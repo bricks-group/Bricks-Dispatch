@@ -1,0 +1,100 @@
+{
+  "theme": "dark",
+  "archetype": "Archetype 4: Swiss & High-Contrast (Utilitarian Dark Mode / Operations Pattern)",
+  "typography": {
+    "heading_font": "Chivo",
+    "body_font": "IBM Plex Sans",
+    "mono_font": "JetBrains Mono",
+    "scale": {
+      "h1": "text-3xl sm:text-4xl font-black tracking-tighter uppercase",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-xl font-semibold tracking-tight",
+      "h4": "text-lg font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-zinc-400",
+      "micro": "text-xs font-bold uppercase tracking-[0.15em]"
+    }
+  },
+  "colors": {
+    "background": "#050505",
+    "surface": "#121212",
+    "surface_elevated": "#1A1A1A",
+    "border": "#27272A",
+    "border_focus": "#FACC15",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "text_tertiary": "#71717A",
+    "primary": "#FACC15",
+    "primary_hover": "#EAB308",
+    "primary_text": "#000000",
+    "status": {
+      "assigned": { "bg": "#3B82F6", "text": "#FFFFFF", "soft_bg": "#1D4ED840", "soft_text": "#60A5FA" },
+      "in_progress": { "bg": "#FACC15", "text": "#000000", "soft_bg": "#CA8A0440", "soft_text": "#FDE047" },
+      "completed": { "bg": "#22C55E", "text": "#FFFFFF", "soft_bg": "#15803D40", "soft_text": "#4ADE80" },
+      "urgent": { "bg": "#EF4444", "text": "#FFFFFF", "soft_bg": "#B91C1C40", "soft_text": "#F87171" }
+    }
+  },
+  "layout_spacing": {
+    "app_wrapper": "w-full min-h-[100dvh] bg-[#050505] text-white flex flex-col md:max-w-md md:mx-auto md:border-x md:border-zinc-900 shadow-2xl relative overflow-hidden",
+    "content_padding": "px-4 py-6 pb-28",
+    "card_padding": "p-5",
+    "gap_large": "gap-8",
+    "gap_medium": "gap-4",
+    "gap_small": "gap-2"
+  },
+  "components": {
+    "button": {
+      "primary": "w-full bg-[#FACC15] text-black font-bold uppercase tracking-wide rounded-sm py-4 px-6 text-center hover:bg-[#EAB308] active:scale-[0.98] transition-all flex justify-center items-center gap-2",
+      "secondary": "w-full bg-[#1A1A1A] text-white border border-zinc-800 font-semibold rounded-sm py-4 px-6 text-center hover:bg-zinc-800 active:scale-[0.98] transition-all flex justify-center items-center gap-2"
+    },
+    "card": "bg-[#121212] border border-zinc-800 rounded-sm shadow-none p-4",
+    "badge": "px-2 py-1 text-[10px] font-bold uppercase tracking-widest rounded-sm border border-transparent",
+    "bottom_nav": {
+      "container": "fixed bottom-0 left-0 right-0 w-full md:max-w-md md:mx-auto bg-[#0A0A0A]/95 backdrop-blur-md border-t border-zinc-900 flex justify-between px-2 pb-safe pt-2 z-50",
+      "item_active": "text-[#FACC15] flex flex-col items-center gap-1.5 p-3 w-1/4",
+      "item_inactive": "text-zinc-500 hover:text-zinc-300 flex flex-col items-center gap-1.5 p-3 w-1/4 transition-colors"
+    },
+    "input": "w-full bg-[#0A0A0A] border border-zinc-800 rounded-sm p-4 text-white focus:ring-1 focus:ring-[#FACC15] focus:border-[#FACC15] outline-none transition-colors",
+    "progress_bar": {
+      "track": "w-full bg-zinc-900 h-1.5 rounded-none overflow-hidden",
+      "fill": "bg-[#FACC15] h-full transition-all duration-300"
+    },
+    "checkbox": "w-6 h-6 rounded-sm border-2 border-zinc-600 data-[state=checked]:bg-[#FACC15] data-[state=checked]:text-black data-[state=checked]:border-[#FACC15] transition-all",
+    "switch": "peer inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15] disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-[#FACC15] data-[state=unchecked]:bg-zinc-800"
+  },
+  "motion": {
+    "page_transition": "animate-in slide-in-from-bottom-4 fade-in duration-300",
+    "tap_interaction": "active:scale-95 transition-transform duration-100",
+    "list_stagger": "animate-in fade-in slide-in-from-bottom-2 duration-300 delay-100"
+  },
+  "icons": {
+    "library": "lucide-react",
+    "style": "strokeWidth={2.5} className='w-5 h-5'"
+  },
+  "media_urls": {
+    "property_sample": {
+      "url": "https://images.unsplash.com/photo-1767950470198-c9cd97f8ed87?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBsdXh1cnklMjBob21lJTIwZXh0ZXJpb3IlMjBuaWdodHxlbnwwfHx8fDE3NzYwMDQ5NDJ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Modern luxury home exterior at night (for job detail header hero image)"
+    },
+    "map_dark_mode": {
+      "url": "https://images.unsplash.com/photo-1704773988833-af2f8709a831?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBkYXJrJTIwbWFwJTIwc2F0ZWxsaXRlJTIwdmlld3xlbnwwfHx8fDE3NzYwMDQ5NDJ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Dark satellite map view for location mapping inside job details"
+    },
+    "user_avatar": {
+      "url": "https://images.unsplash.com/photo-1772987273687-4866382c146f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMHBob3RvZ3JhcGhlciUyMGRhcmslMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3NjAwNDk0MXww&ixlib=rb-4.1.0&q=85",
+      "description": "Professional photographer avatar in dark setting for the Profile tab"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Ensure 'lucide-react' is used for all icon needs. Do not use generic emoji unless debugging.",
+    "This is a mobile-first app wrapper. Wrap the main app routes inside a container with 'w-full flex flex-col md:max-w-md md:mx-auto min-h-[100dvh] relative overflow-x-hidden' to simulate a mobile app on desktop.",
+    "CRITICAL: Do not use rounded cards. Use 'rounded-sm' or 'rounded-none'. We are going for a strict, military-grade logistics UI look (Uber Driver style).",
+    "CRITICAL: Every interactive element (buttons, tabs, inputs, list items) MUST have a 'data-testid' attribute as per accessibility rules.",
+    "Navigation should stick to the bottom. Add 'pb-28' to the main scrollable container to prevent content from hiding behind the tab bar.",
+    "The primary accent color is High-Vis Yellow (#FACC15). Use this sparingly for active states or primary 'Start/Complete Job' CTAs.",
+    "Avoid descriptive marketing text. Use data-dense labels (e.g., 'ARRIVE: 14:00', 'UPLOAD: 23/45').",
+    "Ensure there are no full-screen gradients. Keep backgrounds solid, matte black (#050505 or #121212) with sharp 1px borders.",
+    "Job Cards should clearly display the status via colored text or badges. Over-index on negative space and clear alignment.",
+    "For the Schedule timeline view, use vertical lines (border-l-2 border-zinc-800) connecting the timeslots to create a robust structural grid."
+  ]
+}
