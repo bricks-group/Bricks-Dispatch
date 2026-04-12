@@ -11,10 +11,11 @@ type TabIconProps = {
 function TabIcon({ Icon, label, focused }: TabIconProps) {
   return (
     <View style={styles.tabItem}>
+      {focused && <View style={styles.activeIndicator} />}
       <Icon
-        size={22}
-        color={focused ? '#FACC15' : '#71717A'}
-        strokeWidth={focused ? 2.5 : 2}
+        size={20}
+        color={focused ? '#FFFFFF' : '#565B7E'}
+        strokeWidth={focused ? 2.5 : 1.8}
       />
       <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>
         {label}
@@ -30,10 +31,9 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarStyle: styles.tabBar,
         tabBarShowLabel: false,
-        tabBarActiveTintColor: '#FACC15',
-        tabBarInactiveTintColor: '#71717A',
-        lazy: false,
-        sceneStyle: { backgroundColor: '#050505' },
+        tabBarActiveTintColor: '#FFFFFF',
+        tabBarInactiveTintColor: '#565B7E',
+        sceneStyle: { backgroundColor: '#0C0D14' },
       }}
     >
       <Tabs.Screen
@@ -41,7 +41,7 @@ export default function TabsLayout() {
         options={{
           title: 'Jobs',
           tabBarIcon: ({ focused }) => (
-            <TabIcon Icon={Briefcase} label="JOBS" focused={focused} />
+            <TabIcon Icon={Briefcase} label="Jobs" focused={focused} />
           ),
           tabBarTestID: 'tab-jobs',
         }}
@@ -51,7 +51,7 @@ export default function TabsLayout() {
         options={{
           title: 'Schedule',
           tabBarIcon: ({ focused }) => (
-            <TabIcon Icon={Calendar} label="SCHEDULE" focused={focused} />
+            <TabIcon Icon={Calendar} label="Schedule" focused={focused} />
           ),
           tabBarTestID: 'tab-schedule',
         }}
@@ -61,7 +61,7 @@ export default function TabsLayout() {
         options={{
           title: 'Uploads',
           tabBarIcon: ({ focused }) => (
-            <TabIcon Icon={Upload} label="UPLOADS" focused={focused} />
+            <TabIcon Icon={Upload} label="Uploads" focused={focused} />
           ),
           tabBarTestID: 'tab-uploads',
         }}
@@ -71,7 +71,7 @@ export default function TabsLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ focused }) => (
-            <TabIcon Icon={User} label="PROFILE" focused={focused} />
+            <TabIcon Icon={User} label="Profile" focused={focused} />
           ),
           tabBarTestID: 'tab-profile',
         }}
@@ -82,27 +82,37 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: '#0A0A0A',
+    backgroundColor: '#0C0D14',
     borderTopWidth: 1,
-    borderTopColor: '#1A1A1A',
-    height: 72,
+    borderTopColor: '#1E2030',
+    height: 76,
     paddingTop: 8,
-    paddingBottom: 12,
+    paddingBottom: 14,
     elevation: 0,
     shadowOpacity: 0,
   },
   tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 5,
+    position: 'relative',
+  },
+  activeIndicator: {
+    position: 'absolute',
+    top: -12,
+    width: 24,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: '#3B82F6',
   },
   tabLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-    color: '#71717A',
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#565B7E',
+    letterSpacing: 0.3,
   },
   tabLabelActive: {
-    color: '#FACC15',
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
 });

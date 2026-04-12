@@ -36,17 +36,11 @@ type Job = {
 };
 
 const JOB_TYPE_ICONS: Record<string, React.ComponentType<any>> = {
-  photo: Camera,
-  video: Video,
-  drone: Plane,
-  '3d_tour': Box,
-  floor_plan: Ruler,
+  photo: Camera, video: Video, drone: Plane, '3d_tour': Box, floor_plan: Ruler,
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  assigned: '#3B82F6',
-  in_progress: '#FACC15',
-  completed: '#22C55E',
+  assigned: '#3B82F6', in_progress: '#F59E0B', completed: '#22C55E',
 };
 
 function getDatesForWeek(baseDate: Date): string[] {
@@ -61,7 +55,7 @@ function getDatesForWeek(baseDate: Date): string[] {
   return dates;
 }
 
-const DAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export default function ScheduleScreen() {
   const router = useRouter();
@@ -96,38 +90,34 @@ export default function ScheduleScreen() {
     fetchSchedule();
   }, [fetchSchedule]);
 
-  const goToPrevWeek = () => {
-    const d = new Date(currentDate);
-    d.setDate(d.getDate() - 7);
-    setCurrentDate(d);
-  };
-
-  const goToNextWeek = () => {
-    const d = new Date(currentDate);
-    d.setDate(d.getDate() + 7);
-    setCurrentDate(d);
-  };
-
   const today = new Date().toISOString().split('T')[0];
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>SCHEDULE</Text>
+        <Text style={styles.headerTitle}>Schedule</Text>
       </View>
 
       {/* Week Navigation */}
       <View style={styles.weekNav}>
-        <TouchableOpacity testID="prev-week-btn" onPress={goToPrevWeek} style={styles.navBtn}>
-          <ChevronLeft size={20} color="#A1A1AA" strokeWidth={2.5} />
+        <TouchableOpacity testID="prev-week-btn" onPress={() => {
+          const d = new Date(currentDate);
+          d.setDate(d.getDate() - 7);
+          setCurrentDate(d);
+        }} style={styles.navBtn}>
+          <ChevronLeft size={18} color="#8B8FA3" strokeWidth={2.5} />
         </TouchableOpacity>
         <Text style={styles.weekLabel}>
           {new Date(weekDates[0]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
           {' – '}
           {new Date(weekDates[6]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
         </Text>
-        <TouchableOpacity testID="next-week-btn" onPress={goToNextWeek} style={styles.navBtn}>
-          <ChevronRight size={20} color="#A1A1AA" strokeWidth={2.5} />
+        <TouchableOpacity testID="next-week-btn" onPress={() => {
+          const d = new Date(currentDate);
+          d.setDate(d.getDate() + 7);
+          setCurrentDate(d);
+        }} style={styles.navBtn}>
+          <ChevronRight size={18} color="#8B8FA3" strokeWidth={2.5} />
         </TouchableOpacity>
       </View>
 
@@ -137,7 +127,6 @@ export default function ScheduleScreen() {
           const isSelected = date === selectedDate;
           const isToday = date === today;
           const dayNum = new Date(date + 'T12:00:00').getDate();
-
           return (
             <TouchableOpacity
               key={date}
@@ -145,12 +134,8 @@ export default function ScheduleScreen() {
               style={[styles.dayBtn, isSelected && styles.dayBtnSelected]}
               onPress={() => setSelectedDate(date)}
             >
-              <Text style={[styles.dayName, isSelected && styles.dayNameSelected]}>
-                {DAY_NAMES[idx]}
-              </Text>
-              <Text style={[styles.dayNum, isSelected && styles.dayNumSelected, isToday && !isSelected && styles.dayNumToday]}>
-                {dayNum}
-              </Text>
+              <Text style={[styles.dayName, isSelected && styles.dayNameSelected]}>{DAY_NAMES[idx]}</Text>
+              <Text style={[styles.dayNum, isSelected && styles.dayNumSelected, isToday && !isSelected && styles.dayNumToday]}>{dayNum}</Text>
               {isToday && <View style={[styles.todayDot, isSelected && styles.todayDotSelected]} />}
             </TouchableOpacity>
           );
@@ -161,14 +146,10 @@ export default function ScheduleScreen() {
       <ScrollView
         style={styles.timeline}
         contentContainerStyle={styles.timelineContent}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FACC15" colors={['#FACC15']} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B82F6" colors={['#3B82F6']} />}
       >
         {loading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator size="large" color="#FACC15" />
-          </View>
+          <View style={styles.loadingWrap}><ActivityIndicator size="large" color="#3B82F6" /></View>
         ) : jobs.length === 0 ? (
           <View style={styles.emptyWrap}>
             <Text style={styles.emptyText}>No jobs scheduled</Text>
@@ -180,7 +161,6 @@ export default function ScheduleScreen() {
             const statusColor = STATUS_COLORS[job.status] || '#3B82F6';
             const isUrgent = job.priority === 'urgent';
             const isHigh = job.priority === 'high';
-
             return (
               <TouchableOpacity
                 key={job.id}
@@ -189,34 +169,27 @@ export default function ScheduleScreen() {
                 onPress={() => router.push(`/job/${job.id}`)}
                 activeOpacity={0.7}
               >
-                {/* Timeline Connector */}
                 <View style={styles.timelineLeft}>
                   <View style={[styles.timelineDot, { backgroundColor: statusColor }]} />
                   {idx < jobs.length - 1 && <View style={styles.timelineLine} />}
                 </View>
-
-                {/* Content */}
                 <View style={styles.timelineCard}>
                   <View style={styles.timelineCardHeader}>
-                    <Text style={styles.timelineTime}>
-                      {job.time_window_start} – {job.time_window_end}
-                    </Text>
+                    <Text style={styles.timelineTime}>{job.time_window_start} – {job.time_window_end}</Text>
                     {(isUrgent || isHigh) && (
                       <View style={[styles.priorityTag, isUrgent ? styles.urgentTag : styles.highTag]}>
-                        {isUrgent && <AlertTriangle size={10} color="#FFF" strokeWidth={3} />}
-                        <Text style={styles.priorityTagText}>{isUrgent ? 'URGENT' : 'HIGH'}</Text>
+                        {isUrgent && <AlertTriangle size={10} color="#FFF" strokeWidth={2.5} />}
+                        <Text style={styles.priorityTagText}>{isUrgent ? 'Urgent' : 'High'}</Text>
                       </View>
                     )}
                   </View>
                   <Text style={styles.timelineAddress} numberOfLines={1}>{job.address}</Text>
                   <View style={styles.timelineFooter}>
-                    <TypeIcon size={14} color="#71717A" strokeWidth={2} />
-                    <Text style={styles.timelineType}>
-                      {job.job_type.replace('_', ' ').toUpperCase()}
-                    </Text>
-                    <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-                    <Text style={[styles.statusLabel, { color: statusColor }]}>
-                      {job.status.replace('_', ' ').toUpperCase()}
+                    <TypeIcon size={14} color="#565B7E" strokeWidth={2} />
+                    <Text style={styles.timelineType}>{job.job_type.replace('_', ' ')}</Text>
+                    <View style={[styles.statusDotSmall, { backgroundColor: statusColor }]} />
+                    <Text style={[styles.statusLabelSmall, { color: statusColor }]}>
+                      {job.status.replace('_', ' ')}
                     </Text>
                   </View>
                 </View>
@@ -230,199 +203,42 @@ export default function ScheduleScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#050505',
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    letterSpacing: 2,
-  },
-  weekNav: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    marginBottom: 12,
-  },
-  navBtn: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#121212',
-    borderWidth: 1,
-    borderColor: '#27272A',
-  },
-  weekLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#A1A1AA',
-    letterSpacing: 0.5,
-  },
-  dayRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 12,
-    marginBottom: 16,
-    gap: 4,
-  },
-  dayBtn: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 10,
-    backgroundColor: '#121212',
-    borderWidth: 1,
-    borderColor: '#1A1A1A',
-  },
-  dayBtnSelected: {
-    backgroundColor: '#FACC15',
-    borderColor: '#FACC15',
-  },
-  dayName: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#71717A',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  dayNameSelected: {
-    color: '#000000',
-  },
-  dayNum: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  dayNumSelected: {
-    color: '#000000',
-  },
-  dayNumToday: {
-    color: '#FACC15',
-  },
-  todayDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#FACC15',
-    marginTop: 4,
-  },
-  todayDotSelected: {
-    backgroundColor: '#000000',
-  },
-  timeline: {
-    flex: 1,
-  },
-  timelineContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 100,
-  },
-  timelineItem: {
-    flexDirection: 'row',
-    marginBottom: 0,
-  },
-  timelineLeft: {
-    width: 32,
-    alignItems: 'center',
-  },
-  timelineDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginTop: 16,
-  },
-  timelineLine: {
-    width: 2,
-    flex: 1,
-    backgroundColor: '#27272A',
-  },
-  timelineCard: {
-    flex: 1,
-    backgroundColor: '#121212',
-    borderWidth: 1,
-    borderColor: '#27272A',
-    padding: 14,
-    marginLeft: 12,
-    marginBottom: 8,
-  },
-  timelineCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  timelineTime: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FACC15',
-  },
-  priorityTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  urgentTag: {
-    backgroundColor: '#EF4444',
-  },
-  highTag: {
-    backgroundColor: '#F59E0B',
-  },
-  priorityTagText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: 1,
-  },
-  timelineAddress: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    marginBottom: 8,
-  },
-  timelineFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  timelineType: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#71717A',
-    letterSpacing: 0.5,
-    marginRight: 8,
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  loadingWrap: {
-    paddingVertical: 60,
-    alignItems: 'center',
-  },
-  emptyWrap: {
-    paddingVertical: 60,
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontSize: 14,
-    color: '#71717A',
-    marginBottom: 4,
-  },
-  emptySubtext: {
-    fontSize: 12,
-    color: '#52525B',
-  },
+  container: { flex: 1, backgroundColor: '#0C0D14' },
+  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16 },
+  headerTitle: { fontSize: 26, fontWeight: '700', color: '#FFFFFF', letterSpacing: -0.5 },
+  weekNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12 },
+  navBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: '#151722', borderRadius: 10, borderWidth: 1, borderColor: '#1E2030' },
+  weekLabel: { fontSize: 14, fontWeight: '600', color: '#8B8FA3' },
+  dayRow: { flexDirection: 'row', paddingHorizontal: 12, marginBottom: 16, gap: 6 },
+  dayBtn: { flex: 1, alignItems: 'center', paddingVertical: 10, backgroundColor: '#151722', borderRadius: 12, borderWidth: 1, borderColor: '#1E2030' },
+  dayBtnSelected: { backgroundColor: '#3B82F6', borderColor: '#3B82F6' },
+  dayName: { fontSize: 10, fontWeight: '500', color: '#565B7E', marginBottom: 4 },
+  dayNameSelected: { color: '#FFFFFF' },
+  dayNum: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  dayNumSelected: { color: '#FFFFFF' },
+  dayNumToday: { color: '#3B82F6' },
+  todayDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#3B82F6', marginTop: 4 },
+  todayDotSelected: { backgroundColor: '#FFFFFF' },
+  timeline: { flex: 1 },
+  timelineContent: { paddingHorizontal: 16, paddingBottom: 100 },
+  timelineItem: { flexDirection: 'row', marginBottom: 0 },
+  timelineLeft: { width: 28, alignItems: 'center' },
+  timelineDot: { width: 10, height: 10, borderRadius: 5, marginTop: 18 },
+  timelineLine: { width: 2, flex: 1, backgroundColor: '#1E2030' },
+  timelineCard: { flex: 1, backgroundColor: '#151722', borderRadius: 14, borderWidth: 1, borderColor: '#1E2030', padding: 14, marginLeft: 10, marginBottom: 8 },
+  timelineCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  timelineTime: { fontSize: 14, fontWeight: '600', color: '#3B82F6' },
+  priorityTag: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  urgentTag: { backgroundColor: '#EF4444' },
+  highTag: { backgroundColor: '#F59E0B' },
+  priorityTagText: { fontSize: 11, fontWeight: '600', color: '#FFFFFF' },
+  timelineAddress: { fontSize: 16, fontWeight: '600', color: '#FFFFFF', marginBottom: 8 },
+  timelineFooter: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  timelineType: { fontSize: 12, fontWeight: '500', color: '#565B7E', textTransform: 'capitalize', marginRight: 8 },
+  statusDotSmall: { width: 6, height: 6, borderRadius: 3 },
+  statusLabelSmall: { fontSize: 12, fontWeight: '600', textTransform: 'capitalize' },
+  loadingWrap: { paddingVertical: 60, alignItems: 'center' },
+  emptyWrap: { paddingVertical: 60, alignItems: 'center' },
+  emptyText: { fontSize: 14, color: '#565B7E', marginBottom: 4 },
+  emptySubtext: { fontSize: 12, color: '#3D4160' },
 });

@@ -18,6 +18,7 @@ import {
   Ruler,
   ChevronRight,
   AlertTriangle,
+  Circle,
 } from 'lucide-react-native';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -46,20 +47,26 @@ const JOB_TYPE_ICONS: Record<string, React.ComponentType<any>> = {
 };
 
 const JOB_TYPE_LABELS: Record<string, string> = {
-  photo: 'PHOTO',
-  video: 'VIDEO',
-  drone: 'DRONE',
-  '3d_tour': '3D TOUR',
-  floor_plan: 'FLOOR PLAN',
+  photo: 'Photo',
+  video: 'Video',
+  drone: 'Drone',
+  '3d_tour': '3D Tour',
+  floor_plan: 'Floor Plan',
 };
 
-const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
-  assigned: { bg: '#1D4ED840', text: '#60A5FA', label: 'ASSIGNED' },
-  in_progress: { bg: '#CA8A0440', text: '#FDE047', label: 'IN PROGRESS' },
-  completed: { bg: '#15803D40', text: '#4ADE80', label: 'COMPLETED' },
+const STATUS_CONFIG: Record<string, { bg: string; dot: string; text: string; label: string }> = {
+  assigned: { bg: '#3B82F615', dot: '#3B82F6', text: '#60A5FA', label: 'Assigned' },
+  in_progress: { bg: '#F59E0B15', dot: '#F59E0B', text: '#FBBF24', label: 'In Progress' },
+  completed: { bg: '#22C55E15', dot: '#22C55E', text: '#4ADE80', label: 'Completed' },
 };
 
 const FILTERS = ['all', 'assigned', 'in_progress', 'completed'];
+const FILTER_LABELS: Record<string, string> = {
+  all: 'All',
+  assigned: 'Assigned',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+};
 
 function JobCard({ job, onPress }: { job: Job; onPress: () => void }) {
   const statusConfig = STATUS_CONFIG[job.status] || STATUS_CONFIG.assigned;
@@ -70,42 +77,55 @@ function JobCard({ job, onPress }: { job: Job; onPress: () => void }) {
   return (
     <TouchableOpacity
       testID={`job-card-${job.id}`}
-      style={[
-        styles.card,
-        isUrgent && styles.cardUrgent,
-      ]}
+      style={styles.card}
       onPress={onPress}
       activeOpacity={0.7}
     >
-      <View style={styles.cardHeader}>
+      {/* Top Row: Type + Priority + Status */}
+      <View style={styles.cardTop}>
         <View style={styles.cardTypeRow}>
           <View style={styles.typeIconWrap}>
-            <TypeIcon size={16} color="#A1A1AA" strokeWidth={2.5} />
+            <TypeIcon size={14} color="#8B8FA3" strokeWidth={2} />
           </View>
-          <Text style={styles.typeLabel}>{JOB_TYPE_LABELS[job.job_type] || job.job_type.toUpperCase()}</Text>
+          <Text style={styles.typeLabel}>{JOB_TYPE_LABELS[job.job_type] || job.job_type}</Text>
           {(isUrgent || isHigh) && (
             <View style={[styles.priorityBadge, isUrgent ? styles.urgentBadge : styles.highBadge]}>
-              {isUrgent && <AlertTriangle size={10} color="#FFF" strokeWidth={3} />}
-              <Text style={styles.priorityText}>{isUrgent ? 'URGENT' : 'HIGH'}</Text>
+              {isUrgent && <AlertTriangle size={10} color="#FFF" strokeWidth={2.5} />}
+              <Text style={styles.priorityText}>{isUrgent ? 'Urgent' : 'High'}</Text>
             </View>
           )}
         </View>
         <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg }]}>
+          <View style={[styles.statusDot, { backgroundColor: statusConfig.dot }]} />
           <Text style={[styles.statusText, { color: statusConfig.text }]}>{statusConfig.label}</Text>
         </View>
       </View>
 
+      {/* Address */}
       <Text style={styles.address} numberOfLines={1}>{job.address}</Text>
       <Text style={styles.cityState}>{job.city}, {job.state}</Text>
 
+      {/* Footer */}
       <View style={styles.cardFooter}>
-        <Text style={styles.timeWindow}>{job.time_window_start} – {job.time_window_end}</Text>
-        <View style={styles.deliverables}>
-          <Text style={styles.deliverablesText}>
-            {job.uploaded_count}/{job.deliverables_count}
-          </Text>
+        <View style={styles.timeWrap}>
+          <Text style={styles.timeWindow}>{job.time_window_start} – {job.time_window_end}</Text>
         </View>
-        <ChevronRight size={18} color="#71717A" strokeWidth={2} />
+        <View style={styles.progressWrap}>
+          <View style={styles.progressTrack}>
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  width: job.deliverables_count > 0
+                    ? `${(job.uploaded_count / job.deliverables_count) * 100}%`
+                    : '0%',
+                },
+              ]}
+            />
+          </View>
+          <Text style={styles.progressText}>{job.uploaded_count}/{job.deliverables_count}</Text>
+        </View>
+        <ChevronRight size={16} color="#565B7E" strokeWidth={2} />
       </View>
     </TouchableOpacity>
   );
@@ -146,7 +166,7 @@ export default function JobsScreen() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color="#FACC15" />
+          <ActivityIndicator size="large" color="#3B82F6" />
         </View>
       </SafeAreaView>
     );
@@ -155,10 +175,13 @@ export default function JobsScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>JOBS</Text>
-        <Text style={styles.headerCount}>{jobs.length}</Text>
+        <View>
+          <Text style={styles.headerTitle}>Jobs</Text>
+          <Text style={styles.headerSub}>{jobs.length} assignments</Text>
+        </View>
       </View>
 
+      {/* Filter Chips */}
       <View style={styles.filterRow}>
         {FILTERS.map((f) => (
           <TouchableOpacity
@@ -168,7 +191,7 @@ export default function JobsScreen() {
             onPress={() => setFilter(f)}
           >
             <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>
-              {f === 'all' ? 'ALL' : f.replace('_', ' ').toUpperCase()}
+              {FILTER_LABELS[f]}
             </Text>
           </TouchableOpacity>
         ))}
@@ -188,8 +211,8 @@ export default function JobsScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor="#FACC15"
-            colors={['#FACC15']}
+            tintColor="#3B82F6"
+            colors={['#3B82F6']}
           />
         }
         ListEmptyComponent={
@@ -205,7 +228,7 @@ export default function JobsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#050505',
+    backgroundColor: '#0C0D14',
   },
   loadingWrap: {
     flex: 1,
@@ -217,67 +240,65 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingTop: 12,
+    paddingBottom: 16,
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: '900',
+    fontSize: 26,
+    fontWeight: '700',
     color: '#FFFFFF',
-    letterSpacing: 2,
+    letterSpacing: -0.5,
   },
-  headerCount: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#FACC15',
+  headerSub: {
+    fontSize: 13,
+    color: '#565B7E',
+    marginTop: 2,
   },
   filterRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    marginBottom: 8,
+    marginBottom: 12,
     gap: 8,
   },
   filterBtn: {
     paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: '#151722',
     borderWidth: 1,
-    borderColor: '#27272A',
-    backgroundColor: '#121212',
+    borderColor: '#1E2030',
   },
   filterBtnActive: {
-    backgroundColor: '#FACC15',
-    borderColor: '#FACC15',
+    backgroundColor: '#3B82F6',
+    borderColor: '#3B82F6',
   },
   filterText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#A1A1AA',
-    letterSpacing: 1,
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#8B8FA3',
   },
   filterTextActive: {
-    color: '#000000',
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   list: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 4,
     paddingBottom: 100,
   },
   card: {
-    backgroundColor: '#121212',
+    backgroundColor: '#151722',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#27272A',
+    borderColor: '#1E2030',
     padding: 16,
-    marginBottom: 12,
+    marginBottom: 10,
   },
-  cardUrgent: {
-    borderColor: '#EF444480',
-    borderLeftWidth: 3,
-    borderLeftColor: '#EF4444',
-  },
-  cardHeader: {
+  cardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   cardTypeRow: {
     flexDirection: 'row',
@@ -285,19 +306,17 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   typeIconWrap: {
-    width: 28,
-    height: 28,
-    backgroundColor: '#1A1A1A',
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: '#1E2030',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#27272A',
   },
   typeLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#A1A1AA',
-    letterSpacing: 1.5,
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#8B8FA3',
   },
   priorityBadge: {
     flexDirection: 'row',
@@ -305,6 +324,7 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 3,
+    borderRadius: 6,
   },
   urgentBadge: {
     backgroundColor: '#EF4444',
@@ -313,51 +333,75 @@ const styles = StyleSheet.create({
     backgroundColor: '#F59E0B',
   },
   priorityText: {
-    fontSize: 9,
-    fontWeight: '800',
+    fontSize: 11,
+    fontWeight: '600',
     color: '#FFFFFF',
-    letterSpacing: 1,
   },
   statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   statusText: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.5,
+    fontSize: 12,
+    fontWeight: '600',
   },
   address: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '600',
     color: '#FFFFFF',
-    marginBottom: 2,
+    marginBottom: 3,
   },
   cityState: {
     fontSize: 13,
-    color: '#71717A',
-    marginBottom: 12,
+    color: '#565B7E',
+    marginBottom: 14,
   },
   cardFooter: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#1A1A1A',
-    paddingTop: 10,
+    borderTopColor: '#1E2030',
+  },
+  timeWrap: {
+    flex: 1,
   },
   timeWindow: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#FACC15',
-    flex: 1,
+    color: '#3B82F6',
   },
-  deliverables: {
+  progressWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     marginRight: 12,
   },
-  deliverablesText: {
+  progressTrack: {
+    width: 48,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#1E2030',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: '#3B82F6',
+  },
+  progressText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#A1A1AA',
+    fontWeight: '500',
+    color: '#565B7E',
   },
   emptyWrap: {
     paddingVertical: 60,
@@ -365,6 +409,6 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 14,
-    color: '#71717A',
+    color: '#565B7E',
   },
 });
