@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import { Briefcase, Calendar, Upload, User } from 'lucide-react-native';
 
 type TabIconProps = {
@@ -34,6 +34,7 @@ export default function TabsLayout() {
         tabBarActiveTintColor: '#FFFFFF',
         tabBarInactiveTintColor: '#565B7E',
         sceneStyle: { backgroundColor: '#0C0D14' },
+        ...(Platform.OS === 'web' ? { unmountOnBlur: true } : {}),
       }}
     >
       <Tabs.Screen

@@ -62,8 +62,14 @@ Bricks Dispatch is a mobile-first operations application for managing real estat
 - Default user profile (Alex Rivera, Lead Photographer)
 
 ## Design System
-- Background: #050505 (pure black)
-- Surface: #121212
-- Accent: #FACC15 (high-vis yellow)
-- Status colors: Blue (Assigned), Yellow (In Progress), Green (Completed), Red (Urgent)
+- **Inspired by**: CoStar CRM, BuildIn Construction, Petronex Oil & Gas SaaS dashboards (Rondesignlab Behance)
+- Background: #0C0D14 (deep navy-dark)
+- Surface: #151722 (dark navy)
+- Border: #1E2030 (subtle navy borders)
+- Primary Accent: #3B82F6 (vibrant blue)
+- Status colors: Blue (Assigned), Orange/Yellow (In Progress), Green (Completed), Red (Urgent)
+- Card radius: 14px (polished, rounded)
+- Filter chips: pill-shaped (20px radius)
+- Typography: clean, -0.5 letter-spacing headings, 500-700 weights
+- Tab bar: blue active indicator dot, subtle active state
 - No auth required
