@@ -32,6 +32,8 @@ export default function TabsLayout() {
         tabBarShowLabel: false,
         tabBarActiveTintColor: '#FACC15',
         tabBarInactiveTintColor: '#71717A',
+        lazy: false,
+        sceneStyle: { backgroundColor: '#050505' },
       }}
     >
       <Tabs.Screen
