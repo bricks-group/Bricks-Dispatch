@@ -41,9 +41,7 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Jobs',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon Icon={Briefcase} label="Jobs" focused={focused} />
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon Icon={Briefcase} label="Jobs" focused={focused} />,
           tabBarTestID: 'tab-jobs',
         }}
       />
@@ -51,9 +49,7 @@ export default function TabsLayout() {
         name="schedule"
         options={{
           title: 'Schedule',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon Icon={Calendar} label="Schedule" focused={focused} />
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon Icon={Calendar} label="Schedule" focused={focused} />,
           tabBarTestID: 'tab-schedule',
         }}
       />
@@ -61,9 +57,7 @@ export default function TabsLayout() {
         name="uploads"
         options={{
           title: 'Uploads',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon Icon={Upload} label="Uploads" focused={focused} />
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon Icon={Upload} label="Uploads" focused={focused} />,
           tabBarTestID: 'tab-uploads',
         }}
       />
@@ -71,9 +65,7 @@ export default function TabsLayout() {
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon Icon={User} label="Profile" focused={focused} />
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon Icon={User} label="Profile" focused={focused} />,
           tabBarTestID: 'tab-profile',
         }}
       />
@@ -108,12 +100,12 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     fontSize: 11,
-    fontWeight: '500',
+    fontFamily: 'Manrope_500Medium',
     color: '#565B7E',
     letterSpacing: 0.3,
   },
   tabLabelActive: {
     color: '#FFFFFF',
-    fontWeight: '600',
+    fontFamily: 'Manrope_600SemiBold',
   },
 });
