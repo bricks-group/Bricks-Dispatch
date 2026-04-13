@@ -444,3 +444,183 @@ class TestProfileEndpoint:
         
         # Restore original name
         api_client.put(f"{BASE_URL}/api/profile", json={"name": original_name})
+
+
+
+class TestNotificationEndpoints:
+    """Test /api/notifications endpoints - NEW FEATURE"""
+
+    def test_get_notifications(self, api_client):
+        """GET /api/notifications returns notification list"""
+        response = api_client.get(f"{BASE_URL}/api/notifications")
+        assert response.status_code == 200
+        
+        notifications = response.json()
+        assert isinstance(notifications, list), "Response should be a list"
+        
+        # Validate notification structure
+        if len(notifications) > 0:
+            notif = notifications[0]
+            required_fields = ['id', 'title', 'body', 'type', 'data', 'read', 'created_at']
+            for field in required_fields:
+                assert field in notif, f"Notification missing field: {field}"
+            
+            # Validate data types
+            assert isinstance(notif['read'], bool)
+            assert isinstance(notif['data'], dict)
+            assert notif['type'] in ['info', 'new_job', 'status_change', 'reminder', 'upload']
+
+    def test_get_unread_count(self, api_client):
+        """GET /api/notifications/unread-count returns count"""
+        response = api_client.get(f"{BASE_URL}/api/notifications/unread-count")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert 'count' in data, "Response should have 'count' field"
+        assert isinstance(data['count'], int), "Count should be an integer"
+        assert data['count'] >= 0, "Count should be non-negative"
+
+    def test_mark_notification_read(self, api_client):
+        """PUT /api/notifications/{id}/read marks notification as read"""
+        # Get notifications to find an unread one
+        notifs_response = api_client.get(f"{BASE_URL}/api/notifications")
+        notifs = notifs_response.json()
+        
+        if len(notifs) == 0:
+            pytest.skip("No notifications available for testing")
+        
+        # Find an unread notification or use the first one
+        test_notif = next((n for n in notifs if not n['read']), notifs[0])
+        notif_id = test_notif['id']
+        
+        # Get initial unread count
+        count_before = api_client.get(f"{BASE_URL}/api/notifications/unread-count").json()['count']
+        
+        # Mark as read
+        response = api_client.put(f"{BASE_URL}/api/notifications/{notif_id}/read")
+        assert response.status_code == 200
+        assert response.json()['read'] == True
+        
+        # Verify notification is marked as read
+        updated_notifs = api_client.get(f"{BASE_URL}/api/notifications").json()
+        updated_notif = next((n for n in updated_notifs if n['id'] == notif_id), None)
+        assert updated_notif is not None
+        assert updated_notif['read'] == True
+        
+        # Verify unread count decreased (if it was unread before)
+        if not test_notif['read']:
+            count_after = api_client.get(f"{BASE_URL}/api/notifications/unread-count").json()['count']
+            assert count_after == count_before - 1
+
+
+class TestPushTokenEndpoint:
+    """Test /api/push-tokens endpoint - NEW FEATURE"""
+
+    def test_register_push_token(self, api_client):
+        """POST /api/push-tokens registers a new push token"""
+        token_data = {
+            "token": "ExponentPushToken[TEST_xxxxxxxxxxxxxxxxxxxxxx]",
+            "platform": "ios"
+        }
+        
+        response = api_client.post(f"{BASE_URL}/api/push-tokens", json=token_data)
+        assert response.status_code == 200
+        
+        result = response.json()
+        assert 'registered' in result
+        assert result['registered'] == True
+
+    def test_register_push_token_duplicate(self, api_client):
+        """POST /api/push-tokens with duplicate token updates existing"""
+        token_data = {
+            "token": "ExponentPushToken[TEST_duplicate_token_12345]",
+            "platform": "android"
+        }
+        
+        # Register first time
+        response1 = api_client.post(f"{BASE_URL}/api/push-tokens", json=token_data)
+        assert response1.status_code == 200
+        assert response1.json()['registered'] == True
+        
+        # Register again with same token (should update, not create new)
+        response2 = api_client.post(f"{BASE_URL}/api/push-tokens", json=token_data)
+        assert response2.status_code == 200
+        assert response2.json()['registered'] == True
+
+
+class TestNotificationTriggers:
+    """Test notification creation triggers - NEW FEATURE"""
+
+    def test_status_change_creates_notification(self, api_client):
+        """PUT /api/jobs/{id}/status creates a notification"""
+        # Get an assigned job
+        jobs_response = api_client.get(f"{BASE_URL}/api/jobs?status=assigned")
+        jobs = jobs_response.json()
+        
+        if len(jobs) == 0:
+            pytest.skip("No assigned jobs available for testing")
+        
+        job_id = jobs[0]['id']
+        
+        # Get initial notification count
+        notifs_before = api_client.get(f"{BASE_URL}/api/notifications").json()
+        count_before = len(notifs_before)
+        
+        # Change job status
+        status_response = api_client.put(
+            f"{BASE_URL}/api/jobs/{job_id}/status",
+            json={"status": "in_progress"}
+        )
+        assert status_response.status_code == 200
+        
+        # Verify notification was created
+        notifs_after = api_client.get(f"{BASE_URL}/api/notifications").json()
+        count_after = len(notifs_after)
+        assert count_after == count_before + 1, "Status change should create a notification"
+        
+        # Verify notification content
+        new_notif = notifs_after[0]  # Most recent notification (sorted by created_at desc)
+        assert new_notif['type'] == 'status_change'
+        assert 'job_id' in new_notif['data']
+        assert new_notif['data']['job_id'] == job_id
+        assert new_notif['data']['status'] == 'in_progress'
+
+    def test_upload_creates_notification(self, api_client):
+        """POST /api/uploads creates a notification"""
+        # Get a job for upload
+        jobs_response = api_client.get(f"{BASE_URL}/api/jobs")
+        jobs = jobs_response.json()
+        
+        if len(jobs) == 0:
+            pytest.skip("No jobs available for testing")
+        
+        job_id = jobs[0]['id']
+        
+        # Get initial notification count
+        notifs_before = api_client.get(f"{BASE_URL}/api/notifications").json()
+        count_before = len(notifs_before)
+        
+        # Create upload
+        form_data = {
+            'job_id': job_id,
+            'filename': 'TEST_notification_upload.jpg',
+            'file_size': 2048000,
+            'mime_type': 'image/jpeg',
+            'file_data': 'base64test'
+        }
+        
+        upload_response = requests.post(f"{BASE_URL}/api/uploads", data=form_data)
+        assert upload_response.status_code == 200
+        
+        # Verify notification was created
+        notifs_after = api_client.get(f"{BASE_URL}/api/notifications").json()
+        count_after = len(notifs_after)
+        assert count_after == count_before + 1, "Upload should create a notification"
+        
+        # Verify notification content
+        new_notif = notifs_after[0]  # Most recent notification
+        assert new_notif['type'] == 'upload'
+        assert 'job_id' in new_notif['data']
+        assert new_notif['data']['job_id'] == job_id
+        assert 'filename' in new_notif['data']
+        assert new_notif['data']['filename'] == 'TEST_notification_upload.jpg'

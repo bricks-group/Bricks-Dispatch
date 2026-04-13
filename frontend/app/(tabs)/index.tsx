@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Camera, Video, Plane, Box, Ruler, ChevronRight, AlertTriangle } from 'lucide-react-native';
+import { Camera, Video, Plane, Box, Ruler, ChevronRight, AlertTriangle, Bell } from 'lucide-react-native';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -75,6 +75,7 @@ export default function JobsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('all');
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -85,15 +86,39 @@ export default function JobsScreen() {
     finally { setLoading(false); setRefreshing(false); }
   }, [filter]);
 
-  useEffect(() => { setLoading(true); fetchJobs(); }, [fetchJobs]);
-  const onRefresh = useCallback(() => { setRefreshing(true); fetchJobs(); }, [fetchJobs]);
+  const fetchUnread = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/notifications/unread-count`);
+      const data = await res.json();
+      setUnreadCount(data.count || 0);
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => { setLoading(true); fetchJobs(); fetchUnread(); }, [fetchJobs, fetchUnread]);
+  const onRefresh = useCallback(() => { setRefreshing(true); fetchJobs(); fetchUnread(); }, [fetchJobs, fetchUnread]);
 
   if (loading) return <SafeAreaView style={styles.container}><View style={styles.loadingWrap}><ActivityIndicator size="large" color="#3B82F6" /></View></SafeAreaView>;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Jobs</Text>
+        <View style={styles.brandRow}>
+          <View style={styles.wordmark}>
+            <View style={styles.wordmarkAccent} />
+            <Text style={styles.wordmarkText}>BRICKS</Text>
+          </View>
+          <Text style={styles.wordmarkSub}>DISPATCH</Text>
+        </View>
+        <TouchableOpacity testID="notifications-btn" style={styles.bellBtn}>
+          <Bell size={20} color="#8B8FA3" strokeWidth={2} />
+          {unreadCount > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
+      <View style={styles.subHeader}>
         <Text style={styles.headerSub}>{jobs.length} assignments</Text>
       </View>
       <View style={styles.filterRow}>
@@ -116,9 +141,17 @@ export default function JobsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0C0D14' },
   loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16 },
-  headerTitle: { fontSize: 26, fontFamily: 'Outfit_600SemiBold', color: '#FFFFFF', letterSpacing: -0.5 },
-  headerSub: { fontSize: 13, fontFamily: 'Manrope_400Regular', color: '#565B7E', marginTop: 2 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
+  brandRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  wordmark: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  wordmarkAccent: { width: 4, height: 22, borderRadius: 2, backgroundColor: '#3B82F6' },
+  wordmarkText: { fontSize: 22, fontFamily: 'Outfit_700Bold', color: '#FFFFFF', letterSpacing: 3 },
+  wordmarkSub: { fontSize: 12, fontFamily: 'Manrope_400Regular', color: '#565B7E', letterSpacing: 2 },
+  bellBtn: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#151722', borderWidth: 1, borderColor: '#1E2030', alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  badge: { position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  badgeText: { fontSize: 10, fontFamily: 'Manrope_600SemiBold', color: '#FFFFFF' },
+  subHeader: { paddingHorizontal: 20, paddingBottom: 12 },
+  headerSub: { fontSize: 13, fontFamily: 'Manrope_400Regular', color: '#565B7E' },
   filterRow: { flexDirection: 'row', paddingHorizontal: 16, marginBottom: 12, gap: 8 },
   filterBtn: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, backgroundColor: '#151722', borderWidth: 1, borderColor: '#1E2030' },
   filterBtnActive: { backgroundColor: '#3B82F6', borderColor: '#3B82F6' },
