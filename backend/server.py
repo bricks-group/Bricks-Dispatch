@@ -137,6 +137,70 @@ class NotificationRecord(BaseModel):
     read: bool = False
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+class VendorMember(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    vendor_id: str = "default_vendor"
+    name: str
+    email: str
+    phone: str = ""
+    role: str = "Photographer"
+    status: str = "available"
+    is_active: bool = True
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class VendorMemberCreate(BaseModel):
+    name: str
+    email: str
+    phone: str = ""
+    role: str = "Photographer"
+
+class VendorMemberUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+    status: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class JobAssignmentUpdate(BaseModel):
+    member_id: str
+
+class BlockedWindow(BaseModel):
+    start: str
+    end: str
+
+class AvailabilitySettings(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    vendor_id: str = "default_vendor"
+    member_id: str = "default_user"
+    available: bool = True
+    work_start: str = "08:00"
+    work_end: str = "17:00"
+    jobs_per_day: int = 4
+    blocked_windows: List[BlockedWindow] = []
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class AvailabilityUpdate(BaseModel):
+    available: bool
+    work_start: str
+    work_end: str
+    jobs_per_day: int
+    blocked_windows: List[BlockedWindow] = []
+
+class VendorSettings(BaseModel):
+    id: str = "default_vendor_settings"
+    vendor_id: str = "default_vendor"
+    company_name: str = "Bricks Vendor"
+    service_areas: List[str] = ["Los Angeles"]
+    support_email: str = "support@bricksdispatch.com"
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class VendorSettingsUpdate(BaseModel):
+    company_name: Optional[str] = None
+    service_areas: Optional[List[str]] = None
+    support_email: Optional[str] = None
+
 # --- Routes ---
 
 @api_router.get("/")
@@ -213,6 +277,22 @@ def ensure_assigned_to_actor(job: dict, actor_id: str):
     assignee_id = job.get("assignee_id", "default_user")
     if assignee_id != actor_id:
         raise HTTPException(status_code=403, detail="You are not assigned to this job")
+
+async def ensure_default_vendor_member():
+    existing = await db.vendor_members.find_one({"id": "default_user"}, {"_id": 0})
+    if existing:
+        return
+    profile = await db.profile.find_one({"id": "default_user"}, {"_id": 0})
+    name = profile["name"] if profile else "Default Vendor"
+    email = profile["email"] if profile else "vendor@bricksdispatch.com"
+    member = VendorMember(id="default_user", name=name, email=email, role="Owner Operator")
+    await db.vendor_members.insert_one(member.dict())
+
+async def get_vendor_member_ids() -> List[str]:
+    await ensure_default_vendor_member()
+    members = await db.vendor_members.find({"vendor_id": "default_vendor", "is_active": True}, {"_id": 0, "id": 1}).to_list(200)
+    ids = [m["id"] for m in members]
+    return ids if ids else ["default_user"]
 
 @api_router.put("/jobs/{job_id}/status")
 async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
@@ -350,6 +430,192 @@ async def update_profile(update: ProfileUpdate):
     await db.profile.update_one({"id": "default_user"}, {"$set": update_data}, upsert=True)
     return await db.profile.find_one({"id": "default_user"}, {"_id": 0})
 
+# Vendor OS - Overview
+@api_router.get("/vendor-os/overview")
+async def get_vendor_os_overview(x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    member_ids = await get_vendor_member_ids()
+    jobs = await db.jobs.find({"assignee_id": {"$in": member_ids}}, {"_id": 0}).to_list(500)
+    today = datetime.now(timezone.utc).date()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    assigned_today = 0
+    assigned_week = 0
+    completed_week = 0
+    upcoming = []
+    total_capacity = max(len(member_ids) * 4, 1)
+    scheduled_this_week = 0
+
+    for job in jobs:
+        try:
+            scheduled = datetime.strptime(job.get("scheduled_date", ""), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if scheduled == today:
+            assigned_today += 1
+        if week_start <= scheduled <= week_end:
+            assigned_week += 1
+            scheduled_this_week += 1
+            if job.get("status") == "completed":
+                completed_week += 1
+        if scheduled >= today and job.get("status") != "completed":
+            upcoming.append(job)
+
+    capacity_utilization = round(min((scheduled_this_week / (total_capacity * 7)) * 100, 100), 1)
+    upcoming_sorted = sorted(upcoming, key=lambda j: (j.get("scheduled_date", ""), j.get("time_window_start", "")))[:5]
+    return {
+        "jobs_assigned_today": assigned_today,
+        "jobs_assigned_week": assigned_week,
+        "jobs_completed_week": completed_week,
+        "capacity_utilization_pct": capacity_utilization,
+        "upcoming_jobs": upcoming_sorted,
+    }
+
+# Vendor OS - Team
+@api_router.get("/vendor-os/team")
+async def get_vendor_team(x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    await ensure_default_vendor_member()
+    members = await db.vendor_members.find({"vendor_id": "default_vendor"}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    for member in members:
+        member["assigned_jobs"] = await db.jobs.count_documents({"assignee_id": member["id"], "status": {"$ne": "completed"}})
+    return members
+
+@api_router.post("/vendor-os/team")
+async def create_vendor_member(payload: VendorMemberCreate, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    member = VendorMember(
+        name=payload.name,
+        email=payload.email,
+        phone=payload.phone,
+        role=payload.role,
+    )
+    member_dict = member.dict()
+    await db.vendor_members.insert_one(member_dict)
+    member_dict["assigned_jobs"] = 0
+    return member_dict
+
+@api_router.put("/vendor-os/team/{member_id}")
+async def update_vendor_member(member_id: str, payload: VendorMemberUpdate, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    update_data = {k: v for k, v in payload.dict().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No update data")
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.vendor_members.update_one({"id": member_id, "vendor_id": "default_vendor"}, {"$set": update_data})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Member not found")
+    member = await db.vendor_members.find_one({"id": member_id}, {"_id": 0})
+    member["assigned_jobs"] = await db.jobs.count_documents({"assignee_id": member_id, "status": {"$ne": "completed"}})
+    return member
+
+@api_router.delete("/vendor-os/team/{member_id}")
+async def delete_vendor_member(member_id: str, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    if member_id == "default_user":
+        raise HTTPException(status_code=400, detail="Cannot remove default member")
+    result = await db.vendor_members.delete_one({"id": member_id, "vendor_id": "default_vendor"})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Member not found")
+    await db.jobs.update_many({"assignee_id": member_id}, {"$set": {"assignee_id": "default_user", "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"deleted": True}
+
+# Vendor OS - Jobs assignment
+@api_router.put("/vendor-os/jobs/{job_id}/assign")
+async def assign_job_to_member(job_id: str, payload: JobAssignmentUpdate, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    member = await db.vendor_members.find_one({"id": payload.member_id, "vendor_id": "default_vendor", "is_active": True}, {"_id": 0})
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    result = await db.jobs.update_one({"id": job_id}, {"$set": {"assignee_id": payload.member_id, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return await db.jobs.find_one({"id": job_id}, {"_id": 0})
+
+# Vendor OS - Availability
+@api_router.get("/vendor-os/availability")
+async def get_vendor_availability(x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    actor_id = resolve_actor_id(x_user_id)
+    record = await db.vendor_availability.find_one({"vendor_id": "default_vendor", "member_id": actor_id}, {"_id": 0})
+    if not record:
+        default = AvailabilitySettings(member_id=actor_id).dict()
+        await db.vendor_availability.insert_one(default)
+        return default
+    return record
+
+@api_router.put("/vendor-os/availability")
+async def update_vendor_availability(payload: AvailabilityUpdate, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    actor_id = resolve_actor_id(x_user_id)
+    update_data = payload.dict()
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.vendor_availability.update_one(
+        {"vendor_id": "default_vendor", "member_id": actor_id},
+        {"$set": update_data, "$setOnInsert": {"id": str(uuid.uuid4()), "vendor_id": "default_vendor", "member_id": actor_id}},
+        upsert=True,
+    )
+    return await db.vendor_availability.find_one({"vendor_id": "default_vendor", "member_id": actor_id}, {"_id": 0})
+
+# Vendor OS - Performance
+@api_router.get("/vendor-os/performance")
+async def get_vendor_performance(x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    member_ids = await get_vendor_member_ids()
+    jobs = await db.jobs.find({"assignee_id": {"$in": member_ids}}, {"_id": 0}).to_list(500)
+    today = datetime.now(timezone.utc).date()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    week_jobs = []
+    completed = []
+    for job in jobs:
+        try:
+            scheduled = datetime.strptime(job.get("scheduled_date", ""), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if week_start <= scheduled <= week_end:
+            week_jobs.append(job)
+            if job.get("status") == "completed":
+                completed.append(job)
+
+    completion_rate = round((len(completed) / len(week_jobs) * 100), 1) if week_jobs else 0.0
+    on_time = 0
+    for job in completed:
+        try:
+            deadline = datetime.strptime(f"{job.get('scheduled_date')} {job.get('time_window_end', '23:59')}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            updated_at = datetime.fromisoformat(job.get("updated_at"))
+            if updated_at <= deadline:
+                on_time += 1
+        except Exception:
+            continue
+    on_time_rate = round((on_time / len(completed) * 100), 1) if completed else 0.0
+    return {
+        "completion_rate": completion_rate,
+        "on_time_rate": on_time_rate,
+        "job_volume_week": len(week_jobs),
+    }
+
+# Vendor OS - Settings
+@api_router.get("/vendor-os/settings")
+async def get_vendor_settings(x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    settings = await db.vendor_settings.find_one({"id": "default_vendor_settings"}, {"_id": 0})
+    if not settings:
+        default = VendorSettings().dict()
+        await db.vendor_settings.insert_one(default)
+        return default
+    return settings
+
+@api_router.put("/vendor-os/settings")
+async def update_vendor_settings(payload: VendorSettingsUpdate, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    resolve_actor_id(x_user_id)
+    update_data = {k: v for k, v in payload.dict().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No update data")
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.vendor_settings.update_one({"id": "default_vendor_settings"}, {"$set": update_data}, upsert=True)
+    return await db.vendor_settings.find_one({"id": "default_vendor_settings"}, {"_id": 0})
+
 # Seed
 @api_router.post("/seed")
 async def seed_data():
@@ -357,6 +623,9 @@ async def seed_data():
     await db.uploads.delete_many({})
     await db.profile.delete_many({})
     await db.notifications.delete_many({})
+    await db.vendor_members.delete_many({})
+    await db.vendor_availability.delete_many({})
+    await db.vendor_settings.delete_many({})
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -397,6 +666,9 @@ async def seed_data():
 
     profile = Profile()
     await db.profile.insert_one(profile.dict())
+    await db.vendor_members.insert_one(VendorMember(id="default_user", name=profile.name, email=profile.email, phone=profile.phone, role="Owner Operator").dict())
+    await db.vendor_availability.insert_one(AvailabilitySettings(member_id="default_user").dict())
+    await db.vendor_settings.insert_one(VendorSettings().dict())
     return {"seeded": True, "jobs_count": len(jobs), "uploads_count": len(sample_uploads)}
 
 app.include_router(api_router)
