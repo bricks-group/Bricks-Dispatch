@@ -8,6 +8,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
+import secrets
+import hashlib
 from datetime import datetime, timezone, timedelta
 
 ROOT_DIR = Path(__file__).parent
@@ -88,6 +90,7 @@ class Job(BaseModel):
     deliverables_count: int = 0
     uploaded_count: int = 0
     assignee_id: str = "default_user"
+    vendor_id: str = "default_vendor"
     scheduled_date: str = ""
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -207,7 +210,7 @@ class VendorAuthLogin(BaseModel):
 
 class VendorSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    token: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    token_hash: str
     vendor_id: str = "default_vendor"
     member_id: str
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -266,18 +269,23 @@ async def create_notification(title: str, body: str, ntype: str = "info", data: 
 
 # Jobs
 @api_router.get("/jobs")
-async def get_jobs(status: Optional[str] = None):
-    query = {}
+async def get_jobs(status: Optional[str] = None, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    query = {"vendor_id": member.get("vendor_id", "default_vendor"), "assignee_id": actor_id}
     if status:
         query["status"] = status
     jobs = await db.jobs.find(query, {"_id": 0}).sort("time_window_start", 1).to_list(100)
     return jobs
 
 @api_router.get("/jobs/{job_id}")
-async def get_job(job_id: str):
-    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+async def get_job(job_id: str, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    job = await db.jobs.find_one({"id": job_id, "vendor_id": member.get("vendor_id", "default_vendor")}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    ensure_assigned_to_actor(job, actor_id)
     return job
 
 def resolve_actor_id(x_user_id: Optional[str]) -> str:
@@ -307,11 +315,25 @@ async def get_vendor_member_ids() -> List[str]:
     ids = [m["id"] for m in members]
     return ids if ids else ["default_user"]
 
+def hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+async def get_vendor_member(actor_id: str) -> dict:
+    await ensure_default_vendor_member()
+    member = await db.vendor_members.find_one({"id": actor_id}, {"_id": 0})
+    if not member:
+        raise HTTPException(status_code=403, detail="Vendor member not found")
+    return member
+
+def is_vendor_admin(member: dict) -> bool:
+    role = (member.get("role") or "").lower()
+    return any(k in role for k in ["owner", "admin", "manager"])
+
 async def resolve_vendor_actor_id(authorization: Optional[str], x_user_id: Optional[str] = None) -> str:
     if authorization:
         token = authorization.replace("Bearer ", "").strip()
         if token:
-            session = await db.vendor_sessions.find_one({"token": token, "active": True}, {"_id": 0})
+            session = await db.vendor_sessions.find_one({"token_hash": hash_session_token(token), "active": True}, {"_id": 0})
             if not session:
                 raise HTTPException(status_code=401, detail="Invalid session token")
             try:
@@ -319,7 +341,7 @@ async def resolve_vendor_actor_id(authorization: Optional[str], x_user_id: Optio
             except Exception:
                 raise HTTPException(status_code=401, detail="Invalid session expiration")
             if expires_at < datetime.now(timezone.utc):
-                await db.vendor_sessions.update_one({"token": token}, {"$set": {"active": False}})
+                await db.vendor_sessions.update_one({"token_hash": hash_session_token(token)}, {"$set": {"active": False}})
                 raise HTTPException(status_code=401, detail="Session expired")
             return session["member_id"]
     return resolve_actor_id(x_user_id)
@@ -339,10 +361,15 @@ async def vendor_os_login(payload: VendorAuthLogin):
             role="Photographer",
         ).dict()
         await db.vendor_members.insert_one(member)
-    session = VendorSession(member_id=member["id"]).dict()
+    raw_token = secrets.token_urlsafe(48)
+    session = VendorSession(
+        member_id=member["id"],
+        vendor_id=member.get("vendor_id", "default_vendor"),
+        token_hash=hash_session_token(raw_token),
+    ).dict()
     await db.vendor_sessions.insert_one(session)
     return {
-        "token": session["token"],
+        "token": raw_token,
         "member": member,
         "expires_at": session["expires_at"],
     }
@@ -362,7 +389,7 @@ async def vendor_os_logout(authorization: Optional[str] = Header(default=None, a
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     token = authorization.replace("Bearer ", "").strip()
-    result = await db.vendor_sessions.update_one({"token": token, "active": True}, {"$set": {"active": False}})
+    result = await db.vendor_sessions.update_one({"token_hash": hash_session_token(token), "active": True}, {"$set": {"active": False}})
     if result.matched_count == 0:
         raise HTTPException(status_code=401, detail="Invalid session token")
     return {"logged_out": True}
@@ -425,19 +452,31 @@ async def toggle_checklist_item(job_id: str, item_id: str, toggle: ChecklistTogg
 
 # Schedule
 @api_router.get("/schedule")
-async def get_schedule(date: Optional[str] = None):
-    query = {}
+async def get_schedule(date: Optional[str] = None, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    query = {"vendor_id": member.get("vendor_id", "default_vendor"), "assignee_id": actor_id}
     if date:
         query["scheduled_date"] = date
     return await db.jobs.find(query, {"_id": 0}).sort("time_window_start", 1).to_list(100)
 
 # Uploads
 @api_router.get("/uploads")
-async def get_uploads(job_id: Optional[str] = None):
-    query = {}
+async def get_uploads(job_id: Optional[str] = None, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    vendor_id = member.get("vendor_id", "default_vendor")
     if job_id:
-        query["job_id"] = job_id
-    return await db.uploads.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+        job = await db.jobs.find_one({"id": job_id, "vendor_id": vendor_id}, {"_id": 0})
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        ensure_assigned_to_actor(job, actor_id)
+        return await db.uploads.find({"job_id": job_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    jobs = await db.jobs.find({"vendor_id": vendor_id, "assignee_id": actor_id}, {"_id": 0, "id": 1}).to_list(500)
+    job_ids = [j["id"] for j in jobs]
+    if not job_ids:
+        return []
+    return await db.uploads.find({"job_id": {"$in": job_ids}}, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 @api_router.post("/uploads")
 async def create_upload(job_id: str = Form(...), filename: str = Form(...), file_size: int = Form(0), mime_type: str = Form(""), file_data: str = Form(""), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
@@ -555,9 +594,9 @@ async def get_vendor_team(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    await resolve_vendor_actor_id(authorization, x_user_id)
-    await ensure_default_vendor_member()
-    query = {"vendor_id": "default_vendor"}
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    query = {"vendor_id": actor_member.get("vendor_id", "default_vendor")}
     if status:
         query["status"] = status
     if search:
@@ -582,12 +621,16 @@ async def get_vendor_team(
 
 @api_router.post("/vendor-os/team")
 async def create_vendor_member(payload: VendorMemberCreate, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
-    await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     member = VendorMember(
         name=payload.name,
         email=payload.email.strip().lower(),
         phone=payload.phone,
         role=payload.role,
+        vendor_id=actor_member.get("vendor_id", "default_vendor"),
     )
     member_dict = member.dict()
     await db.vendor_members.insert_one(member_dict)
@@ -596,12 +639,15 @@ async def create_vendor_member(payload: VendorMemberCreate, authorization: Optio
 
 @api_router.put("/vendor-os/team/{member_id}")
 async def update_vendor_member(member_id: str, payload: VendorMemberUpdate, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
-    await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     update_data = {k: v for k, v in payload.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No update data")
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = await db.vendor_members.update_one({"id": member_id, "vendor_id": "default_vendor"}, {"$set": update_data})
+    result = await db.vendor_members.update_one({"id": member_id, "vendor_id": actor_member.get("vendor_id", "default_vendor")}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Member not found")
     member = await db.vendor_members.find_one({"id": member_id}, {"_id": 0})
@@ -610,13 +656,17 @@ async def update_vendor_member(member_id: str, payload: VendorMemberUpdate, auth
 
 @api_router.delete("/vendor-os/team/{member_id}")
 async def delete_vendor_member(member_id: str, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
-    await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     if member_id == "default_user":
         raise HTTPException(status_code=400, detail="Cannot remove default member")
-    result = await db.vendor_members.delete_one({"id": member_id, "vendor_id": "default_vendor"})
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    result = await db.vendor_members.delete_one({"id": member_id, "vendor_id": vendor_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Member not found")
-    await db.jobs.update_many({"assignee_id": member_id}, {"$set": {"assignee_id": "default_user", "updated_at": datetime.now(timezone.utc).isoformat()}})
+    await db.jobs.update_many({"assignee_id": member_id, "vendor_id": vendor_id}, {"$set": {"assignee_id": "default_user", "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"deleted": True}
 
 # Vendor OS - Jobs assignment
@@ -630,8 +680,9 @@ async def get_vendor_os_jobs(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    await resolve_vendor_actor_id(authorization, x_user_id)
-    query = {}
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    query = {"vendor_id": actor_member.get("vendor_id", "default_vendor")}
     if status:
         query["status"] = status
     if assignee_id:
@@ -646,7 +697,7 @@ async def get_vendor_os_jobs(
     page_size = min(max(page_size, 1), 100)
     skip = (page - 1) * page_size
     jobs = await db.jobs.find(query, {"_id": 0}).sort("scheduled_date", 1).skip(skip).limit(page_size).to_list(page_size)
-    members = await db.vendor_members.find({"vendor_id": "default_vendor"}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    members = await db.vendor_members.find({"vendor_id": actor_member.get("vendor_id", "default_vendor")}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
     member_map = {m["id"]: m.get("name", "Unknown") for m in members}
     for job in jobs:
         job["assignee_name"] = member_map.get(job.get("assignee_id"), "Unassigned")
@@ -659,11 +710,15 @@ async def get_vendor_os_jobs(
 
 @api_router.put("/vendor-os/jobs/{job_id}/assign")
 async def assign_job_to_member(job_id: str, payload: JobAssignmentUpdate, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
-    await resolve_vendor_actor_id(authorization, x_user_id)
-    member = await db.vendor_members.find_one({"id": payload.member_id, "vendor_id": "default_vendor", "is_active": True}, {"_id": 0})
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    member = await db.vendor_members.find_one({"id": payload.member_id, "vendor_id": vendor_id, "is_active": True}, {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
-    result = await db.jobs.update_one({"id": job_id}, {"$set": {"assignee_id": payload.member_id, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    result = await db.jobs.update_one({"id": job_id, "vendor_id": vendor_id}, {"$set": {"assignee_id": payload.member_id, "updated_at": datetime.now(timezone.utc).isoformat()}})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Job not found")
     return await db.jobs.find_one({"id": job_id}, {"_id": 0})
@@ -672,9 +727,11 @@ async def assign_job_to_member(job_id: str, payload: JobAssignmentUpdate, author
 @api_router.get("/vendor-os/availability")
 async def get_vendor_availability(authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    record = await db.vendor_availability.find_one({"vendor_id": "default_vendor", "member_id": actor_id}, {"_id": 0})
+    member = await get_vendor_member(actor_id)
+    vendor_id = member.get("vendor_id", "default_vendor")
+    record = await db.vendor_availability.find_one({"vendor_id": vendor_id, "member_id": actor_id}, {"_id": 0})
     if not record:
-        default = AvailabilitySettings(member_id=actor_id).dict()
+        default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
         await db.vendor_availability.insert_one(default)
         return default
     return record
@@ -682,21 +739,26 @@ async def get_vendor_availability(authorization: Optional[str] = Header(default=
 @api_router.put("/vendor-os/availability")
 async def update_vendor_availability(payload: AvailabilityUpdate, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    vendor_id = member.get("vendor_id", "default_vendor")
     update_data = payload.dict()
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.vendor_availability.update_one(
-        {"vendor_id": "default_vendor", "member_id": actor_id},
-        {"$set": update_data, "$setOnInsert": {"id": str(uuid.uuid4()), "vendor_id": "default_vendor", "member_id": actor_id}},
+        {"vendor_id": vendor_id, "member_id": actor_id},
+        {"$set": update_data, "$setOnInsert": {"id": str(uuid.uuid4()), "vendor_id": vendor_id, "member_id": actor_id}},
         upsert=True,
     )
-    return await db.vendor_availability.find_one({"vendor_id": "default_vendor", "member_id": actor_id}, {"_id": 0})
+    return await db.vendor_availability.find_one({"vendor_id": vendor_id, "member_id": actor_id}, {"_id": 0})
 
 # Vendor OS - Performance
 @api_router.get("/vendor-os/performance")
 async def get_vendor_performance(authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
-    await resolve_vendor_actor_id(authorization, x_user_id)
-    member_ids = await get_vendor_member_ids()
-    jobs = await db.jobs.find({"assignee_id": {"$in": member_ids}}, {"_id": 0}).to_list(500)
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    members = await db.vendor_members.find({"vendor_id": vendor_id, "is_active": True}, {"_id": 0, "id": 1}).to_list(500)
+    member_ids = [m["id"] for m in members] or ["default_user"]
+    jobs = await db.jobs.find({"vendor_id": vendor_id, "assignee_id": {"$in": member_ids}}, {"_id": 0}).to_list(500)
     today = datetime.now(timezone.utc).date()
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
@@ -733,23 +795,29 @@ async def get_vendor_performance(authorization: Optional[str] = Header(default=N
 # Vendor OS - Settings
 @api_router.get("/vendor-os/settings")
 async def get_vendor_settings(authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
-    await resolve_vendor_actor_id(authorization, x_user_id)
-    settings = await db.vendor_settings.find_one({"id": "default_vendor_settings"}, {"_id": 0})
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    settings = await db.vendor_settings.find_one({"vendor_id": vendor_id}, {"_id": 0})
     if not settings:
-        default = VendorSettings().dict()
+        default = VendorSettings(vendor_id=vendor_id).dict()
         await db.vendor_settings.insert_one(default)
         return default
     return settings
 
 @api_router.put("/vendor-os/settings")
 async def update_vendor_settings(payload: VendorSettingsUpdate, authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
-    await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
     update_data = {k: v for k, v in payload.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No update data")
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db.vendor_settings.update_one({"id": "default_vendor_settings"}, {"$set": update_data}, upsert=True)
-    return await db.vendor_settings.find_one({"id": "default_vendor_settings"}, {"_id": 0})
+    await db.vendor_settings.update_one({"vendor_id": vendor_id}, {"$set": update_data, "$setOnInsert": {"id": "default_vendor_settings", "vendor_id": vendor_id}}, upsert=True)
+    return await db.vendor_settings.find_one({"vendor_id": vendor_id}, {"_id": 0})
 
 # Seed
 @api_router.post("/seed")
