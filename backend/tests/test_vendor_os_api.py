@@ -16,12 +16,22 @@ def get_base_url():
 
 
 BASE_URL = get_base_url()
-HEADERS = {"X-User-Id": "default_user", "Content-Type": "application/json"}
+
+
+def auth_headers():
+    login_res = requests.post(
+        f"{BASE_URL}/api/vendor-os/auth/login",
+        json={"email": "alex.rivera@bricksdispatch.com", "name": "Alex Rivera"},
+    )
+    assert login_res.status_code == 200
+    token = login_res.json()["token"]
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
 def test_vendor_os_overview():
     requests.post(f"{BASE_URL}/api/seed")
-    res = requests.get(f"{BASE_URL}/api/vendor-os/overview", headers=HEADERS)
+    headers = auth_headers()
+    res = requests.get(f"{BASE_URL}/api/vendor-os/overview", headers=headers)
     assert res.status_code == 200
     data = res.json()
     for key in ["jobs_assigned_today", "jobs_assigned_week", "jobs_completed_week", "capacity_utilization_pct", "upcoming_jobs"]:
@@ -30,9 +40,10 @@ def test_vendor_os_overview():
 
 def test_vendor_os_team_crud():
     requests.post(f"{BASE_URL}/api/seed")
-    list_res = requests.get(f"{BASE_URL}/api/vendor-os/team", headers=HEADERS)
+    headers = auth_headers()
+    list_res = requests.get(f"{BASE_URL}/api/vendor-os/team", headers=headers)
     assert list_res.status_code == 200
-    initial_count = len(list_res.json())
+    initial_count = list_res.json()["total"]
 
     create_payload = {
         "name": "Jamie Vendor",
@@ -40,43 +51,56 @@ def test_vendor_os_team_crud():
         "phone": "+1 555 333 2222",
         "role": "Photographer",
     }
-    create_res = requests.post(f"{BASE_URL}/api/vendor-os/team", headers=HEADERS, json=create_payload)
+    create_res = requests.post(f"{BASE_URL}/api/vendor-os/team", headers=headers, json=create_payload)
     assert create_res.status_code == 200
     member = create_res.json()
     member_id = member["id"]
 
     update_res = requests.put(
         f"{BASE_URL}/api/vendor-os/team/{member_id}",
-        headers=HEADERS,
+        headers=headers,
         json={"status": "busy"}
     )
     assert update_res.status_code == 200
     assert update_res.json()["status"] == "busy"
 
-    delete_res = requests.delete(f"{BASE_URL}/api/vendor-os/team/{member_id}", headers=HEADERS)
+    delete_res = requests.delete(f"{BASE_URL}/api/vendor-os/team/{member_id}", headers=headers)
     assert delete_res.status_code == 200
 
-    final_res = requests.get(f"{BASE_URL}/api/vendor-os/team", headers=HEADERS)
-    assert len(final_res.json()) == initial_count
+    final_res = requests.get(f"{BASE_URL}/api/vendor-os/team", headers=headers)
+    assert final_res.json()["total"] == initial_count
+
+
+def test_vendor_os_team_filter_and_pagination():
+    requests.post(f"{BASE_URL}/api/seed")
+    headers = auth_headers()
+    requests.post(f"{BASE_URL}/api/vendor-os/team", headers=headers, json={"name": "Pat Busy", "email": "pat.busy@test.com", "phone": "", "role": "Editor"})
+    requests.post(f"{BASE_URL}/api/vendor-os/team", headers=headers, json={"name": "Sam Busy", "email": "sam.busy@test.com", "phone": "", "role": "Photographer"})
+    team = requests.get(f"{BASE_URL}/api/vendor-os/team?search=busy&page=1&page_size=1", headers=headers)
+    assert team.status_code == 200
+    payload = team.json()
+    assert payload["total"] >= 2
+    assert len(payload["items"]) == 1
 
 
 def test_vendor_os_job_assignment():
     requests.post(f"{BASE_URL}/api/seed")
+    headers = auth_headers()
     member_res = requests.post(
         f"{BASE_URL}/api/vendor-os/team",
-        headers=HEADERS,
+        headers=headers,
         json={"name": "Alex Team", "email": "alex.team@test.com", "phone": "", "role": "Operator"},
     )
     assert member_res.status_code == 200
     member_id = member_res.json()["id"]
 
-    jobs_res = requests.get(f"{BASE_URL}/api/jobs", headers=HEADERS)
+    jobs_res = requests.get(f"{BASE_URL}/api/jobs", headers={"X-User-Id": "default_user", "Content-Type": "application/json"})
     assert jobs_res.status_code == 200
     job_id = jobs_res.json()[0]["id"]
 
     assign_res = requests.put(
         f"{BASE_URL}/api/vendor-os/jobs/{job_id}/assign",
-        headers=HEADERS,
+        headers=headers,
         json={"member_id": member_id}
     )
     assert assign_res.status_code == 200
@@ -85,7 +109,8 @@ def test_vendor_os_job_assignment():
 
 def test_vendor_os_availability_settings():
     requests.post(f"{BASE_URL}/api/seed")
-    get_res = requests.get(f"{BASE_URL}/api/vendor-os/availability", headers=HEADERS)
+    headers = auth_headers()
+    get_res = requests.get(f"{BASE_URL}/api/vendor-os/availability", headers=headers)
     assert get_res.status_code == 200
 
     payload = {
@@ -95,7 +120,7 @@ def test_vendor_os_availability_settings():
         "jobs_per_day": 6,
         "blocked_windows": [{"start": "2026-04-15T12:00:00Z", "end": "2026-04-15T13:00:00Z"}]
     }
-    put_res = requests.put(f"{BASE_URL}/api/vendor-os/availability", headers=HEADERS, json=payload)
+    put_res = requests.put(f"{BASE_URL}/api/vendor-os/availability", headers=headers, json=payload)
     assert put_res.status_code == 200
     updated = put_res.json()
     assert updated["jobs_per_day"] == 6
@@ -104,18 +129,19 @@ def test_vendor_os_availability_settings():
 
 def test_vendor_os_performance_and_settings():
     requests.post(f"{BASE_URL}/api/seed")
-    perf_res = requests.get(f"{BASE_URL}/api/vendor-os/performance", headers=HEADERS)
+    headers = auth_headers()
+    perf_res = requests.get(f"{BASE_URL}/api/vendor-os/performance", headers=headers)
     assert perf_res.status_code == 200
     perf = perf_res.json()
     for key in ["completion_rate", "on_time_rate", "job_volume_week"]:
         assert key in perf
 
-    settings_get = requests.get(f"{BASE_URL}/api/vendor-os/settings", headers=HEADERS)
+    settings_get = requests.get(f"{BASE_URL}/api/vendor-os/settings", headers=headers)
     assert settings_get.status_code == 200
 
     settings_put = requests.put(
         f"{BASE_URL}/api/vendor-os/settings",
-        headers=HEADERS,
+        headers=headers,
         json={
             "company_name": "Bricks Creative Ops",
             "service_areas": ["Los Angeles", "Pasadena"],
@@ -125,3 +151,37 @@ def test_vendor_os_performance_and_settings():
     assert settings_put.status_code == 200
     updated = settings_put.json()
     assert updated["company_name"] == "Bricks Creative Ops"
+
+
+def test_vendor_os_jobs_filter_and_pagination():
+    requests.post(f"{BASE_URL}/api/seed")
+    headers = auth_headers()
+    jobs_res = requests.get(f"{BASE_URL}/api/vendor-os/jobs?status=assigned&page=1&page_size=2", headers=headers)
+    assert jobs_res.status_code == 200
+    payload = jobs_res.json()
+    assert payload["page"] == 1
+    assert payload["page_size"] == 2
+    assert payload["total"] >= len(payload["items"])
+    for item in payload["items"]:
+        assert item["status"] == "assigned"
+
+
+def test_vendor_os_auth_logout_and_me():
+    requests.post(f"{BASE_URL}/api/seed")
+    login_res = requests.post(
+        f"{BASE_URL}/api/vendor-os/auth/login",
+        json={"email": "alex.rivera@bricksdispatch.com", "name": "Alex Rivera"},
+    )
+    assert login_res.status_code == 200
+    token = login_res.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    me_res = requests.get(f"{BASE_URL}/api/vendor-os/auth/me", headers=headers)
+    assert me_res.status_code == 200
+    assert me_res.json()["email"] == "alex.rivera@bricksdispatch.com"
+
+    logout_res = requests.post(f"{BASE_URL}/api/vendor-os/auth/logout", headers=headers)
+    assert logout_res.status_code == 200
+
+    blocked_res = requests.get(f"{BASE_URL}/api/vendor-os/auth/me", headers=headers)
+    assert blocked_res.status_code == 401

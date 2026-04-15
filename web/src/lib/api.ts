@@ -1,5 +1,5 @@
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-const ACTOR_ID = import.meta.env.VITE_ACTOR_ID || 'default_user';
+const TOKEN_KEY = 'vendor_os_token';
 
 type RequestOptions = RequestInit & { query?: Record<string, string | number | undefined> };
 
@@ -17,7 +17,10 @@ function buildUrl(path: string, query?: RequestOptions['query']) {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
-  headers.set('X-User-Id', ACTOR_ID);
+  const token = getToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
   if (!headers.has('Content-Type') && options.body && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
@@ -41,6 +44,53 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
 
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string) {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+export type AuthMember = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  status: 'available' | 'busy' | 'offline';
+};
+
+export async function login(email: string, name?: string): Promise<AuthMember> {
+  const res = await fetch(`${API_BASE}/api/vendor-os/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, name }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || 'Login failed');
+  }
+  const data = await res.json();
+  setToken(data.token);
+  return data.member;
+}
+
+export async function me(): Promise<AuthMember> {
+  return api.get<AuthMember>('/api/vendor-os/auth/me');
+}
+
+export async function logout() {
+  try {
+    await api.post('/api/vendor-os/auth/logout');
+  } finally {
+    clearToken();
+  }
+}
+
 export type TeamMember = {
   id: string;
   name: string;
@@ -52,6 +102,13 @@ export type TeamMember = {
   assigned_jobs: number;
 };
 
+export type PaginatedTeamResponse = {
+  items: TeamMember[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
 export type Job = {
   id: string;
   address: string;
@@ -59,5 +116,13 @@ export type Job = {
   time_window_end: string;
   status: 'assigned' | 'in_progress' | 'completed';
   assignee_id: string;
+  assignee_name?: string;
   scheduled_date: string;
+};
+
+export type PaginatedJobsResponse = {
+  items: Job[];
+  total: number;
+  page: number;
+  page_size: number;
 };
