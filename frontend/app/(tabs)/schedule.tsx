@@ -26,6 +26,7 @@ export default function ScheduleScreen() {
   useEffect(() => { setLoading(true); fetchSchedule(); }, [fetchSchedule]);
   const onRefresh = useCallback(() => { setRefreshing(true); fetchSchedule(); }, [fetchSchedule]);
   const today = new Date().toISOString().split('T')[0];
+  const nextJob = jobs.find((job) => job.status !== 'completed');
 
   return (
     <SafeAreaView style={s.container} edges={['top']}>
@@ -50,7 +51,15 @@ export default function ScheduleScreen() {
       <ScrollView style={s.timeline} contentContainerStyle={s.timelineContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B82F6" colors={['#3B82F6']} />}>
         {loading ? <View style={s.loadingWrap}><ActivityIndicator size="large" color="#3B82F6" /></View>
         : jobs.length === 0 ? <View style={s.emptyWrap}><Text style={s.emptyText}>No jobs scheduled</Text><Text style={s.emptySub}>{selectedDate}</Text></View>
-        : jobs.map((job, idx) => {
+        : <>
+          {nextJob && (
+            <TouchableOpacity testID={`next-job-${nextJob.id}`} style={s.nextJobCard} onPress={() => router.push(`/job/${nextJob.id}`)} activeOpacity={0.8}>
+              <Text style={s.nextLabel}>Next Job</Text>
+              <Text style={s.nextAddress} numberOfLines={1}>{nextJob.address}</Text>
+              <Text style={s.nextMeta}>{nextJob.time_window_start} – {nextJob.time_window_end} · {nextJob.job_type.replace('_', ' ')}</Text>
+            </TouchableOpacity>
+          )}
+          {jobs.map((job, idx) => {
           const TypeIcon = JOB_TYPE_ICONS[job.job_type] || Camera; const color = STATUS_COLORS[job.status] || '#3B82F6';
           return (
             <TouchableOpacity key={job.id} testID={`schedule-job-${job.id}`} style={s.tlItem} onPress={() => router.push(`/job/${job.id}`)} activeOpacity={0.7}>
@@ -76,6 +85,7 @@ export default function ScheduleScreen() {
             </TouchableOpacity>
           );
         })}
+        </>}
       </ScrollView>
     </SafeAreaView>
   );
@@ -100,6 +110,10 @@ const s = StyleSheet.create({
   todayDotSel: { backgroundColor: '#FFFFFF' },
   timeline: { flex: 1 },
   timelineContent: { paddingHorizontal: 16, paddingBottom: 100 },
+  nextJobCard: { backgroundColor: '#14213D', borderWidth: 1, borderColor: '#2A3D66', borderRadius: 14, padding: 14, marginBottom: 14 },
+  nextLabel: { fontSize: 11, fontFamily: 'Manrope_600SemiBold', color: '#93C5FD', textTransform: 'uppercase', marginBottom: 4, letterSpacing: 0.4 },
+  nextAddress: { fontSize: 16, fontFamily: 'Outfit_600SemiBold', color: '#FFFFFF', marginBottom: 6 },
+  nextMeta: { fontSize: 12, fontFamily: 'JetBrainsMono_400Regular', color: '#BFDBFE' },
   tlItem: { flexDirection: 'row' },
   tlLeft: { width: 28, alignItems: 'center' },
   tlDot: { width: 10, height: 10, borderRadius: 5, marginTop: 18 },

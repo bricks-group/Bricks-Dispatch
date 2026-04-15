@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Form
+from fastapi import FastAPI, APIRouter, HTTPException, Form, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -87,6 +87,7 @@ class Job(BaseModel):
     checklist: List[ChecklistItem] = []
     deliverables_count: int = 0
     uploaded_count: int = 0
+    assignee_id: str = "default_user"
     scheduled_date: str = ""
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -202,15 +203,41 @@ async def get_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
+def resolve_actor_id(x_user_id: Optional[str]) -> str:
+    actor_id = (x_user_id or "").strip()
+    if not actor_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-Id header")
+    return actor_id
+
+def ensure_assigned_to_actor(job: dict, actor_id: str):
+    assignee_id = job.get("assignee_id", "default_user")
+    if assignee_id != actor_id:
+        raise HTTPException(status_code=403, detail="You are not assigned to this job")
+
 @api_router.put("/jobs/{job_id}/status")
-async def update_job_status(job_id: str, update: JobStatusUpdate):
+async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
     valid_transitions = {"assigned": ["in_progress"], "in_progress": ["completed"], "completed": []}
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    actor_id = resolve_actor_id(x_user_id)
+    ensure_assigned_to_actor(job, actor_id)
     current_status = job["status"]
     if update.status not in valid_transitions.get(current_status, []):
         raise HTTPException(status_code=400, detail=f"Cannot transition from {current_status} to {update.status}")
+    if current_status == "in_progress" and update.status == "completed":
+        checklist = job.get("checklist", [])
+        incomplete_count = len([item for item in checklist if not item.get("completed", False)])
+        required_uploads = max(job.get("deliverables_count", 0), 0)
+        uploaded_count = max(job.get("uploaded_count", 0), 0)
+        missing_uploads = max(required_uploads - uploaded_count, 0)
+        if incomplete_count > 0 or missing_uploads > 0:
+            blockers = []
+            if incomplete_count > 0:
+                blockers.append(f"{incomplete_count} checklist item(s) incomplete")
+            if missing_uploads > 0:
+                blockers.append(f"{missing_uploads} deliverable upload(s) remaining")
+            raise HTTPException(status_code=400, detail=f"Cannot complete job: {', '.join(blockers)}")
     now = datetime.now(timezone.utc).isoformat()
     await db.jobs.update_one({"id": job_id}, {"$set": {"status": update.status, "updated_at": now}})
     updated = await db.jobs.find_one({"id": job_id}, {"_id": 0})
@@ -226,7 +253,14 @@ async def update_job_status(job_id: str, update: JobStatusUpdate):
     return updated
 
 @api_router.put("/jobs/{job_id}/checklist/{item_id}")
-async def toggle_checklist_item(job_id: str, item_id: str, toggle: ChecklistToggle):
+async def toggle_checklist_item(job_id: str, item_id: str, toggle: ChecklistToggle, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    actor_id = resolve_actor_id(x_user_id)
+    ensure_assigned_to_actor(job, actor_id)
+    if job.get("status") != "in_progress":
+        raise HTTPException(status_code=400, detail="Checklist can only be updated while job is in progress")
     result = await db.jobs.update_one(
         {"id": job_id, "checklist.id": item_id},
         {"$set": {"checklist.$.completed": toggle.completed, "updated_at": datetime.now(timezone.utc).isoformat()}}
@@ -253,7 +287,14 @@ async def get_uploads(job_id: Optional[str] = None):
     return await db.uploads.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 @api_router.post("/uploads")
-async def create_upload(job_id: str = Form(...), filename: str = Form(...), file_size: int = Form(0), mime_type: str = Form(""), file_data: str = Form("")):
+async def create_upload(job_id: str = Form(...), filename: str = Form(...), file_size: int = Form(0), mime_type: str = Form(""), file_data: str = Form(""), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    actor_id = resolve_actor_id(x_user_id)
+    ensure_assigned_to_actor(job, actor_id)
+    if job.get("status") != "in_progress":
+        raise HTTPException(status_code=400, detail="Uploads are only allowed while job is in progress")
     upload = UploadRecord(job_id=job_id, filename=filename, file_size=file_size, mime_type=mime_type, thumbnail=file_data[:200] if file_data else "")
     upload_dict = upload.dict()
     await db.uploads.insert_one(upload_dict)
@@ -261,7 +302,6 @@ async def create_upload(job_id: str = Form(...), filename: str = Form(...), file
     upload_dict.pop("_id", None)
 
     # Notification trigger: upload completed
-    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     addr = job["address"] if job else "Unknown"
     await create_notification(
         title="Upload Complete",
@@ -272,12 +312,22 @@ async def create_upload(job_id: str = Form(...), filename: str = Form(...), file
     return upload_dict
 
 @api_router.delete("/uploads/{upload_id}")
-async def delete_upload(upload_id: str):
+async def delete_upload(upload_id: str, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
     upload = await db.uploads.find_one({"id": upload_id}, {"_id": 0})
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
+    job = await db.jobs.find_one({"id": upload["job_id"]}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    actor_id = resolve_actor_id(x_user_id)
+    ensure_assigned_to_actor(job, actor_id)
+    if job.get("status") == "completed":
+        raise HTTPException(status_code=400, detail="Cannot delete uploads from completed jobs")
+    if job.get("status") != "in_progress":
+        raise HTTPException(status_code=400, detail="Uploads can only be deleted while job is in progress")
     await db.uploads.delete_one({"id": upload_id})
-    await db.jobs.update_one({"id": upload["job_id"]}, {"$inc": {"uploaded_count": -1}})
+    next_count = max(job.get("uploaded_count", 0) - 1, 0)
+    await db.jobs.update_one({"id": upload["job_id"]}, {"$set": {"uploaded_count": next_count, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"deleted": True}
 
 # Profile

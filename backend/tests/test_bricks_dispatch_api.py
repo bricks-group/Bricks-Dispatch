@@ -19,12 +19,15 @@ def get_base_url():
     return ''
 
 BASE_URL = get_base_url()
+DEFAULT_HEADERS = {"X-User-Id": "default_user"}
 
 @pytest.fixture(scope="module")
 def api_client():
     """Shared requests session"""
     session = requests.Session()
-    session.headers.update({"Content-Type": "application/json"})
+    session.headers.update({"Content-Type": "application/json", **DEFAULT_HEADERS})
+    # Reset seeded state at test start for deterministic transitions.
+    requests.post(f"{BASE_URL}/api/seed")
     return session
 
 @pytest.fixture(scope="module")
@@ -52,6 +55,15 @@ def in_progress_job_id(api_client):
     assert response.status_code == 200
     jobs = response.json()
     assert len(jobs) > 0, "No in_progress jobs found"
+    return jobs[0]['id']
+
+@pytest.fixture(scope="module")
+def completed_job_id(api_client):
+    """Get a completed job ID for completed-state mutation tests"""
+    response = api_client.get(f"{BASE_URL}/api/jobs?status=completed")
+    assert response.status_code == 200
+    jobs = response.json()
+    assert len(jobs) > 0, "No completed jobs found"
     return jobs[0]['id']
 
 
@@ -158,6 +170,32 @@ class TestJobStatusTransitions:
 
     def test_status_transition_in_progress_to_completed(self, api_client, in_progress_job_id):
         """PUT /api/jobs/{id}/status transitions in_progress->completed"""
+        # Complete all checklist items first
+        job_response = api_client.get(f"{BASE_URL}/api/jobs/{in_progress_job_id}")
+        assert job_response.status_code == 200
+        job = job_response.json()
+        for item in job.get("checklist", []):
+            if not item["completed"]:
+                r = api_client.put(
+                    f"{BASE_URL}/api/jobs/{in_progress_job_id}/checklist/{item['id']}",
+                    json={"completed": True},
+                )
+                assert r.status_code == 200
+
+        # Upload any missing deliverables before completing
+        refreshed = api_client.get(f"{BASE_URL}/api/jobs/{in_progress_job_id}").json()
+        missing_uploads = max(refreshed["deliverables_count"] - refreshed["uploaded_count"], 0)
+        for idx in range(missing_uploads):
+            form_data = {
+                'job_id': in_progress_job_id,
+                'filename': f'TEST_ready_for_complete_{idx}.jpg',
+                'file_size': 1024000,
+                'mime_type': 'image/jpeg',
+                'file_data': 'base64data'
+            }
+            upload_response = requests.post(f"{BASE_URL}/api/uploads", data=form_data, headers=DEFAULT_HEADERS)
+            assert upload_response.status_code == 200, f"Upload failed: {upload_response.text}"
+
         response = api_client.put(
             f"{BASE_URL}/api/jobs/{in_progress_job_id}/status",
             json={"status": "completed"}
@@ -309,16 +347,16 @@ class TestUploadsEndpoint:
         for upload in uploads:
             assert upload['job_id'] == test_job_id
 
-    def test_create_upload(self, api_client, test_job_id):
+    def test_create_upload(self, api_client, in_progress_job_id):
         """POST /api/uploads creates upload and increments job count"""
         # Get current uploaded count
-        job_response = api_client.get(f"{BASE_URL}/api/jobs/{test_job_id}")
+        job_response = api_client.get(f"{BASE_URL}/api/jobs/{in_progress_job_id}")
         job = job_response.json()
         initial_count = job['uploaded_count']
         
         # Create upload using multipart form data (data parameter, not files)
         form_data = {
-            'job_id': test_job_id,
+            'job_id': in_progress_job_id,
             'filename': 'TEST_upload.jpg',
             'file_size': 1024000,
             'mime_type': 'image/jpeg',
@@ -327,36 +365,36 @@ class TestUploadsEndpoint:
         
         # Remove Content-Type header to let requests set it for multipart
         headers = {}
-        response = requests.post(f"{BASE_URL}/api/uploads", data=form_data, headers=headers)
+        response = requests.post(f"{BASE_URL}/api/uploads", data=form_data, headers={**DEFAULT_HEADERS, **headers})
         assert response.status_code == 200, f"Upload failed: {response.text}"
         
         upload = response.json()
-        assert upload['job_id'] == test_job_id
+        assert upload['job_id'] == in_progress_job_id
         assert upload['filename'] == 'TEST_upload.jpg'
         assert upload['file_size'] == 1024000
         
         # Verify job uploaded_count incremented
-        updated_job_response = api_client.get(f"{BASE_URL}/api/jobs/{test_job_id}")
+        updated_job_response = api_client.get(f"{BASE_URL}/api/jobs/{in_progress_job_id}")
         updated_job = updated_job_response.json()
         assert updated_job['uploaded_count'] == initial_count + 1
 
-    def test_delete_upload(self, api_client, test_job_id):
+    def test_delete_upload(self, api_client, in_progress_job_id):
         """DELETE /api/uploads/{id} deletes upload and decrements job count"""
         # Create an upload first
         form_data = {
-            'job_id': test_job_id,
+            'job_id': in_progress_job_id,
             'filename': 'TEST_delete_me.jpg',
             'file_size': 500000,
             'mime_type': 'image/jpeg',
             'file_data': ''
         }
-        create_response = requests.post(f"{BASE_URL}/api/uploads", data=form_data)
+        create_response = requests.post(f"{BASE_URL}/api/uploads", data=form_data, headers=DEFAULT_HEADERS)
         assert create_response.status_code == 200, f"Upload creation failed: {create_response.text}"
         upload = create_response.json()
         upload_id = upload['id']
         
         # Get current count
-        job_response = api_client.get(f"{BASE_URL}/api/jobs/{test_job_id}")
+        job_response = api_client.get(f"{BASE_URL}/api/jobs/{in_progress_job_id}")
         job = job_response.json()
         count_before_delete = job['uploaded_count']
         
@@ -366,7 +404,7 @@ class TestUploadsEndpoint:
         assert delete_response.json()['deleted'] == True
         
         # Verify job count decremented
-        updated_job_response = api_client.get(f"{BASE_URL}/api/jobs/{test_job_id}")
+        updated_job_response = api_client.get(f"{BASE_URL}/api/jobs/{in_progress_job_id}")
         updated_job = updated_job_response.json()
         assert updated_job['uploaded_count'] == count_before_delete - 1
         
@@ -609,7 +647,7 @@ class TestNotificationTriggers:
             'file_data': 'base64test'
         }
         
-        upload_response = requests.post(f"{BASE_URL}/api/uploads", data=form_data)
+        upload_response = requests.post(f"{BASE_URL}/api/uploads", data=form_data, headers=DEFAULT_HEADERS)
         assert upload_response.status_code == 200
         
         # Verify notification was created
@@ -624,3 +662,63 @@ class TestNotificationTriggers:
         assert new_notif['data']['job_id'] == job_id
         assert 'filename' in new_notif['data']
         assert new_notif['data']['filename'] == 'TEST_notification_upload.jpg'
+
+
+class TestDispatchRules:
+    """Strict dispatch rule enforcement tests"""
+
+    def test_completion_blocked_until_ready(self, api_client):
+        jobs_response = api_client.get(f"{BASE_URL}/api/jobs?status=assigned")
+        jobs = jobs_response.json()
+        assert jobs, "No assigned job available"
+        job_id = jobs[0]["id"]
+
+        start_response = api_client.put(
+            f"{BASE_URL}/api/jobs/{job_id}/status",
+            json={"status": "in_progress"}
+        )
+        assert start_response.status_code == 200
+
+        complete_response = api_client.put(
+            f"{BASE_URL}/api/jobs/{job_id}/status",
+            json={"status": "completed"}
+        )
+        assert complete_response.status_code == 400
+        assert "Cannot complete job" in complete_response.json().get("detail", "")
+
+    def test_forbidden_mutation_on_unassigned_job(self, api_client, in_progress_job_id):
+        headers = {"X-User-Id": "other_vendor"}
+        status_response = api_client.put(
+            f"{BASE_URL}/api/jobs/{in_progress_job_id}/status",
+            json={"status": "completed"},
+            headers=headers
+        )
+        assert status_response.status_code == 403
+
+        checklist_job = api_client.get(f"{BASE_URL}/api/jobs/{in_progress_job_id}").json()
+        checklist_item = checklist_job["checklist"][0]["id"]
+        checklist_response = api_client.put(
+            f"{BASE_URL}/api/jobs/{in_progress_job_id}/checklist/{checklist_item}",
+            json={"completed": True},
+            headers=headers
+        )
+        assert checklist_response.status_code == 403
+
+    def test_completed_job_mutation_restrictions(self, api_client, completed_job_id):
+        job_response = api_client.get(f"{BASE_URL}/api/jobs/{completed_job_id}")
+        job = job_response.json()
+        assert job["status"] == "completed"
+
+        if job.get("checklist"):
+            checklist_response = api_client.put(
+                f"{BASE_URL}/api/jobs/{completed_job_id}/checklist/{job['checklist'][0]['id']}",
+                json={"completed": False}
+            )
+            assert checklist_response.status_code == 400
+
+        # Create upload manually in DB-backed API first by selecting in-progress job and then complete-job delete restriction
+        uploads_response = api_client.get(f"{BASE_URL}/api/uploads?job_id={completed_job_id}")
+        uploads = uploads_response.json()
+        if uploads:
+            delete_response = api_client.delete(f"{BASE_URL}/api/uploads/{uploads[0]['id']}")
+            assert delete_response.status_code == 400

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Switch, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { User, Mail, Phone, Star, Award, Calendar, HelpCircle, LogOut, Wifi, WifiOff } from 'lucide-react-native';
+import { User, Mail, Phone, HelpCircle, Wifi, WifiOff } from 'lucide-react-native';
+import { actorHeaders } from '../../lib/api';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL;
 type Profile = { id: string; name: string; email: string; role: string; phone: string; availability: boolean; total_jobs_completed: number; rating: number; member_since: string };
@@ -20,7 +21,7 @@ export default function ProfileScreen() {
   const toggle = async () => {
     if (!profile || toggling) return; setToggling(true);
     const nv = !profile.availability; setProfile({ ...profile, availability: nv });
-    try { await fetch(`${API}/api/profile`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availability: nv }) }); }
+    try { await fetch(`${API}/api/profile`, { method: 'PUT', headers: actorHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ availability: nv }) }); }
     catch { setProfile({ ...profile, availability: !nv }); } finally { setToggling(false); }
   };
 
@@ -42,18 +43,13 @@ export default function ProfileScreen() {
           </View>
           <Switch testID="availability-toggle" value={profile.availability} onValueChange={toggle} trackColor={{ false: '#252839', true: '#3B82F640' }} thumbColor={profile.availability ? '#3B82F6' : '#565B7E'} />
         </View>
-        <View style={s.stats}>
-          <View style={s.stat}><Award size={18} color="#3B82F6" strokeWidth={2} /><Text style={s.statV}>{profile.total_jobs_completed}</Text><Text style={s.statL}>Jobs Done</Text></View>
-          <View style={s.stat}><Star size={18} color="#F59E0B" strokeWidth={2} /><Text style={s.statV}>{profile.rating}</Text><Text style={s.statL}>Rating</Text></View>
-          <View style={s.stat}><Calendar size={18} color="#8B5CF6" strokeWidth={2} /><Text style={s.statV}>{new Date(profile.member_since).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}</Text><Text style={s.statL}>Since</Text></View>
-        </View>
         <View style={s.info}>
           <View style={s.infoI}><Mail size={16} color="#565B7E" strokeWidth={2} /><View style={s.infoTx}><Text style={s.infoL}>Email</Text><Text style={s.infoV}>{profile.email}</Text></View></View>
-          <View style={[s.infoI, { borderBottomWidth: 0 }]}><Phone size={16} color="#565B7E" strokeWidth={2} /><View style={s.infoTx}><Text style={s.infoL}>Phone</Text><Text style={s.infoV}>{profile.phone}</Text></View></View>
+          <View style={s.infoI}><Phone size={16} color="#565B7E" strokeWidth={2} /><View style={s.infoTx}><Text style={s.infoL}>Phone</Text><Text style={s.infoV}>{profile.phone}</Text></View></View>
+          <View style={[s.infoI, { borderBottomWidth: 0 }]}><HelpCircle size={16} color="#565B7E" strokeWidth={2} /><View style={s.infoTx}><Text style={s.infoL}>Support</Text><Text style={s.infoV}>support@bricksdispatch.com</Text></View></View>
         </View>
         <View style={s.acts}>
-          <TouchableOpacity testID="support-btn" style={s.actBtn}><HelpCircle size={16} color="#8B8FA3" strokeWidth={2} /><Text style={s.actTx}>Support</Text></TouchableOpacity>
-          <TouchableOpacity testID="logout-btn" style={[s.actBtn, s.logBtn]}><LogOut size={16} color="#EF4444" strokeWidth={2} /><Text style={[s.actTx, s.logTx]}>Sign Out</Text></TouchableOpacity>
+          <TouchableOpacity testID="support-btn" style={s.actBtn}><HelpCircle size={16} color="#8B8FA3" strokeWidth={2} /><Text style={s.actTx}>Contact Support</Text></TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -78,10 +74,6 @@ const s = StyleSheet.create({
   avInfo: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   avLabel: { fontSize: 12, fontFamily: 'Manrope_500Medium', color: '#565B7E', marginBottom: 2 },
   avStatus: { fontSize: 14, fontFamily: 'Outfit_600SemiBold' },
-  stats: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 16 },
-  stat: { flex: 1, backgroundColor: '#151722', borderRadius: 14, borderWidth: 1, borderColor: '#1E2030', padding: 16, alignItems: 'center', gap: 6 },
-  statV: { fontSize: 18, fontFamily: 'Outfit_300Light', color: '#FFF' },
-  statL: { fontSize: 11, fontFamily: 'Manrope_500Medium', color: '#565B7E' },
   info: { marginHorizontal: 16, backgroundColor: '#151722', borderRadius: 14, borderWidth: 1, borderColor: '#1E2030', marginBottom: 16 },
   infoI: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#1E2030', gap: 12 },
   infoTx: { flex: 1 },
@@ -90,6 +82,4 @@ const s = StyleSheet.create({
   acts: { marginHorizontal: 16, gap: 8 },
   actBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#151722', borderRadius: 14, borderWidth: 1, borderColor: '#1E2030', padding: 16 },
   actTx: { fontSize: 14, fontFamily: 'Manrope_500Medium', color: '#8B8FA3' },
-  logBtn: { borderColor: '#EF444430' },
-  logTx: { color: '#EF4444' },
 });

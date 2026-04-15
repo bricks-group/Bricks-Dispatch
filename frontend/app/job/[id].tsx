@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { ArrowLeft, Camera, Video, Plane, Box, Ruler, MapPin, Clock, CheckSquare, Square, AlertTriangle, Upload, FileText } from 'lucide-react-native';
+import { actorHeaders } from '../../lib/api';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL;
 type ChecklistItem = { id: string; label: string; completed: boolean };
@@ -39,22 +40,40 @@ export default function JobDetailScreen() {
     if (!job || actionLoading) return;
     const next = job.status === 'assigned' ? 'in_progress' : 'completed';
     setActionLoading(true);
-    try { const r = await fetch(`${API}/api/jobs/${id}/status`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: next }) }); if (r.ok) setJob(await r.json()); else Alert.alert('Error'); }
-    catch { Alert.alert('Error'); } finally { setActionLoading(false); }
+    try {
+      const r = await fetch(`${API}/api/jobs/${id}/status`, { method:'PUT', headers:actorHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ status: next }) });
+      if (r.ok) {
+        setJob(await r.json());
+      } else {
+        const err = await r.json();
+        Alert.alert('Unable to update status', err?.detail || 'Please try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'Failed to update status');
+    } finally { setActionLoading(false); }
   };
   const toggleCheck = async (itemId: string, done: boolean) => {
     if (!job) return;
+    if (job.status !== 'in_progress') return;
     setJob({ ...job, checklist: job.checklist.map(i => i.id === itemId ? { ...i, completed: !done } : i) });
-    try { await fetch(`${API}/api/jobs/${id}/checklist/${itemId}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ completed: !done }) }); }
+    try {
+      const r = await fetch(`${API}/api/jobs/${id}/checklist/${itemId}`, { method:'PUT', headers:actorHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ completed: !done }) });
+      if (!r.ok) {
+        setJob({ ...job, checklist: job.checklist.map(i => i.id === itemId ? { ...i, completed: done } : i) });
+      }
+    }
     catch { setJob({ ...job, checklist: job.checklist.map(i => i.id === itemId ? { ...i, completed: done } : i) }); }
   };
   const handleUpload = async () => {
     if (!job) return;
+    if (job.status !== 'in_progress') return;
     const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images','videos'], quality: 0.8, base64: true });
     if (r.canceled) return;
     const a = r.assets[0]; setUploading(true);
-    try { const fd = new FormData(); fd.append('job_id', job.id); fd.append('filename', a.fileName||`upload_${Date.now()}.jpg`); fd.append('file_size', String(a.fileSize||0)); fd.append('mime_type', a.mimeType||'image/jpeg'); fd.append('file_data', a.base64?a.base64.substring(0,200):''); const res = await fetch(`${API}/api/uploads`, { method:'POST', body: fd }); if (res.ok) fetchData(); }
-    catch { } finally { setUploading(false); }
+    try {
+      const fd = new FormData(); fd.append('job_id', job.id); fd.append('filename', a.fileName||`upload_${Date.now()}.jpg`); fd.append('file_size', String(a.fileSize||0)); fd.append('mime_type', a.mimeType||'image/jpeg'); fd.append('file_data', a.base64?a.base64.substring(0,200):''); const res = await fetch(`${API}/api/uploads`, { method:'POST', headers: actorHeaders(), body: fd }); if (res.ok) fetchData(); else Alert.alert('Upload blocked', 'Uploads are allowed only while the job is in progress.');
+    }
+    catch { Alert.alert('Error', 'Upload failed'); } finally { setUploading(false); }
   };
 
   if (loading || !job) return <SafeAreaView style={st.ctn}><View style={st.ldg}><ActivityIndicator size="large" color="#3B82F6" /></View></SafeAreaView>;
@@ -62,6 +81,14 @@ export default function JobDetailScreen() {
   const TI = ICONS[job.job_type] || Camera;
   const done = job.checklist.filter(c => c.completed).length;
   const total = job.checklist.length;
+  const remainingChecklist = Math.max(total - done, 0);
+  const remainingDeliverables = Math.max(job.deliverables_count - job.uploaded_count, 0);
+  const canCompleteJob = job.status !== 'in_progress' || (remainingChecklist === 0 && remainingDeliverables === 0);
+  const ctaHint = job.status === 'in_progress' && !canCompleteJob
+    ? `${remainingChecklist > 0 ? `${remainingChecklist} checklist item(s) left` : ''}${remainingChecklist > 0 && remainingDeliverables > 0 ? ' • ' : ''}${remainingDeliverables > 0 ? `${remainingDeliverables} upload(s) left` : ''}`
+    : '';
+  const checklistLocked = job.status !== 'in_progress';
+  const uploadLocked = job.status !== 'in_progress';
 
   return (
     <SafeAreaView style={st.ctn} edges={['top']}>
@@ -89,11 +116,12 @@ export default function JobDetailScreen() {
             <View style={st.secH}><Text style={st.secT}>Checklist</Text><Text style={st.clProg}>{done}/{total}</Text></View>
             <View style={st.progTrack}><View style={[st.progFill, { width: total > 0 ? `${(done/total)*100}%` : '0%' }]} /></View>
             {job.checklist.map(i => (
-              <TouchableOpacity key={i.id} testID={`checklist-${i.id}`} style={st.clItem} onPress={() => toggleCheck(i.id, i.completed)}>
+              <TouchableOpacity key={i.id} testID={`checklist-${i.id}`} style={st.clItem} onPress={() => toggleCheck(i.id, i.completed)} disabled={checklistLocked}>
                 {i.completed ? <CheckSquare size={20} color="#3B82F6" strokeWidth={2.5} /> : <Square size={20} color="#3D4160" strokeWidth={1.8} />}
                 <Text style={[st.clLabel, i.completed && st.clDone]}>{i.label}</Text>
               </TouchableOpacity>
             ))}
+            {checklistLocked && <Text style={st.lockedHelp}>Checklist unlocks when job is in progress.</Text>}
           </View>
         )}
         <View style={st.sec}>
@@ -104,11 +132,13 @@ export default function JobDetailScreen() {
               {uploading ? <ActivityIndicator size="small" color="#FFF" /> : <><Upload size={14} color="#FFF" strokeWidth={2.5} /><Text style={st.upBtnTx}>Upload Media</Text></>}
             </TouchableOpacity>
           )}
+          {uploadLocked && job.status !== 'completed' && <Text style={st.lockedHelp}>Uploads unlock when job is in progress.</Text>}
         </View>
       </ScrollView>
       {job.status !== 'completed' && (
         <View style={st.actBar}>
-          <TouchableOpacity testID="status-action-btn" style={[st.actBtn, job.status === 'assigned' ? st.startBtn : st.compBtn]} onPress={handleStatus} disabled={actionLoading}>
+          {!!ctaHint && <Text style={st.ctaHint}>{ctaHint}</Text>}
+          <TouchableOpacity testID="status-action-btn" style={[st.actBtn, job.status === 'assigned' ? st.startBtn : st.compBtn, (!canCompleteJob || actionLoading) && { opacity: 0.6 }]} onPress={handleStatus} disabled={actionLoading || !canCompleteJob}>
             {actionLoading ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={st.actBtnTx}>{sc.action}</Text>}
           </TouchableOpacity>
         </View>
@@ -157,7 +187,9 @@ const st = StyleSheet.create({
   upSz: { fontSize: 12, fontFamily: 'JetBrainsMono_400Regular', color: '#3D4160' },
   upBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#3B82F6', paddingVertical: 14, borderRadius: 12, marginTop: 12 },
   upBtnTx: { fontSize: 14, fontFamily: 'Manrope_600SemiBold', color: '#FFF' },
+  lockedHelp: { fontSize: 12, fontFamily: 'Manrope_400Regular', color: '#565B7E', marginTop: 10 },
   actBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingVertical: 16, paddingBottom: 32, backgroundColor: '#0C0D14', borderTopWidth: 1, borderTopColor: '#1E2030' },
+  ctaHint: { fontSize: 12, fontFamily: 'Manrope_500Medium', color: '#F59E0B', marginBottom: 10, textAlign: 'center' },
   actBtn: { paddingVertical: 16, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   startBtn: { backgroundColor: '#3B82F6' },
   compBtn: { backgroundColor: '#22C55E' },
