@@ -68,7 +68,7 @@ async def get_job(job_id: str, authorization: str | None = Header(default=None, 
 
 @router.put("/jobs/{job_id}/status")
 async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    valid_transitions = {"assigned": ["in_progress"], "in_progress": ["completed"], "completed": []}
+    valid_transitions = {"pending_assignment": [], "assigned": ["in_progress"], "in_progress": ["completed"], "completed": []}
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         api_error(404, "Job not found", "job_not_found")
