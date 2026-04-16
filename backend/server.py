@@ -21,6 +21,10 @@ db = client[os.environ['DB_NAME']]
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
+SESSION_TTL_DAYS = 7
+
+def api_error(status_code: int, detail: str, code: str):
+    raise HTTPException(status_code=status_code, detail={"code": code, "message": detail})
 
 # --- Notification Sending Utility ---
 async def send_push_notification(title: str, body: str, data: dict = None):
@@ -214,7 +218,7 @@ class VendorSession(BaseModel):
     vendor_id: str = "default_vendor"
     member_id: str
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    expires_at: str = Field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=7)).isoformat())
+    expires_at: str = Field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat())
     active: bool = True
 
 # --- Routes ---
@@ -322,7 +326,7 @@ async def get_vendor_member(actor_id: str) -> dict:
     await ensure_default_vendor_member()
     member = await db.vendor_members.find_one({"id": actor_id}, {"_id": 0})
     if not member:
-        raise HTTPException(status_code=403, detail="Vendor member not found")
+        api_error(403, "Vendor member not found", "vendor_member_not_found")
     return member
 
 def is_vendor_admin(member: dict) -> bool:
@@ -335,32 +339,18 @@ async def resolve_vendor_actor_id(authorization: Optional[str], x_user_id: Optio
         if token:
             session = await db.vendor_sessions.find_one({"token_hash": hash_session_token(token), "active": True}, {"_id": 0})
             if not session:
-                raise HTTPException(status_code=401, detail="Invalid session token")
+                api_error(401, "Invalid session token", "invalid_session_token")
             try:
                 expires_at = datetime.fromisoformat(session["expires_at"])
             except Exception:
-                raise HTTPException(status_code=401, detail="Invalid session expiration")
+                api_error(401, "Invalid session expiration", "invalid_session_expiration")
             if expires_at < datetime.now(timezone.utc):
                 await db.vendor_sessions.update_one({"token_hash": hash_session_token(token)}, {"$set": {"active": False}})
-                raise HTTPException(status_code=401, detail="Session expired")
+                api_error(401, "Session expired", "session_expired")
             return session["member_id"]
     return resolve_actor_id(x_user_id)
 
-
-@api_router.post("/vendor-os/auth/login")
-async def vendor_os_login(payload: VendorAuthLogin):
-    await ensure_default_vendor_member()
-    email = payload.email.strip().lower()
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required")
-    member = await db.vendor_members.find_one({"vendor_id": "default_vendor", "email": email}, {"_id": 0})
-    if not member:
-        member = VendorMember(
-            name=(payload.name or email.split("@")[0]).strip() or "Vendor User",
-            email=email,
-            role="Photographer",
-        ).dict()
-        await db.vendor_members.insert_one(member)
+async def create_vendor_session(member: dict) -> dict:
     raw_token = secrets.token_urlsafe(48)
     session = VendorSession(
         member_id=member["id"],
@@ -374,25 +364,83 @@ async def vendor_os_login(payload: VendorAuthLogin):
         "expires_at": session["expires_at"],
     }
 
+async def deactivate_expired_sessions():
+    now = datetime.now(timezone.utc).isoformat()
+    await db.vendor_sessions.update_many(
+        {"active": True, "expires_at": {"$lt": now}},
+        {"$set": {"active": False}}
+    )
+
+
+@api_router.post("/vendor-os/auth/login")
+async def vendor_os_login(payload: VendorAuthLogin):
+    await ensure_default_vendor_member()
+    email = payload.email.strip().lower()
+    if not email:
+        api_error(400, "Email is required", "email_required")
+    member = await db.vendor_members.find_one({"vendor_id": "default_vendor", "email": email}, {"_id": 0})
+    if not member:
+        member = VendorMember(
+            name=(payload.name or email.split("@")[0]).strip() or "Vendor User",
+            email=email,
+            role="Photographer",
+        ).dict()
+        await db.vendor_members.insert_one(member)
+    return await create_vendor_session(member)
+
 
 @api_router.get("/vendor-os/auth/me")
 async def vendor_os_me(authorization: Optional[str] = Header(default=None, alias="Authorization")):
     actor_id = await resolve_vendor_actor_id(authorization, None)
     member = await db.vendor_members.find_one({"id": actor_id, "vendor_id": "default_vendor"}, {"_id": 0})
     if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
+        api_error(404, "Member not found", "member_not_found")
     return member
+
+@api_router.post("/vendor-os/auth/refresh")
+async def vendor_os_refresh(authorization: Optional[str] = Header(default=None, alias="Authorization")):
+    if not authorization:
+        api_error(401, "Missing Authorization header", "missing_authorization")
+    token = authorization.replace("Bearer ", "").strip()
+    token_hash = hash_session_token(token)
+    session = await db.vendor_sessions.find_one({"token_hash": token_hash, "active": True}, {"_id": 0})
+    if not session:
+        api_error(401, "Invalid session token", "invalid_session_token")
+    try:
+        expires_at = datetime.fromisoformat(session["expires_at"])
+    except Exception:
+        api_error(401, "Invalid session expiration", "invalid_session_expiration")
+    if expires_at < datetime.now(timezone.utc):
+        await db.vendor_sessions.update_one({"token_hash": token_hash}, {"$set": {"active": False}})
+        api_error(401, "Session expired", "session_expired")
+
+    member = await db.vendor_members.find_one({"id": session["member_id"], "vendor_id": session["vendor_id"]}, {"_id": 0})
+    if not member:
+        api_error(404, "Member not found", "member_not_found")
+
+    await db.vendor_sessions.update_one({"token_hash": token_hash}, {"$set": {"active": False}})
+    return await create_vendor_session(member)
 
 
 @api_router.post("/vendor-os/auth/logout")
 async def vendor_os_logout(authorization: Optional[str] = Header(default=None, alias="Authorization")):
     if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
+        api_error(401, "Missing Authorization header", "missing_authorization")
     token = authorization.replace("Bearer ", "").strip()
     result = await db.vendor_sessions.update_one({"token_hash": hash_session_token(token), "active": True}, {"$set": {"active": False}})
     if result.matched_count == 0:
-        raise HTTPException(status_code=401, detail="Invalid session token")
+        api_error(401, "Invalid session token", "invalid_session_token")
     return {"logged_out": True}
+
+@api_router.post("/vendor-os/auth/cleanup")
+async def vendor_os_cleanup_sessions(authorization: Optional[str] = Header(default=None, alias="Authorization"), x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+    await deactivate_expired_sessions()
+    count = await db.vendor_sessions.count_documents({"active": False})
+    return {"inactive_sessions": count}
 
 @api_router.put("/jobs/{job_id}/status")
 async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")):
@@ -624,7 +672,7 @@ async def create_vendor_member(payload: VendorMemberCreate, authorization: Optio
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
     member = VendorMember(
         name=payload.name,
         email=payload.email.strip().lower(),
@@ -642,7 +690,7 @@ async def update_vendor_member(member_id: str, payload: VendorMemberUpdate, auth
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
     update_data = {k: v for k, v in payload.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No update data")
@@ -659,7 +707,7 @@ async def delete_vendor_member(member_id: str, authorization: Optional[str] = He
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
     if member_id == "default_user":
         raise HTTPException(status_code=400, detail="Cannot remove default member")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
@@ -713,7 +761,7 @@ async def assign_job_to_member(job_id: str, payload: JobAssignmentUpdate, author
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     member = await db.vendor_members.find_one({"id": payload.member_id, "vendor_id": vendor_id, "is_active": True}, {"_id": 0})
     if not member:
@@ -810,7 +858,7 @@ async def update_vendor_settings(payload: VendorSettingsUpdate, authorization: O
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     update_data = {k: v for k, v in payload.dict().items() if v is not None}
     if not update_data:
