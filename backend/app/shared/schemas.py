@@ -16,12 +16,14 @@ class ChecklistItem(BaseModel):
 
 class Job(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    # Cross-service reference — set when job originates from a Booking booking
+    booking_id: Optional[str] = None
     address: str
-    city: str
-    state: str
-    zip_code: str
+    city: str = ""
+    state: str = ""
+    zip_code: str = ""
     time_window_start: str
-    time_window_end: str
+    time_window_end: str = ""
     job_type: str
     status: str = "assigned"
     priority: str = "normal"
@@ -33,6 +35,16 @@ class Job(BaseModel):
     assignee_id: str = "default_user"
     vendor_id: str = "default_vendor"
     scheduled_date: str = ""
+    # Agent context — populated when job originates from Booking
+    agent_user_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    agent_email: Optional[str] = None
+    agent_brokerage: Optional[str] = None
+    # Package context
+    package_id: Optional[str] = None
+    package_name: Optional[str] = None
+    package_price: Optional[int] = None
+    billing_type: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 

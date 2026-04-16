@@ -91,6 +91,17 @@ async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: str
     now = datetime.now(timezone.utc).isoformat()
     await db.jobs.update_one({"id": job_id}, {"$set": {"status": update.status, "updated_at": now}})
     updated = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+
+    # Sync status back to Booking's bookings collection
+    if updated.get("booking_id"):
+        booking_status_map = {"in_progress": "in_progress", "completed": "delivered"}
+        booking_status = booking_status_map.get(update.status)
+        if booking_status:
+            await db.bookings.update_one(
+                {"booking_id": updated["booking_id"]},
+                {"$set": {"status": booking_status, "updated_at": now}},
+            )
+
     await create_notification(
         title=f"Job {'Started' if update.status == 'in_progress' else 'Completed'}",
         body=f"{job['address']} — status changed to {update.status.replace('_', ' ')}",
