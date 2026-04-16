@@ -81,6 +81,7 @@ def test_vendor_os_team_filter_and_pagination():
     payload = team.json()
     assert payload["total"] >= 2
     assert len(payload["items"]) == 1
+    assert payload["total_pages"] >= 2
 
 
 def test_vendor_os_job_assignment():
@@ -162,6 +163,7 @@ def test_vendor_os_jobs_filter_and_pagination():
     assert payload["page"] == 1
     assert payload["page_size"] == 2
     assert payload["total"] >= len(payload["items"])
+    assert payload["total_pages"] >= 1
     for item in payload["items"]:
         assert item["status"] == "assigned"
 
@@ -185,3 +187,21 @@ def test_vendor_os_auth_logout_and_me():
 
     blocked_res = requests.get(f"{BASE_URL}/api/vendor-os/auth/me", headers=headers)
     assert blocked_res.status_code == 401
+
+
+def test_vendor_os_audit_history_records_mutations():
+    requests.post(f"{BASE_URL}/api/seed")
+    headers = auth_headers()
+
+    member_res = requests.post(
+        f"{BASE_URL}/api/vendor-os/team",
+        headers=headers,
+        json={"name": "Audit User", "email": "audit.user@test.com", "phone": "", "role": "Operator"},
+    )
+    assert member_res.status_code == 200
+
+    audit_res = requests.get(f"{BASE_URL}/api/vendor-os/audit-events?entity_type=vendor_member", headers=headers)
+    assert audit_res.status_code == 200
+    payload = audit_res.json()
+    assert payload["total"] >= 1
+    assert any(event["action"] == "create" for event in payload["items"])

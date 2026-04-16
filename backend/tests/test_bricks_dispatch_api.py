@@ -229,7 +229,11 @@ class TestJobStatusTransitions:
         
         error = response.json()
         assert 'detail' in error
-        assert 'Cannot transition' in error['detail']
+        detail = error['detail']
+        if isinstance(detail, dict):
+            assert 'Cannot transition' in detail.get('message', '')
+        else:
+            assert 'Cannot transition' in detail
 
     def test_status_transition_invalid_completed_to_assigned(self, api_client):
         """PUT /api/jobs/{id}/status rejects transition from completed"""
@@ -684,7 +688,11 @@ class TestDispatchRules:
             json={"status": "completed"}
         )
         assert complete_response.status_code == 400
-        assert "Cannot complete job" in complete_response.json().get("detail", "")
+        detail = complete_response.json().get("detail", "")
+        if isinstance(detail, dict):
+            assert "Cannot complete job" in detail.get("message", "")
+        else:
+            assert "Cannot complete job" in detail
 
     def test_forbidden_mutation_on_unassigned_job(self, api_client, in_progress_job_id):
         headers = {"X-User-Id": "other_vendor"}
