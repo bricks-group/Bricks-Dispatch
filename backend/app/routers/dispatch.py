@@ -1,9 +1,12 @@
+import base64
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Form, Header
 
 from ..services.notifications import create_notification
+from ..services.storage import get_signed_download_url, upload_file
+from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.auth import ensure_assigned_to_actor, get_vendor_member, resolve_actor_id, resolve_vendor_actor_id
 from ..shared.database import db
@@ -27,6 +30,21 @@ async def register_push_token(reg: PushTokenRegister):
     else:
         await db.push_tokens.insert_one({"token": reg.token, "platform": reg.platform, "active": True, "created_at": datetime.now(timezone.utc).isoformat()})
     return {"registered": True}
+
+
+@router.post("/jobs/{job_id}/auto-assign")
+async def auto_assign_job(job_id: str):
+    """
+    Triggers AI-driven or rule-based auto-assignment for a job.
+    """
+    try:
+        member_id = await assign_vendor_for_job(job_id)
+        job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+        return job
+    except ValueError as e:
+        api_error(404, str(e), "job_not_found")
+    except Exception as e:
+        api_error(500, f"Auto-assignment failed: {str(e)}", "auto_assign_failed")
 
 
 @router.get("/notifications")
@@ -168,7 +186,20 @@ async def create_upload(job_id: str = Form(...), filename: str = Form(...), file
     ensure_assigned_to_actor(job, actor_id)
     if job.get("status") != "in_progress":
         api_error(400, "Uploads are only allowed while job is in progress", "upload_locked")
-    upload = UploadRecord(job_id=job_id, filename=filename, file_size=file_size, mime_type=mime_type, thumbnail=file_data[:200] if file_data else "")
+
+    # Decode base64 payload and store to S3 (gracefully degrades if no credentials)
+    upload = UploadRecord(job_id=job_id, filename=filename, file_size=file_size, mime_type=mime_type)
+    if file_data:
+        try:
+            raw_bytes = base64.b64decode(file_data)
+        except Exception:
+            raw_bytes = file_data.encode()
+        file_key, thumb_key, thumb_b64 = await upload_file(
+            raw_bytes, job_id, upload.id, filename, mime_type
+        )
+        upload.thumbnail = thumb_b64
+        upload.file_url = file_key
+        upload.thumbnail_url = thumb_key
     upload_dict = upload.dict()
     await db.uploads.insert_one(upload_dict)
     await db.jobs.update_one({"id": job_id}, {"$inc": {"uploaded_count": 1}})
@@ -176,6 +207,31 @@ async def create_upload(job_id: str = Form(...), filename: str = Form(...), file
     await create_notification("Upload Complete", f"{filename} uploaded to {job['address']}", ntype="upload", data={"job_id": job_id, "filename": filename})
     await write_audit_event(actor_id, "upload", upload_dict["id"], "create", vendor_id=job.get("vendor_id", "default_vendor"), details={"job_id": job_id, "filename": filename})
     return upload_dict
+
+
+@router.get("/uploads/{upload_id}/download")
+async def get_upload_download_url(upload_id: str, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    """Return a short-lived signed S3 URL so agents can download completed photos."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    upload = await db.uploads.find_one({"id": upload_id}, {"_id": 0})
+    if not upload:
+        api_error(404, "Upload not found", "upload_not_found")
+    job = await db.jobs.find_one({"id": upload["job_id"]}, {"_id": 0})
+    if not job:
+        api_error(404, "Job not found", "job_not_found")
+    # Allow both the assigned photographer and brokerage users (no vendor membership required for brokerage)
+    member = await db.vendor_members.find_one({"user_id": actor_id})
+    if member:
+        ensure_assigned_to_actor(job, actor_id)
+    s3_key = upload.get("file_url")
+    signed_url = get_signed_download_url(s3_key) if s3_key else None
+    return {
+        "upload_id": upload_id,
+        "filename": upload.get("filename"),
+        "signed_url": signed_url,
+        "expires_in": 3600,
+        "available": signed_url is not None,
+    }
 
 
 @router.delete("/uploads/{upload_id}")

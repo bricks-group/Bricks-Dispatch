@@ -1,12 +1,17 @@
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from starlette.middleware.cors import CORSMiddleware
+
+_SEED_ENABLED = os.environ.get("SEED_ENABLED", "false").lower() == "true"
 
 from app.routers.auth import router as auth_router
 from app.routers.dispatch import router as dispatch_router
 from app.routers.vendor_os import router as vendor_os_router
+from app.routers.onboarding import router as onboarding_router
+from app.routers.admin_ops import router as admin_ops_router
 from app.shared.database import client, db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -25,6 +30,8 @@ seed_router = APIRouter(prefix="/api", tags=["seed"])
 
 @seed_router.post("/seed")
 async def seed_data():
+    if not _SEED_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
     await db.jobs.delete_many({})
     await db.uploads.delete_many({})
     await db.profile.delete_many({})
@@ -39,13 +46,13 @@ async def seed_data():
     day_after = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%d")
 
     jobs = [
-        Job(address="1245 Ocean Blvd", city="Santa Monica", state="CA", zip_code="90401", time_window_start="09:00", time_window_end="10:30", job_type="photo", status="assigned", priority="high", property_details="4BR/3BA luxury beachfront property. 3,200 sqft. Recently renovated kitchen and master suite. Ocean-facing balcony.", client_instructions="Capture sunset views from balcony. Focus on kitchen upgrades and open floor plan. Include aerial drone shots of beachfront.", scheduled_date=today, deliverables_count=25, uploaded_count=0, checklist=[ChecklistItem(label="Exterior front elevation"), ChecklistItem(label="Exterior rear with pool"), ChecklistItem(label="Living room wide angle"), ChecklistItem(label="Kitchen overview"), ChecklistItem(label="Master bedroom"), ChecklistItem(label="Master bathroom"), ChecklistItem(label="Balcony ocean view"), ChecklistItem(label="Drone aerial shot")]),
-        Job(address="892 Maple Drive", city="Beverly Hills", state="CA", zip_code="90210", time_window_start="11:00", time_window_end="12:30", job_type="video", status="assigned", priority="urgent", property_details="6BR/5BA estate. 8,500 sqft. Pool, tennis court, 3-car garage. Mediterranean style.", client_instructions="Full walkthrough video. Cinematic style. Include drone flyover. Client wants twilight shots if possible.", scheduled_date=today, deliverables_count=3, uploaded_count=0, checklist=[ChecklistItem(label="Walkthrough video (4K)"), ChecklistItem(label="Drone flyover footage"), ChecklistItem(label="Twilight exterior shots")]),
-        Job(address="3401 Wilshire Blvd #PH", city="Los Angeles", state="CA", zip_code="90010", time_window_start="14:00", time_window_end="15:30", job_type="3d_tour", status="in_progress", priority="normal", property_details="2BR/2BA penthouse condo. 1,800 sqft. Downtown skyline views. Modern minimalist design.", client_instructions="Matterport 3D scan. Cover all rooms including closets and storage. Tag key features.", scheduled_date=today, deliverables_count=12, uploaded_count=4, checklist=[ChecklistItem(label="Living area scan", completed=True), ChecklistItem(label="Kitchen scan", completed=True), ChecklistItem(label="Bedroom 1 scan", completed=True), ChecklistItem(label="Bedroom 2 scan", completed=True), ChecklistItem(label="Bathroom 1 scan"), ChecklistItem(label="Bathroom 2 scan"), ChecklistItem(label="Balcony scan"), ChecklistItem(label="Storage/utility scan")]),
-        Job(address="567 Elm Street", city="Pasadena", state="CA", zip_code="91101", time_window_start="16:00", time_window_end="17:00", job_type="floor_plan", status="completed", priority="normal", property_details="3BR/2BA craftsman bungalow. 1,600 sqft. Detached garage. Large backyard.", client_instructions="Standard floor plan with room dimensions. Include garage and outdoor spaces.", scheduled_date=today, deliverables_count=2, uploaded_count=2, checklist=[ChecklistItem(label="Main floor measurement", completed=True), ChecklistItem(label="Floor plan rendering", completed=True)]),
-        Job(address="2100 Pacific Coast Hwy", city="Malibu", state="CA", zip_code="90265", time_window_start="08:00", time_window_end="10:00", job_type="drone", status="assigned", priority="high", property_details="5BR/4BA oceanfront estate. 4,800 sqft. Infinity pool. Private beach access.", client_instructions="Aerial photography and video. Include coastline shots. FAA clearance obtained.", scheduled_date=tomorrow, deliverables_count=15, uploaded_count=0, checklist=[ChecklistItem(label="Aerial front approach"), ChecklistItem(label="Overhead property shot"), ChecklistItem(label="Coastline panorama"), ChecklistItem(label="Pool and backyard aerial"), ChecklistItem(label="Neighborhood context shot")]),
-        Job(address="445 N Rodeo Drive", city="Beverly Hills", state="CA", zip_code="90210", time_window_start="13:00", time_window_end="14:30", job_type="photo", status="assigned", priority="normal", property_details="Commercial retail space. 2,400 sqft. Corner lot with high visibility.", client_instructions="Standard commercial photography package. Emphasis on storefront and foot traffic visibility.", scheduled_date=tomorrow, deliverables_count=18, uploaded_count=0, checklist=[ChecklistItem(label="Storefront exterior"), ChecklistItem(label="Interior wide shots"), ChecklistItem(label="Detail shots"), ChecklistItem(label="Loading/parking area")]),
-        Job(address="7788 Sunset Strip", city="West Hollywood", state="CA", zip_code="90046", time_window_start="10:00", time_window_end="12:00", job_type="video", status="assigned", priority="normal", property_details="3BR/2BA modern condo. 2,100 sqft. Rooftop access. City views.", client_instructions="Lifestyle video with rooftop sunset shots. Background music will be added in post.", scheduled_date=day_after, deliverables_count=4, uploaded_count=0, checklist=[ChecklistItem(label="Interior walkthrough"), ChecklistItem(label="Rooftop footage"), ChecklistItem(label="Sunset timelapse"), ChecklistItem(label="Neighborhood B-roll")]),
+        Job(address="22 Rosehill Ave", city="Toronto", state="ON", zip_code="M4T 1G5", time_window_start="09:00", time_window_end="10:30", job_type="photo", status="assigned", priority="high", property_details="4BR/3BA detached home. 2,800 sqft. Renovated kitchen and master suite. Large backyard.", client_instructions="Focus on kitchen upgrades and open floor plan. Capture backyard entertaining area.", scheduled_date=today, deliverables_count=35, uploaded_count=0, checklist=[ChecklistItem(label="Exterior front elevation"), ChecklistItem(label="Exterior rear with yard"), ChecklistItem(label="Living room wide angle"), ChecklistItem(label="Kitchen overview"), ChecklistItem(label="Master bedroom"), ChecklistItem(label="Master bathroom"), ChecklistItem(label="Backyard"), ChecklistItem(label="Drone aerial shot")]),
+        Job(address="88 Harbour Square", city="Toronto", state="ON", zip_code="M5J 2S2", time_window_start="11:00", time_window_end="12:30", job_type="video", status="assigned", priority="urgent", property_details="2BR/2BA lakefront condo. 1,400 sqft. Floor-to-ceiling windows. Lake Ontario views.", client_instructions="Cinematic walkthrough. Emphasise lake views and building amenities. Include drone flyover.", scheduled_date=today, deliverables_count=3, uploaded_count=0, checklist=[ChecklistItem(label="Walkthrough video (4K)"), ChecklistItem(label="Drone flyover footage"), ChecklistItem(label="Twilight exterior shots")]),
+        Job(address="312 King St W, Unit 1802", city="Toronto", state="ON", zip_code="M5V 1J2", time_window_start="14:00", time_window_end="15:30", job_type="3d_tour", status="in_progress", priority="normal", property_details="1BR+den condo. 750 sqft. Entertainment district. Modern finishes.", client_instructions="Full Matterport scan including storage and den. Tag kitchen island and city view windows.", scheduled_date=today, deliverables_count=12, uploaded_count=4, checklist=[ChecklistItem(label="Living area scan", completed=True), ChecklistItem(label="Kitchen scan", completed=True), ChecklistItem(label="Bedroom scan", completed=True), ChecklistItem(label="Den scan", completed=True), ChecklistItem(label="Bathroom scan"), ChecklistItem(label="Balcony scan"), ChecklistItem(label="Storage scan"), ChecklistItem(label="Hallway scan")]),
+        Job(address="45 Dunbar Rd", city="Hamilton", state="ON", zip_code="L8P 3B4", time_window_start="16:00", time_window_end="17:00", job_type="floor_plan", status="completed", priority="normal", property_details="3BR/2BA century home. 1,750 sqft. Detached garage. Corner lot.", client_instructions="Standard floor plan with room dimensions. Include garage and yard footprint.", scheduled_date=today, deliverables_count=2, uploaded_count=2, checklist=[ChecklistItem(label="Main floor measurement", completed=True), ChecklistItem(label="Floor plan rendering", completed=True)]),
+        Job(address="9 Harbour St E", city="Mississauga", state="ON", zip_code="L5G 1A7", time_window_start="08:00", time_window_end="10:00", job_type="drone", status="assigned", priority="high", property_details="4BR/3BA executive home. 3,200 sqft. Pool. Backing onto conservation land.", client_instructions="Aerial photography and video. Capture conservation backdrop and pool area.", scheduled_date=tomorrow, deliverables_count=15, uploaded_count=0, checklist=[ChecklistItem(label="Aerial front approach"), ChecklistItem(label="Overhead property shot"), ChecklistItem(label="Conservation land backdrop"), ChecklistItem(label="Pool and backyard aerial"), ChecklistItem(label="Neighbourhood context shot")]),
+        Job(address="150 King St W", city="Toronto", state="ON", zip_code="M5H 1J9", time_window_start="13:00", time_window_end="14:30", job_type="photo", status="assigned", priority="normal", property_details="Commercial office space. 3,100 sqft. Financial district. Corner unit with city views.", client_instructions="Standard commercial photography. Emphasise natural light and boardroom.", scheduled_date=tomorrow, deliverables_count=18, uploaded_count=0, checklist=[ChecklistItem(label="Exterior building shot"), ChecklistItem(label="Reception area"), ChecklistItem(label="Open office"), ChecklistItem(label="Boardroom")]),
+        Job(address="1 Yonge St, Unit 4201", city="Toronto", state="ON", zip_code="M5E 1W7", time_window_start="10:00", time_window_end="12:00", job_type="video", status="assigned", priority="normal", property_details="2BR/2BA luxury condo. 1,100 sqft. 42nd floor. Panoramic lake and city views.", client_instructions="Lifestyle walkthrough video. Capture sunrise lake view. Music to be added in post.", scheduled_date=day_after, deliverables_count=4, uploaded_count=0, checklist=[ChecklistItem(label="Interior walkthrough"), ChecklistItem(label="Lake view footage"), ChecklistItem(label="Sunrise timelapse"), ChecklistItem(label="Amenities B-roll")]),
     ]
     for job in jobs:
         await db.jobs.insert_one(job.dict())
@@ -63,17 +70,25 @@ async def seed_data():
 
     # Seed sample notifications
     sample_notifs = [
-        NotificationRecord(title="New Job Assigned", body="1245 Ocean Blvd — Photo shoot at 09:00", type="new_job", data={"job_id": jobs[0].id}),
-        NotificationRecord(title="New Job Assigned", body="892 Maple Drive — URGENT video shoot at 11:00", type="new_job", data={"job_id": jobs[1].id}),
-        NotificationRecord(title="Job Started", body="3401 Wilshire Blvd #PH — 3D tour in progress", type="status_change", data={"job_id": jobs[2].id}),
-        NotificationRecord(title="Approaching Time Window", body="1245 Ocean Blvd — starts in 30 min", type="reminder", data={"job_id": jobs[0].id}),
+        NotificationRecord(title="New Job Assigned", body="22 Rosehill Ave — Photo shoot at 09:00", type="new_job", data={"job_id": jobs[0].id}),
+        NotificationRecord(title="New Job Assigned", body="88 Harbour Square — URGENT video shoot at 11:00", type="new_job", data={"job_id": jobs[1].id}),
+        NotificationRecord(title="Job Started", body="312 King St W — 3D tour in progress", type="status_change", data={"job_id": jobs[2].id}),
+        NotificationRecord(title="Approaching Time Window", body="22 Rosehill Ave — starts in 30 min", type="reminder", data={"job_id": jobs[0].id}),
     ]
     for n in sample_notifs:
         await db.notifications.insert_one(n.dict())
 
     profile = Profile()
     await db.profile.insert_one(profile.dict())
-    await db.vendor_members.insert_one(VendorMember(id="default_user", name=profile.name, email=profile.email, phone=profile.phone, role="Owner Operator").dict())
+    await db.vendor_members.insert_one(VendorMember(
+        id="default_user", 
+        name=profile.name, 
+        email=profile.email, 
+        phone=profile.phone, 
+        role="Owner Operator",
+        is_active=True,
+        onboarding_status="approved"
+    ).dict())
     await db.vendor_availability.insert_one(AvailabilitySettings(member_id="default_user").dict())
     await db.vendor_settings.insert_one(VendorSettings().dict())
     await db.audit_events.delete_many({})
@@ -82,20 +97,27 @@ async def seed_data():
 app.include_router(dispatch_router)
 app.include_router(auth_router)
 app.include_router(vendor_os_router)
+app.include_router(onboarding_router)
+app.include_router(admin_ops_router)
 app.include_router(seed_router)
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_ALLOWED_ORIGINS, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup_event():
-    count = await db.jobs.count_documents({})
-    if count == 0:
-        logger.info("Seeding demo data...")
-        await seed_data()
-        logger.info("Demo data seeded")
+    logger.info("Dispatch service started")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+@app.get("/health")
+async def health():
+    try:
+        await db.command("ping")
+        return {"status": "ok", "db": "connected"}
+    except Exception:
+        return {"status": "degraded", "db": "unreachable"}

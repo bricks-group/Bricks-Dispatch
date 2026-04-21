@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Header
 
+from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.auth import get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.database import db
@@ -205,14 +206,21 @@ async def assign_job_to_member(
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
-    member = await db.vendor_members.find_one({"id": payload.member_id, "vendor_id": vendor_id, "is_active": True}, {"_id": 0})
-    if not member:
-        api_error(404, "Member not found", "member_not_found")
+
     existing_job = await db.jobs.find_one({"id": job_id, "vendor_id": vendor_id}, {"_id": 0, "assignee_id": 1})
     if not existing_job:
         api_error(404, "Job not found", "job_not_found")
-    await db.jobs.update_one({"id": job_id, "vendor_id": vendor_id}, {"$set": {"assignee_id": payload.member_id, "updated_at": datetime.now(timezone.utc).isoformat()}})
-    await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": payload.member_id})
+
+    if payload.member_id == "auto":
+        new_assignee_id = await assign_vendor_for_job(job_id)
+    else:
+        member = await db.vendor_members.find_one({"id": payload.member_id, "vendor_id": vendor_id, "is_active": True}, {"_id": 0})
+        if not member:
+            api_error(404, "Member not found", "member_not_found")
+        new_assignee_id = payload.member_id
+        await db.jobs.update_one({"id": job_id, "vendor_id": vendor_id}, {"$set": {"assignee_id": new_assignee_id, "updated_at": datetime.now(timezone.utc).isoformat()}})
+
+    await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if payload.member_id == "auto" else "manual"})
     return await db.jobs.find_one({"id": job_id}, {"_id": 0})
 
 

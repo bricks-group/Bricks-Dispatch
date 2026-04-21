@@ -3,195 +3,166 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import { ArrowLeft, Camera, Video, Plane, Box, Ruler, MapPin, Clock, CheckSquare, Square, AlertTriangle, Upload, FileText } from 'lucide-react-native';
+import { ChevronLeft, Camera, Video, Plane, Box, Ruler, Navigation, Upload, Check } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
+import { TOKENS } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL;
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || "http://10.0.0.206:8000";
+
 type ChecklistItem = { id: string; label: string; completed: boolean };
-type Job = { id: string; address: string; city: string; state: string; zip_code: string; time_window_start: string; time_window_end: string; job_type: string; status: string; priority: string; property_details: string; client_instructions: string; checklist: ChecklistItem[]; deliverables_count: number; uploaded_count: number; scheduled_date: string };
-type UploadRecord = { id: string; filename: string; file_size: number; mime_type: string; created_at: string };
-const ICONS: Record<string, React.ComponentType<any>> = { photo: Camera, video: Video, drone: Plane, '3d_tour': Box, floor_plan: Ruler };
-const LABELS: Record<string, string> = { photo: 'Photo', video: 'Video', drone: 'Drone', '3d_tour': '3D Tour', floor_plan: 'Floor Plan' };
-const SC: Record<string, { bg: string; dot: string; text: string; label: string; action: string }> = {
-  assigned: { bg: '#3B82F615', dot: '#3B82F6', text: '#60A5FA', label: 'Assigned', action: 'Start Job' },
-  in_progress: { bg: '#F59E0B15', dot: '#F59E0B', text: '#FBBF24', label: 'In Progress', action: 'Complete Job' },
-  completed: { bg: '#22C55E15', dot: '#22C55E', text: '#4ADE80', label: 'Completed', action: '' },
+type Job = { 
+  id: string; address: string; city: string; state: string; zip_code: string; 
+  time_window_start: string; time_window_end: string; job_type: string; 
+  status: string; priority: string; property_details: string; 
+  client_instructions: string; checklist: ChecklistItem[]; 
+  deliverables_count: number; uploaded_count: number; scheduled_date: string 
 };
-function fmtSize(b: number) { if (!b) return '0 B'; const k=1024,s=['B','KB','MB','GB'],i=Math.floor(Math.log(b)/Math.log(k)); return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]; }
+
+const ICONS: Record<string, React.ComponentType<any>> = { photo: Camera, video: Video, drone: Plane, '3d_tour': Box, floor_plan: Ruler };
+const STATUS_BADGE: Record<string, { bg: string; fg: string }> = {
+  assigned: { bg: TOKENS.nightDeep, fg: TOKENS.moonSoft },
+  in_progress: { bg: TOKENS.brickTint, fg: TOKENS.brickDeep },
+  completed: { bg: TOKENS.okTint, fg: TOKENS.ok }
+};
 
 export default function JobDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
-  const [uploads, setUploads] = useState<UploadRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
 
   const fetchData = useCallback(async () => {
-    try { const [j, u] = await Promise.all([fetch(`${API}/api/jobs/${id}`), fetch(`${API}/api/uploads?job_id=${id}`)]); setJob(await j.json()); setUploads(await u.json()); }
-    catch (e) { console.error(e); } finally { setLoading(false); setRefreshing(false); }
+    try {
+      const res = await fetch(`${API}/api/jobs/${id}`);
+      setJob(await res.json());
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); setRefreshing(false); }
   }, [id]);
+
   useEffect(() => { fetchData(); }, [fetchData]);
-  const onRefresh = useCallback(() => { setRefreshing(true); fetchData(); }, [fetchData]);
 
   const handleStatus = async () => {
     if (!job || actionLoading) return;
     const next = job.status === 'assigned' ? 'in_progress' : 'completed';
     setActionLoading(true);
     try {
-      const r = await fetch(`${API}/api/jobs/${id}/status`, { method:'PUT', headers:actorHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ status: next }) });
-      if (r.ok) {
-        setJob(await r.json());
-      } else {
-        const err = await r.json();
-        Alert.alert('Unable to update status', err?.detail || 'Please try again.');
-      }
-    } catch {
-      Alert.alert('Error', 'Failed to update status');
+      const r = await fetch(`${API}/api/jobs/${id}/status`, { 
+        method:'PUT', 
+        headers:actorHeaders({'Content-Type':'application/json'}), 
+        body: JSON.stringify({ status: next }) 
+      });
+      if (r.ok) setJob(await r.json());
     } finally { setActionLoading(false); }
   };
-  const toggleCheck = async (itemId: string, done: boolean) => {
-    if (!job) return;
-    if (job.status !== 'in_progress') return;
-    setJob({ ...job, checklist: job.checklist.map(i => i.id === itemId ? { ...i, completed: !done } : i) });
-    try {
-      const r = await fetch(`${API}/api/jobs/${id}/checklist/${itemId}`, { method:'PUT', headers:actorHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ completed: !done }) });
-      if (!r.ok) {
-        setJob({ ...job, checklist: job.checklist.map(i => i.id === itemId ? { ...i, completed: done } : i) });
-      }
-    }
-    catch { setJob({ ...job, checklist: job.checklist.map(i => i.id === itemId ? { ...i, completed: done } : i) }); }
-  };
-  const handleUpload = async () => {
-    if (!job) return;
-    if (job.status !== 'in_progress') return;
-    const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images','videos'], quality: 0.8, base64: true });
-    if (r.canceled) return;
-    const a = r.assets[0]; setUploading(true);
-    try {
-      const fd = new FormData(); fd.append('job_id', job.id); fd.append('filename', a.fileName||`upload_${Date.now()}.jpg`); fd.append('file_size', String(a.fileSize||0)); fd.append('mime_type', a.mimeType||'image/jpeg'); fd.append('file_data', a.base64?a.base64.substring(0,200):''); const res = await fetch(`${API}/api/uploads`, { method:'POST', headers: actorHeaders(), body: fd }); if (res.ok) fetchData(); else Alert.alert('Upload blocked', 'Uploads are allowed only while the job is in progress.');
-    }
-    catch { Alert.alert('Error', 'Upload failed'); } finally { setUploading(false); }
-  };
 
-  if (loading || !job) return <SafeAreaView style={st.ctn}><View style={st.ldg}><ActivityIndicator size="large" color="#3B82F6" /></View></SafeAreaView>;
-  const sc = SC[job.status] || SC.assigned;
-  const TI = ICONS[job.job_type] || Camera;
-  const done = job.checklist.filter(c => c.completed).length;
-  const total = job.checklist.length;
-  const remainingChecklist = Math.max(total - done, 0);
-  const remainingDeliverables = Math.max(job.deliverables_count - job.uploaded_count, 0);
-  const canCompleteJob = job.status !== 'in_progress' || (remainingChecklist === 0 && remainingDeliverables === 0);
-  const ctaHint = job.status === 'in_progress' && !canCompleteJob
-    ? `${remainingChecklist > 0 ? `${remainingChecklist} checklist item(s) left` : ''}${remainingChecklist > 0 && remainingDeliverables > 0 ? ' • ' : ''}${remainingDeliverables > 0 ? `${remainingDeliverables} upload(s) left` : ''}`
-    : '';
-  const checklistLocked = job.status !== 'in_progress';
-  const uploadLocked = job.status !== 'in_progress';
+  if (loading || !job) return <SafeAreaView style={s.container}><View style={s.ldg}><ActivityIndicator size="small" color={TOKENS.brick} /></View></SafeAreaView>;
+
+  const badge = STATUS_BADGE[job.status] || STATUS_BADGE.assigned;
 
   return (
-    <SafeAreaView style={st.ctn} edges={['top']}>
-      <View style={st.topBar}>
-        <TouchableOpacity testID="back-btn" onPress={() => router.back()} style={st.backBtn}><ArrowLeft size={20} color="#FFF" strokeWidth={2.5} /></TouchableOpacity>
-        <Text style={st.topTitle}>Job Details</Text>
-        <View style={[st.sBadge, { backgroundColor: sc.bg }]}><View style={[st.sDot, { backgroundColor: sc.dot }]} /><Text style={[st.sTx, { color: sc.text }]}>{sc.label}</Text></View>
+    <SafeAreaView style={s.container} edges={['top']}>
+      <View style={s.topBar}>
+        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+          <ChevronLeft size={20} color={TOKENS.moon} strokeWidth={1.5} />
+        </TouchableOpacity>
+        <Text style={s.topId}>JOB–{job.id.slice(0,5).toUpperCase()}</Text>
+        <View style={[s.badge, { backgroundColor: badge.bg }]}>
+          <Text style={[s.badgeText, { color: badge.fg }]}>{job.status.toUpperCase().replace('_', ' ')}</Text>
+        </View>
       </View>
-      <ScrollView contentContainerStyle={st.scroll} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B82F6" colors={['#3B82F6']} />}>
-        <View style={st.typeRow}>
-          <View style={st.typeW}><View style={st.typeIco}><TI size={14} color="#8B8FA3" strokeWidth={2} /></View><Text style={st.typeTx}>{LABELS[job.job_type] || job.job_type}</Text></View>
-          {(job.priority === 'urgent' || job.priority === 'high') && (
-            <View style={[st.priBadge, job.priority === 'urgent' ? st.urgBadge : st.hiBadge]}>
-              {job.priority === 'urgent' && <AlertTriangle size={10} color="#FFF" strokeWidth={2.5} />}
-              <Text style={st.priTx}>{job.priority === 'urgent' ? 'Urgent' : 'High Priority'}</Text>
-            </View>
-          )}
+
+      <ScrollView contentContainerStyle={s.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchData} tintColor={TOKENS.brick} />}>
+        <View style={s.hero}>
+          <Text style={s.address}>{job.address.toLowerCase()}</Text>
+          <Text style={s.sub}>{job.city}, {job.state} · {job.job_type.replace('_', ' ')}</Text>
         </View>
-        <View style={st.addrSec}><MapPin size={16} color="#3B82F6" strokeWidth={2.5} /><View style={st.addrTx}><Text style={st.addr}>{job.address}</Text><Text style={st.city}>{job.city}, {job.state} {job.zip_code}</Text></View></View>
-        <View style={st.timeSec}><Clock size={14} color="#8B8FA3" strokeWidth={2} /><Text style={st.timeTx}>{job.time_window_start} – {job.time_window_end}</Text><Text style={st.dateTx}>{job.scheduled_date}</Text></View>
-        {job.property_details ? <View style={st.sec}><Text style={st.secT}>Property</Text><Text style={st.secB}>{job.property_details}</Text></View> : null}
-        {job.client_instructions ? <View style={st.sec}><Text style={st.secT}>Client Instructions</Text><Text style={st.secB}>{job.client_instructions}</Text></View> : null}
-        {total > 0 && (
-          <View style={st.sec}>
-            <View style={st.secH}><Text style={st.secT}>Checklist</Text><Text style={st.clProg}>{done}/{total}</Text></View>
-            <View style={st.progTrack}><View style={[st.progFill, { width: total > 0 ? `${(done/total)*100}%` : '0%' }]} /></View>
-            {job.checklist.map(i => (
-              <TouchableOpacity key={i.id} testID={`checklist-${i.id}`} style={st.clItem} onPress={() => toggleCheck(i.id, i.completed)} disabled={checklistLocked}>
-                {i.completed ? <CheckSquare size={20} color="#3B82F6" strokeWidth={2.5} /> : <Square size={20} color="#3D4160" strokeWidth={1.8} />}
-                <Text style={[st.clLabel, i.completed && st.clDone]}>{i.label}</Text>
-              </TouchableOpacity>
-            ))}
-            {checklistLocked && <Text style={st.lockedHelp}>Checklist unlocks when job is in progress.</Text>}
+
+        {/* Rail grid */}
+        <View style={s.rail}>
+          <View style={s.railCell}>
+            <Text style={s.railL}>ARRIVE</Text>
+            <Text style={s.railV}>{job.time_window_start}</Text>
           </View>
-        )}
-        <View style={st.sec}>
-          <View style={st.secH}><Text style={st.secT}>Uploads</Text><Text style={st.clProg}>{job.uploaded_count}/{job.deliverables_count}</Text></View>
-          {uploads.map(u => <View key={u.id} testID={`job-upload-${u.id}`} style={st.upItem}><FileText size={14} color="#8B8FA3" strokeWidth={2} /><Text style={st.upFn} numberOfLines={1}>{u.filename}</Text><Text style={st.upSz}>{fmtSize(u.file_size)}</Text></View>)}
-          {job.status !== 'completed' && (
-            <TouchableOpacity testID="job-upload-btn" style={st.upBtn} onPress={handleUpload} disabled={uploading}>
-              {uploading ? <ActivityIndicator size="small" color="#FFF" /> : <><Upload size={14} color="#FFF" strokeWidth={2.5} /><Text style={st.upBtnTx}>Upload Media</Text></>}
-            </TouchableOpacity>
-          )}
-          {uploadLocked && job.status !== 'completed' && <Text style={st.lockedHelp}>Uploads unlock when job is in progress.</Text>}
+          <View style={[s.railCell, { borderLeftWidth: 1, borderColor: TOKENS.nightHair }]}>
+            <Text style={s.railL}>AGENT</Text>
+            <Text style={s.railV}>M. Ortega</Text>
+          </View>
+          <View style={[s.railCell, { borderLeftWidth: 1, borderColor: TOKENS.nightHair }]}>
+            <Text style={s.railL}>PACKAGE</Text>
+            <Text style={s.railV}>SIGNATURE</Text>
+          </View>
         </View>
+
+        {/* Checklist section */}
+        <View style={s.section}>
+          <Text style={s.sectionL}>CHECKLIST</Text>
+          <View style={s.clList}>
+            {job.checklist.map(item => (
+              <View key={item.id} style={s.clRow}>
+                <View style={item.completed ? s.chk : s.chkEmpty}>
+                  {item.completed && <Check size={10} color="#FFF" strokeWidth={3} />}
+                </View>
+                <Text style={item.completed ? s.clTextDone : s.clText}>{item.label}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {/* Property section */}
+        <View style={s.section}>
+          <Text style={s.sectionL}>PROPERTY DETAILS</Text>
+          <Text style={s.body}>{job.property_details || 'No specific details provided.'}</Text>
+        </View>
+        
+        <View style={{ height: 120 }} />
       </ScrollView>
-      {job.status !== 'completed' && (
-        <View style={st.actBar}>
-          {!!ctaHint && <Text style={st.ctaHint}>{ctaHint}</Text>}
-          <TouchableOpacity testID="status-action-btn" style={[st.actBtn, job.status === 'assigned' ? st.startBtn : st.compBtn, (!canCompleteJob || actionLoading) && { opacity: 0.6 }]} onPress={handleStatus} disabled={actionLoading || !canCompleteJob}>
-            {actionLoading ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={st.actBtnTx}>{sc.action}</Text>}
-          </TouchableOpacity>
-        </View>
-      )}
+
+      <View style={s.footer}>
+        <TouchableOpacity style={s.primaryBtn} onPress={handleStatus} disabled={actionLoading}>
+          {actionLoading ? <ActivityIndicator color="#FFF" /> : (
+            <>
+              <Navigation size={15} color="#FFF" strokeWidth={2} />
+              <Text style={s.btnText}>{job.status === 'assigned' ? 'START JOB' : 'COMPLETE JOB'}</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
 
-const st = StyleSheet.create({
-  ctn: { flex: 1, backgroundColor: '#0C0D14' },
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: TOKENS.night },
   ldg: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#1E2030' },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', backgroundColor: '#151722', borderRadius: 10, borderWidth: 1, borderColor: '#1E2030' },
-  topTitle: { flex: 1, fontSize: 16, fontFamily: 'Outfit_600SemiBold', color: '#FFF', marginLeft: 12 },
-  sBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
-  sDot: { width: 6, height: 6, borderRadius: 3 },
-  sTx: { fontSize: 12, fontFamily: 'Manrope_600SemiBold' },
-  scroll: { paddingBottom: 120 },
-  typeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 },
-  typeW: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  typeIco: { width: 30, height: 30, borderRadius: 8, backgroundColor: '#151722', alignItems: 'center', justifyContent: 'center' },
-  typeTx: { fontSize: 13, fontFamily: 'Manrope_500Medium', color: '#8B8FA3' },
-  priBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
-  urgBadge: { backgroundColor: '#EF4444' },
-  hiBadge: { backgroundColor: '#F59E0B' },
-  priTx: { fontSize: 11, fontFamily: 'Manrope_600SemiBold', color: '#FFF' },
-  addrSec: { flexDirection: 'row', paddingHorizontal: 20, paddingVertical: 12, gap: 12, alignItems: 'flex-start' },
-  addrTx: { flex: 1 },
-  addr: { fontSize: 22, fontFamily: 'Outfit_700Bold', color: '#FFF', letterSpacing: -0.3, marginBottom: 4 },
-  city: { fontSize: 14, fontFamily: 'Manrope_400Regular', color: '#565B7E' },
-  timeSec: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 16, gap: 8, borderBottomWidth: 1, borderBottomColor: '#1E2030' },
-  timeTx: { fontSize: 15, fontFamily: 'JetBrainsMono_500Medium', color: '#3B82F6' },
-  dateTx: { fontSize: 13, fontFamily: 'JetBrainsMono_400Regular', color: '#3D4160', marginLeft: 'auto' },
-  sec: { paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#1E2030' },
-  secH: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  secT: { fontSize: 14, fontFamily: 'Outfit_500Medium', color: '#8B8FA3', marginBottom: 8 },
-  secB: { fontSize: 14, fontFamily: 'Manrope_400Regular', lineHeight: 22, color: '#C4C7D8' },
-  clProg: { fontSize: 14, fontFamily: 'JetBrainsMono_500Medium', color: '#3B82F6' },
-  progTrack: { height: 4, backgroundColor: '#1E2030', borderRadius: 2, marginBottom: 14 },
-  progFill: { height: '100%', borderRadius: 2, backgroundColor: '#3B82F6' },
-  clItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#151722' },
-  clLabel: { fontSize: 14, fontFamily: 'Manrope_400Regular', color: '#C4C7D8', flex: 1 },
-  clDone: { color: '#3D4160', textDecorationLine: 'line-through' },
-  upItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#151722' },
-  upFn: { flex: 1, fontSize: 13, fontFamily: 'Manrope_400Regular', color: '#C4C7D8' },
-  upSz: { fontSize: 12, fontFamily: 'JetBrainsMono_400Regular', color: '#3D4160' },
-  upBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#3B82F6', paddingVertical: 14, borderRadius: 12, marginTop: 12 },
-  upBtnTx: { fontSize: 14, fontFamily: 'Manrope_600SemiBold', color: '#FFF' },
-  lockedHelp: { fontSize: 12, fontFamily: 'Manrope_400Regular', color: '#565B7E', marginTop: 10 },
-  actBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingVertical: 16, paddingBottom: 32, backgroundColor: '#0C0D14', borderTopWidth: 1, borderTopColor: '#1E2030' },
-  ctaHint: { fontSize: 12, fontFamily: 'Manrope_500Medium', color: '#F59E0B', marginBottom: 10, textAlign: 'center' },
-  actBtn: { paddingVertical: 16, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  startBtn: { backgroundColor: '#3B82F6' },
-  compBtn: { backgroundColor: '#22C55E' },
-  actBtnTx: { fontSize: 16, fontFamily: 'Outfit_600SemiBold', color: '#FFF', letterSpacing: 0.3 },
+  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 36, paddingVertical: 16, borderBottomWidth: 1, borderColor: TOKENS.nightHair },
+  backBtn: { marginRight: 16 },
+  topId: { flex: 1, fontFamily: 'JetBrainsMono-Medium', fontSize: 11, color: TOKENS.moonMute, letterSpacing: 1.4 },
+  badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 2 },
+  badgeText: { fontFamily: 'JetBrainsMono-Medium', fontSize: 10, letterSpacing: 1 },
+  
+  content: { padding: 36 },
+  hero: { marginBottom: 32 },
+  address: { fontSize: 28, fontFamily: 'System', color: TOKENS.moon, letterSpacing: -0.6, marginBottom: 8 },
+  sub: { fontSize: 14, color: TOKENS.moonMute },
+  
+  rail: { flexDirection: 'row', backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, marginBottom: 32 },
+  railCell: { flex: 1, padding: 16 },
+  railL: { fontFamily: 'JetBrainsMono-Medium', fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.4, marginBottom: 6 },
+  railV: { fontFamily: 'JetBrainsMono-Regular', fontSize: 13, color: TOKENS.moon },
+  
+  section: { marginBottom: 32 },
+  sectionL: { fontFamily: 'JetBrainsMono-Medium', fontSize: 10, color: TOKENS.moonMute, letterSpacing: 1.6, marginBottom: 16 },
+  clList: { gap: 12 },
+  clRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  chk: { width: 16, height: 16, borderRadius: 2, backgroundColor: TOKENS.brick, alignItems: 'center', justifyContent: 'center' },
+  chkEmpty: { width: 16, height: 16, borderRadius: 2, borderWidth: 1.5, borderColor: TOKENS.nightHairS },
+  clText: { fontSize: 14, color: TOKENS.moon },
+  clTextDone: { fontSize: 14, color: TOKENS.moonMute, textDecorationLine: 'line-through' },
+  body: { fontSize: 14, color: TOKENS.moonSoft, lineHeight: 22 },
+  
+  footer: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 36, backgroundColor: TOKENS.night, borderTopWidth: 1, borderColor: TOKENS.nightHair },
+  primaryBtn: { backgroundColor: TOKENS.brick, padding: 16, borderRadius: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  btnText: { color: '#FFF', fontFamily: 'System', fontSize: 15, fontWeight: '500' }
 });

@@ -22,6 +22,8 @@ class Job(BaseModel):
     city: str = ""
     state: str = ""
     zip_code: str = ""
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     time_window_start: str
     time_window_end: str = ""
     job_type: str
@@ -63,7 +65,9 @@ class UploadRecord(BaseModel):
     filename: str
     file_size: int = 0
     mime_type: str = ""
-    thumbnail: str = ""
+    thumbnail: str = ""          # 200-char base64 preview (backward compat)
+    file_url: Optional[str] = None     # S3 object key for original file
+    thumbnail_url: Optional[str] = None  # S3 object key for thumbnail
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -101,6 +105,10 @@ class NotificationRecord(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class Coordinate(BaseModel):
+    lat: float
+    lng: float
+
 class VendorMember(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     vendor_id: str = "default_vendor"
@@ -108,10 +116,67 @@ class VendorMember(BaseModel):
     email: str
     phone: str = ""
     role: str = "Photographer"
+    specialty: str = "photo"
     status: str = "available"
-    is_active: bool = True
+    is_active: bool = False
+    onboarding_status: str = "pending"
+    portfolio_links: List[str] = []
+    equipment_list: List[str] = []
+    service_areas: List[str] = [] # Legacy city-based
+    operation_polygon: List[Coordinate] = [] # The "Connected Dots"
+    home_city: str = ""
+    max_travel_km: int = 50
+    hst_number: Optional[str] = None
+    wsib_number: Optional[str] = None
+    insurance_policy_number: Optional[str] = None
+    internal_notes: str = ""
+    completion_rate: float = 1.0
+    avg_turnaround_days: float = 0.0
+    quality_rating: float = 4.0
+    total_assignments: int = 0
+    active_assignments: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class VendorApplicationCreate(BaseModel):
+    name: str
+    email: str
+    phone: str
+    specialties: List[str]
+    portfolio_links: List[str] = []
+    equipment_list: List[str] = []
+    city: str
+    max_travel_km: int = 50 
+    operation_polygon: List[Coordinate] = [] 
+    # Ontario Regions: GTA, York, Peel, Halton, Durham, Hamilton, Waterloo, Ottawa, etc.
+    preferred_regions: List[str] = [] 
+    accepted_terms: bool 
+
+
+class VendorDocument(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    vendor_id: str
+    member_id: str
+    doc_type: str  # coi, wsib, hst_registry, id_verification
+    file_url: str
+    status: str = "pending"  # pending, verified, rejected
+    expiry_date: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class VendorLead(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    portfolio_url: Optional[str] = None
+    city: str
+    source: str  # instagram, google, linkedin, referral
+    status: str = "identified"  # identified, contacted, interested, converted, not_interested
+    notes: str = ""
+    last_contacted_at: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class VendorMemberCreate(BaseModel):
@@ -128,6 +193,11 @@ class VendorMemberUpdate(BaseModel):
     role: Optional[str] = None
     status: Optional[str] = None
     is_active: Optional[bool] = None
+    onboarding_status: Optional[str] = None
+    hst_number: Optional[str] = None
+    wsib_number: Optional[str] = None
+    internal_notes: Optional[str] = None
+    quality_rating: Optional[float] = None
 
 
 class JobAssignmentUpdate(BaseModel):

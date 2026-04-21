@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bricks — Full Front End</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  @font-face { font-family: 'General Sans'; src: url('https://fonts.cdnfonts.com/s/85755/GeneralSans-Regular.woff2') format('woff2'); font-weight: 400; }
+  @font-face { font-family: 'General Sans'; src: url('https://fonts.cdnfonts.com/s/85755/GeneralSans-Medium.woff2') format('woff2'); font-weight: 500; }
+  @font-face { font-family: 'General Sans'; src: url('https://fonts.cdnfonts.com/s/85755/GeneralSans-Semibold.woff2') format('woff2'); font-weight: 600; }
+  html,body { margin:0; padding:0; background:#E4DED2; font-family:'General Sans', ui-sans-serif, sans-serif; color:#14110E; }
+  * { box-sizing:border-box; }
+  .stage { padding: 56px 40px 96px; }
+  .hdr   { max-width: 1720px; margin: 0 auto 40px; }
+  .hdr .eye { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #6B6054; }
+  .hdr h1  { font-size: 56px; font-weight: 500; letter-spacing: -1.6px; margin: 14px 0 6px; }
+  .hdr p   { font-size: 16px; color: #3B332A; max-width: 720px; margin: 0; line-height: 1.5; }
+  .section { max-width: 1720px; margin: 0 auto 72px; }
+  .section > h2 { font-size: 28px; font-weight: 500; letter-spacing: -0.6px; margin: 0 0 6px; display:flex; align-items:baseline; gap:14px; }
+  .section > h2 .count { font-family:'JetBrains Mono', monospace; font-size: 13px; color:#6B6054; letter-spacing:0; font-weight:400; }
+  .section > p  { font-size: 14px; color:#3B332A; margin:0 0 28px; }
+  .grid { display:grid; gap: 28px; }
+  .g-web { grid-template-columns: repeat(auto-fit, minmax(1440px, 1fr)); }
+  .g-mob { grid-template-columns: repeat(auto-fit, 390px); }
+  .cell { display:flex; flex-direction:column; gap:10px; }
+  .cell .lbl { font-family:'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color:#6B6054; }
+  .cell .frame { background:#F4F1EB; border:1px solid #14111020; border-radius: 2px; overflow:hidden; box-shadow: 0 1px 0 #14111008, 0 24px 60px -24px #14110E2E; }
+  .cell.dark .frame { background:#141210; border-color:#F4F1EB26; }
+  .foot { max-width: 1720px; margin: 40px auto 0; padding-top:32px; border-top:1px solid #14111020; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.14em; color:#6B6054; display:flex; justify-content:space-between; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="hdr">
+    <div class="eye">Bricks · April 2026</div>
+    <h1>The complete front end.</h1>
+    <p>Three apps, one system. Brokerage (web), Booking (mobile, agents), Dispatch (mobile, vendors). Warm paper, ink, terracotta. General Sans + JetBrains Mono. Hairlines and 2px radii.</p>
+  </div>
+
+  <div class="section">
+    <h2>Brokerage <span class="count">· web · 1440w · 8 screens</span></h2>
+    <p>Ops dashboard for the brokerage team. Sidebar nav, light theme by default.</p>
+    <div class="grid g-web" id="broks"></div>
+  </div>
+
+  <div class="section">
+    <h2>Booking <span class="count">· mobile · 390w · agent-facing · 9 screens</span></h2>
+    <p>What agents use to book shoots and watch deliveries land.</p>
+    <div class="grid g-mob" id="books"></div>
+  </div>
+
+  <div class="section">
+    <h2>Dispatch <span class="count">· mobile · 390w · vendor-facing · dark · 8 screens</span></h2>
+    <p>Shooter's day in their pocket. Dark by default — it's what vendors use pre-dawn and post-dusk.</p>
+    <div class="grid g-mob" id="disps"></div>
+  </div>
+
+  <div class="foot">
+    <span>BRICKS / FULL FRONT END</span>
+    <span>v0.1 · HANDOFF READY</span>
+  </div>
+</div>
+
+<div id="tweaks-root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="screens/_primitives.jsx"></script>
+<script type="text/babel" src="screens/brok-1.jsx"></script>
+<script type="text/babel" src="screens/brok-2.jsx"></script>
+<script type="text/babel" src="screens/booking.jsx"></script>
+<script type="text/babel" src="screens/dispatch.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+function boot() {
+  if (typeof BrokLogin === 'undefined' || typeof BookHome === 'undefined' || typeof DispToday === 'undefined') {
+    return setTimeout(boot, 40);
+  }
+const brokScreens = [
+  ['01 Login',     <BrokLogin/>],
+  ['02 Overview',  <BrokShell screen="overview"/>],
+  ['03 Jobs',      <BrokShell screen="jobs"/>],
+  ['04 Job Detail',<BrokShell screen="jobdetail"/>],
+  ['05 Agents',    <BrokShell screen="agents"/>],
+  ['06 Vendors',   <BrokShell screen="vendors"/>],
+  ['07 Billing',   <BrokShell screen="billing"/>],
+  ['08 Settings',  <BrokShell screen="settings"/>],
+];
+const bookScreens = [
+  ['01 Onboarding · 1', <BookOnboarding slide={0}/>],
+  ['02 Onboarding · 2', <BookOnboarding slide={1}/>],
+  ['03 Onboarding · 3', <BookOnboarding slide={2}/>],
+  ['04 Login',          <BookLogin/>],
+  ['05 Register',       <BookRegister/>],
+  ['06 Home',           <BookHome/>],
+  ['07 Book · Package', <BookFlow/>],
+  ['08 Jobs',           <BookJobs/>],
+  ['09 Profile',        <BookProfile/>],
+];
+const dispScreens = [
+  ['01 Onboarding · 1', <DispOnboarding slide={0}/>],
+  ['02 Onboarding · 2', <DispOnboarding slide={1}/>],
+  ['03 Onboarding · 3', <DispOnboarding slide={2}/>],
+  ['04 Today',          <DispToday/>],
+  ['05 Schedule',       <DispSchedule/>],
+  ['06 Job Detail',     <DispJobDetail/>],
+  ['07 Uploads',        <DispUploads/>],
+  ['08 Payouts',        <DispProfile/>],
+];
+
+function Cell({ label, children, dark }) {
+  return (
+    <div className={"cell" + (dark ? " dark" : "")} data-screen-label={label}>
+      <div className="lbl">{label}</div>
+      <div className="frame">{children}</div>
+    </div>
+  );
+}
+
+function render(id, list, dark) {
+  const root = ReactDOM.createRoot(document.getElementById(id));
+  root.render(<>{list.map(([l,el]) => <Cell key={l} label={l} dark={dark}>{el}</Cell>)}</>);
+}
+render('broks', brokScreens, false);
+render('books', bookScreens, false);
+render('disps', dispScreens, true);
+}
+boot();
+</script>
+</body>
+</html>

@@ -7,6 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "frontend",
     "userInterfaceStyle": "automatic",
+    "entryPoint": "./index.js",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true

@@ -1,0 +1,14 @@
+{
+  "id": "session-1776371280273",
+  "startedAt": "2026-04-16T20:28:00.273Z",
+  "cwd": "/Volumes/2025/Bricks-Dispatch/backend",
+  "context": {},
+  "metrics": {
+    "edits": 4,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "endedAt": "2026-04-17T00:45:34.363Z",
+  "duration": 15454093
+}

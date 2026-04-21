@@ -1,183 +1,220 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Image,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Camera, Video, Plane, Box, Ruler, ChevronRight, AlertTriangle, Bell } from 'lucide-react-native';
+import { Bell, Navigation, Check, Camera } from 'lucide-react-native';
+import { TOKENS } from '../../constants/Theme';
+import BricksWordmark from '../../components/BricksWordmark';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL;
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8000';
 
-type Job = {
-  id: string; address: string; city: string; state: string;
-  time_window_start: string; time_window_end: string; job_type: string;
-  status: string; priority: string; scheduled_date: string;
-  deliverables_count: number; uploaded_count: number;
-};
-
-const JOB_TYPE_ICONS: Record<string, React.ComponentType<any>> = {
-  photo: Camera, video: Video, drone: Plane, '3d_tour': Box, floor_plan: Ruler,
-};
-const JOB_TYPE_LABELS: Record<string, string> = {
-  photo: 'Photo', video: 'Video', drone: 'Drone', '3d_tour': '3D Tour', floor_plan: 'Floor Plan',
-};
-const STATUS_CONFIG: Record<string, { bg: string; dot: string; text: string; label: string }> = {
-  assigned: { bg: '#3B82F615', dot: '#3B82F6', text: '#60A5FA', label: 'Assigned' },
-  in_progress: { bg: '#F59E0B15', dot: '#F59E0B', text: '#FBBF24', label: 'In Progress' },
-  completed: { bg: '#22C55E15', dot: '#22C55E', text: '#4ADE80', label: 'Completed' },
-};
-const FILTERS = ['all', 'assigned', 'in_progress', 'completed'];
-const FILTER_LABELS: Record<string, string> = { all: 'All', assigned: 'Assigned', in_progress: 'In Progress', completed: 'Completed' };
-
-function JobCard({ job, onPress }: { job: Job; onPress: () => void }) {
-  const sc = STATUS_CONFIG[job.status] || STATUS_CONFIG.assigned;
-  const TypeIcon = JOB_TYPE_ICONS[job.job_type] || Camera;
-  const isUrgent = job.priority === 'urgent';
-  const isHigh = job.priority === 'high';
-
-  return (
-    <TouchableOpacity testID={`job-card-${job.id}`} style={styles.card} onPress={onPress} activeOpacity={0.7}>
-      <View style={styles.cardTop}>
-        <View style={styles.cardTypeRow}>
-          <View style={styles.typeIconWrap}><TypeIcon size={14} color="#8B8FA3" strokeWidth={2} /></View>
-          <Text style={styles.typeLabel}>{JOB_TYPE_LABELS[job.job_type] || job.job_type}</Text>
-          {(isUrgent || isHigh) && (
-            <View style={[styles.priorityBadge, isUrgent ? styles.urgentBadge : styles.highBadge]}>
-              {isUrgent && <AlertTriangle size={10} color="#FFF" strokeWidth={2.5} />}
-              <Text style={styles.priorityText}>{isUrgent ? 'Urgent' : 'High'}</Text>
-            </View>
-          )}
-        </View>
-        <View style={[styles.statusBadge, { backgroundColor: sc.bg }]}>
-          <View style={[styles.statusDot, { backgroundColor: sc.dot }]} />
-          <Text style={[styles.statusText, { color: sc.text }]}>{sc.label}</Text>
-        </View>
-      </View>
-      <Text style={styles.address} numberOfLines={1}>{job.address}</Text>
-      <Text style={styles.cityState}>{job.city}, {job.state}</Text>
-      <View style={styles.cardFooter}>
-        <Text style={styles.timeWindow}>{job.time_window_start} – {job.time_window_end}</Text>
-        <View style={styles.progressWrap}>
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: job.deliverables_count > 0 ? `${(job.uploaded_count / job.deliverables_count) * 100}%` : '0%' }]} />
-          </View>
-          <Text style={styles.progressText}>{job.uploaded_count}/{job.deliverables_count}</Text>
-        </View>
-        <ChevronRight size={16} color="#565B7E" strokeWidth={2} />
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-export default function JobsScreen() {
+export default function DispatchTodayScreen() {
   const router = useRouter();
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState('all');
-  const [unreadCount, setUnreadCount] = useState(0);
 
-  const fetchJobs = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const url = filter === 'all' ? `${API}/api/jobs` : `${API}/api/jobs?status=${filter}`;
-      const data = await (await fetch(url)).json();
+      const data = await (await fetch(`${API}/api/jobs`)).json();
       setJobs(data);
-    } catch (e) { console.error('Failed to fetch jobs:', e); }
+    } catch (e) { console.error(e); }
     finally { setLoading(false); setRefreshing(false); }
-  }, [filter]);
-
-  const fetchUnread = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/api/notifications/unread-count`);
-      const data = await res.json();
-      setUnreadCount(data.count || 0);
-    } catch (e) {}
   }, []);
 
-  useEffect(() => { setLoading(true); fetchJobs(); fetchUnread(); }, [fetchJobs, fetchUnread]);
-  const onRefresh = useCallback(() => { setRefreshing(true); fetchJobs(); fetchUnread(); }, [fetchJobs, fetchUnread]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
-  if (loading) return <SafeAreaView style={styles.container}><View style={styles.loadingWrap}><ActivityIndicator size="large" color="#3B82F6" /></View></SafeAreaView>;
+  if (loading) return (
+    <SafeAreaView style={s.container}>
+      <View style={s.ldg}><ActivityIndicator size="small" color={TOKENS.brick} /></View>
+    </SafeAreaView>
+  );
+
+  const nextJob = jobs.find(j => j.status !== 'completed');
+  const laterJobs = jobs.filter(j => j.id !== nextJob?.id).slice(0, 2);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <View style={styles.brandRow}>
-          <View style={styles.wordmark}>
-            <View style={styles.wordmarkAccent} />
-            <Text style={styles.wordmarkText}>BRICKS</Text>
+    <SafeAreaView style={s.container} edges={['top']}>
+      <ScrollView 
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchData} tintColor={TOKENS.brick} />}
+      >
+        {/* Header */}
+        <View style={s.hdr}>
+          <View>
+            <Text style={s.overline}>Tuesday · Apr 21</Text>
+            <Text style={s.hdrT}>Today</Text>
           </View>
-          <Text style={styles.wordmarkSub}>DISPATCH</Text>
-        </View>
-        <TouchableOpacity testID="notifications-btn" style={styles.bellBtn}>
-          <Bell size={20} color="#8B8FA3" strokeWidth={2} />
-          {unreadCount > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-      <View style={styles.subHeader}>
-        <Text style={styles.headerSub}>{jobs.length} assignments</Text>
-      </View>
-      <View style={styles.filterRow}>
-        {FILTERS.map((f) => (
-          <TouchableOpacity key={f} testID={`filter-${f}`} style={[styles.filterBtn, filter === f && styles.filterBtnActive]} onPress={() => setFilter(f)}>
-            <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>{FILTER_LABELS[f]}</Text>
+          <TouchableOpacity style={s.bellBtn}>
+            <Bell size={16} color={TOKENS.moon} strokeWidth={1.5} />
+            <View style={s.bellDot} />
           </TouchableOpacity>
-        ))}
-      </View>
-      <FlatList data={jobs} keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <JobCard job={item} onPress={() => router.push(`/job/${item.id}`)} />}
-        contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B82F6" colors={['#3B82F6']} />}
-        ListEmptyComponent={<View style={styles.emptyWrap}><Text style={styles.emptyText}>No jobs found</Text></View>}
-      />
+        </View>
+
+        {/* Day summary strip */}
+        <View style={s.summaryStrip}>
+          {[
+            ['SHOOTS', jobs.length],
+            ['DRIVE', '42m'],
+            ['UPLOAD', '23/45'],
+          ].map(([l, v], i) => (
+            <View key={l} style={[s.summaryCell, i > 0 && { borderLeftWidth: 1, borderColor: TOKENS.nightHair }]}>
+              <Text style={s.summaryLabel}>{l}</Text>
+              <Text style={s.summaryValue}>{v}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Next up — the hero */}
+        <View style={s.heroSec}>
+          <View style={s.heroHdr}>
+            <Text style={s.heroOverline}>Next up · in 22 min</Text>
+            <Text style={s.navLink}>Navigate</Text>
+          </View>
+
+          {nextJob ? (
+            <View style={s.heroCard}>
+              <View style={s.placeholderImg}>
+                <Camera size={24} color={TOKENS.moonFaint} strokeWidth={1} />
+                <Text style={s.placeholderLabel}>PROPERTY — {nextJob.address.toUpperCase()}</Text>
+              </View>
+              
+              <View style={s.heroBody}>
+                <View style={s.heroTop}>
+                  <View>
+                    <Text style={s.jobId}>JOB–{nextJob.id.slice(0,5).toUpperCase()}</Text>
+                    <Text style={s.heroAddress}>{nextJob.address}</Text>
+                    <Text style={s.heroSub}>Brooklyn · House · 2,140 sqft</Text>
+                  </View>
+                  <View style={s.pkgBadge}>
+                    <Text style={s.pkgText}>SIGNATURE</Text>
+                  </View>
+                </View>
+
+                {/* time / distance rail */}
+                <View style={s.rail}>
+                  {[
+                    ['ARRIVE', nextJob.time_window_start],
+                    ['DRIVE',  '15 min'],
+                    ['AGENT',  'M. Ortega'],
+                  ].map(([l, v], i) => (
+                    <View key={l} style={[s.railCell, i > 0 && { borderLeftWidth: 1, borderColor: TOKENS.nightHair }]}>
+                      <Text style={s.railLabel}>{l}</Text>
+                      <Text style={s.railValue}>{v}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                {/* Checklist Preview */}
+                <View style={s.cl}>
+                  <View style={s.clRow}>
+                    <View style={s.chk}><Check size={10} color="#FFF" strokeWidth={3} /></View>
+                    <Text style={s.clTextDone}>35 photos + drone</Text>
+                  </View>
+                  <View style={s.clRow}>
+                    <View style={s.chkEmpty} />
+                    <Text style={s.clText}>60-sec reel</Text>
+                  </View>
+                  <View style={s.clRow}>
+                    <View style={s.chkEmpty} />
+                    <Text style={s.clText}>Floor plan scan</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity style={s.heroBtn} onPress={() => router.push(`/job/${nextJob.id}`)}>
+                  <Navigation size={15} color="#FFF" strokeWidth={2} />
+                  <Text style={s.heroBtnText}>Start navigation</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <Text style={s.noJobs}>No more jobs today.</Text>
+          )}
+        </View>
+
+        {/* Later today */}
+        <View style={s.laterSec}>
+          <Text style={s.heroOverline}>Later today</Text>
+          <View style={s.laterList}>
+            {laterJobs.map((j, i) => (
+              <TouchableOpacity 
+                key={j.id} 
+                style={[s.laterRow, i === 0 && { borderTopWidth: 1 }]}
+                onPress={() => router.push(`/job/${j.id}`)}
+              >
+                <Text style={s.laterTime}>{j.time_window_start}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.laterAddr}>{j.address}</Text>
+                  <Text style={s.laterSub}>Condo · 1,200 sqft</Text>
+                </View>
+                <View style={s.laterPkg}>
+                  <Text style={s.laterPkgText}>ESSENTIAL</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        <View style={{ height: 100 }} />
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0C0D14' },
-  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
-  brandRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
-  wordmark: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  wordmarkAccent: { width: 4, height: 22, borderRadius: 2, backgroundColor: '#3B82F6' },
-  wordmarkText: { fontSize: 22, fontFamily: 'Outfit_700Bold', color: '#FFFFFF', letterSpacing: 3 },
-  wordmarkSub: { fontSize: 12, fontFamily: 'Manrope_400Regular', color: '#565B7E', letterSpacing: 2 },
-  bellBtn: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#151722', borderWidth: 1, borderColor: '#1E2030', alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  badge: { position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  badgeText: { fontSize: 10, fontFamily: 'Manrope_600SemiBold', color: '#FFFFFF' },
-  subHeader: { paddingHorizontal: 20, paddingBottom: 12 },
-  headerSub: { fontSize: 13, fontFamily: 'Manrope_400Regular', color: '#565B7E' },
-  filterRow: { flexDirection: 'row', paddingHorizontal: 16, marginBottom: 12, gap: 8 },
-  filterBtn: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, backgroundColor: '#151722', borderWidth: 1, borderColor: '#1E2030' },
-  filterBtnActive: { backgroundColor: '#3B82F6', borderColor: '#3B82F6' },
-  filterText: { fontSize: 13, fontFamily: 'Manrope_500Medium', color: '#8B8FA3' },
-  filterTextActive: { color: '#FFFFFF' },
-  list: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 100 },
-  card: { backgroundColor: '#151722', borderRadius: 14, borderWidth: 1, borderColor: '#1E2030', padding: 16, marginBottom: 10 },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  cardTypeRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  typeIconWrap: { width: 30, height: 30, borderRadius: 8, backgroundColor: '#1E2030', alignItems: 'center', justifyContent: 'center' },
-  typeLabel: { fontSize: 13, fontFamily: 'Manrope_500Medium', color: '#8B8FA3' },
-  priorityBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  urgentBadge: { backgroundColor: '#EF4444' },
-  highBadge: { backgroundColor: '#F59E0B' },
-  priorityText: { fontSize: 11, fontFamily: 'Manrope_600SemiBold', color: '#FFFFFF' },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
-  statusDot: { width: 6, height: 6, borderRadius: 3 },
-  statusText: { fontSize: 12, fontFamily: 'Manrope_600SemiBold' },
-  address: { fontSize: 17, fontFamily: 'Outfit_600SemiBold', color: '#FFFFFF', marginBottom: 3 },
-  cityState: { fontSize: 13, fontFamily: 'Manrope_400Regular', color: '#565B7E', marginBottom: 14 },
-  cardFooter: { flexDirection: 'row', alignItems: 'center', paddingTop: 12, borderTopWidth: 1, borderTopColor: '#1E2030' },
-  timeWindow: { fontSize: 14, fontFamily: 'JetBrainsMono_500Medium', color: '#3B82F6', flex: 1 },
-  progressWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 12 },
-  progressTrack: { width: 48, height: 4, borderRadius: 2, backgroundColor: '#1E2030', overflow: 'hidden' },
-  progressFill: { height: '100%', borderRadius: 2, backgroundColor: '#3B82F6' },
-  progressText: { fontSize: 12, fontFamily: 'JetBrainsMono_400Regular', color: '#565B7E' },
-  emptyWrap: { paddingVertical: 60, alignItems: 'center' },
-  emptyText: { fontSize: 14, fontFamily: 'Manrope_400Regular', color: '#565B7E' },
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: TOKENS.night },
+  ldg: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  hdr: { paddingHorizontal: 24, paddingTop: 10, paddingBottom: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  overline: { fontFamily: 'JetBrainsMono-Medium', fontSize: 10, color: TOKENS.moonMute, letterSpacing: 1.6, textTransform: 'uppercase' },
+  hdrT: { fontSize: 26, fontFamily: 'System', color: TOKENS.moon, letterSpacing: -0.8, marginTop: 4 },
+  bellBtn: { width: 36, height: 36, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, alignItems: 'center', justifyContent: 'center' },
+  bellDot: { position: 'absolute', top: 6, right: 6, width: 6, height: 6, borderRadius: 3, backgroundColor: TOKENS.brick },
+  
+  summaryStrip: { marginHorizontal: 24, flexDirection: 'row', backgroundColor: TOKENS.night, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
+  summaryCell: { flex: 1, padding: 12 },
+  summaryLabel: { fontFamily: 'JetBrainsMono-Medium', fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.6 },
+  summaryValue: { fontFamily: 'JetBrainsMono-Regular', fontSize: 22, color: TOKENS.moon, marginTop: 4, letterSpacing: -0.5 },
+
+  heroSec: { paddingHorizontal: 24, paddingTop: 22 },
+  heroHdr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 },
+  heroOverline: { fontFamily: 'JetBrainsMono-Medium', fontSize: 10, color: TOKENS.moonMute, letterSpacing: 1.4, textTransform: 'uppercase' },
+  navLink: { fontSize: 12, color: TOKENS.brick, fontFamily: 'System', fontWeight: '500' },
+  
+  heroCard: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, overflow: 'hidden' },
+  placeholderImg: { height: 132, backgroundColor: TOKENS.nightDeep, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  placeholderLabel: { fontFamily: 'JetBrainsMono-Medium', fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1 },
+  
+  heroBody: { padding: 18 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  jobId: { fontFamily: 'JetBrainsMono-Regular', fontSize: 11, color: TOKENS.moonMute, letterSpacing: 1.4 },
+  heroAddress: { fontSize: 19, fontFamily: 'System', color: TOKENS.moon, marginTop: 6, letterSpacing: -0.3 },
+  heroSub: { fontSize: 13, color: TOKENS.moonMute, marginTop: 2 },
+  pkgBadge: { paddingHorizontal: 9, paddingVertical: 5, backgroundColor: '#F4D9CC22', borderRadius: 2 },
+  pkgText: { fontFamily: 'JetBrainsMono-Medium', fontSize: 10, color: TOKENS.brickSoft, letterSpacing: 1.4 },
+  
+  rail: { marginTop: 16, paddingVertical: 12, flexDirection: 'row', borderTopWidth: 1, borderBottomWidth: 1, borderColor: TOKENS.nightHair },
+  railCell: { flex: 1, paddingLeft: 0, paddingRight: 0, alignItems: 'flex-start' },
+  railLabel: { fontFamily: 'JetBrainsMono-Medium', fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.6 },
+  railValue: { fontFamily: 'JetBrainsMono-Regular', fontSize: 13, color: TOKENS.moon, marginTop: 3 },
+  
+  cl: { marginTop: 14, gap: 6 },
+  clRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  chk: { width: 16, height: 16, borderRadius: 2, backgroundColor: TOKENS.brick, alignItems: 'center', justifyContent: 'center' },
+  chkEmpty: { width: 16, height: 16, borderRadius: 2, borderWidth: 1.5, borderColor: TOKENS.nightHairS },
+  clText: { fontSize: 13, color: TOKENS.moon },
+  clTextDone: { fontSize: 13, color: TOKENS.moonMute, textDecorationLine: 'line-through' },
+  
+  heroBtn: { marginTop: 16, width: '100%', backgroundColor: TOKENS.brick, padding: 15, borderRadius: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  heroBtnText: { color: '#FFF', fontFamily: 'System', fontSize: 15, fontWeight: '500' },
+
+  laterSec: { paddingHorizontal: 24, paddingTop: 18 },
+  laterList: { marginTop: 10 },
+  laterRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderColor: TOKENS.nightHair, borderBottomWidth: 1 },
+  laterTime: { fontFamily: 'JetBrainsMono-Regular', fontSize: 14, color: TOKENS.moon, width: 60 },
+  laterAddr: { fontSize: 14, fontFamily: 'System', color: TOKENS.moon, fontWeight: '500' },
+  laterSub: { fontSize: 12, color: TOKENS.moonMute, marginTop: 2 },
+  laterPkg: { paddingHorizontal: 8, paddingVertical: 4, backgroundColor: TOKENS.nightSoft, borderRadius: 2 },
+  laterPkgText: { fontFamily: 'JetBrainsMono-Medium', fontSize: 9, color: TOKENS.moonSoft, letterSpacing: 1.4, textTransform: 'uppercase' },
+  noJobs: { color: TOKENS.moonFaint, textAlign: 'center', marginTop: 20 }
 });

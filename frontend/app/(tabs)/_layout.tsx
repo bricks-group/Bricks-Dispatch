@@ -1,6 +1,7 @@
 import { Tabs } from 'expo-router';
 import { View, Text, StyleSheet, Platform } from 'react-native';
 import { Briefcase, Calendar, Upload, User } from 'lucide-react-native';
+import { TOKENS } from '../../constants/Theme';
 
 type TabIconProps = {
   Icon: React.ComponentType<{ size: number; color: string; strokeWidth: number }>;
@@ -14,10 +15,13 @@ function TabIcon({ Icon, label, focused }: TabIconProps) {
       {focused && <View style={styles.activeIndicator} />}
       <Icon
         size={20}
-        color={focused ? '#FFFFFF' : '#565B7E'}
-        strokeWidth={focused ? 2.5 : 1.8}
+        color={focused ? TOKENS.moon : TOKENS.moonFaint}
+        strokeWidth={focused ? 1.75 : 1.5}
       />
-      <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>
+      <Text 
+        numberOfLines={1} 
+        style={[styles.tabLabel, focused && styles.tabLabelActive]}
+      >
         {label}
       </Text>
     </View>
@@ -31,41 +35,41 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarStyle: styles.tabBar,
         tabBarShowLabel: false,
-        tabBarActiveTintColor: '#FFFFFF',
-        tabBarInactiveTintColor: '#565B7E',
-        sceneStyle: { backgroundColor: '#0C0D14' },
+        tabBarActiveTintColor: TOKENS.moon,
+        tabBarInactiveTintColor: TOKENS.moonFaint,
+        sceneStyle: { backgroundColor: TOKENS.night },
         ...(Platform.OS === 'web' ? { unmountOnBlur: true } : {}),
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Jobs',
-          tabBarIcon: ({ focused }) => <TabIcon Icon={Briefcase} label="Jobs" focused={focused} />,
+          title: 'JOBS',
+          tabBarIcon: ({ focused }) => <TabIcon Icon={Briefcase} label="JOBS" focused={focused} />,
           tabBarTestID: 'tab-jobs',
         }}
       />
       <Tabs.Screen
         name="schedule"
         options={{
-          title: 'Schedule',
-          tabBarIcon: ({ focused }) => <TabIcon Icon={Calendar} label="Schedule" focused={focused} />,
+          title: 'SCHEDULE',
+          tabBarIcon: ({ focused }) => <TabIcon Icon={Calendar} label="SCHEDULE" focused={focused} />,
           tabBarTestID: 'tab-schedule',
         }}
       />
       <Tabs.Screen
         name="uploads"
         options={{
-          title: 'Uploads',
-          tabBarIcon: ({ focused }) => <TabIcon Icon={Upload} label="Uploads" focused={focused} />,
+          title: 'UPLOADS',
+          tabBarIcon: ({ focused }) => <TabIcon Icon={Upload} label="UPLOADS" focused={focused} />,
           tabBarTestID: 'tab-uploads',
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
-          title: 'Profile',
-          tabBarIcon: ({ focused }) => <TabIcon Icon={User} label="Profile" focused={focused} />,
+          title: 'PROFILE',
+          tabBarIcon: ({ focused }) => <TabIcon Icon={User} label="PROFILE" focused={focused} />,
           tabBarTestID: 'tab-profile',
         }}
       />
@@ -75,37 +79,37 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: '#0C0D14',
+    backgroundColor: TOKENS.night,
     borderTopWidth: 1,
-    borderTopColor: '#1E2030',
-    height: 76,
-    paddingTop: 8,
-    paddingBottom: 14,
+    borderTopColor: TOKENS.nightHair,
+    height: 84,
+    paddingTop: 12,
+    paddingBottom: 28,
     elevation: 0,
     shadowOpacity: 0,
   },
   tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
+    gap: 4,
     position: 'relative',
+    width: '100%',
   },
   activeIndicator: {
     position: 'absolute',
     top: -12,
     width: 24,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: '#3B82F6',
+    height: 2,
+    backgroundColor: TOKENS.brick,
   },
   tabLabel: {
-    fontSize: 11,
-    fontFamily: 'Manrope_500Medium',
-    color: '#565B7E',
-    letterSpacing: 0.3,
+    fontSize: 9, // Slightly smaller to prevent wrap
+    fontFamily: 'JetBrainsMono-Medium',
+    color: TOKENS.moonFaint,
+    letterSpacing: 1.0, // Reduced from 1.2
+    textTransform: 'uppercase',
   },
   tabLabelActive: {
-    color: '#FFFFFF',
-    fontFamily: 'Manrope_600SemiBold',
+    color: TOKENS.moon,
   },
 });
