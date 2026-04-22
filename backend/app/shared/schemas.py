@@ -46,7 +46,10 @@ class Job(BaseModel):
     package_id: Optional[str] = None
     package_name: Optional[str] = None
     package_price: Optional[int] = None
+    add_ons: List[str] = []
+    add_on_total: Optional[int] = None
     billing_type: Optional[str] = None
+    overage_amount: Optional[int] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -268,4 +271,3 @@ class AuditEvent(BaseModel):
     action: str
     details: dict = {}
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
