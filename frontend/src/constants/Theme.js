@@ -1,0 +1,22 @@
+// Bricks Tokens - Dispatch Dark Mode
+export const T = {
+  night: '#141210',
+  nightSoft: '#1C1A17',
+  nightDeep: '#23201C',
+  nightHair: '#F4F1EB14',
+  nightHairS: '#F4F1EB26',
+  moon: '#F4F1EB',
+  moonSoft: '#D6CFC2',
+  moonMute: '#8F8678',
+  moonFaint: '#5E574C',
+  brick: '#D2542B',
+  brickDeep: '#A8401F',
+  brickSoft: '#F4D9CC',
+  brickTint: '#FBEFE8',
+  ok: '#4A6B3C',
+  okTint: '#E6ECDD',
+  warn: '#B8741F',
+  warnTint: '#F6E8D1',
+  bad: '#8C2F24',
+  badTint: '#F1DAD4',
+};
