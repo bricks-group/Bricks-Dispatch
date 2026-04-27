@@ -1,4 +1,4 @@
-from .database import db
+from .database import get_db
 from .schemas import AuditEvent
 
 async def write_audit_event(
@@ -17,5 +17,5 @@ async def write_audit_event(
         action=action,
         details=details or {},
     )
-    await db.table("audit_events").insert(event.dict()).execute()
+    await (await get_db()).table("audit_events").insert(event.dict()).execute()
     return event.dict()

@@ -5,7 +5,7 @@ from ..shared.auth import (
     is_vendor_admin,
     resolve_vendor_actor_id,
 )
-from ..shared.database import db
+from ..shared.database import get_db
 from ..shared.errors import api_error
 from ..shared.schemas import VendorAuthLogin
 
@@ -19,7 +19,7 @@ async def vendor_os_login(payload: VendorAuthLogin):
     
     # In Supabase, we send OTP
     try:
-        res = await db.auth.sign_in_with_otp({"email": email})
+        res = await (await get_db()).auth.sign_in_with_otp({"email": email})
         return {"message": "OTP sent to email", "email": email}
     except Exception as e:
         api_error(500, f"Error sending OTP: {str(e)}", "otp_error")
@@ -32,13 +32,13 @@ async def vendor_os_verify(payload: dict):
         api_error(400, "Email and token are required", "missing_fields")
     
     try:
-        res = await db.auth.verify_otp({"email": email, "token": token, "type": "magiclink"})
+        res = await (await get_db()).auth.verify_otp({"email": email, "token": token, "type": "magiclink"})
         if res.session:
             # We might want to ensure the member exists in our table too
             user = res.user
-            member_res = await db.table("vendor_members").select("*").eq("id", user.id).maybe_single().execute()
+            member_res = await (await get_db()).table("vendor_members").select("*").eq("id", user.id).maybe_single().execute()
             if not member_res.data:
-                await db.table("vendor_members").insert({
+                await (await get_db()).table("vendor_members").insert({
                     "id": user.id,
                     "email": user.email,
                     "name": user.user_metadata.get("name", email.split("@")[0]),
@@ -72,7 +72,7 @@ async def vendor_os_logout(authorization: str | None = Header(default=None, alia
     try:
         # Supabase logout
         # Note: SignOut usually clears the session on the server side for that token
-        await db.auth.sign_out()
+        await (await get_db()).auth.sign_out()
         return {"logged_out": True}
     except Exception:
         # Even if it fails, we treat it as logged out locally

@@ -1,11 +1,11 @@
 import logging
-from ..shared.database import db
+from ..shared.database import get_db
 from ..shared.schemas import NotificationRecord
 
 logger = logging.getLogger(__name__)
 
 async def send_push_notification(title: str, body: str, data: dict | None = None):
-    res = await db.table("push_tokens").select("*").eq("active", True).limit(100).execute()
+    res = await (await get_db()).table("push_tokens").select("*").eq("active", True).limit(100).execute()
     tokens = res.data
     if not tokens:
         return
@@ -35,7 +35,7 @@ async def send_push_notification(title: str, body: str, data: dict | None = None
                 response = push_client.publish(msg)
                 response.validate_response()
             except DeviceNotRegisteredError:
-                await db.table("push_tokens").update({"active": False}).eq("token", token_doc["token"]).execute()
+                await (await get_db()).table("push_tokens").update({"active": False}).eq("token", token_doc["token"]).execute()
             except Exception as exc:
                 logger.error("Push error: %s", exc)
     except ImportError:
@@ -46,6 +46,6 @@ async def send_push_notification(title: str, body: str, data: dict | None = None
 async def create_notification(title: str, body: str, ntype: str = "info", data: dict | None = None):
     notif = NotificationRecord(title=title, body=body, type=ntype, data=data or {})
     notif_dict = notif.dict()
-    await db.table("notifications").insert(notif_dict).execute()
+    await (await get_db()).table("notifications").insert(notif_dict).execute()
     await send_push_notification(title, body, data)
     return notif_dict

@@ -3,7 +3,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Header, HTTPException
 
 from ..shared.auth import is_vendor_admin, get_vendor_member, resolve_vendor_actor_id
-from ..shared.database import db
+from ..shared.database import get_db
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import VendorMemberUpdate, VendorLead
@@ -25,7 +25,7 @@ async def create_lead(
         api_error(403, "Insufficient permissions", "insufficient_permissions")
         
     lead_dict = payload.dict()
-    await db.table("vendor_leads").insert(lead_dict).execute()
+    await (await get_db()).table("vendor_leads").insert(lead_dict).execute()
     return lead_dict
 
 @router.get("/leads")
@@ -43,7 +43,7 @@ async def list_leads(
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
         
-    query = db.table("vendor_leads").select("*")
+    sb = await get_db(); query = sb.table("vendor_leads").select("*")
     if status: query = query.eq("status", status)
     if city: query = query.eq("city", city)
     
@@ -68,7 +68,7 @@ async def list_applicants(
         api_error(403, "Insufficient permissions for vetting", "insufficient_permissions")
         
     vendor_id = actor_member.get("vendor_id", "default_vendor")
-    query = db.table("vendor_members").select("*", count="exact").eq("vendor_id", vendor_id).eq("onboarding_status", status)
+    sb = await get_db(); query = sb.table("vendor_members").select("*", count="exact").eq("vendor_id", vendor_id).eq("onboarding_status", status)
     
     page, page_size, skip = normalize_pagination(page, page_size)
     res = await query.order("created_at", ascending=False).range(skip, skip + page_size - 1).execute()
@@ -107,7 +107,7 @@ async def update_applicant_status(
         update_data["is_active"] = True
         update_data["role"] = "Photographer" # Upgrade from 'Applicant'
     
-    res = await db.table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()
+    res = await (await get_db()).table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()
     
     if not res.data:
         api_error(404, "Applicant not found", "applicant_not_found")
@@ -129,7 +129,7 @@ async def get_applicant_documents(
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
         
-    res = await db.table("vendor_documents").select("*").eq("member_id", member_id).limit(50).execute()
+    res = await (await get_db()).table("vendor_documents").select("*").eq("member_id", member_id).limit(50).execute()
     return res.data
 
 @router.put("/applicants/{member_id}/documents/{doc_id}/verify")
@@ -149,7 +149,7 @@ async def verify_document(
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
         
-    res = await db.table("vendor_documents").update({
+    res = await (await get_db()).table("vendor_documents").update({
         "status": status, 
         "updated_at": datetime.now(timezone.utc).isoformat()
     }).eq("id", doc_id).eq("member_id", member_id).execute()

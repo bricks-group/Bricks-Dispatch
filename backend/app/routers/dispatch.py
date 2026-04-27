@@ -9,7 +9,7 @@ from ..services.storage import get_signed_download_url, upload_file
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.auth import ensure_assigned_to_actor, get_vendor_member, resolve_actor_id, resolve_vendor_actor_id
-from ..shared.database import db
+from ..shared.database import get_db
 from ..shared.errors import api_error
 from ..shared.schemas import ChecklistToggle, JobStatusUpdate, Profile, ProfileUpdate, PushTokenRegister, UploadRecord
 
@@ -24,13 +24,13 @@ async def root():
 
 @router.post("/push-tokens")
 async def register_push_token(reg: PushTokenRegister):
-    res = await db.table("push_tokens").select("*").eq("token", reg.token).maybe_single().execute()
+    res = await (await get_db()).table("push_tokens").select("*").eq("token", reg.token).maybe_single().execute()
     existing = res.data
     now = datetime.now(timezone.utc).isoformat()
     if existing:
-        await db.table("push_tokens").update({"active": True, "platform": reg.platform, "updated_at": now}).eq("token", reg.token).execute()
+        await (await get_db()).table("push_tokens").update({"active": True, "platform": reg.platform, "updated_at": now}).eq("token", reg.token).execute()
     else:
-        await db.table("push_tokens").insert({"token": reg.token, "platform": reg.platform, "active": True, "created_at": now, "updated_at": now}).execute()
+        await (await get_db()).table("push_tokens").insert({"token": reg.token, "platform": reg.platform, "active": True, "created_at": now, "updated_at": now}).execute()
     return {"registered": True}
 
 
@@ -38,7 +38,7 @@ async def register_push_token(reg: PushTokenRegister):
 async def auto_assign_job(job_id: str):
     try:
         member_id = await assign_vendor_for_job(job_id)
-        res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        res = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
         return res.data
     except ValueError as e:
         api_error(404, str(e), "job_not_found")
@@ -48,19 +48,19 @@ async def auto_assign_job(job_id: str):
 
 @router.get("/notifications")
 async def get_notifications():
-    res = await db.table("notifications").select("*").order("created_at", ascending=False).limit(50).execute()
+    res = await (await get_db()).table("notifications").select("*").order("created_at", ascending=False).limit(50).execute()
     return res.data
 
 
 @router.put("/notifications/{notif_id}/read")
 async def mark_notification_read(notif_id: str):
-    await db.table("notifications").update({"read": True}).eq("id", notif_id).execute()
+    await (await get_db()).table("notifications").update({"read": True}).eq("id", notif_id).execute()
     return {"read": True}
 
 
 @router.get("/notifications/unread-count")
 async def unread_count():
-    res = await db.table("notifications").select("*", count="exact").eq("read", False).execute()
+    res = await (await get_db()).table("notifications").select("*", count="exact").eq("read", False).execute()
     return {"count": res.count}
 
 
@@ -68,7 +68,7 @@ async def unread_count():
 async def get_jobs(status: Optional[str] = None, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
-    query = db.table("jobs").select("*").eq("vendor_id", member.get("vendor_id", "default_vendor")).eq("assignee_id", actor_id)
+    sb = await get_db(); query = sb.table("jobs").select("*").eq("vendor_id", member.get("vendor_id", "default_vendor")).eq("assignee_id", actor_id)
     if status:
         query = query.eq("status", status)
     res = await query.order("time_window_start", ascending=True).limit(100).execute()
@@ -79,7 +79,7 @@ async def get_jobs(status: Optional[str] = None, authorization: str | None = Hea
 async def get_job(job_id: str, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
-    res = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", member.get("vendor_id", "default_vendor")).maybe_single().execute()
+    res = await (await get_db()).table("jobs").select("*").eq("id", job_id).eq("vendor_id", member.get("vendor_id", "default_vendor")).maybe_single().execute()
     job = res.data
     if not job:
         api_error(404, "Job not found", "job_not_found")
@@ -90,7 +90,7 @@ async def get_job(job_id: str, authorization: str | None = Header(default=None, 
 @router.put("/jobs/{job_id}/status")
 async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
     valid_transitions = {"pending_assignment": ["assigned"], "assigned": ["in_progress", "pending_assignment"], "in_progress": ["completed"], "completed": ["delivered"], "delivered": []}
-    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    res = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     job = res.data
     if not job:
         api_error(404, "Job not found", "job_not_found")
@@ -113,8 +113,8 @@ async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: str
             api_error(400, f"Cannot complete job: {', '.join(blockers)}", "job_completion_blocked")
     
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({"status": update.status, "updated_at": now}).eq("id", job_id).execute()
-    res_updated = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    await (await get_db()).table("jobs").update({"status": update.status, "updated_at": now}).eq("id", job_id).execute()
+    res_updated = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     updated = res_updated.data
 
     if updated.get("booking_id"):
@@ -131,7 +131,7 @@ async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: str
                 set_fields["completed_at"] = now
             if update.status == "delivered":
                 set_fields["delivered_at"] = now
-            await db.table("bookings").update(set_fields).eq("booking_id", updated["booking_id"]).execute()
+            await (await get_db()).table("bookings").update(set_fields).eq("booking_id", updated["booking_id"]).execute()
 
     _notif_title_map = {"assigned": "Job Assigned", "in_progress": "Shoot Started", "completed": "Shoot Complete", "delivered": "Media Delivered"}
     await create_notification(
@@ -146,7 +146,7 @@ async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: str
 
 @router.put("/jobs/{job_id}/checklist/{item_id}")
 async def toggle_checklist_item(job_id: str, item_id: str, toggle: ChecklistToggle, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    res = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     job = res.data
     if not job:
         api_error(404, "Job not found", "job_not_found")
@@ -166,10 +166,10 @@ async def toggle_checklist_item(job_id: str, item_id: str, toggle: ChecklistTogg
     if not found:
         api_error(404, "Checklist item not found", "checklist_item_not_found")
     
-    await db.table("jobs").update({"checklist": checklist, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).execute()
+    await (await get_db()).table("jobs").update({"checklist": checklist, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).execute()
     await write_audit_event(actor_id, "job", job_id, "checklist_toggle", vendor_id=job.get("vendor_id", "default_vendor"), details={"item_id": item_id, "completed": toggle.completed})
     
-    res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    res_final = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     return res_final.data
 
 
@@ -177,7 +177,7 @@ async def toggle_checklist_item(job_id: str, item_id: str, toggle: ChecklistTogg
 async def get_schedule(date: Optional[str] = None, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
-    query = db.table("jobs").select("*").eq("vendor_id", member.get("vendor_id", "default_vendor")).eq("assignee_id", actor_id)
+    sb = await get_db(); query = sb.table("jobs").select("*").eq("vendor_id", member.get("vendor_id", "default_vendor")).eq("assignee_id", actor_id)
     if date:
         query = query.eq("scheduled_date", date)
     res = await query.order("time_window_start", ascending=True).limit(100).execute()
@@ -190,27 +190,27 @@ async def get_uploads(job_id: Optional[str] = None, authorization: str | None = 
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
     if job_id:
-        res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+        res_job = await (await get_db()).table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
         job = res_job.data
         if not job:
             api_error(404, "Job not found", "job_not_found")
         ensure_assigned_to_actor(job, actor_id)
-        res_uploads = await db.table("uploads").select("*").eq("job_id", job_id).order("created_at", ascending=False).limit(200).execute()
+        res_uploads = await (await get_db()).table("uploads").select("*").eq("job_id", job_id).order("created_at", ascending=False).limit(200).execute()
         return res_uploads.data
     
-    res_jobs = await db.table("jobs").select("id").eq("vendor_id", vendor_id).eq("assignee_id", actor_id).limit(500).execute()
+    res_jobs = await (await get_db()).table("jobs").select("id").eq("vendor_id", vendor_id).eq("assignee_id", actor_id).limit(500).execute()
     job_ids = [j["id"] for j in res_jobs.data]
     if not job_ids:
         return []
-    res_uploads = await db.table("uploads").select("*").contains("job_id", job_ids).order("created_at", ascending=False).limit(200).execute()
+    res_uploads = await (await get_db()).table("uploads").select("*").contains("job_id", job_ids).order("created_at", ascending=False).limit(200).execute()
     # Wait, Supabase `.contains` is for arrays. For IN, we use `.in_`
-    res_uploads = await db.table("uploads").select("*").in_("job_id", job_ids).order("created_at", ascending=False).limit(200).execute()
+    res_uploads = await (await get_db()).table("uploads").select("*").in_("job_id", job_ids).order("created_at", ascending=False).limit(200).execute()
     return res_uploads.data
 
 
 @router.post("/uploads")
 async def create_upload(job_id: str = Form(...), filename: str = Form(...), file_size: int = Form(0), mime_type: str = Form(""), file_data: str = Form(""), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    res_job = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     job = res_job.data
     if not job:
         api_error(404, "Job not found", "job_not_found")
@@ -233,11 +233,11 @@ async def create_upload(job_id: str = Form(...), filename: str = Form(...), file
         upload.thumbnail_url = thumb_key
     
     upload_dict = upload.dict()
-    await db.table("uploads").insert(upload_dict).execute()
+    await (await get_db()).table("uploads").insert(upload_dict).execute()
     
     # Increment uploaded_count
     new_count = job.get("uploaded_count", 0) + 1
-    await db.table("jobs").update({"uploaded_count": new_count}).eq("id", job_id).execute()
+    await (await get_db()).table("jobs").update({"uploaded_count": new_count}).eq("id", job_id).execute()
     
     await create_notification("Upload Complete", f"{filename} uploaded to {job['address']}", ntype="upload", data={"job_id": job_id, "filename": filename})
     await write_audit_event(actor_id, "upload", upload_dict["id"], "create", vendor_id=job.get("vendor_id", "default_vendor"), details={"job_id": job_id, "filename": filename})
@@ -247,16 +247,16 @@ async def create_upload(job_id: str = Form(...), filename: str = Form(...), file
 @router.get("/uploads/{upload_id}/download")
 async def get_upload_download_url(upload_id: str, authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    res_upload = await db.table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
+    res_upload = await (await get_db()).table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
     upload = res_upload.data
     if not upload:
         api_error(404, "Upload not found", "upload_not_found")
-    res_job = await db.table("jobs").select("*").eq("id", upload["job_id"]).maybe_single().execute()
+    res_job = await (await get_db()).table("jobs").select("*").eq("id", upload["job_id"]).maybe_single().execute()
     job = res_job.data
     if not job:
         api_error(404, "Job not found", "job_not_found")
     
-    res_member = await db.table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
+    res_member = await (await get_db()).table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
     member = res_member.data
     if member:
         ensure_assigned_to_actor(job, actor_id)
@@ -274,11 +274,11 @@ async def get_upload_download_url(upload_id: str, authorization: str | None = He
 
 @router.delete("/uploads/{upload_id}")
 async def delete_upload(upload_id: str, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    res_upload = await db.table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
+    res_upload = await (await get_db()).table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
     upload = res_upload.data
     if not upload:
         api_error(404, "Upload not found", "upload_not_found")
-    res_job = await db.table("jobs").select("*").eq("id", upload["job_id"]).maybe_single().execute()
+    res_job = await (await get_db()).table("jobs").select("*").eq("id", upload["job_id"]).maybe_single().execute()
     job = res_job.data
     if not job:
         api_error(404, "Job not found", "job_not_found")
@@ -289,20 +289,20 @@ async def delete_upload(upload_id: str, x_user_id: str | None = Header(default=N
     if job.get("status") != "in_progress":
         api_error(400, "Uploads can only be deleted while job is in progress", "upload_locked")
     
-    await db.table("uploads").delete().eq("id", upload_id).execute()
+    await (await get_db()).table("uploads").delete().eq("id", upload_id).execute()
     next_count = max(job.get("uploaded_count", 0) - 1, 0)
-    await db.table("jobs").update({"uploaded_count": next_count, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", upload["job_id"]).execute()
+    await (await get_db()).table("jobs").update({"uploaded_count": next_count, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", upload["job_id"]).execute()
     await write_audit_event(actor_id, "upload", upload_id, "delete", vendor_id=job.get("vendor_id", "default_vendor"), details={"job_id": upload["job_id"]})
     return {"deleted": True}
 
 
 @router.get("/profile")
 async def get_profile():
-    res = await db.table("profile").select("*").eq("id", "default_user").maybe_single().execute()
+    res = await (await get_db()).table("profile").select("*").eq("id", "default_user").maybe_single().execute()
     profile = res.data
     if not profile:
         default = Profile().dict()
-        await db.table("profile").insert(default).execute()
+        await (await get_db()).table("profile").insert(default).execute()
         return default
     return profile
 
@@ -312,8 +312,8 @@ async def update_profile(update: ProfileUpdate):
     update_data = {k: v for k, v in update.dict().items() if v is not None}
     if not update_data:
         api_error(400, "No update data", "no_update_data")
-    await db.table("profile").upsert({"id": "default_user", **update_data}).execute()
-    res = await db.table("profile").select("*").eq("id", "default_user").maybe_single().execute()
+    await (await get_db()).table("profile").upsert({"id": "default_user", **update_data}).execute()
+    res = await (await get_db()).table("profile").select("*").eq("id", "default_user").maybe_single().execute()
     return res.data
 
 
@@ -330,7 +330,7 @@ async def get_payouts(authorization: str | None = Header(default=None, alias="Au
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     week_end = week_start + timedelta(days=7)
 
-    res_jobs = await db.table("jobs").select("*").eq("assignee_id", actor_id).eq("vendor_id", vendor_id).order("scheduled_date", ascending=False).limit(50).execute()
+    res_jobs = await (await get_db()).table("jobs").select("*").eq("assignee_id", actor_id).eq("vendor_id", vendor_id).order("scheduled_date", ascending=False).limit(50).execute()
     jobs = res_jobs.data
 
     recent = []

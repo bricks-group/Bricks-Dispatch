@@ -3,7 +3,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 
 from ..integrations.bricks_ai_dispatch import bricks_smart_assign
-from ..shared.database import db
+from ..shared.database import get_db
 from ..shared.schemas import Job, VendorMember
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ async def assign_vendor_for_job(job_id: str) -> str:
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
     """
-    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    res = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     job_doc = res.data
     if not job_doc:
         raise ValueError(f"Job {job_id} not found")
@@ -42,7 +42,7 @@ async def assign_vendor_for_job(job_id: str) -> str:
     job = Job(**job_doc)
     
     vendor_id = job.vendor_id or "default_vendor"
-    res_members = await db.table("vendor_members").select("*").eq("vendor_id", vendor_id).execute()
+    res_members = await (await get_db()).table("vendor_members").select("*").eq("vendor_id", vendor_id).execute()
     members_docs = res_members.data
     vendors = [VendorMember(**m) for m in members_docs]
 
@@ -69,7 +69,7 @@ async def assign_vendor_for_job(job_id: str) -> str:
 
 async def _update_job_assignee(job_id: str, member_id: str):
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({
+    await (await get_db()).table("jobs").update({
         "assignee_id": member_id, 
         "status": "assigned", 
         "updated_at": now

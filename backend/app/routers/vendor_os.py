@@ -7,7 +7,7 @@ from fastapi import APIRouter, Header
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.auth import get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
-from ..shared.database import db
+from ..shared.database import get_db
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import (
@@ -35,7 +35,7 @@ async def get_vendor_os_overview(
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     member_ids = await get_vendor_member_ids(vendor_id)
     
-    res_jobs = await db.table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).limit(500).execute()
+    res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).limit(500).execute()
     jobs = res_jobs.data
     
     today = datetime.now(timezone.utc).date()
@@ -80,7 +80,7 @@ async def get_vendor_team(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     
-    query = db.table("vendor_members").select("*", count="exact").eq("vendor_id", vendor_id)
+    sb = await get_db(); query = sb.table("vendor_members").select("*", count="exact").eq("vendor_id", vendor_id)
     if status:
         query = query.eq("status", status)
     if search:
@@ -95,7 +95,7 @@ async def get_vendor_team(
     
     for member in members:
         # Get assigned jobs count
-        res_count = await db.table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member["id"]).neq("status", "completed").execute()
+        res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member["id"]).neq("status", "completed").execute()
         member["assigned_jobs"] = res_count.count or 0
         
     return paginated_response(members, total, page, page_size)
@@ -119,7 +119,7 @@ async def create_vendor_member(
         vendor_id=actor_member.get("vendor_id", "default_vendor"),
     )
     member_dict = member.dict()
-    await db.table("vendor_members").insert(member_dict).execute()
+    await (await get_db()).table("vendor_members").insert(member_dict).execute()
     member_dict["assigned_jobs"] = 0
     await write_audit_event(actor_id, "vendor_member", member_dict["id"], "create", vendor_id=member_dict["vendor_id"], details={"email": member_dict["email"]})
     return member_dict
@@ -142,12 +142,12 @@ async def update_vendor_member(
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
     vendor_id = actor_member.get("vendor_id", "default_vendor")
-    res = await db.table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()
+    res = await (await get_db()).table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()
     if not res.data:
         api_error(404, "Member not found", "member_not_found")
     
     member = res.data[0]
-    res_count = await db.table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member_id).neq("status", "completed").execute()
+    res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member_id).neq("status", "completed").execute()
     member["assigned_jobs"] = res_count.count or 0
     await write_audit_event(actor_id, "vendor_member", member_id, "update", vendor_id=vendor_id, details=update_data)
     return member
@@ -167,11 +167,11 @@ async def delete_vendor_member(
         api_error(400, "Cannot remove default member", "cannot_remove_default_member")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     
-    res = await db.table("vendor_members").delete().eq("id", member_id).eq("vendor_id", vendor_id).execute()
+    res = await (await get_db()).table("vendor_members").delete().eq("id", member_id).eq("vendor_id", vendor_id).execute()
     if not res.data:
         api_error(404, "Member not found", "member_not_found")
     
-    await db.table("jobs").update({"assignee_id": "default_user", "updated_at": datetime.now(timezone.utc).isoformat()}).eq("assignee_id", member_id).eq("vendor_id", vendor_id).execute()
+    await (await get_db()).table("jobs").update({"assignee_id": "default_user", "updated_at": datetime.now(timezone.utc).isoformat()}).eq("assignee_id", member_id).eq("vendor_id", vendor_id).execute()
     await write_audit_event(actor_id, "vendor_member", member_id, "delete", vendor_id=vendor_id)
     return {"deleted": True}
 
@@ -190,7 +190,7 @@ async def get_vendor_os_jobs(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     
-    query = db.table("jobs").select("*", count="exact").eq("vendor_id", vendor_id)
+    sb = await get_db(); query = sb.table("jobs").select("*", count="exact").eq("vendor_id", vendor_id)
     if status:
         query = query.eq("status", status)
     if assignee_id:
@@ -203,7 +203,7 @@ async def get_vendor_os_jobs(
     jobs = res.data
     total = res.count or 0
     
-    res_members = await db.table("vendor_members").select("id, name").eq("vendor_id", vendor_id).limit(500).execute()
+    res_members = await (await get_db()).table("vendor_members").select("id, name").eq("vendor_id", vendor_id).limit(500).execute()
     member_map = {m["id"]: m.get("name", "Unknown") for m in res_members.data}
     for job in jobs:
         job["assignee_name"] = member_map.get(job.get("assignee_id"), "Unassigned")
@@ -223,7 +223,7 @@ async def assign_job_to_member(
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
-    res_job = await db.table("jobs").select("assignee_id").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    res_job = await (await get_db()).table("jobs").select("assignee_id").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
     existing_job = res_job.data
     if not existing_job:
         api_error(404, "Job not found", "job_not_found")
@@ -231,14 +231,14 @@ async def assign_job_to_member(
     if payload.member_id == "auto":
         new_assignee_id = await assign_vendor_for_job(job_id)
     else:
-        res_member = await db.table("vendor_members").select("*").eq("id", payload.member_id).eq("vendor_id", vendor_id).eq("is_active", True).maybe_single().execute()
+        res_member = await (await get_db()).table("vendor_members").select("*").eq("id", payload.member_id).eq("vendor_id", vendor_id).eq("is_active", True).maybe_single().execute()
         if not res_member.data:
             api_error(404, "Member not found", "member_not_found")
         new_assignee_id = payload.member_id
-        await db.table("jobs").update({"assignee_id": new_assignee_id, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).eq("vendor_id", vendor_id).execute()
+        await (await get_db()).table("jobs").update({"assignee_id": new_assignee_id, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).eq("vendor_id", vendor_id).execute()
 
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if payload.member_id == "auto" else "manual"})
-    res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    res_final = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     return res_final.data
 
 
@@ -250,11 +250,11 @@ async def get_vendor_availability(
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
-    res = await db.table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
+    res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
     record = res.data
     if not record:
         default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
-        await db.table("vendor_availability").insert(default).execute()
+        await (await get_db()).table("vendor_availability").insert(default).execute()
         return default
     return record
 
@@ -273,14 +273,14 @@ async def update_vendor_availability(
     update_data = payload.dict()
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
-    await db.table("vendor_availability").upsert({
+    await (await get_db()).table("vendor_availability").upsert({
         "vendor_id": vendor_id, 
         "member_id": actor_id, 
         **update_data
     }).execute()
     
     await write_audit_event(actor_id, "availability", actor_id, "update", vendor_id=vendor_id, details=update_data)
-    res = await db.table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
+    res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
     return res.data
 
 
@@ -293,10 +293,10 @@ async def get_vendor_performance(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     
-    res_members = await db.table("vendor_members").select("id").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
+    res_members = await (await get_db()).table("vendor_members").select("id").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
     member_ids = [m["id"] for m in res_members.data] or ["default_user"]
     
-    res_jobs = await db.table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).limit(500).execute()
+    res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).limit(500).execute()
     jobs = res_jobs.data
     
     today = datetime.now(timezone.utc).date()
@@ -337,11 +337,11 @@ async def get_vendor_settings(
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
-    res = await db.table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
+    res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
     settings = res.data
     if not settings:
         default = VendorSettings(vendor_id=vendor_id).dict()
-        await db.table("vendor_settings").insert(default).execute()
+        await (await get_db()).table("vendor_settings").insert(default).execute()
         return default
     return settings
 
@@ -362,13 +362,13 @@ async def update_vendor_settings(
         api_error(400, "No update data", "no_update_data")
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
-    await db.table("vendor_settings").upsert({
+    await (await get_db()).table("vendor_settings").upsert({
         "vendor_id": vendor_id,
         **update_data
     }).execute()
     
     await write_audit_event(actor_id, "settings", vendor_id, "update", vendor_id=vendor_id, details=update_data)
-    res = await db.table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
+    res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
     return res.data
 
 
@@ -385,11 +385,11 @@ async def get_vendor_os_earnings(
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     week_end = week_start + timedelta(days=7)
 
-    res_members = await db.table("vendor_members").select("id, commission_rate").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
+    res_members = await (await get_db()).table("vendor_members").select("id, commission_rate").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
     member_rate_map = {m["id"]: m.get("commission_rate", 0.62) for m in res_members.data}
     member_ids = list(member_rate_map.keys()) or ["__none__"]
 
-    res_jobs = await db.table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).order("scheduled_date", ascending=False).limit(50).execute()
+    res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).order("scheduled_date", ascending=False).limit(50).execute()
     jobs = res_jobs.data
 
     week_total = 0
@@ -451,7 +451,7 @@ async def get_audit_events(
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     
-    query = db.table("audit_events").select("*", count="exact").eq("vendor_id", vendor_id)
+    sb = await get_db(); query = sb.table("audit_events").select("*", count="exact").eq("vendor_id", vendor_id)
     if entity_type:
         query = query.eq("entity_type", entity_type)
         

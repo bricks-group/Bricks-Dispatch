@@ -12,4 +12,11 @@ key: str = os.environ.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_KEY",
 if not url or not key:
     print("Warning: SUPABASE_URL or SUPABASE_KEY not set")
 
-db: AsyncClient = create_async_client(url, key)
+_db: AsyncClient = None
+
+async def get_db() -> AsyncClient:
+    global _db
+    if _db is None:
+        _db = await create_async_client(url, key)
+    return _db
+
