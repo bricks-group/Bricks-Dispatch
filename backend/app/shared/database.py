@@ -1,14 +1,15 @@
 import os
 from pathlib import Path
-
 from dotenv import load_dotenv
-from motor.motor_asyncio import AsyncIOMotorClient
-
+from supabase.client import create_async_client, AsyncClient
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT_DIR / ".env")
 
-mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ.get("DB_NAME", "bricks_shared")]
+url: str = os.environ.get("SUPABASE_URL", "")
+key: str = os.environ.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_KEY", ""))
 
+if not url or not key:
+    print("Warning: SUPABASE_URL or SUPABASE_KEY not set")
+
+db: AsyncClient = create_async_client(url, key)

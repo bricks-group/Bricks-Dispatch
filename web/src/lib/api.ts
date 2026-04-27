@@ -1,5 +1,7 @@
+import { supabase } from './supabase';
+
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-const TOKEN_KEY = 'vendor_os_token';
+const TOKEN_KEY = 'bricks_dispatch_token';
 
 type RequestOptions = RequestInit & { query?: Record<string, string | number | undefined> };
 
@@ -17,7 +19,11 @@ function buildUrl(path: string, query?: RequestOptions['query']) {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
-  const token = getToken();
+  
+  // Get token from Supabase
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || localStorage.getItem(TOKEN_KEY);
+  
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
@@ -44,18 +50,6 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
 
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
 export type AuthMember = {
   id: string;
   name: string;
@@ -64,19 +58,22 @@ export type AuthMember = {
   status: 'available' | 'busy' | 'offline';
 };
 
-export async function login(email: string, name?: string): Promise<AuthMember> {
-  const res = await fetch(`${API_BASE}/api/vendor-os/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, name }),
+export async function login(email: string): Promise<void> {
+  const { error } = await supabase.auth.signInWithOtp({ email });
+  if (error) throw error;
+}
+
+export async function verifyOtp(email: string, token: string): Promise<AuthMember> {
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type: 'magiclink'
   });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => ({}));
-    throw new Error(detail.detail || 'Login failed');
-  }
-  const data = await res.json();
-  setToken(data.token);
-  return data.member;
+  if (error) throw error;
+  if (!data.session) throw new Error('No session');
+  
+  // Also call our backend to ensure member is synced and get extra info if needed
+  return me();
 }
 
 export async function me(): Promise<AuthMember> {
@@ -84,13 +81,11 @@ export async function me(): Promise<AuthMember> {
 }
 
 export async function logout() {
-  try {
-    await api.post('/api/vendor-os/auth/logout');
-  } finally {
-    clearToken();
-  }
+  await supabase.auth.signOut();
+  localStorage.removeItem(TOKEN_KEY);
 }
 
+// ... rest of types ...
 export type TeamMember = {
   id: string;
   name: string;

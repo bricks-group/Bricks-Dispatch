@@ -8,7 +8,7 @@ const config = getDefaultConfig(__dirname);
 // EXCLUSION ENGINE: Block macOS "ghost" metadata files from ever being seen by Metro
 config.resolver.blockList = [
   /.*\/(\._|.__)[^\/]*$/, // Blocks files starting with ._ or .__
-  /(.*)\/(__tests__|android|ios|build|dist|.git|node_modules\/.*\/android|node_modules\/.*\/ios|node_modules\/.*\/windows|node_modules\/.*\/macos)(\/.*)?$/
+  /(.*)\/(__tests__|android|ios|.git|node_modules\/.*\/android|node_modules\/.*\/ios|node_modules\/.*\/windows|node_modules\/.*\/macos)(\/.*)?$/
 ];
 
 // Use a stable on-disk store (shared across web/android)

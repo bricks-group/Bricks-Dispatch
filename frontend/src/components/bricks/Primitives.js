@@ -5,9 +5,12 @@ import { T } from '../../constants/Theme';
 // Bricks UI Components for React Native (Dispatch)
 // Dark mode by default
 
+// Bricks UI Components for React Native (Dispatch)
+// Dark mode by default
+
 const F = {
-  display: 'GeneralSans-Medium', // Assumes fonts are linked in project
-  mono: 'JetBrainsMono-Regular',
+  display: 'System', 
+  mono: 'System',
 };
 
 export const I = ({ name, size = 18, color = '#F4F1EB', sw = 1.5, style = {} }) => {

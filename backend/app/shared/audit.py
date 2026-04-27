@@ -1,7 +1,6 @@
 from .database import db
 from .schemas import AuditEvent
 
-
 async def write_audit_event(
     actor_id: str,
     entity_type: str,
@@ -18,6 +17,5 @@ async def write_audit_event(
         action=action,
         details=details or {},
     )
-    await db.audit_events.insert_one(event.dict())
+    await db.table("audit_events").insert(event.dict()).execute()
     return event.dict()
-

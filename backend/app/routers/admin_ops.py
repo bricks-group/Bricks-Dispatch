@@ -25,7 +25,7 @@ async def create_lead(
         api_error(403, "Insufficient permissions", "insufficient_permissions")
         
     lead_dict = payload.dict()
-    await db.vendor_leads.insert_one(lead_dict)
+    await db.table("vendor_leads").insert(lead_dict).execute()
     return lead_dict
 
 @router.get("/leads")
@@ -43,12 +43,12 @@ async def list_leads(
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
         
-    query = {}
-    if status: query["status"] = status
-    if city: query["city"] = city
+    query = db.table("vendor_leads").select("*")
+    if status: query = query.eq("status", status)
+    if city: query = query.eq("city", city)
     
-    leads = await db.vendor_leads.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
-    return leads
+    res = await query.order("created_at", ascending=False).limit(100).execute()
+    return res.data
 
 @router.get("/applicants")
 async def list_applicants(
@@ -68,12 +68,13 @@ async def list_applicants(
         api_error(403, "Insufficient permissions for vetting", "insufficient_permissions")
         
     vendor_id = actor_member.get("vendor_id", "default_vendor")
-    query = {"vendor_id": vendor_id, "onboarding_status": status}
+    query = db.table("vendor_members").select("*", count="exact").eq("vendor_id", vendor_id).eq("onboarding_status", status)
     
-    total = await db.vendor_members.count_documents(query)
     page, page_size, skip = normalize_pagination(page, page_size)
+    res = await query.order("created_at", ascending=False).range(skip, skip + page_size - 1).execute()
     
-    applicants = await db.vendor_members.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+    applicants = res.data
+    total = res.count or 0
     
     return paginated_response(applicants, total, page, page_size)
 
@@ -106,15 +107,12 @@ async def update_applicant_status(
         update_data["is_active"] = True
         update_data["role"] = "Photographer" # Upgrade from 'Applicant'
     
-    result = await db.vendor_members.update_one(
-        {"id": member_id, "vendor_id": vendor_id},
-        {"$set": update_data}
-    )
+    res = await db.table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()
     
-    if result.matched_count == 0:
+    if not res.data:
         api_error(404, "Applicant not found", "applicant_not_found")
         
-    return await db.vendor_members.find_one({"id": member_id}, {"_id": 0})
+    return res.data[0]
 
 @router.get("/applicants/{member_id}/documents")
 async def get_applicant_documents(
@@ -131,8 +129,8 @@ async def get_applicant_documents(
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
         
-    docs = await db.vendor_documents.find({"member_id": member_id}, {"_id": 0}).to_list(50)
-    return docs
+    res = await db.table("vendor_documents").select("*").eq("member_id", member_id).limit(50).execute()
+    return res.data
 
 @router.put("/applicants/{member_id}/documents/{doc_id}/verify")
 async def verify_document(
@@ -151,12 +149,12 @@ async def verify_document(
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
         
-    result = await db.vendor_documents.update_one(
-        {"id": doc_id, "member_id": member_id},
-        {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
+    res = await db.table("vendor_documents").update({
+        "status": status, 
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }).eq("id", doc_id).eq("member_id", member_id).execute()
     
-    if result.matched_count == 0:
+    if not res.data:
         api_error(404, "Document not found", "document_not_found")
         
     return {"id": doc_id, "status": status}

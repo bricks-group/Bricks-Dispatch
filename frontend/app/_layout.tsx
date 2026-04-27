@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import { TOKENS } from '../constants/Theme';
 import { actorHeaders } from '../lib/api';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8000';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -79,7 +79,8 @@ export default function RootLayout() {
 
     (async () => {
       try {
-        const res = await fetch(`${API}/api/profile`, { headers: actorHeaders() });
+        const headers = await actorHeaders();
+        const res = await fetch(`${API}/api/profile`, { headers });
         const profile = await res.json();
         
         const inOnboarding = segments[0] === 'onboarding';
@@ -141,6 +142,8 @@ export default function RootLayout() {
             presentation: 'card',
           }}
         />
+        <Stack.Screen name="profile-edit" options={{ headerShown: false, presentation: 'card' }} />
+        <Stack.Screen name="settings" options={{ headerShown: false, presentation: 'card' }} />
       </Stack>
     </>
   );

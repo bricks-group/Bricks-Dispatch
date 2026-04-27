@@ -1,29 +1,55 @@
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet, Platform } from 'react-native';
-import { Briefcase, Calendar, Upload, User } from 'lucide-react-native';
-import { TOKENS } from '../../constants/Theme';
+import { Home, CalendarDays, Upload, DollarSign, User } from 'lucide-react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { BlurView } from 'expo-blur';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-type TabIconProps = {
-  Icon: React.ComponentType<{ size: number; color: string; strokeWidth: number }>;
-  label: string;
-  focused: boolean;
-};
+const TABS = [
+  { name: 'index',          label: 'Today',  Icon: Home },
+  { name: 'schedule',       label: 'Week',   Icon: CalendarDays },
+  { name: 'uploads',        label: 'Upload', Icon: Upload },
+  { name: 'payouts/index',  label: 'Pay',    Icon: DollarSign },
+  { name: 'account',        label: 'Me',     Icon: User },
+];
 
-function TabIcon({ Icon, label, focused }: TabIconProps) {
+function BricksTabBar({ state, descriptors, navigation }: any) {
+  const insets = useSafeAreaInsets();
+
+  const visibleRoutes = state.routes.filter((r: any) =>
+    TABS.some(t => t.name === r.name)
+  );
+
   return (
-    <View style={styles.tabItem}>
-      {focused && <View style={styles.activeIndicator} />}
-      <Icon
-        size={20}
-        color={focused ? TOKENS.moon : TOKENS.moonFaint}
-        strokeWidth={focused ? 1.75 : 1.5}
-      />
-      <Text 
-        numberOfLines={1} 
-        style={[styles.tabLabel, focused && styles.tabLabelActive]}
-      >
-        {label}
-      </Text>
+    <View style={[s.wrapper, { bottom: insets.bottom + 16 }]}>
+      <BlurView intensity={60} tint="dark" style={s.blur}>
+        <View style={s.inner}>
+          {visibleRoutes.map((route: any) => {
+            const tab = TABS.find(t => t.name === route.name);
+            if (!tab) return null;
+            const focused = state.routes[state.index]?.name === route.name;
+            const { Icon } = tab;
+
+            return (
+              <TouchableOpacity
+                key={route.key}
+                style={[s.tab, focused && s.tabActive]}
+                onPress={() => navigation.navigate(route.name)}
+                activeOpacity={0.8}
+              >
+                <Icon
+                  size={18}
+                  color={focused ? TOKENS.moon : TOKENS.moonFaint}
+                  strokeWidth={focused ? 1.8 : 1.5}
+                />
+                <Text style={[s.label, focused && s.labelActive]}>
+                  {tab.label.toUpperCase()}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </BlurView>
     </View>
   );
 }
@@ -31,85 +57,58 @@ function TabIcon({ Icon, label, focused }: TabIconProps) {
 export default function TabsLayout() {
   return (
     <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: styles.tabBar,
-        tabBarShowLabel: false,
-        tabBarActiveTintColor: TOKENS.moon,
-        tabBarInactiveTintColor: TOKENS.moonFaint,
-        sceneStyle: { backgroundColor: TOKENS.night },
-        ...(Platform.OS === 'web' ? { unmountOnBlur: true } : {}),
-      }}
+      tabBar={(props) => <BricksTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'JOBS',
-          tabBarIcon: ({ focused }) => <TabIcon Icon={Briefcase} label="JOBS" focused={focused} />,
-          tabBarTestID: 'tab-jobs',
-        }}
-      />
-      <Tabs.Screen
-        name="schedule"
-        options={{
-          title: 'SCHEDULE',
-          tabBarIcon: ({ focused }) => <TabIcon Icon={Calendar} label="SCHEDULE" focused={focused} />,
-          tabBarTestID: 'tab-schedule',
-        }}
-      />
-      <Tabs.Screen
-        name="uploads"
-        options={{
-          title: 'UPLOADS',
-          tabBarIcon: ({ focused }) => <TabIcon Icon={Upload} label="UPLOADS" focused={focused} />,
-          tabBarTestID: 'tab-uploads',
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'PROFILE',
-          tabBarIcon: ({ focused }) => <TabIcon Icon={User} label="PROFILE" focused={focused} />,
-          tabBarTestID: 'tab-profile',
-        }}
-      />
+      <Tabs.Screen name="index" />
+      <Tabs.Screen name="schedule" />
+      <Tabs.Screen name="uploads" />
+      <Tabs.Screen name="payouts/index" />
+      <Tabs.Screen name="account" />
     </Tabs>
   );
 }
 
-const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: TOKENS.night,
-    borderTopWidth: 1,
-    borderTopColor: TOKENS.nightHair,
-    height: 84,
-    paddingTop: 12,
-    paddingBottom: 28,
-    elevation: 0,
-    shadowOpacity: 0,
+const s = StyleSheet.create({
+  wrapper: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    alignItems: 'stretch',
+    // Shadow for floating effect
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    elevation: 16,
   },
-  tabItem: {
+  blur: {
+    borderRadius: 2,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: TOKENS.nightHairS,
+  },
+  inner: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(20, 18, 16, 0.72)',
+  },
+  tab: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    position: 'relative',
-    width: '100%',
+    paddingVertical: 12,
+    gap: 5,
   },
-  activeIndicator: {
-    position: 'absolute',
-    top: -12,
-    width: 24,
-    height: 2,
-    backgroundColor: TOKENS.brick,
+  tabActive: {
+    backgroundColor: TOKENS.nightDeep,
   },
-  tabLabel: {
-    fontSize: 9, // Slightly smaller to prevent wrap
-    fontFamily: 'JetBrainsMono-Medium',
+  label: {
+    fontFamily: TYPOGRAPHY.monoMedium,
+    fontSize: 8,
     color: TOKENS.moonFaint,
-    letterSpacing: 1.0, // Reduced from 1.2
-    textTransform: 'uppercase',
+    letterSpacing: 1.2,
   },
-  tabLabelActive: {
+  labelActive: {
     color: TOKENS.moon,
   },
 });

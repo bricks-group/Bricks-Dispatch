@@ -87,6 +87,7 @@ pymongo>=4.5.0
 pyparsing>=3.3.2
 pytest>=9.0.3
 python-dateutil>=2.9.0.post0
+supabase>=2.4.5
 python-dotenv>=1.2.2
 python-jose>=3.5.0
 python-multipart>=0.0.24

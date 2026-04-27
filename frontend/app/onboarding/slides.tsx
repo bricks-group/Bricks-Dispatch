@@ -1,28 +1,30 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ArrowRight, Camera, Map, Zap } from 'lucide-react-native';
-import { TOKENS } from '../../constants/Theme';
-
-const { width } = Dimensions.get('window');
+import { ArrowRight } from 'lucide-react-native';
+import BricksWordmark from '../../components/BricksWordmark';
+import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const SLIDES = [
   {
-    title: 'Focus on the art.',
-    desc: 'We handle the booking, billing, and logistics so you can focus on making great images.',
-    icon: Camera,
+    eye: 'FOR SHOOTERS',
+    head: 'Your day, queued up.',
+    body: 'Every job on the books — addresses, gate codes, packages, contact.',
+    img: 'VENDOR LOADING VAN',
   },
   {
-    title: 'Claim your territory.',
-    desc: 'Define your Area of Operations (AO) and get assigned shoots within your exact fence.',
-    icon: Map,
+    eye: 'NAVIGATE',
+    head: 'Drive time baked in.',
+    body: 'Bricks only books jobs you can actually make. Tap for directions.',
+    img: 'DASHBOARD MAP',
   },
   {
-    title: 'Get paid faster.',
-    desc: 'Instant payouts and transparent tracking. No more chasing invoices.',
-    icon: Zap,
-  }
+    eye: 'UPLOAD',
+    head: 'Shoot. Upload. Done.',
+    body: 'Drop the SD card in. Brokerage gets notified when editing starts.',
+    img: 'SD CARD + LAPTOP',
+  },
 ];
 
 export default function OnboardingSlides() {
@@ -30,53 +32,85 @@ export default function OnboardingSlides() {
   const router = useRouter();
 
   const next = () => {
-    if (current < SLIDES.length - 1) {
-      setCurrent(current + 1);
-    } else {
-      router.push('/onboarding/register');
-    }
+    if (current < SLIDES.length - 1) setCurrent(current + 1);
+    else router.push('/onboarding/register');
   };
 
-  const Slide = SLIDES[current];
-  const Icon = Slide.icon;
+  const skip = () => router.push('/onboarding/register');
+
+  const slide = SLIDES[current];
 
   return (
-    <SafeAreaView style={s.ctn}>
-      <View style={s.content}>
-        <View style={s.iconBox}>
-          <Icon size={48} color={TOKENS.brick} strokeWidth={1} />
-        </View>
-        
-        <Text style={s.title}>{Slide.title}</Text>
-        <Text style={s.desc}>{Slide.desc}</Text>
-        
-        <View style={s.dots}>
-          {SLIDES.map((_, i) => (
-            <View key={i} style={[s.dot, i === current && s.dotActive]} />
-          ))}
-        </View>
+    <SafeAreaView style={s.container}>
+      {/* Top bar: wordmark + skip */}
+      <View style={s.topBar}>
+        <BricksWordmark size={0.85} color={TOKENS.brick} />
+        <TouchableOpacity onPress={skip} activeOpacity={0.7}>
+          <Text style={s.skip}>Skip</Text>
+        </TouchableOpacity>
       </View>
 
-      <View style={s.footer}>
-        <TouchableOpacity style={s.btn} onPress={next}>
-          <Text style={s.btnText}>{current === SLIDES.length - 1 ? 'GET STARTED' : 'NEXT'}</Text>
-          <ArrowRight size={18} color="#FFF" />
-        </TouchableOpacity>
+      <View style={s.body}>
+        {/* Image placeholder */}
+        <View style={s.imgPlaceholder}>
+          <Text style={s.imgLabel}>{slide.img}</Text>
+        </View>
+
+        {/* Copy */}
+        <View style={s.copy}>
+          <Text style={s.eye}>{slide.eye}</Text>
+          <Text style={s.head}>{slide.head}</Text>
+          <Text style={s.desc}>{slide.body}</Text>
+        </View>
+
+        {/* Progress bars + CTA */}
+        <View style={s.footer}>
+          <View style={s.bars}>
+            {SLIDES.map((_, i) => (
+              <View
+                key={i}
+                style={[s.bar, { flex: i === current ? 2 : 1, backgroundColor: i === current ? TOKENS.brick : TOKENS.nightHairS }]}
+              />
+            ))}
+          </View>
+          <TouchableOpacity style={s.btn} onPress={next} activeOpacity={0.85}>
+            <Text style={s.btnText}>{current === SLIDES.length - 1 ? 'GET STARTED' : 'NEXT'}</Text>
+            <ArrowRight size={16} color="#FFF" strokeWidth={2} />
+          </TouchableOpacity>
+        </View>
       </View>
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  ctn: { flex: 1, backgroundColor: TOKENS.night },
-  content: { flex: 1, padding: 48, justifyContent: 'center', alignItems: 'center' },
-  iconBox: { marginBottom: 48 },
-  title: { fontSize: 34, fontFamily: 'System', color: TOKENS.moon, letterSpacing: -1.1, textAlign: 'center', marginBottom: 16 },
-  desc: { fontSize: 16, fontFamily: 'System', color: TOKENS.moonSoft, textAlign: 'center', lineHeight: 24 },
-  dots: { flexDirection: 'row', gap: 8, marginTop: 48 },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: TOKENS.nightHairS },
-  dotActive: { backgroundColor: TOKENS.brick, width: 20 },
-  footer: { padding: 48, borderTopWidth: 1, borderColor: TOKENS.nightHair },
-  btn: { backgroundColor: TOKENS.brick, padding: 18, borderRadius: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 },
-  btnText: { color: '#FFF', fontFamily: 'JetBrainsMono-Medium', fontSize: 14, letterSpacing: 1 },
+  container: { flex: 1, backgroundColor: TOKENS.night },
+
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 12 },
+  skip: { fontSize: 12, color: TOKENS.moonFaint },
+
+  body: { flex: 1, paddingHorizontal: 24, paddingBottom: 24, flexDirection: 'column' },
+
+  imgPlaceholder: {
+    flex: 1,
+    backgroundColor: TOKENS.nightSoft,
+    borderWidth: 1,
+    borderColor: TOKENS.nightHair,
+    borderRadius: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 32,
+  },
+  imgLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 10, color: TOKENS.moonFaint, letterSpacing: 1.4 },
+
+  copy: { marginBottom: 32 },
+  eye: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 10, color: TOKENS.brick, letterSpacing: 1.8, marginBottom: 10 },
+  head: { fontSize: 28, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, letterSpacing: -0.8, lineHeight: 34, marginBottom: 10 },
+  desc: { fontSize: 14, color: TOKENS.moonSoft, lineHeight: 22 },
+
+  footer: {},
+  bars: { flexDirection: 'row', gap: 6, height: 2, marginBottom: 20 },
+  bar: { height: 2, borderRadius: 1 },
+  btn: { backgroundColor: TOKENS.brick, paddingVertical: 16, borderRadius: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  btnText: { color: '#FFF', fontFamily: TYPOGRAPHY.monoMedium, fontSize: 13, letterSpacing: 1.2 },
 });

@@ -8,26 +8,20 @@ interface Props {
   showWordmark?: boolean;
 }
 
-/**
- * The mark is three rectangular bricks arranged to read as a lowercase b.
- * [════════════]
- * [════════════] [═══════════]
- */
 function LogoMark({ size, color }: { size: number, color: string }) {
-  const h = Math.round(6 * size);
-  const w1 = Math.round(12 * size);
-  const w2 = Math.round(11 * size);
-  const gap = Math.round(2 * size);
-  const r = 1.2 * size;
+  const h     = Math.round(7 * size);
+  const wTop  = Math.round(11 * size);
+  const wBotL = Math.round(6 * size);
+  const wBotR = Math.round(10 * size);
+  const rGap  = Math.round(2 * size);
+  const cGap  = Math.max(1, Math.round(size));
+  const r     = 1.2 * size;
 
   return (
-    <View style={{ width: Math.round(27 * size), height: Math.round(16 * size), position: 'relative' }}>
-      {/* Top Left - Stem start */}
-      <View style={{ position: 'absolute', left: 0, top: 0, width: w1, height: h, borderRadius: r, backgroundColor: color }} />
-      {/* Bottom Left - Stem end */}
-      <View style={{ position: 'absolute', left: 0, top: h + gap, width: w1, height: h, borderRadius: r, backgroundColor: color }} />
-      {/* Bottom Right - Bowl */}
-      <View style={{ position: 'absolute', left: w1 + gap, top: h + gap, width: w2, height: h, borderRadius: r, backgroundColor: color }} />
+    <View style={{ width: wBotL + cGap + wBotR, height: h + rGap + h, position: 'relative' }}>
+      <View style={{ position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color }} />
+      <View style={{ position: 'absolute', left: 0, top: h + rGap, width: wBotL, height: h, borderRadius: r, backgroundColor: color }} />
+      <View style={{ position: 'absolute', left: wBotL + cGap, top: h + rGap, width: wBotR, height: h, borderRadius: r, backgroundColor: color }} />
     </View>
   );
 }

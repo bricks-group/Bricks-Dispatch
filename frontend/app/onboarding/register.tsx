@@ -120,7 +120,7 @@ export default function OnboardingRegister() {
 
         {/* CUSTOM AO MAP SELECTOR */}
         <BricksAOSelector 
-          onPolygonComplete={(path) => setForm({...form, operation_polygon: path})}
+          onPolygonComplete={(path: any) => setForm({...form, operation_polygon: path})}
         />
       </View>
 
