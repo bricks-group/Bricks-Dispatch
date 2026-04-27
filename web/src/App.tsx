@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { clearToken, getToken, logout, me } from './lib/api';
 import { AvailabilityPage } from './pages/AvailabilityPage';
+import { EarningsPage } from './pages/EarningsPage';
 import { JobsPage } from './pages/JobsPage';
 import { LoginPage } from './pages/LoginPage';
 import { OverviewPage } from './pages/OverviewPage';
@@ -59,6 +60,7 @@ function ProtectedLayout() {
           <Route path="/" element={<OverviewPage />} />
           <Route path="/team" element={<TeamPage />} />
           <Route path="/jobs" element={<JobsPage />} />
+          <Route path="/earnings" element={<EarningsPage />} />
           <Route path="/availability" element={<AvailabilityPage />} />
           <Route path="/performance" element={<PerformancePage />} />
           <Route path="/settings" element={<SettingsPage />} />

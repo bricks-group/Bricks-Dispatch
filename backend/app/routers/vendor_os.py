@@ -343,6 +343,73 @@ async def update_vendor_settings(
     return await db.vendor_settings.find_one({"vendor_id": vendor_id}, {"_id": 0})
 
 
+@router.get("/earnings")
+async def get_vendor_os_earnings(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    now = datetime.now(timezone.utc)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=7)
+
+    members = await db.vendor_members.find({"vendor_id": vendor_id, "is_active": True}, {"_id": 0, "id": 1, "commission_rate": 1}).to_list(500)
+    member_rate_map = {m["id"]: m.get("commission_rate", 0.62) for m in members}
+    member_ids = list(member_rate_map.keys()) or ["__none__"]
+
+    jobs = await db.jobs.find(
+        {"vendor_id": vendor_id, "assignee_id": {"$in": member_ids}},
+        {"_id": 0, "id": 1, "address": 1, "scheduled_date": 1, "status": 1, "package_price": 1, "assignee_id": 1},
+    ).sort("scheduled_date", -1).limit(50).to_list(50)
+
+    week_total = 0
+    paid_total = 0
+    pending_total = 0
+    recent = []
+
+    for j in jobs:
+        raw_price = j.get("package_price") or 0
+        rate = member_rate_map.get(j.get("assignee_id", ""), 0.62)
+        payout = round(raw_price * rate)
+        sched = j.get("scheduled_date", "")
+        is_this_week = False
+        try:
+            sched_dt = datetime.fromisoformat(sched).replace(tzinfo=timezone.utc) if sched else None
+            is_this_week = bool(sched_dt and week_start <= sched_dt < week_end)
+        except Exception:
+            pass
+
+        is_paid = j.get("status") == "completed"
+        if is_this_week:
+            week_total += payout
+            if is_paid:
+                paid_total += payout
+            else:
+                pending_total += payout
+
+        if len(recent) < 20:
+            recent.append({
+                "id": j.get("id"),
+                "address": j.get("address", ""),
+                "scheduled_date": sched,
+                "status": j.get("status", "assigned"),
+                "payout_amount": payout,
+                "payout_status": "paid" if is_paid else "pending",
+            })
+
+    return {
+        "week_total": week_total,
+        "paid_amount": paid_total,
+        "pending_amount": pending_total,
+        "payout_day": week_end.strftime("%A"),
+        "week_job_count": sum(1 for j in jobs if j.get("scheduled_date", "") >= week_start.date().isoformat()),
+        "recent_jobs": recent,
+    }
+
+
 @router.get("/audit-events")
 async def get_audit_events(
     entity_type: Optional[str] = None,

@@ -86,7 +86,7 @@ async def get_job(job_id: str, authorization: str | None = Header(default=None, 
 
 @router.put("/jobs/{job_id}/status")
 async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
-    valid_transitions = {"pending_assignment": [], "assigned": ["in_progress"], "in_progress": ["completed"], "completed": []}
+    valid_transitions = {"pending_assignment": ["assigned"], "assigned": ["in_progress", "pending_assignment"], "in_progress": ["completed"], "completed": ["delivered"], "delivered": []}
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         api_error(404, "Job not found", "job_not_found")
@@ -112,16 +112,27 @@ async def update_job_status(job_id: str, update: JobStatusUpdate, x_user_id: str
 
     # Sync status back to Booking's bookings collection
     if updated.get("booking_id"):
-        booking_status_map = {"in_progress": "in_progress", "completed": "delivered"}
+        booking_status_map = {
+            "assigned":    "scheduled",
+            "in_progress": "in_progress",
+            "completed":   "completed",
+            "delivered":   "delivered",
+        }
         booking_status = booking_status_map.get(update.status)
         if booking_status:
+            set_fields: dict = {"status": booking_status, "updated_at": now}
+            if update.status == "completed":
+                set_fields["completed_at"] = now
+            if update.status == "delivered":
+                set_fields["delivered_at"] = now
             await db.bookings.update_one(
                 {"booking_id": updated["booking_id"]},
-                {"$set": {"status": booking_status, "updated_at": now}},
+                {"$set": set_fields},
             )
 
+    _notif_title_map = {"assigned": "Job Assigned", "in_progress": "Shoot Started", "completed": "Shoot Complete", "delivered": "Media Delivered"}
     await create_notification(
-        title=f"Job {'Started' if update.status == 'in_progress' else 'Completed'}",
+        title=_notif_title_map.get(update.status, "Job Updated"),
         body=f"{job['address']} — status changed to {update.status.replace('_', ' ')}",
         ntype="status_change",
         data={"job_id": job_id, "status": update.status},
@@ -272,4 +283,67 @@ async def update_profile(update: ProfileUpdate):
         api_error(400, "No update data", "no_update_data")
     await db.profile.update_one({"id": "default_user"}, {"$set": update_data}, upsert=True)
     return await db.profile.find_one({"id": "default_user"}, {"_id": 0})
+
+
+VENDOR_PAYOUT_RATE = 0.62
+
+@router.get("/payouts")
+async def get_payouts(authorization: str | None = Header(default=None, alias="Authorization"), x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    from datetime import datetime, timezone, timedelta
+    actor = await resolve_actor(authorization, x_user_id)
+    actor_id = actor.get("id", "default_user")
+    vendor_id = actor.get("vendor_id", "default_vendor")
+
+    now = datetime.now(timezone.utc)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=7)
+
+    jobs = await db.jobs.find(
+        {"assignee_id": actor_id, "vendor_id": vendor_id},
+        {"_id": 0, "id": 1, "address": 1, "scheduled_date": 1, "status": 1, "package_price": 1}
+    ).sort("scheduled_date", -1).limit(50).to_list(50)
+
+    recent = []
+    week_total = 0
+    paid_total = 0
+    pending_total = 0
+
+    for j in jobs:
+        raw_price = j.get("package_price") or 0
+        payout = round(raw_price * VENDOR_PAYOUT_RATE)
+        sched = j.get("scheduled_date", "")
+        is_this_week = False
+        try:
+            sched_dt = datetime.fromisoformat(sched).replace(tzinfo=timezone.utc) if sched else None
+            is_this_week = sched_dt and week_start <= sched_dt < week_end
+        except Exception:
+            pass
+
+        is_paid = j.get("status") == "completed"
+        if is_this_week:
+            week_total += payout
+            if is_paid:
+                paid_total += payout
+            else:
+                pending_total += payout
+
+        if len(recent) < 20:
+            recent.append({
+                "id": j.get("id"),
+                "address": j.get("address", ""),
+                "scheduled_date": sched,
+                "status": j.get("status", "assigned"),
+                "payout_amount": payout,
+                "payout_status": "Paid" if is_paid else "Pending",
+            })
+
+    payout_day = (week_end).strftime("%A")
+    return {
+        "week_total": week_total,
+        "paid_amount": paid_total,
+        "pending_amount": pending_total,
+        "payout_day": payout_day,
+        "week_job_count": sum(1 for j in jobs if j.get("scheduled_date", "") >= week_start.date().isoformat()),
+        "recent_jobs": recent,
+    }
 

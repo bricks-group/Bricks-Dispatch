@@ -4,6 +4,7 @@ const items = [
   { path: '/', label: 'Overview' },
   { path: '/team', label: 'Team' },
   { path: '/jobs', label: 'Jobs' },
+  { path: '/earnings', label: 'Earnings' },
   { path: '/availability', label: 'Availability' },
   { path: '/performance', label: 'Performance' },
   { path: '/settings', label: 'Settings' },

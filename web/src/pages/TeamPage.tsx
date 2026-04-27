@@ -1,32 +1,41 @@
 import { useEffect, useState } from 'react';
 import { api, PaginatedTeamResponse, TeamMember } from '../lib/api';
 
+const STATUS_OPTIONS = ['available', 'busy', 'offline'] as const;
+type MemberStatus = typeof STATUS_OPTIONS[number];
+
+const STATUS_BADGE: Record<MemberStatus, string> = {
+  available: 'badge-green',
+  busy: 'badge-yellow',
+  offline: 'badge-gray',
+};
+
 export function TeamPage() {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('Photographer');
-  const [status, setStatus] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const pageSize = 10;
 
-  const load = () => api.get<PaginatedTeamResponse>('/api/vendor-os/team', { search, status, page, page_size: pageSize }).then((res) => {
-    setMembers(res.items);
-    setTotal(res.total);
-  });
+  const load = () =>
+    api.get<PaginatedTeamResponse>('/api/vendor-os/team', { search, status: filterStatus, page, page_size: pageSize })
+      .then((res) => { setMembers(res.items); setTotal(res.total); });
 
-  useEffect(() => {
-    load();
-  }, [page, search, status]);
+  useEffect(() => { load(); }, [page, search, filterStatus]);
+
+  const setMemberStatus = async (memberId: string, status: MemberStatus) => {
+    await api.put(`/api/vendor-os/team/${memberId}`, { status });
+    setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, status } : m));
+  };
 
   const addMember = async () => {
     if (!name.trim() || !email.trim()) return;
     await api.post('/api/vendor-os/team', { name, email, role, phone: '' });
-    setName('');
-    setEmail('');
-    setRole('Photographer');
+    setName(''); setEmail(''); setRole('Photographer');
     load();
   };
 
@@ -36,24 +45,34 @@ export function TeamPage() {
         <h3>People</h3>
         <div className="row">
           <input value={search} onChange={(e) => { setPage(1); setSearch(e.target.value); }} placeholder="Search name/email/role" />
-          <select value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
+          <select value={filterStatus} onChange={(e) => { setPage(1); setFilterStatus(e.target.value); }}>
             <option value="">All statuses</option>
-            <option value="available">Available</option>
-            <option value="busy">Busy</option>
-            <option value="offline">Offline</option>
+            {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
         <table className="table">
           <thead>
-            <tr><th>Name</th><th>Status</th><th>Role</th><th>Assigned Jobs</th></tr>
+            <tr><th>Name</th><th>Role</th><th>Active Jobs</th><th>Availability</th></tr>
           </thead>
           <tbody>
             {members.map((m) => (
               <tr key={m.id}>
                 <td>{m.name}</td>
-                <td>{m.status}</td>
-                <td>{m.role}</td>
+                <td className="muted">{m.role}</td>
                 <td>{m.assigned_jobs}</td>
+                <td>
+                  <div className="status-toggle">
+                    {STATUS_OPTIONS.map((s) => (
+                      <button
+                        key={s}
+                        className={`status-btn ${m.status === s ? STATUS_BADGE[s] + ' active' : ''}`}
+                        onClick={() => setMemberStatus(m.id, s)}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
