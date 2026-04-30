@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
-import { clearToken, getToken, logout, me } from './lib/api';
+import { logout, me } from './lib/api';
+import { supabase } from './lib/supabase';
 import { AvailabilityPage } from './pages/AvailabilityPage';
 import { EarningsPage } from './pages/EarningsPage';
 import { JobsPage } from './pages/JobsPage';
@@ -11,6 +12,20 @@ import { PerformancePage } from './pages/PerformancePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TeamPage } from './pages/TeamPage';
 
+function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase();
+  return (
+    <div className="topbar">
+      <span className="topbar-date">{dateStr}</span>
+      <div className="topbar-right">
+        {name && <span className="topbar-user">{name}</span>}
+        <button className="btn-logout" onClick={onLogout}>Sign out</button>
+      </div>
+    </div>
+  );
+}
+
 function ProtectedLayout() {
   const [loading, setLoading] = useState(true);
   const [isAuthed, setIsAuthed] = useState(false);
@@ -18,22 +33,13 @@ function ProtectedLayout() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      setLoading(false);
-      setIsAuthed(false);
-      return;
-    }
-    me()
-      .then((member) => {
-        setIsAuthed(true);
-        setName(member.name);
-      })
-      .catch(() => {
-        clearToken();
-        setIsAuthed(false);
-      })
-      .finally(() => setLoading(false));
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { setLoading(false); setIsAuthed(false); return; }
+      me()
+        .then((member) => { setIsAuthed(true); setName(member.name); })
+        .catch(() => setIsAuthed(false))
+        .finally(() => setLoading(false));
+    });
   }, []);
 
   const onLogout = async () => {
@@ -41,30 +47,23 @@ function ProtectedLayout() {
     navigate('/login', { replace: true });
   };
 
-  if (loading) return <p className="main">Checking session...</p>;
+  if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
   if (!isAuthed) return <Navigate to="/login" replace />;
 
   return (
     <div className="app-shell">
       <Sidebar />
       <main className="main">
-        <header className="page-header">
-          <h1>Bricks Vendor OS</h1>
-          <p>Operational control layer for vendor teams and solo providers</p>
-          <div className="row page-meta">
-            <span className="muted">Signed in as {name}</span>
-            <button onClick={onLogout}>Logout</button>
-          </div>
-        </header>
+        <TopBar name={name} onLogout={onLogout} />
         <Routes>
-          <Route path="/" element={<OverviewPage />} />
-          <Route path="/team" element={<TeamPage />} />
-          <Route path="/jobs" element={<JobsPage />} />
-          <Route path="/earnings" element={<EarningsPage />} />
+          <Route path="/"             element={<OverviewPage />} />
+          <Route path="/jobs"         element={<JobsPage />} />
+          <Route path="/team"         element={<TeamPage />} />
+          <Route path="/earnings"     element={<EarningsPage />} />
           <Route path="/availability" element={<AvailabilityPage />} />
-          <Route path="/performance" element={<PerformancePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="/performance"  element={<PerformancePage />} />
+          <Route path="/settings"     element={<SettingsPage />} />
+          <Route path="*"             element={<Navigate to="/" replace />} />
         </Routes>
       </main>
     </div>
@@ -75,7 +74,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/*" element={<ProtectedLayout />} />
+      <Route path="/*"     element={<ProtectedLayout />} />
     </Routes>
   );
 }

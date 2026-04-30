@@ -14,22 +14,38 @@ export function PerformancePage() {
     api.get<Performance>('/api/vendor-os/performance').then(setData);
   }, []);
 
-  if (!data) return <p>Loading performance...</p>;
-
   return (
-    <div className="page-grid">
-      <section className="card">
-        <h3>Completion Rate</h3>
-        <p className="metric">{data.completion_rate}%</p>
-      </section>
-      <section className="card">
-        <h3>On-Time Rate</h3>
-        <p className="metric">{data.on_time_rate}%</p>
-      </section>
-      <section className="card">
-        <h3>Job Volume (Week)</h3>
-        <p className="metric">{data.job_volume_week}</p>
-      </section>
+    <div className="page-content">
+      <div className="page-header">
+        <div>
+          <h1>Performance</h1>
+          <p>Completion and on-time delivery rates</p>
+        </div>
+      </div>
+
+      {!data && <p className="muted">Loading…</p>}
+
+      {data && (
+        <div className="page-grid">
+          <section className="card">
+            <h3>Completion rate</h3>
+            <p className="metric">{data.completion_rate}%</p>
+            <div className="bar-track"><div className="bar-fill" style={{ width: `${data.completion_rate}%` }} /></div>
+            <p className="muted">of assigned jobs</p>
+          </section>
+          <section className="card">
+            <h3>On-time rate</h3>
+            <p className="metric">{data.on_time_rate}%</p>
+            <div className="bar-track"><div className="bar-fill" style={{ width: `${data.on_time_rate}%` }} /></div>
+            <p className="muted">on-time arrivals</p>
+          </section>
+          <section className="card">
+            <h3>Job volume · week</h3>
+            <p className="metric">{data.job_volume_week}</p>
+            <p className="muted">jobs completed</p>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

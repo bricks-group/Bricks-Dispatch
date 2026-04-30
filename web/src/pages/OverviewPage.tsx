@@ -19,42 +19,62 @@ export function OverviewPage() {
       .catch((e) => setError(e.message));
   }, []);
 
-  if (error) return <p className="error">{error}</p>;
-  if (!data) return <p>Loading overview...</p>;
-
   return (
-    <div className="page-grid">
-      <section className="card">
-        <h3>Assigned</h3>
-        <p className="metric">{data.jobs_assigned_today}</p>
-        <p className="muted">today</p>
-      </section>
-      <section className="card">
-        <h3>Assigned (week)</h3>
-        <p className="metric">{data.jobs_assigned_week}</p>
-      </section>
-      <section className="card">
-        <h3>Completed (week)</h3>
-        <p className="metric">{data.jobs_completed_week}</p>
-      </section>
-      <section className="card">
-        <h3>Capacity Utilization</h3>
-        <div className="bar-track"><div className="bar-fill" style={{ width: `${Math.min(data.capacity_utilization_pct, 100)}%` }} /></div>
-        <p className="muted">{data.capacity_utilization_pct}%</p>
-      </section>
-      <section className="card full">
-        <h3>Upcoming Schedule</h3>
-        {data.upcoming_jobs.length === 0 ? <p className="muted">No upcoming jobs</p> : (
-          <ul className="list">
-            {data.upcoming_jobs.map((job) => (
-              <li key={job.id} className="list-row">
-                <span>{job.address}</span>
-                <span>{job.time_window_start} - {job.time_window_end}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+    <div className="page-content">
+      <div className="page-header">
+        <div>
+          <h1>Overview</h1>
+          <p>Today's workload at a glance</p>
+        </div>
+      </div>
+
+      {error && <p className="error">{error}</p>}
+
+      {data && (
+        <>
+          <div className="page-grid">
+            <section className="card">
+              <h3>Assigned today</h3>
+              <p className="metric">{data.jobs_assigned_today}</p>
+              <p className="muted">jobs</p>
+            </section>
+            <section className="card">
+              <h3>Assigned · week</h3>
+              <p className="metric">{data.jobs_assigned_week}</p>
+              <p className="muted">jobs</p>
+            </section>
+            <section className="card">
+              <h3>Completed · week</h3>
+              <p className="metric">{data.jobs_completed_week}</p>
+              <p className="muted">jobs</p>
+            </section>
+            <section className="card">
+              <h3>Capacity</h3>
+              <p className="metric">{data.capacity_utilization_pct}%</p>
+              <div className="bar-track"><div className="bar-fill" style={{ width: `${Math.min(data.capacity_utilization_pct, 100)}%` }} /></div>
+              <p className="muted">utilization</p>
+            </section>
+          </div>
+
+          <section className="card full">
+            <h3>Upcoming Schedule</h3>
+            {data.upcoming_jobs.length === 0
+              ? <p className="muted" style={{ padding: '20px' }}>No upcoming jobs</p>
+              : (
+                <ul className="list">
+                  {data.upcoming_jobs.map((job) => (
+                    <li key={job.id} className="list-row">
+                      <span>{job.address}</span>
+                      <span className="muted">{job.time_window_start} – {job.time_window_end}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+          </section>
+        </>
+      )}
+
+      {!data && !error && <p className="muted">Loading…</p>}
     </div>
   );
 }
