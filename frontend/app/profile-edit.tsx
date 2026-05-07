@@ -21,7 +21,7 @@ export default function ProfileEditScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API}/api/profile`, { headers: actorHeaders() });
+        const res = await fetch(`${API}/api/profile`, { headers: await actorHeaders() });
         const data: Profile = await res.json();
         setName(data.name);
         setPhone(data.phone);
@@ -39,7 +39,7 @@ export default function ProfileEditScreen() {
     try {
       await fetch(`${API}/api/profile`, {
         method: 'PUT',
-        headers: actorHeaders({ 'Content-Type': 'application/json' }),
+        headers: await actorHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ name, phone }),
       });
       router.back();

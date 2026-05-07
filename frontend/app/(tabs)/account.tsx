@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { User, Star, Briefcase, Calendar, Download, LogOut, ChevronRight, Pencil, Settings } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
@@ -43,7 +44,7 @@ export default function AccountScreen() {
   const fetchProfile = useCallback(async () => {
     setError(false);
     try {
-      const res = await fetch(`${API}/api/profile`, { headers: actorHeaders() });
+      const res = await fetch(`${API}/api/profile`, { headers: await actorHeaders() });
       const data: Profile = await res.json();
       setProfile(data);
       setAvailability(data.availability);
@@ -62,7 +63,7 @@ export default function AccountScreen() {
     try {
       await fetch(`${API}/api/profile`, {
         method: 'PUT',
-        headers: actorHeaders({ 'Content-Type': 'application/json' }),
+        headers: await actorHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ availability: val }),
       });
     } catch (e) {
@@ -70,6 +71,24 @@ export default function AccountScreen() {
     } finally {
       setTogglingAvail(false);
     }
+  };
+
+  const handleSignOut = () => {
+    Alert.alert(
+      'Sign out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            await supabase.auth.signOut();
+            router.replace('/(auth)/login');
+          },
+        },
+      ],
+    );
   };
 
   if (loading) {
@@ -250,7 +269,7 @@ export default function AccountScreen() {
 
         {/* Sign out */}
         <View style={s.section}>
-          <TouchableOpacity style={s.signOutRow} activeOpacity={0.7}>
+          <TouchableOpacity style={s.signOutRow} activeOpacity={0.7} onPress={handleSignOut}>
             <LogOut size={15} color={TOKENS.bad} strokeWidth={1.5} />
             <Text style={s.signOutLabel}>Sign out</Text>
           </TouchableOpacity>
