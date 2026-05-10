@@ -6,9 +6,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Bell, Check, ChevronLeft, UploadCloud, Briefcase, AlertTriangle } from 'lucide-react-native';
 import { TOKENS } from '../constants/Theme';
+import { actorHeaders } from '../lib/api';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || "http://10.0.0.206:8000";
-const ACTOR_ID = process.env.EXPO_PUBLIC_ACTOR_ID || 'default_user';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8002';
 
 type Notification = {
   id: string;
@@ -40,9 +40,8 @@ export default function NotificationsScreen() {
 
   const fetchNotifications = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/notifications`, {
-        headers: { 'X-User-Id': ACTOR_ID },
-      });
+      const headers = await actorHeaders();
+      const res = await fetch(`${API}/api/notifications`, { headers });
       if (res.ok) setNotifications(await res.json());
     } catch {}
     setLoading(false);
@@ -51,10 +50,8 @@ export default function NotificationsScreen() {
   useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
 
   const markRead = async (id: string) => {
-    await fetch(`${API}/api/notifications/${id}/read`, {
-      method: 'PUT',
-      headers: { 'X-User-Id': ACTOR_ID },
-    }).catch(() => {});
+    const headers = await actorHeaders();
+    await fetch(`${API}/api/notifications/${id}/read`, { method: 'PUT', headers }).catch(() => {});
     setNotifications(prev =>
       prev.map(n => n.id === id ? { ...n, read: true } : n)
     );
@@ -62,11 +59,9 @@ export default function NotificationsScreen() {
 
   const markAllRead = async () => {
     const unread = notifications.filter(n => !n.read);
+    const headers = await actorHeaders();
     await Promise.all(unread.map(n =>
-      fetch(`${API}/api/notifications/${n.id}/read`, {
-        method: 'PUT',
-        headers: { 'X-User-Id': ACTOR_ID },
-      }).catch(() => {})
+      fetch(`${API}/api/notifications/${n.id}/read`, { method: 'PUT', headers }).catch(() => {})
     ));
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
