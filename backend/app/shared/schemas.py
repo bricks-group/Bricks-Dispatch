@@ -46,16 +46,148 @@ class Job(BaseModel):
     package_id: Optional[str] = None
     package_name: Optional[str] = None
     package_price: Optional[int] = None
-    add_ons: List[str] = []
+    add_ons: list = []
     add_on_total: Optional[int] = None
     billing_type: Optional[str] = None
     overage_amount: Optional[int] = None
+    # Enriched Booking fields — populated when job originates via Booking HTTP intake
+    vendor_name: Optional[str] = None
+    vendor_tier: Optional[int] = None
+    vendor_payout: Optional[float] = None
+    platform_margin: Optional[float] = None
+    sqft: Optional[int] = None
+    is_rush: bool = False
+    complexity_score: Optional[int] = None
+    complexity_band: Optional[str] = None
+    min_tier_required: Optional[int] = None
+    preferred_tier: Optional[int] = None
+    ai_flags: Optional[list] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class JobIntakeRequest(BaseModel):
+    """Payload accepted by POST /api/v1/dispatch/jobs from Booking."""
+    booking_id: str
+    address: str
+    city: str = ""
+    state: str = ""
+    zip_code: str = ""
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    time_window_start: str
+    time_window_end: str = ""
+    job_type: str
+    priority: str = "normal"
+    property_details: str = ""
+    client_instructions: str = ""
+    checklist: List[dict] = []
+    deliverables_count: int = 0
+    assignee_id: str = "default_user"
+    vendor_id: str = "default_vendor"
+    scheduled_date: str = ""
+    agent_user_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    agent_email: Optional[str] = None
+    agent_brokerage: Optional[str] = None
+    package_id: Optional[str] = None
+    package_name: Optional[str] = None
+    package_price: Optional[int] = None
+    add_ons: list = []
+    add_on_total: Optional[int] = None
+    billing_type: Optional[str] = None
+    overage_amount: Optional[int] = None
+    vendor_name: Optional[str] = None
+    vendor_tier: Optional[int] = None
+    vendor_payout: Optional[float] = None
+    platform_margin: Optional[float] = None
+    sqft: Optional[int] = None
+    is_rush: bool = False
+    complexity_score: Optional[int] = None
+    complexity_band: Optional[str] = None
+    min_tier_required: Optional[int] = None
+    preferred_tier: Optional[int] = None
+    ai_flags: Optional[list] = None
+
+
 class JobStatusUpdate(BaseModel):
     status: str
+
+
+class ChecklistProgress(BaseModel):
+    """Progress snapshot for status update payloads."""
+    total: int
+    completed: int
+
+
+class JobStatusUpdateFull(BaseModel):
+    """Full status update payload from Dispatch to Booking.
+
+    Sent via PUT /api/v1/dispatch-jobs/{booking_id}/status
+    See: dispatch-booking-status.schema.json
+    """
+    api_version: str = "v1"
+    job_id: str
+    new_status: str
+    previous_status: Optional[str] = None
+    changed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    actor_id: Optional[str] = None
+    actor_type: Optional[str] = None
+    notes: str = ""
+    checklist_progress: Optional[ChecklistProgress] = None
+
+
+class StatusUpdateResponse(BaseModel):
+    """Response from Booking acknowledging a status update."""
+    accepted: bool
+    booking_id: str
+    updated_dispatch_status: str
+    dispatch_job_id: Optional[str] = None
+
+
+class UploadNotification(BaseModel):
+    """Upload notification payload from Dispatch to Booking.
+
+    Sent via POST /api/v1/dispatch-jobs/{booking_id}/uploads
+    See: dispatch-upload.schema.json
+    """
+    api_version: str = "v1"
+    upload_id: str
+    job_id: str
+    filename: str
+    file_size: int
+    mime_type: str
+    uploaded_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class UploadNotificationResponse(BaseModel):
+    """Response from Booking acknowledging an upload notification."""
+    accepted: bool
+    booking_id: str
+    new_uploads_count: int
+    total_uploads: int
+
+
+class WebhookEventData(BaseModel):
+    """Inner payload of a dispatch webhook event."""
+    booking_id: str
+    job_id: str
+    previous_status: Optional[str] = None
+    new_status: str
+    actor_id: Optional[str] = None
+    actor_type: Optional[str] = None
+
+
+class DispatchWebhookEvent(BaseModel):
+    """Webhook event sent by Dispatch to Booking's callback URL.
+
+    See: dispatch-webhook-event.schema.json
+    """
+    event_type: str
+    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    source: str = "dispatch"
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    data: WebhookEventData
 
 
 class ChecklistToggle(BaseModel):
@@ -205,6 +337,30 @@ class VendorMemberUpdate(BaseModel):
 
 class JobAssignmentUpdate(BaseModel):
     member_id: str
+
+
+class JobCreate(BaseModel):
+    id: Optional[str] = None
+    booking_id: Optional[str] = None
+    address: str
+    city: str = ""
+    state: str = "ON"
+    zip_code: str = ""
+    time_window_start: str = "10:00"
+    time_window_end: str = "11:00"
+    job_type: str
+    status: str = "assigned"
+    priority: str = "normal"
+    property_details: str = ""
+    client_instructions: str = ""
+    scheduled_date: str
+    deliverables_count: int = 0
+    uploaded_count: int = 0
+    assignee_id: str = "default_user"
+    vendor_id: str = "default_vendor"
+    package_id: Optional[str] = None
+    package_name: Optional[str] = None
+    package_price: Optional[int] = None
 
 
 class BlockedWindow(BaseModel):

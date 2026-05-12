@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
+import httpx
+import os
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
@@ -14,6 +16,7 @@ from ..shared.schemas import (
     AvailabilitySettings,
     AvailabilityUpdate,
     JobAssignmentUpdate,
+    JobCreate,
     VendorMember,
     VendorMemberCreate,
     VendorMemberUpdate,
@@ -89,7 +92,7 @@ async def get_vendor_team(
         query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%,role.ilike.%{search}%")
     
     page, page_size, skip = normalize_pagination(page, page_size)
-    res = await query.order("created_at", ascending=True).range(skip, skip + page_size - 1).execute()
+    res = await query.order("created_at", desc=False).range(skip, skip + page_size - 1).execute()
     members = res.data
     total = res.count or 0
     
@@ -199,7 +202,7 @@ async def get_vendor_os_jobs(
         query = query.or_(f"address.ilike.%{search}%,city.ilike.%{search}%")
         
     page, page_size, skip = normalize_pagination(page, page_size)
-    res = await query.order("scheduled_date", ascending=True).range(skip, skip + page_size - 1).execute()
+    res = await query.order("scheduled_date", desc=False).range(skip, skip + page_size - 1).execute()
     jobs = res.data
     total = res.count or 0
     
@@ -208,6 +211,55 @@ async def get_vendor_os_jobs(
     for job in jobs:
         job["assignee_name"] = member_map.get(job.get("assignee_id"), "Unassigned")
     return paginated_response(jobs, total, page, page_size)
+
+
+@router.post("/jobs")
+async def create_job(
+    payload: JobCreate,
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    from ..shared.auth import resolve_actor_id
+    internal_keys = os.environ.get("INTERNAL_API_KEYS", "br-ef7ddf0e84582e6746668881873f61cc,bk-5274a1f72baf20a0699c405").split(",")
+    if x_internal_api_key and x_internal_api_key in internal_keys:
+        actor_id = "booking_system"
+    else:
+        actor_id = resolve_actor_id(x_user_id)
+
+    job_id = payload.id or str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    job_row = {
+        "id": job_id,
+        "booking_id": payload.booking_id,
+        "address": payload.address,
+        "city": payload.city,
+        "state": payload.state,
+        "zip_code": payload.zip_code,
+        "time_window_start": payload.time_window_start,
+        "time_window_end": payload.time_window_end,
+        "job_type": payload.job_type,
+        "status": payload.status,
+        "priority": payload.priority,
+        "property_details": payload.property_details,
+        "client_instructions": payload.client_instructions,
+        "scheduled_date": payload.scheduled_date,
+        "deliverables_count": payload.deliverables_count,
+        "uploaded_count": payload.uploaded_count,
+        "assignee_id": payload.assignee_id,
+        "vendor_id": payload.vendor_id,
+        "package_id": payload.package_id,
+        "package_name": payload.package_name,
+        "package_price": payload.package_price,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+
+    try:
+        result = await (await get_db()).table("jobs").insert(job_row).execute()
+        return {"id": job_id, **job_row}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create job: {type(e).__name__}: {str(e)}")
 
 
 @router.put("/jobs/{job_id}/assign")
@@ -239,6 +291,25 @@ async def assign_job_to_member(
 
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if payload.member_id == "auto" else "manual"})
     res_final = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+
+    # POST callback to Booking backend when job is assigned
+    booking_callback_url = os.environ.get("BOOKING_CALLBACK_URL", "http://10.0.0.219:8001")
+    callback_payload = {
+        "booking_id": res_final.data.get("booking_id"),
+        "job_id": job_id,
+        "status": res_final.data.get("status", "assigned"),
+        "completed_at": res_final.data.get("completed_at"),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{booking_callback_url}/api/callbacks/job-status",
+                json=callback_payload,
+                headers={"Content-Type": "application/json"},
+            )
+    except Exception:
+        pass  # Callback is fire-and-forget, don't block the response
+
     return res_final.data
 
 
@@ -389,7 +460,7 @@ async def get_vendor_os_earnings(
     member_rate_map = {m["id"]: m.get("commission_rate", 0.62) for m in res_members.data}
     member_ids = list(member_rate_map.keys()) or ["__none__"]
 
-    res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).order("scheduled_date", ascending=False).limit(50).execute()
+    res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).order("scheduled_date", desc=True).limit(50).execute()
     jobs = res_jobs.data
 
     week_total = 0
@@ -456,7 +527,7 @@ async def get_audit_events(
         query = query.eq("entity_type", entity_type)
         
     page, page_size, skip = normalize_pagination(page, page_size)
-    res = await query.order("created_at", ascending=False).range(skip, skip + page_size - 1).execute()
+    res = await query.order("created_at", desc=True).range(skip, skip + page_size - 1).execute()
     items = res.data
     total = res.count or 0
     
