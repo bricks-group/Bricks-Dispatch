@@ -1,5 +1,6 @@
 {
   "expo": {
+    "owner": "akashorter",
     "name": "Bricks Dispatch",
     "slug": "bricks-dispatch",
     "version": "1.0.0",
