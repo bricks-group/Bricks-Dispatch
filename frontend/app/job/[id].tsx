@@ -1,31 +1,25 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Linking, Alert,
+  ActivityIndicator, Alert, Linking,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronLeft, Phone, Navigation, Check, MapPin } from 'lucide-react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
-const VENDOR_RATE = 0.62;
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8002';
 
 type ChecklistItem = { id: string; label: string; completed: boolean };
 type Job = {
-  id: string; address: string; city: string; state: string; zip_code: string;
-  time_window_start: string; time_window_end: string; job_type: string;
-  status: string; property_details: string; client_instructions: string;
-  checklist: ChecklistItem[]; deliverables_count: number; uploaded_count: number;
+  id: string; address: string; city: string; state: string;
+  time_window_start: string; job_type: string; status: string;
   scheduled_date: string; package_name: string | null; package_price: number | null;
-  agent_name: string | null; agent_email: string | null; agent_brokerage: string | null;
-};
-
-const STATUS_BADGE: Record<string, { bg: string; fg: string }> = {
-  assigned:    { bg: TOKENS.nightDeep,  fg: TOKENS.moonSoft },
-  in_progress: { bg: TOKENS.brickTint, fg: TOKENS.brickDeep },
-  completed:   { bg: TOKENS.okTint,    fg: TOKENS.ok },
+  agent_name: string | null; agent_phone: string | null;
+  client_instructions: string | null;
+  checklist: ChecklistItem[];
+  vendor_payout?: number | null;
 };
 
 function fmtTime(iso: string) {
@@ -34,295 +28,295 @@ function fmtTime(iso: string) {
   return isNaN(d.getTime()) ? iso : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
-function agentInitials(name: string | null) {
-  if (!name) return '??';
-  return name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
+function fmtDate(s: string) {
+  if (!s) return '—';
+  const d = new Date(s + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function fmtMoney(amount: number) {
-  return `$${amount.toLocaleString('en-US')}`;
+function fmtJobType(t: string) {
+  return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
+
+const STATUS_COLOR: Record<string, string> = {
+  pending: TOKENS.warn,
+  assigned: TOKENS.brick,
+  in_progress: TOKENS.brick,
+  completed: TOKENS.ok,
+  cancelled: TOKENS.bad,
+};
 
 export default function JobDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [togglingItem, setTogglingItem] = useState<string | null>(null);
+  const [actioning, setActioning] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const headers = await actorHeaders();
-      const res = await fetch(`${API}/api/jobs/${id}`, { headers });
-      setJob(await res.json());
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); setRefreshing(false); }
+  useEffect(() => {
+    if (!id) return;
+    (async () => {
+      try {
+        const headers = await actorHeaders();
+        const res = await fetch(`${API}/api/vendor-os/jobs/${id}`, { headers });
+        if (!res.ok) throw new Error(`${res.status}`);
+        setJob(await res.json());
+      } catch {
+        Alert.alert('Error', 'Could not load job details.');
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [id]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  const handleStatus = async () => {
-    if (!job || actionLoading) return;
-    const next = job.status === 'assigned' ? 'in_progress' : 'completed';
-    setActionLoading(true);
-    try {
-      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
-      const r = await fetch(`${API}/api/jobs/${id}/status`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({ status: next }),
-      });
-      if (r.ok) setJob(await r.json());
-    } finally { setActionLoading(false); }
-  };
-
-  const toggleChecklist = async (itemId: string, current: boolean) => {
-    if (togglingItem) return;
-    setTogglingItem(itemId);
-    setJob(prev => prev ? {
-      ...prev,
-      checklist: prev.checklist.map(c => c.id === itemId ? { ...c, completed: !current } : c),
-    } : prev);
-    try {
-      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
-      await fetch(`${API}/api/jobs/${id}/checklist/${itemId}`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({ completed: !current }),
-      });
-    } catch {
-      setJob(prev => prev ? {
-        ...prev,
-        checklist: prev.checklist.map(c => c.id === itemId ? { ...c, completed: current } : c),
-      } : prev);
-    } finally { setTogglingItem(null); }
+  const markComplete = async () => {
+    if (!job) return;
+    Alert.alert('Mark Complete', 'Confirm that this shoot is finished?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Mark Complete',
+        onPress: async () => {
+          setActioning(true);
+          try {
+            const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+            const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/status`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify({ status: 'completed' }),
+            });
+            if (!res.ok) throw new Error(`${res.status}`);
+            setJob(prev => prev ? { ...prev, status: 'completed' } : prev);
+          } catch {
+            Alert.alert('Error', 'Could not update job status.');
+          } finally {
+            setActioning(false);
+          }
+        },
+      },
+    ]);
   };
 
   const openMaps = () => {
     if (!job) return;
     const addr = encodeURIComponent(`${job.address}, ${job.city}, ${job.state}`);
-    Linking.openURL(`maps://?q=${addr}`).catch(() =>
-      Linking.openURL(`https://maps.google.com/?q=${addr}`)
-    );
+    Linking.openURL(`https://maps.apple.com/?daddr=${addr}`);
   };
 
   const callAgent = () => {
-    if (!job?.agent_email) {
-      Alert.alert('No contact', 'Agent contact information is unavailable.');
-      return;
-    }
-    Linking.openURL(`mailto:${job.agent_email}`);
+    if (job?.agent_phone) Linking.openURL(`tel:${job.agent_phone}`);
   };
 
-  if (loading || !job) {
+  if (loading) {
     return (
-      <SafeAreaView style={s.container} edges={['top']}>
-        <View style={s.center}><ActivityIndicator size="small" color={TOKENS.brick} /></View>
+      <SafeAreaView style={s.safe}>
+        <ActivityIndicator size="large" color={TOKENS.brick} style={{ flex: 1 }} />
       </SafeAreaView>
     );
   }
 
-  const badge = STATUS_BADGE[job.status] || STATUS_BADGE.assigned;
-  const payout = job.package_price ? Math.round(job.package_price * VENDOR_RATE) : null;
-  const completedCount = job.checklist.filter(c => c.completed).length;
+  if (!job) {
+    return (
+      <SafeAreaView style={s.safe}>
+        <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+          <ArrowLeft size={20} color={TOKENS.moon} strokeWidth={1.5} />
+        </TouchableOpacity>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={s.emptyText}>Job not found.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const statusColor = STATUS_COLOR[job.status] || TOKENS.moonMute;
+  const isComplete = job.status === 'completed';
 
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
-      {/* Top bar */}
-      <View style={s.topBar}>
-        <TouchableOpacity onPress={() => router.back()} style={s.backBtn} activeOpacity={0.7}>
-          <ChevronLeft size={20} color={TOKENS.moon} strokeWidth={1.5} />
+    <SafeAreaView style={s.safe}>
+      <View style={s.header}>
+        <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+          <ArrowLeft size={20} color={TOKENS.moon} strokeWidth={1.5} />
         </TouchableOpacity>
-        <Text style={s.topId}>#{job.id.slice(0, 5).toUpperCase()}</Text>
-        <View style={[s.badge, { backgroundColor: badge.bg }]}>
-          <Text style={[s.badgeText, { color: badge.fg }]}>
-            {job.status.replace('_', ' ').toUpperCase()}
-          </Text>
+        <Text style={s.headerTitle}>JOB DETAIL</Text>
+        <View style={[s.statusBadge, { backgroundColor: statusColor + '22', borderColor: statusColor }]}>
+          <Text style={[s.statusText, { color: statusColor }]}>{job.status.toUpperCase()}</Text>
         </View>
       </View>
 
-      <ScrollView
-        contentContainerStyle={s.scroll}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={TOKENS.brick} />}
-      >
-        {/* Hero */}
-        <View style={s.hero}>
-          <Text style={s.address}>{job.address.toLowerCase()}</Text>
-          <Text style={s.addressMeta}>
-            {[job.city, job.state].filter(Boolean).join(', ')} · {job.job_type.replace(/_/g, ' ')}
-          </Text>
-        </View>
-
-        {/* Info grid */}
-        <View style={s.grid}>
-          {[
-            ['ARRIVE', fmtTime(job.time_window_start)],
-            ['PACKAGE', job.package_name || '—'],
-            ['DATE', job.scheduled_date || '—'],
-            ['PAYOUT', payout ? fmtMoney(payout) : '—'],
-          ].map(([label, value], i) => (
-            <View key={label} style={[s.gridCell, i % 2 === 1 && s.gridCellRight, i >= 2 && s.gridCellBottom]}>
-              <Text style={s.gridLabel}>{label}</Text>
-              <Text style={s.gridValue}>{value}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Agent contact */}
-        {job.agent_name && (
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>CONTACT</Text>
-            <View style={s.contactCard}>
-              <View style={s.contactAvatar}>
-                <Text style={s.contactAvatarText}>{agentInitials(job.agent_name)}</Text>
-              </View>
-              <View style={s.contactInfo}>
-                <Text style={s.contactName}>{job.agent_name}</Text>
-                <Text style={s.contactSub}>{job.agent_brokerage || 'Agent'}</Text>
-              </View>
-              <TouchableOpacity style={s.phoneBtn} onPress={callAgent} activeOpacity={0.7}>
-                <Phone size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
-              </TouchableOpacity>
-            </View>
+      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={s.heroRow}>
+          <View style={s.heroIcon}>
+            <Camera size={22} color={TOKENS.brick} strokeWidth={1.5} />
           </View>
-        )}
+          <View style={{ flex: 1 }}>
+            <Text style={s.jobType}>{fmtJobType(job.job_type)}</Text>
+            {job.package_name && <Text style={s.packageName}>{job.package_name}</Text>}
+          </View>
+          {job.vendor_payout != null && (
+            <Text style={s.payoutAmount}>${job.vendor_payout.toFixed(0)}</Text>
+          )}
+        </View>
 
-        {/* Access */}
+        <View style={s.card}>
+          <InfoRow icon={<MapPin size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="ADDRESS">
+            <Text style={s.infoValue}>{job.address}</Text>
+            <Text style={s.infoSub}>{job.city}, {job.state}</Text>
+          </InfoRow>
+          <View style={s.divider} />
+          <InfoRow icon={<Clock size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="SCHEDULED">
+            <Text style={s.infoValue}>{fmtDate(job.scheduled_date)}</Text>
+            <Text style={s.infoSub}>{fmtTime(job.time_window_start)}</Text>
+          </InfoRow>
+          {job.agent_name && (
+            <>
+              <View style={s.divider} />
+              <InfoRow icon={<User size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="AGENT">
+                <Text style={s.infoValue}>{job.agent_name}</Text>
+              </InfoRow>
+            </>
+          )}
+        </View>
+
         {job.client_instructions ? (
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>ACCESS</Text>
-            <View style={s.accessCard}>
-              <MapPin size={13} color={TOKENS.moonFaint} strokeWidth={1.5} style={{ marginTop: 1 }} />
-              <Text style={s.accessText}>{job.client_instructions}</Text>
-            </View>
+          <View style={s.card}>
+            <Text style={s.sectionEye}>INSTRUCTIONS</Text>
+            <Text style={s.instructions}>{job.client_instructions}</Text>
           </View>
         ) : null}
 
-        {/* Checklist */}
-        {job.checklist.length > 0 && (
-          <View style={s.section}>
-            <View style={s.sectionHeader}>
-              <Text style={s.sectionLabel}>CHECKLIST</Text>
-              <Text style={s.checklistCount}>
-                {completedCount}/{job.checklist.length}
-              </Text>
-            </View>
-            <View style={s.card}>
-              {job.checklist.map((item, i) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={[s.checkRow, i < job.checklist.length - 1 && s.checkRowBorder]}
-                  onPress={() => toggleChecklist(item.id, item.completed)}
-                  activeOpacity={0.7}
-                  disabled={togglingItem === item.id}
-                >
-                  <View style={item.completed ? s.chk : s.chkEmpty}>
-                    {item.completed && <Check size={10} color="#FFF" strokeWidth={3} />}
-                  </View>
-                  <Text style={item.completed ? s.checkLabelDone : s.checkLabel}>
-                    {item.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Property details */}
-        {job.property_details ? (
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>PROPERTY</Text>
-            <View style={s.card}>
-              <Text style={s.bodyText}>{job.property_details}</Text>
-            </View>
+        {job.checklist?.length > 0 ? (
+          <View style={s.card}>
+            <Text style={s.sectionEye}>SHOOT CHECKLIST</Text>
+            {job.checklist.map((item) => (
+              <View key={item.id} style={s.checkRow}>
+                <CheckCircle
+                  size={16}
+                  color={item.completed ? TOKENS.ok : TOKENS.moonMute}
+                  strokeWidth={1.5}
+                />
+                <Text style={[s.checkLabel, item.completed && s.checkLabelDone]}>
+                  {item.label}
+                </Text>
+              </View>
+            ))}
           </View>
         ) : null}
-
-        <View style={{ height: 120 }} />
       </ScrollView>
 
-      {/* Sticky footer */}
-      {job.status !== 'completed' && (
-        <View style={s.footer}>
-          <TouchableOpacity style={s.navBtn} onPress={openMaps} activeOpacity={0.7}>
-            <Phone size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
+      <View style={s.footer}>
+        <TouchableOpacity style={s.secondaryBtn} onPress={openMaps}>
+          <Navigation size={16} color={TOKENS.moon} strokeWidth={1.5} />
+          <Text style={s.secondaryBtnText}>Navigate</Text>
+        </TouchableOpacity>
+        {job.agent_phone ? (
+          <TouchableOpacity style={s.secondaryBtn} onPress={callAgent}>
+            <Phone size={16} color={TOKENS.moon} strokeWidth={1.5} />
+            <Text style={s.secondaryBtnText}>Call Agent</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={s.navBtn} onPress={openMaps} activeOpacity={0.7}>
-            <Navigation size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
-          </TouchableOpacity>
+        ) : null}
+        {!isComplete ? (
           <TouchableOpacity
-            style={s.primaryBtn}
-            onPress={handleStatus}
-            disabled={actionLoading}
-            activeOpacity={0.8}
+            style={[s.primaryBtn, actioning && { opacity: 0.5 }]}
+            onPress={markComplete}
+            disabled={actioning}
           >
-            {actionLoading
-              ? <ActivityIndicator color="#FFF" size="small" />
-              : <Text style={s.primaryBtnText}>
-                  {job.status === 'assigned' ? 'START JOB' : 'MARK COMPLETE'}
-                </Text>
+            {actioning
+              ? <ActivityIndicator size="small" color={TOKENS.moon} />
+              : <Text style={s.primaryBtnText}>Mark Complete</Text>
             }
           </TouchableOpacity>
-        </View>
-      )}
+        ) : null}
+      </View>
     </SafeAreaView>
   );
 }
 
+function InfoRow({ icon, label, children }: {
+  icon: React.ReactNode; label: string; children: React.ReactNode;
+}) {
+  return (
+    <View style={s.infoRow}>
+      <View style={s.infoIcon}>{icon}</View>
+      <View style={{ flex: 1 }}>
+        <Text style={s.infoLabel}>{label}</Text>
+        {children}
+      </View>
+    </View>
+  );
+}
+
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: TOKENS.night },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  safe: { flex: 1, backgroundColor: TOKENS.night },
 
-  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 14, borderBottomWidth: 1, borderColor: TOKENS.nightHair },
-  backBtn: { marginRight: 12, padding: 2 },
-  topId: { flex: 1, fontFamily: TYPOGRAPHY.monoMedium, fontSize: 11, color: TOKENS.moonMute, letterSpacing: 1.4 },
-  badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 2 },
-  badgeText: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, letterSpacing: 1 },
+  header: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 20, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair,
+  },
+  backBtn: { width: 36, height: 36, justifyContent: 'center', alignItems: 'flex-start' },
+  headerTitle: {
+    flex: 1, fontFamily: TYPOGRAPHY.mono, fontSize: 11,
+    color: TOKENS.moonMute, letterSpacing: 1.6,
+  },
+  statusBadge: {
+    borderWidth: 1, borderRadius: TOKENS.radius,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  statusText: { fontFamily: TYPOGRAPHY.mono, fontSize: 10, letterSpacing: 1 },
 
-  scroll: { paddingHorizontal: 24, paddingTop: 24 },
-  hero: { marginBottom: 24 },
-  address: { fontSize: 26, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, letterSpacing: -0.5, marginBottom: 6 },
-  addressMeta: { fontSize: 12, color: TOKENS.moonMute, fontFamily: TYPOGRAPHY.mono, textTransform: 'uppercase', letterSpacing: 0.6 },
+  scroll: { flex: 1 },
+  scrollContent: { padding: 20, paddingBottom: 120, gap: 12 },
 
-  grid: { flexDirection: 'row', flexWrap: 'wrap', backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, marginBottom: 28 },
-  gridCell: { width: '50%', padding: 14 },
-  gridCellRight: { borderLeftWidth: 1, borderLeftColor: TOKENS.nightHair },
-  gridCellBottom: { borderTopWidth: 1, borderTopColor: TOKENS.nightHair },
-  gridLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.4, marginBottom: 6 },
-  gridValue: { fontFamily: TYPOGRAPHY.mono, fontSize: 14, color: TOKENS.moon },
+  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 4 },
+  heroIcon: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: TOKENS.nightSoft, justifyContent: 'center', alignItems: 'center',
+  },
+  jobType: { fontSize: 20, fontWeight: '500' as const, color: TOKENS.moon, letterSpacing: -0.4 },
+  packageName: { fontSize: 13, color: TOKENS.moonMute, marginTop: 2 },
+  payoutAmount: { fontFamily: TYPOGRAPHY.mono, fontSize: 22, color: TOKENS.moon },
 
-  section: { marginBottom: 24 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  sectionLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.8 },
-  checklistCount: { fontFamily: TYPOGRAPHY.mono, fontSize: 10, color: TOKENS.moonFaint },
+  card: {
+    backgroundColor: TOKENS.nightSoft, borderRadius: TOKENS.radius,
+    borderWidth: 1, borderColor: TOKENS.nightHair, padding: 16,
+  },
+  sectionEye: {
+    fontFamily: TYPOGRAPHY.mono, fontSize: 10, color: TOKENS.moonMute,
+    letterSpacing: 1.6, marginBottom: 12,
+  },
 
-  card: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 10 },
+  infoIcon: { width: 20, marginTop: 2 },
+  infoLabel: {
+    fontFamily: TYPOGRAPHY.mono, fontSize: 9, color: TOKENS.moonMute,
+    letterSpacing: 1.4, marginBottom: 4,
+  },
+  infoValue: { fontSize: 15, fontWeight: '500' as const, color: TOKENS.moon },
+  infoSub: { fontSize: 13, color: TOKENS.moonSoft, marginTop: 2 },
+  divider: { height: 1, backgroundColor: TOKENS.nightHair },
 
-  contactCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, padding: 14 },
-  contactAvatar: { width: 36, height: 36, borderRadius: 2, backgroundColor: TOKENS.brickSoft + '33', alignItems: 'center', justifyContent: 'center' },
-  contactAvatarText: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 11, color: TOKENS.brick },
-  contactInfo: { flex: 1 },
-  contactName: { fontSize: 14, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, marginBottom: 2 },
-  contactSub: { fontSize: 11, color: TOKENS.moonFaint },
-  phoneBtn: { padding: 8, backgroundColor: TOKENS.nightDeep, borderRadius: 2 },
+  instructions: { fontSize: 14, color: TOKENS.moonSoft, lineHeight: 22 },
 
-  accessCard: { flexDirection: 'row', gap: 10, backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, padding: 14 },
-  accessText: { flex: 1, fontSize: 13, color: TOKENS.moonSoft, lineHeight: 20 },
+  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7 },
+  checkLabel: { fontSize: 14, color: TOKENS.moonSoft, flex: 1 },
+  checkLabelDone: { color: TOKENS.moonFaint, textDecorationLine: 'line-through' },
 
-  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13 },
-  checkRowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  chk: { width: 18, height: 18, borderRadius: 2, backgroundColor: TOKENS.brick, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  chkEmpty: { width: 18, height: 18, borderRadius: 2, borderWidth: 1.5, borderColor: TOKENS.nightHairS, flexShrink: 0 },
-  checkLabel: { fontSize: 13, color: TOKENS.moon, flex: 1 },
-  checkLabelDone: { fontSize: 13, color: TOKENS.moonFaint, textDecorationLine: 'line-through', flex: 1 },
+  emptyText: { fontSize: 15, color: TOKENS.moonMute },
 
-  bodyText: { fontSize: 13, color: TOKENS.moonSoft, lineHeight: 20, padding: 14 },
-
-  footer: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', gap: 10, paddingHorizontal: 24, paddingVertical: 16, paddingBottom: 32, backgroundColor: TOKENS.night, borderTopWidth: 1, borderColor: TOKENS.nightHair },
-  navBtn: { width: 48, height: 48, backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, alignItems: 'center', justifyContent: 'center' },
-  primaryBtn: { flex: 1, height: 48, backgroundColor: TOKENS.brick, borderRadius: 2, alignItems: 'center', justifyContent: 'center' },
-  primaryBtnText: { color: '#FFF', fontFamily: TYPOGRAPHY.monoMedium, fontSize: 13, letterSpacing: 1 },
+  footer: {
+    flexDirection: 'row', gap: 10,
+    paddingHorizontal: 20, paddingTop: 12, paddingBottom: 34,
+    borderTopWidth: 1, borderTopColor: TOKENS.nightHair,
+    backgroundColor: TOKENS.night,
+  },
+  secondaryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, height: 48, borderRadius: TOKENS.radius,
+    borderWidth: 1, borderColor: TOKENS.nightHairS,
+  },
+  secondaryBtnText: { fontSize: 14, color: TOKENS.moon, fontWeight: '500' as const },
+  primaryBtn: {
+    flex: 1, height: 48, borderRadius: TOKENS.radius,
+    backgroundColor: TOKENS.brick, justifyContent: 'center', alignItems: 'center',
+  },
+  primaryBtnText: { fontSize: 15, color: TOKENS.moon, fontWeight: '600' as const },
 });
