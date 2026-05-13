@@ -8,10 +8,11 @@ import {
 } from '@expo-google-fonts/jetbrains-mono';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
+import { ThemeProvider } from '../context/ThemeContext';
 import { TOKENS } from '../constants/Theme';
 import { actorHeaders } from '../lib/api';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -69,6 +70,7 @@ export default function RootLayout() {
     JetBrainsMono_400Regular,
     JetBrainsMono_500Medium,
   });
+  const { isDark } = useTheme();
 
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
@@ -81,6 +83,7 @@ export default function RootLayout() {
       try {
         const headers = await actorHeaders();
         const res = await fetch(`${API}/api/profile`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const profile = await res.json();
         
         const inOnboarding = segments[0] === 'onboarding';
@@ -118,12 +121,12 @@ export default function RootLayout() {
   }
 
   return (
-    <>
-      <StatusBar style="light" />
+    <ThemeProvider>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: TOKENS.night },
+          contentStyle: { backgroundColor: isDark ? TOKENS.night : TOKENS.paper },
           animation: 'slide_from_right',
         }}
       >
@@ -145,7 +148,7 @@ export default function RootLayout() {
         <Stack.Screen name="profile-edit" options={{ headerShown: false, presentation: 'card' }} />
         <Stack.Screen name="settings" options={{ headerShown: false, presentation: 'card' }} />
       </Stack>
-    </>
+    </ThemeProvider>
   );
 }
 
