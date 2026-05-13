@@ -43,7 +43,7 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip internal auth for health, seed, docs, root, and job intake endpoints
         exempt_paths = ("/health", "/docs", "/openapi.json", "/redoc")
-        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin")
+        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts")
         if request.url.path in exempt_paths or any(request.url.path.startswith(p) for p in exempt_prefixes):
             return await call_next(request)
 
@@ -68,6 +68,7 @@ from app.routers.vendor_os import router as vendor_os_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.admin_ops import router as admin_ops_router
 from app.routers.uploads import router as uploads_router
+from app.routers.payouts import router as payouts_router
 from app.shared.database import get_db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -164,6 +165,7 @@ app.include_router(vendor_os_router)
 app.include_router(onboarding_router)
 app.include_router(admin_ops_router)
 app.include_router(uploads_router)
+app.include_router(payouts_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
 _ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
