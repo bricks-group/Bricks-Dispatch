@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 
 type Profile = {
   name: string; email: string; role: string; phone: string;
@@ -43,7 +43,9 @@ export default function AccountScreen() {
   const fetchProfile = useCallback(async () => {
     setError(false);
     try {
-      const res = await fetch(`${API}/api/profile`, { headers: actorHeaders() });
+      const headers = await actorHeaders();
+      const res = await fetch(`${API}/api/profile`, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: Profile = await res.json();
       setProfile(data);
       setAvailability(data.availability);
@@ -60,11 +62,13 @@ export default function AccountScreen() {
     setAvailability(val);
     setTogglingAvail(true);
     try {
-      await fetch(`${API}/api/profile`, {
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      const res = await fetch(`${API}/api/profile`, {
         method: 'PUT',
-        headers: actorHeaders({ 'Content-Type': 'application/json' }),
+        headers,
         body: JSON.stringify({ availability: val }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch (e) {
       setAvailability(!val);
     } finally {

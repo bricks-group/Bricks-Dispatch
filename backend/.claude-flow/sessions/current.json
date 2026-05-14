@@ -1,10 +1,10 @@
 {
-  "id": "session-1777314767407",
-  "startedAt": "2026-04-27T18:32:47.407Z",
-  "cwd": "/Volumes/BRICKS/Bricks-Dispatch/backend",
+  "id": "session-1778607635434",
+  "startedAt": "2026-05-12T17:40:35.434Z",
+  "cwd": "/Volumes/Bricks/Bricks-Dispatch/backend",
   "context": {},
   "metrics": {
-    "edits": 1,
+    "edits": 0,
     "commands": 0,
     "tasks": 0,
     "errors": 0

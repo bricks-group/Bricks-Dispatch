@@ -6,7 +6,7 @@ import { ArrowLeft, Check } from 'lucide-react-native';
 import { actorHeaders } from '../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 
 type Profile = { name: string; email: string; phone: string; role: string };
 
@@ -21,7 +21,9 @@ export default function ProfileEditScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API}/api/profile`, { headers: actorHeaders() });
+        const headers = await actorHeaders();
+        const res = await fetch(`${API}/api/profile`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: Profile = await res.json();
         setName(data.name);
         setPhone(data.phone);
@@ -37,11 +39,13 @@ export default function ProfileEditScreen() {
   const save = async () => {
     setSaving(true);
     try {
-      await fetch(`${API}/api/profile`, {
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      const res = await fetch(`${API}/api/profile`, {
         method: 'PUT',
-        headers: actorHeaders({ 'Content-Type': 'application/json' }),
+        headers,
         body: JSON.stringify({ name, phone }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       router.back();
     } catch {
       Alert.alert('Error', 'Could not save profile.');

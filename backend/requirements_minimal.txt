@@ -1,6 +1,11 @@
 fastapi
+slowapi
 uvicorn
 motor
 python-dotenv
 pydantic
 starlette
+twilio
+tenacity
+twilio
+tenacity

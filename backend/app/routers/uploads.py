@@ -14,6 +14,8 @@ from typing import Optional
 from fastapi import APIRouter, Form, Header, HTTPException
 
 from ..services.storage import upload_file
+from ..services.post_production import process_job_assets
+from fastapi import BackgroundTasks
 from ..shared.auth import get_vendor_member, resolve_vendor_actor_id
 from ..shared.database import get_db
 from ..shared.errors import api_error
@@ -48,6 +50,7 @@ async def list_uploads(
 
 @router.post("")
 async def create_upload(
+    background_tasks: BackgroundTasks,
     job_id: str = Form(...),
     filename: str = Form(...),
     file_size: int = Form(0),

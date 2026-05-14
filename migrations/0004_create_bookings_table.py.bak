@@ -1,0 +1,41 @@
+
+revision = '0004'
+down_revision = '0003' # Assuming 0003 is the previous migration. Adjust if needed.
+branch_labels = None
+depends_on = None
+
+def upgrade():
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS bookings (
+            id text PRIMARY KEY,
+            booking_id text UNIQUE NOT NULL,
+            user_id text NOT NULL,
+            address text NOT NULL,
+            property_type text DEFAULT '',
+            package_id text DEFAULT '',
+            package_name text DEFAULT '',
+            package_price integer DEFAULT 0,
+            scheduled_date text DEFAULT '',
+            scheduled_time text DEFAULT '',
+            notes text DEFAULT '',
+            add_ons text[] DEFAULT '{}',
+            sqft integer,
+            is_rush boolean DEFAULT FALSE,
+            status text DEFAULT 'pending',
+            dispatch_job_id text,
+            lat float8,
+            lng float8,
+            complexity_score integer,
+            complexity_band text,
+            ai_flags text[] DEFAULT '{}',
+            completed_at text,
+            delivered_at text,
+            created_at text NOT NULL,
+            updated_at text NOT NULL
+        );
+    """)
+
+def downgrade():
+    op.execute("""
+        DROP TABLE IF EXISTS bookings;
+    """)

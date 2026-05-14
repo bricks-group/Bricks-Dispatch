@@ -10,12 +10,13 @@ from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.auth import get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.database import get_db
+from ..services.webhooks import send_dispatch_status_update_webhook
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import (
     AvailabilitySettings,
     AvailabilityUpdate,
-    JobAssignmentUpdate,
+    JobAssignmentUpdate, JobStatusUpdate,
     JobCreate,
     VendorMember,
     VendorMemberCreate,
@@ -265,7 +266,7 @@ async def create_job(
 @router.put("/jobs/{job_id}/assign")
 async def assign_job_to_member(
     job_id: str,
-    payload: JobAssignmentUpdate,
+    payload: JobAssignmentUpdate, JobStatusUpdate,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
@@ -532,3 +533,39 @@ async def get_audit_events(
     total = res.count or 0
     
     return paginated_response(items, total, page, page_size)
+
+@router.put("/jobs/{job_id}/status")
+async def update_vendor_job_status(
+    job_id: str,
+    payload: JobStatusUpdate,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    db = await get_db()
+    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not res_job.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = res_job.data
+    old_status = job.get("status")
+    new_status = payload.status
+    booking_id = job.get("booking_id")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
+    
+    if booking_id:
+        await send_dispatch_status_update_webhook(
+            booking_id=booking_id,
+            job_id=job_id,
+            new_status=new_status,
+            previous_status=old_status,
+            actor_id=actor_id,
+            actor_type="vendor_member"
+        )
+    
+    return {"status": "updated", "job_id": job_id, "new_status": new_status}

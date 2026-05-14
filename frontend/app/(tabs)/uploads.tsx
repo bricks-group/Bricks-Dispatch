@@ -9,7 +9,7 @@ import { Upload, FileText } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 
 type UploadRecord = {
   id: string; job_id: string; filename: string; file_size: number;
@@ -56,10 +56,13 @@ export default function UploadsScreen() {
 
   const fetchData = useCallback(async () => {
     try {
+      const headers = await actorHeaders();
       const [upRes, jobRes] = await Promise.all([
-        fetch(`${API}/api/uploads`, { headers: actorHeaders() }),
-        fetch(`${API}/api/jobs`, { headers: actorHeaders() }),
+        fetch(`${API}/api/uploads`, { headers }),
+        fetch(`${API}/api/jobs`, { headers }),
       ]);
+      if (!upRes.ok) throw new Error(`Uploads API error: ${upRes.status}`);
+      if (!jobRes.ok) throw new Error(`Jobs API error: ${jobRes.status}`);
       setUploads(await upRes.json());
       setJobs(await jobRes.json());
     } catch (e) {
@@ -102,11 +105,12 @@ export default function UploadsScreen() {
       form.append('file_size', String(asset.fileSize || 0));
       form.append('mime_type', asset.mimeType || 'image/jpeg');
       form.append('file_data', asset.base64 || '');
+      const headers = await actorHeaders();
       const res = await fetch(`${API}/api/uploads`, {
-        method: 'POST', headers: actorHeaders(), body: form,
+        method: 'POST', headers, body: form,
       });
-      if (!res.ok) Alert.alert('Upload failed', 'Something went wrong.');
-      else await fetchData();
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      await fetchData();
     } catch {
       Alert.alert('Upload failed', 'Network error — check your connection.');
     } finally {

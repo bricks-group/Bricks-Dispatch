@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import { Bell, Check, ChevronLeft, UploadCloud, Briefcase, AlertTriangle } from 'lucide-react-native';
 import { TOKENS } from '../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || "http://10.0.0.206:8000";
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8000';
 const ACTOR_ID = process.env.EXPO_PUBLIC_ACTOR_ID || 'default_user';
 
 type Notification = {

@@ -8,7 +8,7 @@ import { CreditCard, FileText, ChevronRight } from 'lucide-react-native';
 import { actorHeaders } from '../../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 
 type PayoutSummary = {
   week_total: number;
@@ -49,7 +49,9 @@ export default function PayoutsScreen() {
 
   const fetchPayouts = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/payouts`, { headers: actorHeaders() });
+      const headers = await actorHeaders();
+      const res = await fetch(`${API}/api/payouts`, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json: PayoutSummary = await res.json();
       setData(json);
     } catch (e) {

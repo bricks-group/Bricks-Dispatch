@@ -1,5 +1,12 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# IDE and editors
+.idea/
+.vscode/
+
 # Dependencies
 node_modules/
+/node_modules
 /.pnp
 .pnp.js
 .yarn/install-state.gz
@@ -9,64 +16,65 @@ node_modules/
 !.yarn/releases
 !.yarn/versions
 
-# Testing artifacts (never commit these)
+# Testing
 /coverage
-test_reports/
-test_result.md
-pytest_results.xml
-*.xml
 
-# Production builds
-/build
-dist/
-.next/
+# Next.js
+/.next/
 /out/
 next-env.d.ts
 *.tsbuildinfo
 
-# Environment files
+# Production builds
+/build
+dist/
+dist
+
+# Environment and credentials — NEVER commit live secrets
 .env
 .env.*
+!.env.example
 *.env
-*token.json*
-*credentials.json*
 credentials.json
 *.pem
 *.key
 .credentials
+*credentials.json*
+*credentials.json
+*token.json*
+*token.json
 
-# Logs
+# Logs and debug files
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 dump.rdb
 
-# System
+# System files
 .DS_Store
 ._*
-
-# IDE
-.idea/
-.vscode/
+*.pem
 
 # Python
 __pycache__/
-*.pyc
+*pyc*
 venv/
 .venv/
 
-# AI tool artifacts (do not commit)
-.claude-flow/
-.emergent/
-.gitconfig
-GEMINI.md
-QWEN.md
+# Development tools
+chainlit.md
+.chainlit
+.ipynb_checkpoints/
+.ac
 
 # Deployment
 .vercel
 
-# Archive and binary
+# Data and databases
+agenthub/agents/youtube/db
+
+# Archive files and large assets
 **/*.zip
 **/*.tar.gz
 **/*.tar
@@ -78,7 +86,4 @@ QWEN.md
 # Build caches
 .cache/
 
-# Mobile / Expo
-frontend/node_modules/
-android-sdk/
-.expo/
+memory/test_credentials.md

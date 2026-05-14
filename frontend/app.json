@@ -20,7 +20,8 @@
         "backgroundColor": "#141210"
       },
       "package": "com.bricks.dispatch",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "versionCode": 4
     },
     "web": {
       "bundler": "metro",

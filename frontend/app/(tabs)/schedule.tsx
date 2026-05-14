@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 
 const DAY_LABELS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
@@ -68,7 +68,9 @@ export default function ScheduleScreen() {
 
   const fetchJobs = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/jobs`, { headers: actorHeaders() });
+      const headers = await actorHeaders();
+      const res = await fetch(`${API}/api/jobs`, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setAllJobs(await res.json());
     } catch (e) {
       console.error('Schedule fetch error', e);

@@ -9,7 +9,7 @@ import { Bell, Navigation, Phone, Check } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.206:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 const VENDOR_RATE = 0.62;
 
 type ChecklistItem = { id: string; label: string; completed: boolean };
@@ -59,9 +59,11 @@ export default function TodayScreen() {
     try {
       const headers = await actorHeaders();
       const [jobsRes, notifRes] = await Promise.all([
-        fetch(`${API}/api/jobs`, { headers }),
+        fetch(`${API}/api/vendor-os/jobs`, { headers }),
         fetch(`${API}/api/notifications/unread-count`, { headers }),
       ]);
+      if (!jobsRes.ok) throw new Error(`Jobs API error: ${jobsRes.status}`);
+      if (!notifRes.ok) throw new Error(`Notifications API error: ${notifRes.status}`);
       const allJobs: Job[] = await jobsRes.json();
       const notifData = await notifRes.json();
       const todayJobs = allJobs

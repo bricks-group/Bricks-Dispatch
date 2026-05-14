@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8002';
+const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 
 export async function actorHeaders(extra: Record<string, string> = {}) {
   const { data: { session } } = await supabase.auth.getSession();

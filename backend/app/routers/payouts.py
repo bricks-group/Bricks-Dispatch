@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from ..shared.database import get_db
-from .payout_service import trigger_payout_for_job
+from ..services.payout_service import trigger_payout_for_job
 
 logger = logging.getLogger(__name__)
 

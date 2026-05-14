@@ -87,3 +87,6 @@
 {"type":"edit","file":"/Volumes/BRICKS/Bricks-Booking/backend/server.py","timestamp":1777314665037,"sessionId":null}
 {"type":"edit","file":"/Volumes/BRICKS/Bricks-Booking/frontend/app/(auth)/reset-password.tsx","timestamp":1777314748597,"sessionId":null}
 {"type":"edit","file":"/Volumes/BRICKS/Bricks-Booking/frontend/app/(auth)/forgot-password.tsx","timestamp":1777314848085,"sessionId":null}
+{"type":"edit","file":"/Volumes/BRICKS/Bricks-Dispatch/backend/requirements.txt","timestamp":1778604724061,"sessionId":null}
+{"type":"edit","file":"/Volumes/BRICKS/Bricks-Dispatch/backend/app/integrations/bricks_ai_dispatch.py","timestamp":1778605367035,"sessionId":null}
+{"type":"edit","file":"/Volumes/BRICKS/Bricks-Dispatch/backend/app/integrations/bricks_ai_dispatch.py","timestamp":1778605371489,"sessionId":null}
