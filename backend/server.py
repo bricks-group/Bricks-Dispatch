@@ -239,6 +239,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 @app.get("/health/ready")
 async def ready():
     db_status = "connected"

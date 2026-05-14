@@ -17,6 +17,8 @@ _db: AsyncClient = None
 async def get_db() -> AsyncClient:
     global _db
     if _db is None:
+        if not url or not key:
+            raise RuntimeError("Supabase not configured: SUPABASE_URL and SUPABASE_KEY required")
         _db = await create_async_client(url, key)
     return _db
 
