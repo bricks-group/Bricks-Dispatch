@@ -261,6 +261,7 @@ class VendorMember(BaseModel):
     operation_polygon: List[Coordinate] = [] # The "Connected Dots"
     home_city: str = ""
     max_travel_km: int = 50
+    tier: int = 1
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     insurance_policy_number: Optional[str] = None

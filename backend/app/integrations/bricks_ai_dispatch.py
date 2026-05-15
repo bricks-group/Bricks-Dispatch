@@ -40,11 +40,13 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
         return None
 
     try:
+        min_tier = job.min_tier_required or 1
         vendor_data = [
             {
                 "id": v.id,
                 "name": v.name,
                 "specialty": v.specialty,
+                "tier": v.tier,
                 "operation_polygon": [c.dict() for c in v.operation_polygon],
                 "home_city": v.home_city,
                 "max_travel_km": v.max_travel_km,
@@ -55,8 +57,12 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
                 "active_assignments": v.active_assignments,
             }
             for v in vendors
-            if v.is_active and v.onboarding_status == "approved"
+            if v.is_active and v.onboarding_status == "approved" and v.tier >= min_tier
         ]
+
+        if not vendor_data:
+            logger.warning(f"No eligible vendors (min_tier={min_tier}) to pass to AI for job {job.id}")
+            return None
 
         job_context = {
             "address": job.address,
@@ -68,6 +74,8 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
             "property_details": job.property_details,
             "client_instructions": job.client_instructions,
             "scheduled_date": job.scheduled_date,
+            "min_tier_required": min_tier,
+            "preferred_tier": job.preferred_tier or min_tier,
         }
 
         prompt = f"""
@@ -78,11 +86,13 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
         Candidates: {json.dumps(vendor_data)}
 
         Rules:
-        1. Area of Operations (AO): Prioritize candidates whose "operation_polygon" contains the job's lat/lng.
-        2. Geographical Match: If no polygon match, check if job's "city" is in their "service_areas" or within "max_travel_km" radius.
-        3. Match specialty to job_type (photo, video, drone, 3d_tour, floor_plan).
-        4. Prefer high quality_rating and completion_rate.
-        5. Balance load: prefer fewer active_assignments.
+        1. All candidates already meet the minimum tier requirement — do not select below min_tier_required.
+        2. Area of Operations (AO): Prioritize candidates whose "operation_polygon" contains the job's lat/lng.
+        3. Geographical Match: If no polygon match, check if job's "city" is in their "service_areas" or within "max_travel_km" radius.
+        4. Match specialty to job_type (photo, video, drone, 3d_tour, floor_plan).
+        5. Prefer vendor whose tier matches preferred_tier when other factors are equal.
+        6. Prefer high quality_rating and completion_rate.
+        7. Balance load: prefer fewer active_assignments.
 
         Return ONLY a JSON object with the "vendor_id" of the best match.
         Example: {{"vendor_id": "vendor_abc"}}
