@@ -40,7 +40,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     """
     # Fetch the job
     res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res.data:
+    if not res or not res.data:
         logger.error(f"Payout trigger failed: job {job_id} not found")
         return {"error": "job_not_found", "job_id": job_id}
 

@@ -26,13 +26,19 @@ async def trigger_payout(job_id: str):
     Manually trigger a payout for a completed job.
     Calculates amount from vendor tier and package_price, then transfers via Stripe Connect.
     """
-    db = await get_db()
-    result = await trigger_payout_for_job(db, job_id)
+    try:
+        db = await get_db()
+        result = await trigger_payout_for_job(db, job_id)
 
-    if "error" in result and not result.get("already_exists"):
-        raise HTTPException(status_code=400, detail=result)
+        if "error" in result and not result.get("already_exists"):
+            raise HTTPException(status_code=400, detail=result)
 
-    return result
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Payout trigger failed for job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail={"error": "payout_trigger_failed", "message": str(e)})
 
 
 @router.get("/", summary="List payouts")
