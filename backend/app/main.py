@@ -51,7 +51,9 @@ async def ready(db: Client = Depends(get_db)):
     return {"status": "ready", "db": "ok"}
 
 # --- Register Routers ---
-app.include_router(dispatch.router, prefix="/dispatch", tags=["dispatch"])
+# dispatch.router and payouts.router carry their own /api/v1/* prefix internally.
+app.include_router(dispatch.router, tags=["dispatch"])
+app.include_router(payouts.router, tags=["payouts"])
 app.include_router(jobs.router, prefix="/dispatch/jobs", tags=["jobs"])
 app.include_router(vendors.router, prefix="/dispatch/vendors", tags=["vendors"])
 app.include_router(notifications.router, prefix="/dispatch/notifications", tags=["notifications"])
