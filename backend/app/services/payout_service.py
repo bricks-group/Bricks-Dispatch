@@ -23,11 +23,15 @@ DEFAULT_TIER_PERCENTAGE = 0.50  # fallback to Tier 1
 
 
 def calculate_payout_amount(package_price: int | None, vendor_tier: int | None) -> int:
-    """Calculate payout amount in cents based on package price and vendor tier."""
+    """
+    Calculate payout amount in cents.
+    package_price is stored as dollars (e.g. 449). Stripe expects cents.
+    Tier 3 on Standard ($449): int(449 * 100 * 0.70) = 31430 cents = $314.30.
+    """
     if not package_price:
         return 0
     pct = TIER_PERCENTAGES.get(vendor_tier, DEFAULT_TIER_PERCENTAGE)
-    return int(package_price * pct)
+    return int(package_price * 100 * pct)
 
 
 async def trigger_payout_for_job(db, job_id: str) -> dict:

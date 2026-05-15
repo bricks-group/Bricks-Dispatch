@@ -6,7 +6,7 @@ import os
 from pydantic import BaseModel, Field
 
 # Internal service-to-service auth
-INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "bk-5274a1f72baf20a0699c405")
+INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
 BOOKING_API_URL = os.environ.get("BOOKING_API_URL", "https://bricks-booking-api.vercel.app")
 
 class DispatchWebhookEventData(BaseModel):
