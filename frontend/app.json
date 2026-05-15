@@ -8,7 +8,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "bricks-dispatch",
     "userInterfaceStyle": "dark",
-    "entryPoint": "./index.js",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
