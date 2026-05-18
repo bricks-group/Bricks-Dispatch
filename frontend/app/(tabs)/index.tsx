@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Linking,
+  RefreshControl, Linking,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -93,14 +93,6 @@ export default function TodayScreen() {
     );
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={s.container} edges={['top']}>
-        <View style={s.center}><ActivityIndicator size="small" color={TOKENS.brick} /></View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <ScrollView
@@ -113,7 +105,7 @@ export default function TodayScreen() {
           <View>
             <Text style={s.dateLabel}>{dateLabel.toUpperCase()}</Text>
             <Text style={s.title}>
-              {jobs.length > 0 ? `${jobs.length} shoot${jobs.length !== 1 ? 's' : ''}.` : 'Clear day.'}
+              {loading ? '—' : jobs.length > 0 ? `${jobs.length} shoot${jobs.length !== 1 ? 's' : ''}.` : 'Clear day.'}
             </Text>
           </View>
           <TouchableOpacity style={s.bellWrap} onPress={() => router.push('/notifications')} activeOpacity={0.7}>
@@ -126,7 +118,7 @@ export default function TodayScreen() {
           </TouchableOpacity>
         </View>
 
-        {jobs.length === 0 ? (
+        {!loading && jobs.length === 0 ? (
           <View style={s.empty}>
             <Text style={s.emptyText}>No jobs scheduled for today.</Text>
           </View>

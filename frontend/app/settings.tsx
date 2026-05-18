@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ArrowLeft, Bell, Moon, Sun, Vibrate } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
-import { TYPOGRAPHY } from '../constants/Theme';
+import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -82,6 +82,7 @@ export default function SettingsScreen() {
       </ScrollView>
     </SafeAreaView>
   );
+}
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: TOKENS.night },

@@ -1,0 +1,275 @@
+import { useState } from 'react';
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
+import { useRouter } from 'expo-router';
+import { supabase } from '../../lib/supabase';
+import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import BricksWordmark from '../../components/BricksWordmark';
+
+WebBrowser.maybeCompleteAuthSession();
+
+export default function LoginScreen() {
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  const handleLogin = async () => {
+    if (!email.trim() || !password) {
+      setError('Enter your email and password');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      const { error: authError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (authError) throw authError;
+      router.replace('/(tabs)');
+    } catch (e: any) {
+      setError(e.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    setError('');
+    setGoogleLoading(true);
+    try {
+      const redirectTo = Linking.createURL('auth-callback');
+      const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo, skipBrowserRedirect: true },
+      });
+      if (oauthError || !data?.url) throw oauthError ?? new Error('No OAuth URL');
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      if (result.type === 'success' && result.url) {
+        const url = new URL(result.url);
+        const code = url.searchParams.get('code');
+        if (code) {
+          await supabase.auth.exchangeCodeForSession(code);
+          router.replace('/(tabs)');
+        }
+      }
+    } catch (e: any) {
+      setError(e.message || 'Google sign-in failed');
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={s.safe}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={s.flex}
+      >
+        <ScrollView
+          contentContainerStyle={s.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={s.wordmarkWrap}>
+            <BricksWordmark size={1.0} color={TOKENS.brick} />
+          </View>
+
+          <Text style={s.eyebrow}>DISPATCH</Text>
+          <Text style={s.heading}>Sign in.</Text>
+          <Text style={s.sub}>Manage jobs, uploads, and payouts.</Text>
+
+          <View style={s.form}>
+            {!!error && (
+              <View style={s.errorBox}>
+                <Text style={s.errorText}>{error}</Text>
+              </View>
+            )}
+
+            <View style={s.fieldGroup}>
+              <Text style={s.label}>EMAIL</Text>
+              <TextInput
+                style={s.input}
+                value={email}
+                onChangeText={setEmail}
+                placeholder="you@example.com"
+                placeholderTextColor={TOKENS.moonFaint}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={s.fieldGroup}>
+              <Text style={s.label}>PASSWORD</Text>
+              <TextInput
+                style={s.input}
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Enter password"
+                placeholderTextColor={TOKENS.moonFaint}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+            </View>
+
+            <TouchableOpacity
+              style={[s.primaryBtn, loading && s.btnDisabled]}
+              onPress={handleLogin}
+              disabled={loading || googleLoading}
+              activeOpacity={0.85}
+            >
+              {loading
+                ? <ActivityIndicator color={TOKENS.night} />
+                : <Text style={s.primaryBtnText}>Sign in</Text>
+              }
+            </TouchableOpacity>
+
+            <View style={s.divider}>
+              <View style={s.dividerLine} />
+              <Text style={s.dividerLabel}>OR</Text>
+              <View style={s.dividerLine} />
+            </View>
+
+            <TouchableOpacity
+              style={[s.ghostBtn, googleLoading && s.btnDisabled]}
+              onPress={handleGoogle}
+              disabled={loading || googleLoading}
+              activeOpacity={0.8}
+            >
+              {googleLoading
+                ? <ActivityIndicator color={TOKENS.moon} size="small" />
+                : <Text style={s.ghostBtnText}>Continue with Google</Text>
+              }
+            </TouchableOpacity>
+          </View>
+
+          <View style={s.footer}>
+            <Text style={s.footerText}>New to Bricks Dispatch?{'  '}</Text>
+            <TouchableOpacity onPress={() => router.push('/onboarding/slides')} activeOpacity={0.7}>
+              <Text style={s.footerLink}>Apply</Text>
+            </TouchableOpacity>
+          </View>
+
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: TOKENS.night },
+  flex: { flex: 1 },
+  scroll: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 40 },
+
+  wordmarkWrap: { paddingTop: 28, paddingBottom: 32 },
+
+  eyebrow: {
+    fontFamily: TYPOGRAPHY.mono,
+    fontSize: 10,
+    color: TOKENS.moonFaint,
+    letterSpacing: 2,
+    marginBottom: 10,
+  },
+  heading: {
+    fontSize: 34,
+    fontWeight: '500',
+    letterSpacing: -1,
+    color: TOKENS.moon,
+  },
+  sub: {
+    fontSize: 14,
+    color: TOKENS.moonMute,
+    marginTop: 6,
+    marginBottom: 36,
+  },
+
+  form: { gap: 14 },
+
+  errorBox: {
+    backgroundColor: '#2A1510',
+    borderRadius: TOKENS.radius,
+    padding: 12,
+  },
+  errorText: { color: '#F4A195', fontSize: 13, fontFamily: TYPOGRAPHY.body },
+
+  fieldGroup: { gap: 6 },
+  label: {
+    fontFamily: TYPOGRAPHY.mono,
+    fontSize: 10,
+    color: TOKENS.moonMute,
+    letterSpacing: 1.4,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: TOKENS.nightHairS,
+    borderRadius: TOKENS.radius,
+    padding: 14,
+    fontSize: 15,
+    color: TOKENS.moon,
+    backgroundColor: TOKENS.nightSoft,
+    fontFamily: TYPOGRAPHY.body,
+  },
+
+  primaryBtn: {
+    marginTop: 4,
+    backgroundColor: TOKENS.brick,
+    borderRadius: TOKENS.radius,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryBtnText: {
+    color: TOKENS.moon,
+    fontSize: 15,
+    fontWeight: '500',
+    fontFamily: TYPOGRAPHY.body,
+  },
+  btnDisabled: { opacity: 0.5 },
+
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginVertical: 2,
+  },
+  dividerLine: { flex: 1, height: 1, backgroundColor: TOKENS.nightHairS },
+  dividerLabel: {
+    fontFamily: TYPOGRAPHY.mono,
+    fontSize: 10,
+    color: TOKENS.moonFaint,
+    letterSpacing: 1.4,
+  },
+
+  ghostBtn: {
+    borderWidth: 1,
+    borderColor: TOKENS.nightHairS,
+    borderRadius: TOKENS.radius,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ghostBtnText: {
+    color: TOKENS.moonSoft,
+    fontSize: 14,
+    fontFamily: TYPOGRAPHY.body,
+  },
+
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 'auto',
+    paddingTop: 40,
+  },
+  footerText: { fontSize: 13, color: TOKENS.moonMute, fontFamily: TYPOGRAPHY.body },
+  footerLink: { fontSize: 13, color: TOKENS.brick, fontFamily: TYPOGRAPHY.body },
+});

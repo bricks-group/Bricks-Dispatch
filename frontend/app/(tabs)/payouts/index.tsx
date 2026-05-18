@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Share, Alert,
+  Share, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CreditCard, FileText, ChevronRight } from 'lucide-react-native';
@@ -83,11 +83,6 @@ export default function PayoutsScreen() {
 
   return (
     <SafeAreaView style={s.container} edges={['top']}>
-      {loading ? (
-        <View style={s.center}>
-          <ActivityIndicator size="small" color={TOKENS.brick} />
-        </View>
-      ) : (
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
           <Text style={s.screenTitle}>Payouts</Text>
 
@@ -176,7 +171,6 @@ export default function PayoutsScreen() {
 
           <View style={{ height: 120 }} />
         </ScrollView>
-      )}
     </SafeAreaView>
   );
 }

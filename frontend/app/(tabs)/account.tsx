@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, ActivityIndicator, Alert, Linking, Share } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Linking, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { User, Star, Briefcase, Calendar, Download, LogOut, ChevronRight, Pencil, Settings } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
@@ -76,17 +77,7 @@ export default function AccountScreen() {
     }
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={s.container} edges={['top']}>
-        <View style={s.center}>
-          <ActivityIndicator size="small" color={TOKENS.brick} />
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (error || !profile) {
+  if (error || (!loading && !profile)) {
     return (
       <SafeAreaView style={s.container} edges={['top']}>
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
@@ -254,7 +245,16 @@ export default function AccountScreen() {
 
         {/* Sign out */}
         <View style={s.section}>
-          <TouchableOpacity style={s.signOutRow} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={s.signOutRow}
+            activeOpacity={0.7}
+            onPress={() =>
+              Alert.alert('Sign out', 'Are you sure?', [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Sign out', style: 'destructive', onPress: () => supabase.auth.signOut() },
+              ])
+            }
+          >
             <LogOut size={15} color={TOKENS.bad} strokeWidth={1.5} />
             <Text style={s.signOutLabel}>Sign out</Text>
           </TouchableOpacity>

@@ -133,10 +133,7 @@ export default function UploadsScreen() {
 
   return (
     <SafeAreaView style={s.container} edges={['top']}>
-      {loading ? (
-        <View style={s.center}><ActivityIndicator size="small" color={TOKENS.brick} /></View>
-      ) : (
-        <ScrollView
+      <ScrollView
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={TOKENS.brick} />}
           contentContainerStyle={s.scroll}
@@ -219,7 +216,7 @@ export default function UploadsScreen() {
             </View>
           )}
 
-          {groups.length === 0 && (
+          {!loading && groups.length === 0 && (
             <View style={s.empty}>
               <Text style={s.emptyText}>No uploads yet</Text>
             </View>
@@ -227,7 +224,6 @@ export default function UploadsScreen() {
 
           <View style={{ height: 120 }} />
         </ScrollView>
-      )}
     </SafeAreaView>
   );
 }

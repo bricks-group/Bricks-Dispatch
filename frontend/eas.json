@@ -12,7 +12,8 @@
       },
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://bricks-dispatch-api.vercel.app"
-      }
+      },
+      "channel": "development"
     },
     "preview": {
       "distribution": "internal",

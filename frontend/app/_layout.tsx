@@ -8,9 +8,11 @@ import {
 } from '@expo-google-fonts/jetbrains-mono';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
-import { ThemeProvider } from '../context/ThemeContext';
+import { ThemeProvider, useTheme } from '../context/ThemeContext';
 import { TOKENS } from '../constants/Theme';
 import { actorHeaders } from '../lib/api';
+import { supabase } from '../lib/supabase';
+import type { Session } from '@supabase/supabase-js';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
 
@@ -63,16 +65,43 @@ function useInitPushNotifications() {
   }, []);
 }
 
+function ThemedStatusBar() {
+  const { isDark } = useTheme();
+  return <StatusBar style={isDark ? 'light' : 'dark'} />;
+}
+
 export default function RootLayout() {
   const router = useRouter();
   const segments = useSegments();
+  const [session, setSession] = useState<Session | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [fontsLoaded] = useFonts({
     JetBrainsMono_400Regular,
     JetBrainsMono_500Medium,
   });
-  const { isDark } = useTheme();
 
   const [onboardingChecked, setOnboardingChecked] = useState(false);
+
+  // Auth session management
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      setAuthChecked(true);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s);
+      if (event === 'SIGNED_OUT') setOnboardingChecked(false);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Auth routing guard
+  useEffect(() => {
+    if (!authChecked || !fontsLoaded) return;
+    const inAuth = segments[0] === '(auth)';
+    if (!session && !inAuth) router.replace('/(auth)/login');
+    else if (session && inAuth) router.replace('/(tabs)');
+  }, [session, authChecked, fontsLoaded, segments]);
 
   useInitPushNotifications();
 
@@ -105,7 +134,7 @@ export default function RootLayout() {
       SplashScreen.hideAsync().catch(() => {});
     }, 3000);
 
-    if (fontsLoaded && onboardingChecked) {
+    if (fontsLoaded && onboardingChecked && authChecked) {
       SplashScreen.hideAsync().catch(() => {});
     }
 
@@ -122,14 +151,15 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <ThemedStatusBar />
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: isDark ? TOKENS.night : TOKENS.paper },
-          animation: 'slide_from_right',
+          contentStyle: { backgroundColor: TOKENS.night },
+          animation: 'none',
         }}
       >
+        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen
           name="job/[id]"

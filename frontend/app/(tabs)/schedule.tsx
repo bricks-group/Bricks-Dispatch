@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, ChevronRight } from 'lucide-react-native';
@@ -171,9 +171,7 @@ export default function ScheduleScreen() {
         </View>
 
         {/* Timeline */}
-        {loading ? (
-          <View style={s.center}><ActivityIndicator size="small" color={TOKENS.brick} /></View>
-        ) : selectedJobs.length === 0 ? (
+        {!loading && selectedJobs.length === 0 ? (
           <View style={s.empty}><Text style={s.emptyText}>No jobs on this day</Text></View>
         ) : (
           <View style={s.timeline}>
