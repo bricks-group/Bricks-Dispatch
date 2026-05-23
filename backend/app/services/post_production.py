@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 BOXBROWNIE_PUBLIC_KEY = os.environ.get("BOXBROWNIE_PUBLIC_KEY")
 BOXBROWNIE_PRIVATE_KEY = os.environ.get("BOXBROWNIE_PRIVATE_KEY")
 AUTOENHANCE_API_KEY = os.environ.get("AUTOENHANCE_API_KEY")
+FOTELLO_API_KEY = os.environ.get("FOTELLO_API_KEY")
 
 # --- BoxBrownie Helpers ---
 
@@ -74,6 +75,40 @@ async def trigger_autoenhance_edit(image_url: str) -> Optional[str]:
         logger.exception(f"Autoenhance edit failed: {e}")
         return None
 
+# --- Fotello Helpers ---
+
+async def trigger_fotello_edit(image_url: str) -> Optional[str]:
+    """
+    Triggers AI-powered real estate photo enhancement via Fotello's API.
+    Specifically leverages their premium window pulls, sky replacements,
+    and automatic object removals.
+    """
+    if not FOTELLO_API_KEY:
+        logger.error("FOTELLO_API_KEY not configured")
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Download the source image
+            img_res = await client.get(image_url)
+            img_res.raise_for_status()
+            
+            # Post to Fotello's endpoint using standard bearer token auth
+            resp = await client.post(
+                "https://api.fotello.co/v1/images",
+                headers={
+                    "Authorization": f"Bearer {FOTELLO_API_KEY}",
+                    "Accept": "application/json"
+                },
+                files={"image": ("image.jpg", img_res.content, "image/jpeg")}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # Fotello returns { "image_id": "img_..." } or { "job_id": "job_..." }
+            return data.get("image_id") or data.get("job_id")
+    except Exception as e:
+        logger.exception(f"Fotello AI edit failed: {e}")
+        return None
+
 # --- Pipeline Orchestrator ---
 
 async def process_job_assets(job_id: str):
@@ -108,9 +143,14 @@ async def process_job_assets(job_id: str):
             if bb_id:
                 results.append({"asset_id": asset["id"], "provider": "box_brownie", "provider_job_id": bb_id})
         else:
-            ae_id = await trigger_autoenhance_edit(file_url)
-            if ae_id:
-                results.append({"asset_id": asset["id"], "provider": "autoenhance", "provider_job_id": ae_id})
+            if FOTELLO_API_KEY:
+                ft_id = await trigger_fotello_edit(file_url)
+                if ft_id:
+                    results.append({"asset_id": asset["id"], "provider": "fotello", "provider_job_id": ft_id})
+            elif AUTOENHANCE_API_KEY:
+                ae_id = await trigger_autoenhance_edit(file_url)
+                if ae_id:
+                    results.append({"asset_id": asset["id"], "provider": "autoenhance", "provider_job_id": ae_id})
 
     for res in results:
         await db.table("uploads").update({
