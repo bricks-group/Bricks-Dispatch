@@ -1,41 +1,17 @@
-"""S3-backed file storage for Dispatch photo uploads."""
+"""Supabase Storage-backed file storage for Dispatch photo uploads."""
 import base64
 import io
 import os
 from typing import Optional, Tuple
 
-import boto3
-from botocore.exceptions import ClientError
 from PIL import Image
 
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET", "brxs-deliverables")
-AWS_S3_REGION = os.getenv("AWS_S3_REGION", "auto")
-AWS_S3_ENDPOINT_URL = os.getenv("AWS_S3_ENDPOINT_URL", "")
+from ..shared.database import get_db
+
+STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "brxs-deliverables")
 SIGNED_URL_EXPIRY = int(os.getenv("SIGNED_URL_EXPIRY_SECONDS", "3600"))
 
-STORAGE_ENABLED = bool(AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)
-
 _KEY_PREFIX = "bricks-dispatch"
-
-# Module-level singleton — boto3 sessions and connections are thread-safe and
-# should be reused rather than recreated on every request.
-def _make_s3_client():
-    kwargs = dict(
-        region_name=AWS_S3_REGION,
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    )
-    if AWS_S3_ENDPOINT_URL:
-        kwargs["endpoint_url"] = AWS_S3_ENDPOINT_URL
-    return boto3.client("s3", **kwargs)
-
-_s3 = _make_s3_client() if STORAGE_ENABLED else None
-
-
-def _s3_client():
-    return _s3
 
 
 def _make_thumbnail_bytes(image_bytes: bytes, size: Tuple[int, int] = (400, 300)) -> bytes:
@@ -54,18 +30,39 @@ async def upload_file(
     filename: str,
     mime_type: str,
 ) -> Tuple[Optional[str], Optional[str], str]:
-    """Upload file and thumbnail to S3.
+    """Upload file and thumbnail to Supabase Storage.
 
-    Returns (file_url, thumbnail_url, thumbnail_b64_200)
-    file_url / thumbnail_url are S3 object keys (not signed — sign on demand).
-    thumbnail_b64_200 is a 200-char base64 preview for backward compat.
+    Returns (file_path, thumbnail_path, thumbnail_b64_200).
+    file_path / thumbnail_path are storage object paths — sign on demand via get_signed_download_url.
+    thumbnail_b64_200 is a 200-char base64 preview for in-line display.
     """
-    thumb_b64 = ""
-    file_key: Optional[str] = None
-    thumb_key: Optional[str] = None
+    prefix = f"{_KEY_PREFIX}/jobs/{job_id}/{upload_id}"
+    file_path = f"{prefix}/{filename}"
+    thumb_path = f"{prefix}/thumb_{filename.rsplit('.', 1)[0]}.jpg"
 
-    if not STORAGE_ENABLED:
-        # No credentials yet — store only in-memory thumbnail
+    try:
+        db = await get_db()
+        bucket = db.storage.from_(STORAGE_BUCKET)
+
+        await bucket.upload(
+            path=file_path,
+            file=file_bytes,
+            file_options={"content-type": mime_type or "application/octet-stream"},
+        )
+
+        try:
+            thumb_bytes = _make_thumbnail_bytes(file_bytes)
+            await bucket.upload(
+                path=thumb_path,
+                file=thumb_bytes,
+                file_options={"content-type": "image/jpeg"},
+            )
+            thumb_b64 = base64.b64encode(thumb_bytes).decode()[:200]
+        except Exception:
+            thumb_path = None
+            thumb_b64 = base64.b64encode(file_bytes[:150]).decode()[:200]
+
+    except Exception:
         try:
             thumb_bytes = _make_thumbnail_bytes(file_bytes)
             thumb_b64 = base64.b64encode(thumb_bytes).decode()[:200]
@@ -73,46 +70,16 @@ async def upload_file(
             thumb_b64 = base64.b64encode(file_bytes[:150]).decode()[:200]
         return None, None, thumb_b64
 
-    s3 = _s3_client()
-    prefix = f"{_KEY_PREFIX}/jobs/{job_id}/{upload_id}"
-    file_key = f"{prefix}/{filename}"
-    thumb_key = f"{prefix}/thumb_{filename.rsplit('.', 1)[0]}.jpg"
-
-    # Upload original
-    s3.put_object(
-        Bucket=AWS_S3_BUCKET,
-        Key=file_key,
-        Body=file_bytes,
-        ContentType=mime_type or "application/octet-stream",
-    )
-
-    # Generate and upload thumbnail
-    try:
-        thumb_bytes = _make_thumbnail_bytes(file_bytes)
-        s3.put_object(
-            Bucket=AWS_S3_BUCKET,
-            Key=thumb_key,
-            Body=thumb_bytes,
-            ContentType="image/jpeg",
-        )
-        thumb_b64 = base64.b64encode(thumb_bytes).decode()[:200]
-    except Exception:
-        thumb_key = None
-        thumb_b64 = base64.b64encode(file_bytes[:150]).decode()[:200]
-
-    return file_key, thumb_key, thumb_b64
+    return file_path, thumb_path, thumb_b64
 
 
-def get_signed_download_url(s3_key: str, expiry: int = SIGNED_URL_EXPIRY) -> Optional[str]:
-    """Return a pre-signed S3 URL valid for `expiry` seconds."""
-    if not STORAGE_ENABLED or not s3_key:
+async def get_signed_download_url(storage_path: str, expiry: int = SIGNED_URL_EXPIRY) -> Optional[str]:
+    """Return a Supabase signed URL valid for `expiry` seconds."""
+    if not storage_path:
         return None
     try:
-        s3 = _s3_client()
-        return s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": AWS_S3_BUCKET, "Key": s3_key},
-            ExpiresIn=expiry,
-        )
-    except ClientError:
+        db = await get_db()
+        result = await db.storage.from_(STORAGE_BUCKET).create_signed_url(storage_path, expiry)
+        return result.get("signedURL") or result.get("signed_url")
+    except Exception:
         return None
