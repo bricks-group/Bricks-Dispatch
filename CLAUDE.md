@@ -40,9 +40,9 @@ app.include_router(vendors.router, prefix="/dispatch/vendors")
 4. Rule-based score: `(specialty_match, tier_match, -active_assignments, quality_rating)`
 
 ## Vendor Tier System
-- Tier 1: 50% payout
-- Tier 2: 60% payout
-- Tier 3: 70% payout
+- Tier 1 (A): 40% payout — Standard routing only
+- Tier 2 (B): 50% payout — Standard + Premium routing
+- Tier 3 (C): 60% payout — Full routing (Standard + Premium + Luxury)
 - `min_tier_required` on job is a hard gate — never assigned below it
 
 ## Rules

@@ -1,10 +1,10 @@
 """
 Payout service for vendor payouts via Stripe Connect Express.
 
-Vendor tiers (from BRICKS.md section 7.2):
-  Tier 1: 50% of package price
-  Tier 2: 60% of package price
-  Tier 3: 70% of package price
+Vendor tiers (Bricks Dispatch — matches brxs.ca/vendors):
+  Tier 1 (A): 40% of package price
+  Tier 2 (B): 50% of package price
+  Tier 3 (C): 60% of package price
 """
 
 import logging
@@ -13,20 +13,21 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 # Tier percentage mapping: tier number -> percentage of package price
+# Tier A=1, Tier B=2, Tier C=3 — matches the public-facing Dispatch pitch
 TIER_PERCENTAGES = {
-    1: 0.50,
-    2: 0.60,
-    3: 0.70,
+    1: 0.40,
+    2: 0.50,
+    3: 0.60,
 }
 
-DEFAULT_TIER_PERCENTAGE = 0.50  # fallback to Tier 1
+DEFAULT_TIER_PERCENTAGE = 0.40  # fallback to Tier A
 
 
 def calculate_payout_amount(package_price: int | None, vendor_tier: int | None) -> int:
     """
     Calculate payout amount in cents.
     package_price is stored as dollars (e.g. 449). Stripe expects cents.
-    Tier 3 on Standard ($449): int(449 * 100 * 0.70) = 31430 cents = $314.30.
+    Tier 3 (C) on Standard ($449): int(449 * 100 * 0.60) = 26940 cents = $269.40.
     """
     if not package_price:
         return 0
