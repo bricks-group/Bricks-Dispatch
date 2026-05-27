@@ -5,6 +5,5 @@ node_modules/
 __pycache__/
 *.pyc
 .git/
-tests/
 docs/
 test_reports/

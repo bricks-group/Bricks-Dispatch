@@ -51,7 +51,7 @@ app.include_router(vendors.router, prefix="/dispatch/vendors")
 - Keep vendor selection idempotent — same job can be re-run without double-assigning
 - Stripe Connect is Express (CA) — transfers use `stripe_account` parameter
 
-## Current Status (2026-05-15)
+## Current Status (2026-05-27)
 - Job state machine (pending → assigned → in_progress → completed) ✅
 - AI smart assign (Gemini 1.5 Flash) with tier enforcement ✅
 - Rule-based fallback with tier gate ✅
@@ -59,12 +59,19 @@ app.include_router(vendors.router, prefix="/dispatch/vendors")
 - Payout router registered and mounted ✅
 - Router prefix fixed (no double `/dispatch/api/v1/dispatch/`) ✅
 - `VendorMember.tier` field added to schema ✅
-- Post-production pipeline (Autoenhance.ai + BoxBrownie stubs) ✅
+- Post-production pipeline: BoxBrownie (virtual staging) + Fotello (AI edits, primary) + Autoenhance (fallback) ✅
+- Fotello takes priority when `FOTELLO_API_KEY` set; falls back to Autoenhance; BoxBrownie for staging assets ✅
 - Rate limiting + Sentry ✅
-- Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` (DNS propagating)
+- Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
+- Vendor tier payouts aligned to brxs.ca/vendors (Tier A=40%, B=50%, C=60%) ✅
+- Bouncing logo (brickPop on press) + 3D rotating brick loader ✅
+- E2E payout test suite (calculate, idempotency, Stripe happy path, Stripe failure) ✅
+- app.json bundle IDs + EAS project ID configured (`com.bricks.dispatch`) ✅
 
 ## Remaining Before Live Traffic
-- Stripe Connect end-to-end verification (Scenario C)
-- E2E test: job received from Booking → vendor assigned → payout triggered
-- BoxBrownie + Autoenhance API keys (from BRXS repo → Vercel env vars)
-- TestFlight / Play Store uploads (Kam)
+- `BOXBROWNIE_PUBLIC_KEY` + `BOXBROWNIE_PRIVATE_KEY` → add to Vercel env (bricks-dispatch-api)
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_S3_ENDPOINT_URL` → add to Vercel env
+- `FOTELLO_API_KEY` → add to Vercel env once plan is active
+- Stripe Connect live end-to-end verification with real CAD transfer
+- TestFlight upload (Kam — `eas build --platform ios --profile production` + `eas submit`)
+- Play Store internal track (Kam — `eas build --platform android --profile production` + `eas submit`)
