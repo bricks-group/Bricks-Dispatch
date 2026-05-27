@@ -80,7 +80,7 @@ export default function LoginScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={s.wordmarkWrap}>
-            <BricksWordmark size={1.0} color={TOKENS.brick} />
+            <BricksWordmark size={1.0} color={TOKENS.brick} pressable />
           </View>
 
           <Text style={s.eyebrow}>DISPATCH</Text>

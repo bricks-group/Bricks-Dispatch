@@ -1,6 +1,7 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
+import { BrickLoader } from '../components/BricksWordmark';
 import { useFonts } from 'expo-font';
 import {
   JetBrainsMono_400Regular,
@@ -144,7 +145,7 @@ export default function RootLayout() {
   if (!fontsLoaded) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="small" color={TOKENS.brick} />
+        <BrickLoader />
       </View>
     );
   }
