@@ -640,15 +640,128 @@ async def update_vendor_job_status(
 #   Bricks charges the AGENT immediately via their saved Stripe payment method.
 #   Bricks is a pure pass-through (agent charged $60, photographer paid $60, net $0).
 # - Contractor no-show → cancel_rate hurt only, no cash penalty, job re-dispatched.
+#
+# Anti-abuse validation gates (all must pass before charge fires):
+#   1. Time window: claim only valid T-15min → T+90min relative to scheduled shoot start
+#   2. Job ownership: reporter must be the assigned photographer
+#   3. Idempotency: duplicate claim for same job is rejected
+#   4. Rate limit: >2 approved claims in 30 days → hold for admin review (no auto-charge)
+#   5. Booking status: booking must not have been cancelled prior to shoot start
 # ---------------------------------------------------------------------------
-AGENT_NOSHOW_TRIP_FEE_CENTS = 6000  # $60 CAD  (Opus rec: $50-75 midpoint)
+AGENT_NOSHOW_TRIP_FEE_CENTS = 6000   # $60 CAD
+_NOSHOW_WINDOW_BEFORE_MIN = 15       # can report starting 15min before scheduled time
+_NOSHOW_WINDOW_AFTER_MIN = 90        # must report within 90min after scheduled time
+_NOSHOW_RATE_LIMIT_DAYS = 30         # rolling window for rate limiting
+_NOSHOW_RATE_LIMIT_THRESHOLD = 2     # claims above this → hold for admin review
+
+
+async def _validate_noshow_claim(
+    db, job: dict, reporter_id: str
+) -> dict:
+    """
+    Run all anti-abuse checks. Returns:
+      {"ok": True, "hold_for_review": False}                     → auto-approve, charge immediately
+      {"ok": True, "hold_for_review": True, "reason": "..."}     → record, hold for admin review
+      {"ok": False, "reason": "..."}                             → reject outright (HTTP 422)
+    """
+    assignee_id = job.get("assignee_id")
+    job_id = job.get("id")
+    booking_id = job.get("booking_id")
+
+    # Gate 1: must be the assigned photographer
+    if assignee_id != reporter_id:
+        return {"ok": False, "reason": "Only the assigned photographer can report a no-show"}
+
+    # Gate 2: job must be in an active state (not already completed, cancelled, or previously claimed)
+    current_status = job.get("status", "")
+    if current_status in ("completed", "agent_no_show", "cancelled"):
+        return {"ok": False, "reason": f"Cannot report no-show on a job with status '{current_status}'"}
+
+    # Gate 3: idempotency — no existing claim for this job
+    existing = await db.table("agent_noshow_trip_fees").select("id, status").eq(
+        "job_id", job_id
+    ).maybe_single().execute()
+    if existing.data:
+        return {"ok": False, "reason": "A no-show claim already exists for this job"}
+
+    # Gate 4: time window — claim must be filed within the valid window
+    shoot_start_str = job.get("time_window_start") or job.get("scheduled_at")
+    if shoot_start_str:
+        try:
+            shoot_start = datetime.fromisoformat(shoot_start_str.replace("Z", "+00:00"))
+            now_utc = datetime.now(timezone.utc)
+            earliest = shoot_start - timedelta(minutes=_NOSHOW_WINDOW_BEFORE_MIN)
+            latest = shoot_start + timedelta(minutes=_NOSHOW_WINDOW_AFTER_MIN)
+            if now_utc < earliest:
+                return {
+                    "ok": False,
+                    "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M UTC')}"
+                }
+            if now_utc > latest:
+                return {
+                    "ok": False,
+                    "reason": (
+                        f"Claim window expired — must be filed within "
+                        f"{_NOSHOW_WINDOW_AFTER_MIN} minutes of scheduled shoot time"
+                    )
+                }
+        except (ValueError, TypeError):
+            pass  # If we can't parse the time, don't hard-block — log and continue
+
+    # Gate 5: booking must not have been cancelled before shoot start
+    if booking_id:
+        try:
+            res_b = await db.table("bookings").select("status, cancelled_at").eq(
+                "id", booking_id
+            ).maybe_single().execute()
+            if res_b.data:
+                bk_status = res_b.data.get("status", "")
+                cancelled_at = res_b.data.get("cancelled_at")
+                if bk_status == "cancelled" and cancelled_at:
+                    # Only block if cancelled BEFORE the shoot window (not after)
+                    try:
+                        cancel_dt = datetime.fromisoformat(cancelled_at.replace("Z", "+00:00"))
+                        shoot_dt = datetime.fromisoformat(
+                            (shoot_start_str or "").replace("Z", "+00:00")
+                        ) if shoot_start_str else None
+                        if shoot_dt and cancel_dt < shoot_dt:
+                            return {
+                                "ok": False,
+                                "reason": "Booking was cancelled before the shoot — no trip fee applies"
+                            }
+                    except (ValueError, TypeError):
+                        pass
+        except Exception:
+            pass
+
+    # Gate 6: rate limit — count recent approved/pending claims for this photographer
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
+        res_recent = await db.table("agent_noshow_trip_fees").select("id").eq(
+            "member_id", assignee_id
+        ).in_("status", ["pending", "paid_out", "pending_review"]).gte(
+            "created_at", cutoff
+        ).execute()
+        recent_count = len(res_recent.data or [])
+        if recent_count >= _NOSHOW_RATE_LIMIT_THRESHOLD:
+            return {
+                "ok": True,
+                "hold_for_review": True,
+                "reason": (
+                    f"Rate limit: {recent_count} claims in the last {_NOSHOW_RATE_LIMIT_DAYS} days "
+                    f"— held for admin review before charge fires"
+                ),
+            }
+    except Exception:
+        pass
+
+    return {"ok": True, "hold_for_review": False}
 
 
 def _charge_agent_for_noshow(stripe_customer_id: str, booking_id: str, job_id: str) -> str | None:
     """
     Immediately charge the agent's saved payment method $60 for the no-show.
-    Returns Stripe charge ID on success, None on failure.
-    Non-blocking — caller records the outcome but does not abort on failure.
+    Returns Stripe PaymentIntent ID on success, None on failure.
     """
     import stripe as stripe_lib
     stripe_lib.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -668,8 +781,23 @@ def _charge_agent_for_noshow(stripe_customer_id: str, booking_id: str, job_id: s
         )
         return intent.id if intent.status in ("succeeded", "processing") else None
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).error(f"Agent no-show charge failed for booking {booking_id}: {exc}")
+        logger.error(f"Agent no-show Stripe charge failed for booking {booking_id}: {exc}")
+        return None
+
+
+async def _resolve_agent_stripe_customer(db, booking_id: str) -> str | None:
+    """Look up the booking agent's Stripe customer ID from the shared users table."""
+    try:
+        res_b = await db.table("bookings").select("user_id").eq(
+            "id", booking_id
+        ).maybe_single().execute()
+        if not res_b.data or not res_b.data.get("user_id"):
+            return None
+        user_id = res_b.data["user_id"]
+        res_u = await db.table("users").select("payment_method").eq("id", user_id).maybe_single().execute()
+        return ((res_u.data or {}).get("payment_method") or {}).get("stripe_customer_id")
+    except Exception as exc:
+        logger.warning(f"Could not resolve Stripe customer for booking {booking_id}: {exc}")
         return None
 
 
@@ -683,14 +811,23 @@ async def report_agent_no_show(
     """
     Photographer reports that the agent/client was not home.
 
-    Effects:
-    1. Charges agent's saved Stripe payment method $60 immediately (Bricks does NOT absorb this)
-    2. Records $60 trip fee claim for photographer — paid on next payout cycle
-    3. Job status → 'agent_no_show'
-    4. Audit event logged
+    Anti-abuse validation runs before any charge or record is created:
+    - Must be the assigned photographer (not any vendor member)
+    - Job must be in active state (not already completed/cancelled/claimed)
+    - Duplicate claims rejected outright
+    - Must be within T-15min → T+90min of scheduled shoot time
+    - Booking must not have been cancelled before the shoot
+    - >2 claims in 30 days → held for admin review, no auto-charge
 
-    If the Stripe charge fails (expired card etc.), trip fee is still recorded for
-    manual collection; photographer still gets paid on next cycle.
+    When validated:
+    - Charges agent's saved Stripe payment method $60 immediately
+    - Records trip fee claim; paid to photographer on next payout cycle
+    - Job status → 'agent_no_show'
+
+    When held for review:
+    - Claim recorded with status='pending_review'
+    - Admin approves/rejects via POST /api/admin/noshow-claims/{id}/review
+    - Charge only fires after admin approval
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     db = await get_db()
@@ -705,27 +842,30 @@ async def report_agent_no_show(
     booking_id = job.get("booking_id")
     now = datetime.now(timezone.utc).isoformat()
 
-    # Attempt to charge the agent immediately — look up their Stripe customer ID via booking
+    # Run all anti-abuse checks before anything is created or charged
+    validation = await _validate_noshow_claim(db, job, actor_id)
+    if not validation["ok"]:
+        raise HTTPException(status_code=422, detail=validation["reason"])
+
+    hold_for_review = validation.get("hold_for_review", False)
+    review_reason = validation.get("reason", "")
+
     agent_charge_id: str | None = None
-    agent_charge_status = "charge_pending"
-    if booking_id:
-        try:
-            res_b = await db.table("bookings").select("user_id, payment_intent_id").eq(
-                "id", booking_id
-            ).maybe_single().execute()
-            if res_b.data and res_b.data.get("user_id"):
-                user_id = res_b.data["user_id"]
-                res_u = await db.table("users").select("payment_method").eq("id", user_id).maybe_single().execute()
-                stripe_customer_id = (
-                    (res_u.data or {}).get("payment_method") or {}
-                ).get("stripe_customer_id")
-                if stripe_customer_id:
-                    agent_charge_id = _charge_agent_for_noshow(stripe_customer_id, booking_id, job_id)
-                    agent_charge_status = "charged" if agent_charge_id else "charge_failed_needs_manual"
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(f"Could not resolve agent Stripe customer for job {job_id}: {exc}")
-            agent_charge_status = "charge_lookup_failed"
+    agent_charge_status = "not_attempted"
+
+    if not hold_for_review:
+        # Validated — attempt to charge agent immediately
+        if booking_id:
+            stripe_customer_id = await _resolve_agent_stripe_customer(db, booking_id)
+            if stripe_customer_id:
+                agent_charge_id = _charge_agent_for_noshow(stripe_customer_id, booking_id, job_id)
+                agent_charge_status = "charged" if agent_charge_id else "charge_failed_needs_manual"
+            else:
+                agent_charge_status = "no_payment_method_on_file"
+        else:
+            agent_charge_status = "no_booking_id"
+
+    claim_status = "pending_review" if hold_for_review else "pending"
 
     await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()
 
@@ -739,7 +879,9 @@ async def report_agent_no_show(
             "notes": notes or "",
             "agent_charge_id": agent_charge_id,
             "agent_charge_status": agent_charge_status,
-            "status": "pending",
+            "status": claim_status,
+            "review_reason": review_reason or None,
+            "created_at": now,
         }).execute()
 
     await write_audit_event(
@@ -747,19 +889,32 @@ async def report_agent_no_show(
         details={
             "assignee_id": assignee_id,
             "trip_fee_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
+            "claim_status": claim_status,
             "agent_charge_status": agent_charge_status,
             "agent_charge_id": agent_charge_id,
+            "hold_for_review": hold_for_review,
+            "review_reason": review_reason,
         }
     )
+
+    if hold_for_review:
+        return {
+            "job_id": job_id,
+            "photographer_id": assignee_id,
+            "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
+            "claim_status": "pending_review",
+            "agent_charge_status": "on_hold",
+            "note": review_reason,
+        }
 
     return {
         "job_id": job_id,
         "photographer_id": assignee_id,
         "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
-        "trip_fee_status": "pending_photographer_payout",
+        "claim_status": "pending",
         "agent_charge_status": agent_charge_status,
         "agent_charge_id": agent_charge_id,
-        "note": "Agent charged $60 immediately. Photographer receives $60 on next payout cycle.",
+        "note": "Agent charged $60. Photographer receives $60 on next payout cycle.",
     }
 
 

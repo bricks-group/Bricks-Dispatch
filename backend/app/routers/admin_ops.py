@@ -1,3 +1,5 @@
+import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Header, HTTPException
@@ -7,6 +9,8 @@ from ..shared.database import get_db
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import VendorMemberUpdate, VendorLead
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin-ops"])
 
@@ -245,4 +249,121 @@ async def validate_rpas_batch(
         "flagged": sum(1 for r in results if r.get("outcome") == "suspicious"),
         "failed": sum(1 for r in results if r.get("outcome") in ("failed", "error")),
         "results": results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# No-show claim review queue
+# Claims flagged by the rate-limit gate arrive here before any charge fires.
+# ---------------------------------------------------------------------------
+
+@router.get("/noshow-claims")
+async def list_noshow_claims(
+    status: Optional[str] = "pending_review",
+    page: int = 1,
+    page_size: int = 50,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    List no-show trip fee claims. Defaults to pending_review (the admin work queue).
+    Pass status=all to see every claim regardless of state.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    db = await get_db()
+    page, page_size, skip = normalize_pagination(page, page_size)
+
+    query = db.table("agent_noshow_trip_fees").select("*", count="exact")
+    if status and status != "all":
+        query = query.eq("status", status)
+
+    res = await query.order("created_at", ascending=False).range(skip, skip + page_size - 1).execute()
+    return paginated_response(res.data or [], res.count or 0, page, page_size)
+
+
+@router.post("/noshow-claims/{claim_id}/review")
+async def review_noshow_claim(
+    claim_id: str,
+    action: str,  # "approve" or "reject"
+    admin_notes: Optional[str] = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Approve or reject a flagged no-show claim.
+
+    approve → fires the Stripe charge against the agent, sets status='pending' (paid on next payout)
+    reject  → voids the claim, sets status='rejected', job status remains agent_no_show for ops review
+    """
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    res_claim = await db.table("agent_noshow_trip_fees").select("*").eq(
+        "id", claim_id
+    ).maybe_single().execute()
+    if not res_claim.data:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    claim = res_claim.data
+    if claim.get("status") != "pending_review":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Claim is not pending review (current status: {claim.get('status')})"
+        )
+
+    if action == "reject":
+        await db.table("agent_noshow_trip_fees").update({
+            "status": "rejected",
+            "reviewed_by": actor_id,
+            "reviewed_at": now,
+            "admin_notes": admin_notes or "",
+        }).eq("id", claim_id).execute()
+        return {"claim_id": claim_id, "status": "rejected", "reviewed_by": actor_id}
+
+    # action == "approve" → fire the Stripe charge now
+    booking_id = claim.get("booking_id")
+    job_id = claim.get("job_id")
+    agent_charge_id: str | None = None
+    agent_charge_status = "no_payment_method_on_file"
+
+    if booking_id:
+        from ..routers.vendor_os import _resolve_agent_stripe_customer, _charge_agent_for_noshow
+        stripe_customer_id = await _resolve_agent_stripe_customer(db, booking_id)
+        if stripe_customer_id:
+            agent_charge_id = _charge_agent_for_noshow(stripe_customer_id, booking_id, job_id)
+            agent_charge_status = "charged" if agent_charge_id else "charge_failed_needs_manual"
+
+    await db.table("agent_noshow_trip_fees").update({
+        "status": "pending",          # eligible for next payout cycle
+        "agent_charge_id": agent_charge_id,
+        "agent_charge_status": agent_charge_status,
+        "reviewed_by": actor_id,
+        "reviewed_at": now,
+        "admin_notes": admin_notes or "",
+    }).eq("id", claim_id).execute()
+
+    logger.info(
+        f"No-show claim {claim_id} approved by {actor_id}: "
+        f"agent_charge={agent_charge_status} charge_id={agent_charge_id}"
+    )
+
+    return {
+        "claim_id": claim_id,
+        "status": "pending",
+        "agent_charge_status": agent_charge_status,
+        "agent_charge_id": agent_charge_id,
+        "reviewed_by": actor_id,
+        "note": "Photographer will receive $60 on next payout cycle.",
     }
