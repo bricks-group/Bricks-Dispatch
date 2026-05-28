@@ -1,7 +1,10 @@
 import logging
 import math
+import os
 from datetime import datetime, timezone
 from typing import List, Optional
+
+import httpx
 
 from ..shared.database import get_db
 from ..shared.schemas import Job, VendorMember
@@ -9,6 +12,49 @@ from .webhooks import send_dispatch_status_update_webhook
 from ..integrations.bricks_ai_dispatch import bricks_smart_assign
 
 logger = logging.getLogger(__name__)
+
+OPS_EMAIL = "ops@brxs.ca"
+
+
+async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: str = "") -> None:
+    db = await get_db()
+    try:
+        await db.table("ops_escalations").insert({
+            "booking_id": job.booking_id,
+            "job_id": job.id,
+            "escalation_type": "no_vendor_available",
+            "attempt_count": attempt_count,
+            "error_message": error_message or f"No eligible vendor found after {attempt_count} attempt(s)",
+            "status": "open",
+        }).execute()
+    except Exception as e:
+        logger.error(f"Failed to write ops_escalation for job {job.id}: {e}")
+
+    resend_key = os.environ.get("RESEND_API_KEY")
+    if not resend_key:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {resend_key}"},
+                json={
+                    "from": "Bricks Dispatch <noreply@brxs.ca>",
+                    "to": [OPS_EMAIL],
+                    "subject": f"[OPS] No vendor available — job {job.id}",
+                    "html": (
+                        f"<p><b>Job:</b> {job.id}<br/>"
+                        f"<b>Booking:</b> {job.booking_id}<br/>"
+                        f"<b>Address:</b> {job.address}<br/>"
+                        f"<b>Package:</b> {job.package_name}<br/>"
+                        f"<b>Min tier:</b> {job.min_tier_required}<br/>"
+                        f"<b>Attempts:</b> {attempt_count}</p>"
+                        f"<p>No eligible vendor could be assigned. Manual assignment required.</p>"
+                    ),
+                },
+            )
+    except Exception as e:
+        logger.error(f"Resend ops escalation email failed for job {job.id}: {e}")
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -93,13 +139,17 @@ async def _update_job_assignee(job_id: str, member_id: str):
         logger.error(f"Booking confirmed notification failed for job {job_id}: {e}")
 
 
-async def assign_vendor_for_job(job_id: str) -> Optional[str]:
+_MAX_ASSIGNMENT_ATTEMPTS = 3
+
+
+async def assign_vendor_for_job(job_id: str, attempt: int = 1) -> Optional[str]:
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
-    Bricks uses the Snappr/Homejab IC model — no compliance gate; contractors
-    self-certify via the IC agreement at onboarding.
+    Retries up to _MAX_ASSIGNMENT_ATTEMPTS times; on final failure writes an
+    ops_escalation record and fires an email to ops@brxs.ca.
     """
-    res = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    db = await get_db()
+    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     job_doc = res.data
     if not job_doc:
         raise ValueError(f"Job {job_id} not found")
@@ -107,11 +157,13 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
     job = Job(**job_doc)
 
     vendor_id = job_doc.get("vendor_id", "default_vendor")
-    res_members = await (await get_db()).table("vendor_members").select("*").eq("vendor_id", vendor_id).execute()
+    res_members = await db.table("vendor_members").select("*").eq("vendor_id", vendor_id).execute()
     vendors = [VendorMember(**m) for m in (res_members.data or [])]
 
     if not vendors:
-        logger.warning(f"No vendor members found for vendor_id {vendor_id}.")
+        logger.warning(f"No vendor members found for vendor_id {vendor_id} (attempt {attempt}).")
+        if attempt >= _MAX_ASSIGNMENT_ATTEMPTS:
+            await _escalate_no_vendor(job, attempt, "No vendor members in this vendor account.")
         return None
 
     min_tier = job.min_tier_required or 1
@@ -133,10 +185,13 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
         logger.exception(f"Bricks AI assignment failed for job {job_id}")
 
     chosen_id = pick_vendor_rule_based(job, vendors)
-    if chosen_id is None:
-        logger.warning(f"No vendor could be assigned for job {job_id}. Returning None.")
-        return None
+    if chosen_id is not None:
+        logger.info(f"Job {job.id} assigned via rule-based fallback to {chosen_id}")
+        await _update_job_assignee(job_id, chosen_id)
+        return chosen_id
 
-    logger.info(f"Job {job.id} assigned via rule-based fallback to {chosen_id}")
-    await _update_job_assignee(job_id, chosen_id)
-    return chosen_id
+    logger.warning(f"No vendor could be assigned for job {job_id} (attempt {attempt}/{_MAX_ASSIGNMENT_ATTEMPTS}).")
+    if attempt >= _MAX_ASSIGNMENT_ATTEMPTS:
+        await db.table("jobs").update({"status": "dispatch_failed"}).eq("id", job_id).execute()
+        await _escalate_no_vendor(job, attempt)
+    return None

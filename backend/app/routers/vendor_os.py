@@ -516,13 +516,35 @@ async def get_vendor_os_earnings(
                 "payout_status": actual_payout_status,
             })
 
+    # Fetch pending trip fees for this member (paid to photographer on next cycle)
+    member_id = actor_member.get("id")
+    pending_trip_fees = []
+    pending_trip_fees_total = 0.0
+    if member_id:
+        res_fees = await (await get_db()).table("agent_noshow_trip_fees").select(
+            "id, amount_cents, job_id, created_at, status"
+        ).eq("member_id", member_id).in_("status", ["pending", "pending_review"]).execute()
+        for fee in (res_fees.data or []):
+            amount_cad = (fee.get("amount_cents") or 0) / 100
+            pending_trip_fees.append({
+                "id": fee["id"],
+                "job_id": fee.get("job_id"),
+                "amount_cad": amount_cad,
+                "status": fee.get("status"),
+                "created_at": fee.get("created_at"),
+            })
+            if fee.get("status") == "pending":
+                pending_trip_fees_total += amount_cad
+
     return {
         "week_total": week_total,
         "paid_amount": paid_total,
-        "pending_amount": pending_total,
+        "pending_amount": pending_total + pending_trip_fees_total,
         "payout_day": week_end.strftime("%A"),
         "week_job_count": sum(1 for j in jobs if j.get("scheduled_date", "") >= week_start.date().isoformat()),
         "recent_jobs": recent,
+        "pending_trip_fees": pending_trip_fees,
+        "pending_trip_fees_total": pending_trip_fees_total,
     }
 
 
