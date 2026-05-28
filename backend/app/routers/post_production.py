@@ -378,6 +378,20 @@ async def reconcile_stuck_uploads(
     for job_id in other_job_ids:
         background_tasks.add_task(_finalize_job_if_complete, job_id)
 
+    # Alert on jobs stuck in post-production > 4 hours (Sentry / external monitoring)
+    try:
+        res_stuck_jobs = await db.table("jobs").select("id, booking_id, updated_at").in_(
+            "status", ["processing", "completed"]
+        ).lt("updated_at", (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()).execute()
+        stuck_jobs = res_stuck_jobs.data or []
+        if stuck_jobs:
+            logger.error(
+                f"POST-PRODUCTION ALERT: {len(stuck_jobs)} job(s) stuck in processing/completed >4h: "
+                f"{[j['id'] for j in stuck_jobs]}"
+            )
+    except Exception:
+        pass
+
     return {
         "boxbrownie_polled": len(res_bb.data or []),
         "boxbrownie_completed": bb_completed,

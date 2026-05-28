@@ -269,8 +269,15 @@ class VendorMember(BaseModel):
     completion_rate: float = 1.0
     avg_turnaround_days: float = 0.0
     quality_rating: float = 4.0
+    on_time_rate: float = 1.0
+    cancel_rate: float = 0.0
+    acceptance_latency_avg_sec: Optional[int] = None
     total_assignments: int = 0
     active_assignments: int = 0
+    home_lat: Optional[float] = None
+    home_lng: Optional[float] = None
+    ic_agreement_version: Optional[str] = None
+    terms_accepted_at: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -283,11 +290,15 @@ class VendorApplicationCreate(BaseModel):
     portfolio_links: List[str] = []
     equipment_list: List[str] = []
     city: str
-    max_travel_km: int = 50 
-    operation_polygon: List[Coordinate] = [] 
+    max_travel_km: int = 50
+    operation_polygon: List[Coordinate] = []
+    home_lat: Optional[float] = None
+    home_lng: Optional[float] = None
     # Ontario Regions: GTA, York, Peel, Halton, Durham, Hamilton, Waterloo, Ottawa, etc.
-    preferred_regions: List[str] = [] 
-    accepted_terms: bool 
+    preferred_regions: List[str] = []
+    accepted_terms: bool
+    ic_agreement_version: str = "1.0"
+    hst_number: Optional[str] = None
 
 
 class VendorDocument(BaseModel):
@@ -334,6 +345,8 @@ class VendorMemberUpdate(BaseModel):
     wsib_number: Optional[str] = None
     internal_notes: Optional[str] = None
     quality_rating: Optional[float] = None
+    on_time_rate: Optional[float] = None
+    cancel_rate: Optional[float] = None
 
 
 class JobAssignmentUpdate(BaseModel):

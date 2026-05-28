@@ -51,6 +51,14 @@ app.include_router(vendors.router, prefix="/dispatch/vendors")
 - Keep vendor selection idempotent — same job can be re-run without double-assigning
 - Stripe Connect is Express (CA) — transfers use `stripe_account` parameter
 
+## Vendor Model: Snappr/Homejab IC Model
+- No insurance/WSIB blocking — contractors self-certify at onboarding via IC agreement
+- `REQUIRE_VENDOR_COMPLIANCE` removed from dispatch; compliance gate code deleted
+- IC agreement v1.0 with 15 clauses (right to refuse, no exclusivity, right to engage others, no non-compete, indemnity, drone disclaimer, HST responsibility, Ontario governing law)
+- `ic_agreement_version`, `terms_accepted_at`, `hst_number` stored on vendor_members
+- GET /api/onboarding/ic-agreement returns versioned agreement text
+- Backfill: existing members marked as ic_agreement_version='0.0' (pre-dates new agreement)
+
 ## Current Status (2026-05-28)
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - AI smart assign (Gemini 1.5 Flash) with tier enforcement ✅
@@ -74,6 +82,12 @@ app.include_router(vendors.router, prefix="/dispatch/vendors")
 - Bouncing logo (brickPop on press) + 3D rotating brick loader ✅
 - E2E payout test suite (calculate, idempotency, Stripe happy path, Stripe failure) ✅
 - app.json bundle IDs + EAS project ID configured (`com.bricks.dispatch`) ✅
+- **Snappr/Homejab IC model: no compliance gate, IC agreement v1.0, right-to-refuse, no exclusivity** ✅
+- **Smart dispatch: on_time_rate + cancel_rate + travel distance (haversine) in rule-based scorer** ✅
+- **AI dispatch: weather context (Open-Meteo, free, no key) for outdoor/drone jobs** ✅
+- **AI dispatch: on_time_rate + travel_km_to_job in Gemini vendor data** ✅
+- **Post-production stuck-job alert: logs ERROR for jobs stuck >4h in reconcile endpoint** ✅
+- **v_stuck_postprod_jobs DB view for monitoring** ✅
 
 ## Remaining Before Live Traffic
 **Vercel env vars to add (bricks-dispatch-api):**
