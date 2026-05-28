@@ -674,7 +674,8 @@ AGENT_NOSHOW_TRIP_FEE_CENTS = 6000   # $60 CAD
 _NOSHOW_WINDOW_BEFORE_MIN = 15
 _NOSHOW_WINDOW_AFTER_MIN = 90
 _NOSHOW_RATE_LIMIT_DAYS = 30
-_NOSHOW_RATE_LIMIT_THRESHOLD = 1     # 2nd+ claim in 30 days → hold for admin review
+_NOSHOW_RATE_LIMIT_THRESHOLD = 1       # 2nd+ claim in 30 days per photographer → hold for review
+_NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 3 # 3+ claims against same agent in 30 days → collusion flag
 
 
 async def _validate_noshow_claim(
@@ -776,6 +777,40 @@ async def _validate_noshow_claim(
             }
     except Exception:
         pass
+
+    # Gate 7: per-agent rate limit — flag suspected collusion
+    # (same agent repeatedly "not home" across any photographer)
+    if booking_id:
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
+            # Find all bookings for this agent that had no-show claims recently
+            res_agent_bookings = await db.table("agent_noshow_trip_fees").select(
+                "booking_id"
+            ).gte("created_at", cutoff).in_("status", ["pending", "paid_out", "pending_review"]).execute()
+            # Collect unique booking_ids from recent claims
+            recent_booking_ids = list({r["booking_id"] for r in (res_agent_bookings.data or []) if r.get("booking_id")})
+            if recent_booking_ids:
+                # Look up which of those bookings share the same agent (user_id) as this booking
+                res_this_bk = await db.table("bookings").select("user_id").eq(
+                    "id", booking_id
+                ).maybe_single().execute()
+                agent_user_id = (res_this_bk.data or {}).get("user_id") if res_this_bk.data else None
+                if agent_user_id:
+                    res_agent_prev = await db.table("bookings").select("id").eq(
+                        "user_id", agent_user_id
+                    ).in_("id", recent_booking_ids).execute()
+                    agent_noshow_count = len(res_agent_prev.data or [])
+                    if agent_noshow_count >= _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD:
+                        return {
+                            "ok": True,
+                            "hold_for_review": True,
+                            "reason": (
+                                f"Agent-level flag: {agent_noshow_count} no-show claims against this agent "
+                                f"in {_NOSHOW_RATE_LIMIT_DAYS} days — held for admin review"
+                            ),
+                        }
+        except Exception as e:
+            logger.warning(f"Agent rate limit check failed for job {job_id}: {e}")
 
     return {"ok": True, "hold_for_review": False}
 

@@ -5,9 +5,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone } from 'lucide-react-native';
+import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle } from 'lucide-react-native';
+import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+
+const NOSHOW_GEOFENCE_METERS = 150;
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8002';
 
@@ -20,7 +23,18 @@ type Job = {
   client_instructions: string | null;
   checklist: ChecklistItem[];
   vendor_payout?: number | null;
+  lat?: number | null;
+  lng?: number | null;
 };
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
 
 function fmtTime(iso: string) {
   if (!iso) return '—';
@@ -106,6 +120,68 @@ export default function JobDetailScreen() {
     if (job?.agent_phone) Linking.openURL(`tel:${job.agent_phone}`);
   };
 
+  const reportNoShow = async () => {
+    if (!job) return;
+
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Location Required', 'Location permission is required to report a no-show. Enable it in Settings.');
+      return;
+    }
+
+    setActioning(true);
+    try {
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const { latitude, longitude } = pos.coords;
+
+      if (job.lat != null && job.lng != null) {
+        const dist = haversineMeters(latitude, longitude, job.lat, job.lng);
+        if (dist > NOSHOW_GEOFENCE_METERS) {
+          Alert.alert(
+            'Too Far From Property',
+            `You must be within ${NOSHOW_GEOFENCE_METERS}m of the property to report a no-show. ` +
+            `You are currently ${Math.round(dist)}m away.`,
+          );
+          return;
+        }
+      }
+
+      Alert.alert(
+        'Report No-Show',
+        'Confirm the client/agent was not present at the property? A $60 trip fee will be added to your next payout.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Confirm No-Show',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+                const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/agent-no-show`, {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify({ notes: 'Reported via app — geofence verified' }),
+                });
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}));
+                  throw new Error(err.detail || `${res.status}`);
+                }
+                setJob(prev => prev ? { ...prev, status: 'agent_no_show' } : prev);
+                Alert.alert('Recorded', 'No-show filed. $60 trip fee added to your next payout cycle.');
+              } catch (e: any) {
+                Alert.alert('Error', e.message || 'Could not file no-show claim.');
+              }
+            },
+          },
+        ],
+      );
+    } catch {
+      Alert.alert('Location Error', 'Could not determine your current location. Try again.');
+    } finally {
+      setActioning(false);
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={s.safe}>
@@ -129,6 +205,16 @@ export default function JobDetailScreen() {
 
   const statusColor = STATUS_COLOR[job.status] || TOKENS.moonMute;
   const isComplete = job.status === 'completed';
+  const isActive = ['assigned', 'in_progress'].includes(job.status);
+  const canReportNoShow = isActive && (() => {
+    const shoot = job.time_window_start;
+    if (!shoot) return false;
+    const shootDt = new Date(shoot).getTime();
+    const now = Date.now();
+    const earliest = shootDt - 15 * 60 * 1000;
+    const latest = shootDt + 90 * 60 * 1000;
+    return now >= earliest && now <= latest;
+  })();
 
   return (
     <SafeAreaView style={s.safe}>
@@ -225,6 +311,16 @@ export default function JobDetailScreen() {
             }
           </TouchableOpacity>
         ) : null}
+        {canReportNoShow ? (
+          <TouchableOpacity
+            style={[s.noshowBtn, actioning && { opacity: 0.5 }]}
+            onPress={reportNoShow}
+            disabled={actioning}
+          >
+            <AlertTriangle size={16} color={TOKENS.bad} strokeWidth={1.5} />
+            <Text style={s.noshowBtnText}>No-Show</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -319,4 +415,11 @@ const s = StyleSheet.create({
     backgroundColor: TOKENS.brick, justifyContent: 'center', alignItems: 'center',
   },
   primaryBtnText: { fontSize: 15, color: TOKENS.moon, fontWeight: '600' as const },
+  noshowBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, height: 48, borderRadius: TOKENS.radius,
+    borderWidth: 1, borderColor: TOKENS.bad + '66',
+    backgroundColor: TOKENS.bad + '11',
+  },
+  noshowBtnText: { fontSize: 14, color: TOKENS.bad, fontWeight: '500' as const },
 });
