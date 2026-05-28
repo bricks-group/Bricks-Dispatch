@@ -1,3 +1,18 @@
+"""
+Bricks Smart Dispatch — deterministic weighted scorer with optional Gemini explainability.
+
+PRIMARY path: scoring function (fast, auditable, no LLM latency on the hot path).
+SECONDARY path: Gemini 1.5 Flash generates a "why this photographer" explanation
+  string for the admin dashboard — called async after routing is done, never blocks.
+
+Scoring formula (max 100 points):
+  specialty_match (30) + tier_match (10) + proximity (20) + on_time (15) +
+  quality (10) + reliability (10) + load_balance (5)
+
+Repeat-agent bonus: +5 points if vendor has previously completed a job for this agent.
+Drone gate: vendor must have drone_certified=True for drone job_type.
+"""
+
 import json
 import logging
 import math
@@ -15,32 +30,28 @@ _GEMINI_URL = (
     "gemini-1.5-flash:generateContent"
 )
 
-_OUTDOOR_JOB_TYPES = {"drone", "exterior", "video", "twilight"}
+_OUTDOOR_JOB_TYPES = {"drone", "exterior", "twilight"}
+
+# Scoring weights — must sum to 100
+_W = {
+    "specialty": 30,
+    "tier":      10,
+    "proximity": 20,
+    "on_time":   15,
+    "quality":   10,
+    "reliability": 10,
+    "load":      5,
+}
+_REPEAT_AGENT_BONUS = 5   # added on top; doesn't affect weight sum
+_MAX_DAILY_CAP      = 4   # default if availability not queried
+_DRONE_MAX_WIND_KMH = 25  # above this → drone_unsafe flag in job context
 
 
-async def call_bricks_ai_api(prompt: str) -> str:
-    api_key = os.environ.get("GEMINI_API_KEY")
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"},
-    }
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            _GEMINI_URL,
-            params={"key": api_key},
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"]
-
+# ---------------------------------------------------------------------------
+# Weather helper (Open-Meteo — free, no key required)
+# ---------------------------------------------------------------------------
 
 async def _get_weather_context(lat: float, lng: float, scheduled_date: str) -> Optional[dict]:
-    """
-    Fetch hourly forecast from Open-Meteo (free, no key required) for the job date.
-    Returns a brief weather summary dict, or None on failure.
-    WMO weather codes: 0=clear, 45-48=fog, 51-67=rain, 71-77=snow, 80-82=showers, 95-99=thunder.
-    """
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get(
@@ -62,52 +73,43 @@ async def _get_weather_context(lat: float, lng: float, scheduled_date: str) -> O
         winds = hourly.get("windspeed_10m", [])
         precip = hourly.get("precipitation_probability", [])
 
-        # Find hours on the scheduled date (9:00–17:00 window)
-        relevant_codes, relevant_winds, relevant_precip = [], [], []
+        r_codes, r_winds, r_precip = [], [], []
         for i, t in enumerate(times):
             if t.startswith(scheduled_date) and "T" in t:
                 hour = int(t.split("T")[1].split(":")[0])
                 if 9 <= hour <= 17:
-                    if i < len(codes):
-                        relevant_codes.append(codes[i])
-                    if i < len(winds):
-                        relevant_winds.append(winds[i])
-                    if i < len(precip):
-                        relevant_precip.append(precip[i])
+                    if i < len(codes):   r_codes.append(codes[i])
+                    if i < len(winds):   r_winds.append(winds[i])
+                    if i < len(precip):  r_precip.append(precip[i])
 
-        if not relevant_codes:
+        if not r_codes:
             return None
 
-        max_code = max(relevant_codes)
-        max_wind = max(relevant_winds) if relevant_winds else 0
-        max_precip_pct = max(relevant_precip) if relevant_precip else 0
-
-        is_precipitation = max_code >= 51
-        is_high_wind = max_wind > 30  # km/h threshold for drone ops
+        max_code = max(r_codes)
+        max_wind = max(r_winds) if r_winds else 0
 
         condition = "clear"
-        if max_code >= 95:
-            condition = "thunderstorm"
-        elif max_code >= 80:
-            condition = "heavy_rain"
-        elif max_code >= 61:
-            condition = "rain"
-        elif max_code >= 51:
-            condition = "drizzle"
-        elif max_code >= 45:
-            condition = "fog"
+        if max_code >= 95:   condition = "thunderstorm"
+        elif max_code >= 80: condition = "heavy_rain"
+        elif max_code >= 61: condition = "rain"
+        elif max_code >= 51: condition = "drizzle"
+        elif max_code >= 45: condition = "fog"
 
         return {
             "condition": condition,
             "max_wind_kmh": round(max_wind, 1),
-            "max_precip_pct": max_precip_pct,
-            "drone_unsafe": is_precipitation or is_high_wind,
-            "outdoor_caution": is_precipitation,
+            "max_precip_pct": max(r_precip) if r_precip else 0,
+            "drone_unsafe": max_code >= 51 or max_wind > _DRONE_MAX_WIND_KMH,
+            "outdoor_caution": max_code >= 51,
         }
     except Exception as e:
         logger.debug(f"Weather fetch failed (non-fatal): {e}")
         return None
 
+
+# ---------------------------------------------------------------------------
+# Haversine distance
+# ---------------------------------------------------------------------------
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
@@ -117,114 +119,200 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
-async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional[str]:
-    use_ai = os.environ.get("USE_AI_DISPATCH", "true").lower() == "true"
-    api_key = os.environ.get("GEMINI_API_KEY")
+# ---------------------------------------------------------------------------
+# Repeat-agent bonus (non-blocking; fails open)
+# ---------------------------------------------------------------------------
 
-    if not use_ai or not api_key:
-        logger.info("Bricks AI dispatch disabled or GEMINI_API_KEY missing. Skipping AI path.")
+async def _has_repeat_agent_history(vendor_member_ids: List[str], agent_user_id: Optional[str]) -> bool:
+    """
+    Return True if this vendor's members have previously completed a job for this agent.
+    Uses the shared Supabase project — jobs table has agent_user_id.
+    """
+    if not agent_user_id or not vendor_member_ids:
+        return False
+    try:
+        from ..shared.database import get_db
+        res = await (await get_db()).table("jobs").select("id").eq(
+            "agent_user_id", agent_user_id
+        ).in_(
+            "assignee_id", vendor_member_ids[:50]
+        ).in_(
+            "status", ["completed", "delivered"]
+        ).limit(1).execute()
+        return bool(res.data)
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Core deterministic scoring
+# ---------------------------------------------------------------------------
+
+def _score_vendor(
+    v: VendorMember,
+    job: Job,
+    preferred_tier: int,
+    has_repeat_history: bool = False,
+) -> float:
+    """
+    Compute a 0-100 score for a vendor candidate.
+    Higher is better. Tie-break: more active_assignments = worse.
+    """
+    # Specialty match: binary
+    specialty = 1.0 if v.specialty == job.job_type else 0.0
+
+    # Tier preference match: binary (already gated on min_tier upstream)
+    tier = 1.0 if v.tier == preferred_tier else 0.0
+
+    # Proximity: 1.0 at 0 km, 0.0 at 100+ km
+    proximity = 0.5  # neutral default when coordinates unknown
+    if v.home_lat and v.home_lng and job.lat and job.lng:
+        dist = _haversine_km(v.home_lat, v.home_lng, job.lat, job.lng)
+        proximity = max(0.0, 1.0 - dist / 100.0)
+
+    # On-time rate: already 0-1
+    on_time = max(0.0, min(1.0, v.on_time_rate))
+
+    # Quality: normalize 1-5 scale to 0-1
+    quality = max(0.0, min(1.0, (v.quality_rating - 1.0) / 4.0))
+
+    # Reliability: inverse of cancel_rate
+    reliability = max(0.0, min(1.0, 1.0 - v.cancel_rate))
+
+    # Load balance: inverse of fractional load (default cap = 4 jobs/day)
+    load = max(0.0, 1.0 - v.active_assignments / _MAX_DAILY_CAP)
+
+    score = (
+        _W["specialty"]    * specialty    +
+        _W["tier"]         * tier         +
+        _W["proximity"]    * proximity    +
+        _W["on_time"]      * on_time      +
+        _W["quality"]      * quality      +
+        _W["reliability"]  * reliability  +
+        _W["load"]         * load
+    )
+
+    if has_repeat_history:
+        score += _REPEAT_AGENT_BONUS
+
+    return round(score, 3)
+
+
+# ---------------------------------------------------------------------------
+# Gemini explainability (non-blocking — called after routing is decided)
+# ---------------------------------------------------------------------------
+
+async def generate_dispatch_explanation(job: Job, vendor: VendorMember, score: float) -> Optional[str]:
+    """
+    Generate a one-sentence "why this photographer" string for the admin dashboard.
+    Returns None if Gemini is unavailable — never blocks dispatch.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    try:
+        prompt = f"""
+In one sentence (max 25 words), explain why this photographer was chosen for this job.
+Job: {job.job_type} at {job.city}, tier {job.min_tier_required}+ required, scheduled {job.scheduled_date}.
+Photographer: {vendor.name}, tier {vendor.tier}, specialty {vendor.specialty},
+  on_time_rate {vendor.on_time_rate:.0%}, quality {vendor.quality_rating}/5,
+  active_assignments {vendor.active_assignments}, score {score:.1f}/100.
+Return ONLY the explanation sentence as a plain JSON string.
+"""
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                _GEMINI_URL,
+                params={"key": api_key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json"},
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return json.loads(text) if text else None
+    except Exception:
         return None
 
-    try:
-        min_tier = job.min_tier_required or 1
 
-        # Fetch weather context for outdoor/drone jobs
-        weather_context = None
-        is_outdoor_job = job.job_type in _OUTDOOR_JOB_TYPES
-        if is_outdoor_job and job.lat and job.lng and job.scheduled_date:
-            weather_context = await _get_weather_context(job.lat, job.lng, job.scheduled_date)
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
-        vendor_data = []
-        for v in vendors:
-            if not (v.is_active and v.onboarding_status == "approved" and v.tier >= min_tier):
-                continue
+async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional[str]:
+    """
+    Select the best vendor for a job using deterministic weighted scoring.
+    Drone jobs enforce drone_certified=True as a hard gate.
+    Returns the chosen vendor member id, or None if no eligible candidates.
+    """
+    min_tier = job.min_tier_required or 1
+    preferred_tier = job.preferred_tier or min_tier
+    is_drone_job = job.job_type == "drone"
 
-            travel_km: Optional[float] = None
-            if v.home_lat and v.home_lng and job.lat and job.lng:
-                travel_km = round(_haversine_km(v.home_lat, v.home_lng, job.lat, job.lng), 1)
+    # Fetch weather context for outdoor/drone jobs (non-blocking)
+    weather_context = None
+    is_outdoor = job.job_type in _OUTDOOR_JOB_TYPES
+    if is_outdoor and job.lat and job.lng and job.scheduled_date:
+        weather_context = await _get_weather_context(job.lat, job.lng, job.scheduled_date)
+        if weather_context:
+            job_ctx = f"weather={weather_context['condition']}, wind={weather_context['max_wind_kmh']}km/h"
+            if weather_context.get("drone_unsafe") and is_drone_job:
+                logger.warning(f"Job {job.id}: drone conditions unsafe on {job.scheduled_date} — {job_ctx}")
+            elif weather_context.get("outdoor_caution"):
+                logger.info(f"Job {job.id}: outdoor caution on {job.scheduled_date} — {job_ctx}")
 
-            vendor_data.append({
-                "id": v.id,
-                "name": v.name,
-                "specialty": v.specialty,
-                "tier": v.tier,
-                "operation_polygon": [c.dict() for c in v.operation_polygon],
-                "home_city": v.home_city,
-                "max_travel_km": v.max_travel_km,
-                "travel_km_to_job": travel_km,
-                "service_areas": v.service_areas,
-                "completion_rate": v.completion_rate,
-                "on_time_rate": v.on_time_rate,
-                "avg_turnaround_days": v.avg_turnaround_days,
-                "quality_rating": v.quality_rating,
-                "active_assignments": v.active_assignments,
-            })
+    # Filter eligible candidates
+    eligible = [
+        v for v in vendors
+        if (
+            v.is_active
+            and v.onboarding_status == "approved"
+            and v.tier >= min_tier
+            and (not is_drone_job or v.drone_certified)
+        )
+    ]
 
-        if not vendor_data:
-            logger.warning(f"No eligible vendors (min_tier={min_tier}) to pass to AI for job {job.id}")
-            return None
+    if not eligible:
+        reason = "drone_certified filter" if is_drone_job else f"min_tier={min_tier}"
+        logger.warning(f"Job {job.id}: no eligible vendors after {reason}")
+        return None
 
-        job_context = {
-            "address": job.address,
-            "city": job.city,
-            "lat": job.lat,
-            "lng": job.lng,
-            "job_type": job.job_type,
-            "priority": job.priority,
-            "property_details": job.property_details,
-            "client_instructions": job.client_instructions,
-            "scheduled_date": job.scheduled_date,
-            "min_tier_required": min_tier,
-            "preferred_tier": job.preferred_tier or min_tier,
-            "is_outdoor": is_outdoor_job,
-            "weather": weather_context,
-        }
+    # Enrich with repeat-agent history (single DB call for all candidates)
+    all_member_ids = [v.id for v in eligible]
+    agent_user_id = getattr(job, "agent_user_id", None)
+    has_history_by_vendor: dict[str, bool] = {}
+    if agent_user_id:
+        try:
+            from ..shared.database import get_db
+            res = await (await get_db()).table("jobs").select("assignee_id").eq(
+                "agent_user_id", agent_user_id
+            ).in_("assignee_id", all_member_ids[:50]).in_("status", ["completed", "delivered"]).execute()
+            for row in (res.data or []):
+                has_history_by_vendor[row["assignee_id"]] = True
+        except Exception:
+            pass
 
-        weather_guidance = ""
-        if weather_context and weather_context.get("drone_unsafe") and job.job_type == "drone":
-            weather_guidance = (
-                "\nWEATHER ALERT: Drone conditions on the shoot date are unsafe "
-                f"({weather_context['condition']}, wind {weather_context['max_wind_kmh']} km/h). "
-                "Note this in your reasoning but still select the best available candidate — "
-                "rescheduling is handled separately."
-            )
-        elif weather_context and weather_context.get("outdoor_caution"):
-            weather_guidance = (
-                f"\nWEATHER NOTE: Forecast shows {weather_context['condition']} on shoot date. "
-                "Consider this when evaluating candidate reliability."
-            )
+    # Score all candidates
+    scored = []
+    for v in eligible:
+        score = _score_vendor(
+            v, job, preferred_tier,
+            has_repeat_history=has_history_by_vendor.get(v.id, False),
+        )
+        scored.append((score, -v.active_assignments, v.id, v))
 
-        prompt = f"""
-You are the Bricks Smart Dispatch Assistant for Ontario, Canada.
-Assign the best photographer for the following real estate shoot:{weather_guidance}
+    if not scored:
+        return None
 
-Job: {json.dumps(job_context, indent=2)}
+    # Sort: highest score first; tiebreak: fewest active assignments
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    best_score, _, best_id, best_vendor = scored[0]
 
-Candidates: {json.dumps(vendor_data, indent=2)}
+    logger.info(
+        f"Dispatch scored {len(scored)} candidates for job {job.id}: "
+        f"chose {best_vendor.name} (id={best_id}, score={best_score:.1f}, "
+        f"tier={best_vendor.tier}, on_time={best_vendor.on_time_rate:.0%})"
+    )
 
-Rules (apply in priority order):
-1. All candidates already meet the minimum tier requirement — never select below min_tier_required.
-2. Area of Operations: Prioritize candidates whose "operation_polygon" contains the job's lat/lng.
-3. Geography: If no polygon match, prefer candidates whose "travel_km_to_job" is within "max_travel_km", or whose "service_areas" includes the job city.
-4. Specialty match: Prefer "specialty" matching job_type (photo, video, drone, 3d_tour, floor_plan).
-5. Tier preference: Prefer "tier" matching preferred_tier when other factors are equal.
-6. Reliability: Prefer higher "on_time_rate" and "completion_rate". High on_time_rate is critical for time-sensitive luxury jobs.
-7. Quality: Prefer higher "quality_rating".
-8. Load balance: Prefer fewer "active_assignments".
-
-Return ONLY a JSON object with the "vendor_id" of the best match.
-Example: {{"vendor_id": "vendor_abc"}}
-"""
-
-        response_text = await call_bricks_ai_api(prompt)
-        result = json.loads(response_text)
-
-        vendor_id = result.get("vendor_id")
-        if vendor_id:
-            logger.info(f"Bricks AI suggested vendor_id: {vendor_id}")
-            return vendor_id
-
-    except Exception:
-        logger.exception("Error in Bricks AI smart_assign")
-
-    return None
+    return best_id

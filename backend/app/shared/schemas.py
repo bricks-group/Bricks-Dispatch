@@ -262,6 +262,9 @@ class VendorMember(BaseModel):
     home_city: str = ""
     max_travel_km: int = 50
     tier: int = 1
+    drone_certified: bool = False
+    rpas_certificate_number: Optional[str] = None
+    rpas_certificate_level: Optional[str] = None  # "basic" | "advanced"
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     insurance_policy_number: Optional[str] = None
@@ -299,6 +302,9 @@ class VendorApplicationCreate(BaseModel):
     accepted_terms: bool
     ic_agreement_version: str = "1.0"
     hst_number: Optional[str] = None
+    drone_certified: bool = False
+    rpas_certificate_number: Optional[str] = None
+    rpas_certificate_level: Optional[str] = None  # "basic" | "advanced" (Transport Canada)
 
 
 class VendorDocument(BaseModel):

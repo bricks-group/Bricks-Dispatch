@@ -23,15 +23,21 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[str]:
     """
     Deterministic rule-based vendor selection.
-    Enforces min_tier_required as a hard gate, then ranks by:
-    (specialty_match, tier_match, on_time_rate, quality_rating, -active_assignments, -travel_km)
+    Hard gates: min_tier, is_active, approved, and drone_certified for drone jobs.
+    Ranks by: (specialty_match, tier_match, on_time_rate, quality_rating, -active_assignments, proximity)
     """
     min_tier = job.min_tier_required or 1
     preferred_tier = job.preferred_tier or min_tier
+    is_drone_job = job.job_type == "drone"
 
     eligible = [
         v for v in vendors
-        if v.is_active and v.onboarding_status == "approved" and v.tier >= min_tier
+        if (
+            v.is_active
+            and v.onboarding_status == "approved"
+            and v.tier >= min_tier
+            and (not is_drone_job or v.drone_certified)
+        )
     ]
 
     candidates = [v for v in eligible if v.status == "available"] or eligible

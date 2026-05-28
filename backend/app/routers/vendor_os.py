@@ -582,6 +582,37 @@ async def update_vendor_job_status(
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
 
+        # Update on_time_rate for the assigned vendor member
+        try:
+            assignee_id = job.get("assignee_id")
+            if assignee_id and assignee_id != "default_user":
+                was_on_time = False
+                time_end = job.get("time_window_end", "")
+                sched_date = job.get("scheduled_date", "")
+                if sched_date and time_end:
+                    deadline = datetime.strptime(
+                        f"{sched_date} {time_end}", "%Y-%m-%d %H:%M"
+                    ).replace(tzinfo=timezone.utc)
+                    was_on_time = datetime.now(timezone.utc) <= deadline
+
+                res_m = await db.table("vendor_members").select(
+                    "total_assignments, on_time_rate"
+                ).eq("id", assignee_id).maybe_single().execute()
+                if res_m.data:
+                    prev_total = res_m.data.get("total_assignments") or 0
+                    prev_rate = res_m.data.get("on_time_rate") or 1.0
+                    new_total = prev_total + 1
+                    prev_on_time = round(prev_rate * prev_total)
+                    new_on_time = prev_on_time + (1 if was_on_time else 0)
+                    new_rate = round(new_on_time / new_total, 4)
+                    await db.table("vendor_members").update({
+                        "total_assignments": new_total,
+                        "on_time_rate": new_rate,
+                        "updated_at": now,
+                    }).eq("id", assignee_id).execute()
+        except Exception as e:
+            logger.error(f"on_time_rate update failed for job {job_id}: {e}")
+
     # Client communications: notify agent on key status transitions
     if new_status == "in_progress" and old_status != "in_progress":
         try:
