@@ -815,6 +815,21 @@ async def report_agent_no_show(
             "created_at": now,
         }).execute()
 
+    # Notify Booking service — triggers 100% retention penalty on the client's booking.
+    # Fire-and-forget: photographer's claim is recorded regardless of callback result.
+    if booking_id:
+        try:
+            await send_dispatch_status_update_webhook(
+                booking_id=booking_id,
+                job_id=job_id,
+                new_status="agent_no_show",
+                previous_status=job.get("status"),
+                actor_id=actor_id,
+                actor_type="vendor_member",
+            )
+        except Exception as exc:
+            logger.warning(f"No-show Booking penalty callback failed for {booking_id}: {exc}")
+
     await write_audit_event(
         actor_id, "job", job_id, "agent_no_show", vendor_id=vendor_id,
         details={
@@ -840,7 +855,7 @@ async def report_agent_no_show(
         "photographer_id": assignee_id,
         "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
         "claim_status": "pending",
-        "note": "Trip fee will be included in photographer's next payout.",
+        "note": "Trip fee will be included in photographer's next payout. Client booking retained.",
     }
 
 
