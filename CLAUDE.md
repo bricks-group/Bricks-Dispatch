@@ -51,16 +51,23 @@ app.include_router(vendors.router, prefix="/dispatch/vendors")
 - Keep vendor selection idempotent — same job can be re-run without double-assigning
 - Stripe Connect is Express (CA) — transfers use `stripe_account` parameter
 
-## Current Status (2026-05-27)
-- Job state machine (pending → assigned → in_progress → completed) ✅
+## Current Status (2026-05-28)
+- Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - AI smart assign (Gemini 1.5 Flash) with tier enforcement ✅
 - Rule-based fallback with tier gate ✅
 - Payout flow (tier % → Stripe Connect transfer → record) ✅
 - Payout router registered and mounted ✅
 - Router prefix fixed (no double `/dispatch/api/v1/dispatch/`) ✅
 - `VendorMember.tier` field added to schema ✅
-- Post-production pipeline: BoxBrownie (virtual staging) + Fotello (AI edits, primary) + Autoenhance (fallback) ✅
-- Fotello takes priority when `FOTELLO_API_KEY` set; falls back to Autoenhance; BoxBrownie for staging assets ✅
+- Post-production pipeline: BoxBrownie + Fotello (primary) + Autoenhance (fallback) ✅
+- **Post-production callbacks: Fotello/Autoenhance/BoxBrownie webhook handlers** ✅
+- **Media delivery: signed URLs → media_delivery row → Resend email to agent** ✅
+- **Reconciliation endpoint: clears stuck uploads (>2h) and re-attempts finalization** ✅
+- **QC vision agent: Gemini 1.5 Flash gates delivery; rejected photos excluded** ✅
+- **Earnings endpoint: reads real payouts.status (not inferred from job.status)** ✅
+- **Vendor compliance gate: insurance/WSIB check (REQUIRE_VENDOR_COMPLIANCE flag)** ✅
+- **Client comms agent: booking confirmed + photographer en route emails** ✅
+- **Vendor system consolidation Phase 1: contractor_id/user_id/tier on vendor_members** ✅
 - Rate limiting + Sentry ✅
 - Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
 - Vendor tier payouts aligned to brxs.ca/vendors (Tier A=40%, B=50%, C=60%) ✅
@@ -69,9 +76,18 @@ app.include_router(vendors.router, prefix="/dispatch/vendors")
 - app.json bundle IDs + EAS project ID configured (`com.bricks.dispatch`) ✅
 
 ## Remaining Before Live Traffic
-- `BOXBROWNIE_PUBLIC_KEY` + `BOXBROWNIE_PRIVATE_KEY` → add to Vercel env (bricks-dispatch-api)
-- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_S3_ENDPOINT_URL` → add to Vercel env
-- `FOTELLO_API_KEY` → add to Vercel env once plan is active
+**Vercel env vars to add (bricks-dispatch-api):**
+- `BOXBROWNIE_PUBLIC_KEY` + `BOXBROWNIE_PRIVATE_KEY`
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_S3_ENDPOINT_URL`
+- `FOTELLO_API_KEY` → add once plan is active
+- `RESEND_API_KEY` → for delivery + booking confirmation emails
+- `POST_PRODUCTION_CALLBACK_SECRET` → set same secret in BoxBrownie/Fotello/Autoenhance webhook URL
+- `REQUIRE_VENDOR_COMPLIANCE=true` → flip when insurance records are populated
+- **ROTATE `INTERNAL_API_KEYS` immediately** — old values `br-ef7ddf0e84582e6746668881873f61cc` and `bk-5274a1f72baf20a0699c405` are compromised (were hardcoded)
+
+**Ops tasks:**
+- Populate contractors.insurance_verified + wsib_verified for each vendor; then set `REQUIRE_VENDOR_COMPLIANCE=true`
+- Register BoxBrownie/Fotello/Autoenhance webhook URLs to `{dispatch-api.brxs.ca}/api/v1/post-production/callback/{provider}?secret=<SECRET>`
 - Stripe Connect live end-to-end verification with real CAD transfer
 - TestFlight upload (Kam — `eas build --platform ios --profile production` + `eas submit`)
 - Play Store internal track (Kam — `eas build --platform android --profile production` + `eas submit`)
