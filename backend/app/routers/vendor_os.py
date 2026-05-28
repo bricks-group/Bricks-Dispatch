@@ -632,3 +632,217 @@ async def update_vendor_job_status(
         )
 
     return {"status": "updated", "job_id": job_id, "new_status": new_status}
+
+
+# ---------------------------------------------------------------------------
+# No-show policy (Snappr model):
+# - Agent/client no-show → photographer gets $60 trip fee.
+#   Bricks charges the AGENT immediately via their saved Stripe payment method.
+#   Bricks is a pure pass-through (agent charged $60, photographer paid $60, net $0).
+# - Contractor no-show → cancel_rate hurt only, no cash penalty, job re-dispatched.
+# ---------------------------------------------------------------------------
+AGENT_NOSHOW_TRIP_FEE_CENTS = 6000  # $60 CAD  (Opus rec: $50-75 midpoint)
+
+
+def _charge_agent_for_noshow(stripe_customer_id: str, booking_id: str, job_id: str) -> str | None:
+    """
+    Immediately charge the agent's saved payment method $60 for the no-show.
+    Returns Stripe charge ID on success, None on failure.
+    Non-blocking — caller records the outcome but does not abort on failure.
+    """
+    import stripe as stripe_lib
+    stripe_lib.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+    if not stripe_lib.api_key:
+        return None
+    try:
+        intent = stripe_lib.PaymentIntent.create(
+            amount=AGENT_NOSHOW_TRIP_FEE_CENTS,
+            currency="cad",
+            customer=stripe_customer_id,
+            payment_method_types=["card"],
+            confirm=True,
+            off_session=True,
+            description=f"No-show fee — Bricks booking {booking_id}",
+            metadata={"booking_id": booking_id, "job_id": job_id, "type": "agent_noshow_fee"},
+            idempotency_key=f"noshow_{job_id}",
+        )
+        return intent.id if intent.status in ("succeeded", "processing") else None
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error(f"Agent no-show charge failed for booking {booking_id}: {exc}")
+        return None
+
+
+@router.post("/jobs/{job_id}/agent-no-show")
+async def report_agent_no_show(
+    job_id: str,
+    notes: Optional[str] = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Photographer reports that the agent/client was not home.
+
+    Effects:
+    1. Charges agent's saved Stripe payment method $60 immediately (Bricks does NOT absorb this)
+    2. Records $60 trip fee claim for photographer — paid on next payout cycle
+    3. Job status → 'agent_no_show'
+    4. Audit event logged
+
+    If the Stripe charge fails (expired card etc.), trip fee is still recorded for
+    manual collection; photographer still gets paid on next cycle.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    db = await get_db()
+
+    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    if not res_job.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = res_job.data
+    vendor_id = job.get("vendor_id", "default_vendor")
+    assignee_id = job.get("assignee_id")
+    booking_id = job.get("booking_id")
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Attempt to charge the agent immediately — look up their Stripe customer ID via booking
+    agent_charge_id: str | None = None
+    agent_charge_status = "charge_pending"
+    if booking_id:
+        try:
+            res_b = await db.table("bookings").select("user_id, payment_intent_id").eq(
+                "id", booking_id
+            ).maybe_single().execute()
+            if res_b.data and res_b.data.get("user_id"):
+                user_id = res_b.data["user_id"]
+                res_u = await db.table("users").select("payment_method").eq("id", user_id).maybe_single().execute()
+                stripe_customer_id = (
+                    (res_u.data or {}).get("payment_method") or {}
+                ).get("stripe_customer_id")
+                if stripe_customer_id:
+                    agent_charge_id = _charge_agent_for_noshow(stripe_customer_id, booking_id, job_id)
+                    agent_charge_status = "charged" if agent_charge_id else "charge_failed_needs_manual"
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(f"Could not resolve agent Stripe customer for job {job_id}: {exc}")
+            agent_charge_status = "charge_lookup_failed"
+
+    await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()
+
+    if assignee_id and assignee_id != "default_user":
+        await db.table("agent_noshow_trip_fees").insert({
+            "job_id": job_id,
+            "member_id": assignee_id,
+            "vendor_id": vendor_id,
+            "amount_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
+            "booking_id": booking_id,
+            "notes": notes or "",
+            "agent_charge_id": agent_charge_id,
+            "agent_charge_status": agent_charge_status,
+            "status": "pending",
+        }).execute()
+
+    await write_audit_event(
+        actor_id, "job", job_id, "agent_no_show", vendor_id=vendor_id,
+        details={
+            "assignee_id": assignee_id,
+            "trip_fee_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
+            "agent_charge_status": agent_charge_status,
+            "agent_charge_id": agent_charge_id,
+        }
+    )
+
+    return {
+        "job_id": job_id,
+        "photographer_id": assignee_id,
+        "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
+        "trip_fee_status": "pending_photographer_payout",
+        "agent_charge_status": agent_charge_status,
+        "agent_charge_id": agent_charge_id,
+        "note": "Agent charged $60 immediately. Photographer receives $60 on next payout cycle.",
+    }
+
+
+@router.post("/jobs/{job_id}/contractor-no-show")
+async def report_contractor_no_show(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Admin reports that the assigned photographer failed to show up.
+
+    Effects:
+    1. cancel_rate updated on contractor (hurts dispatch priority — no cash penalty)
+    2. Job immediately re-dispatched
+    3. Agent notified with new assignment confirmation
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions — admin only", "insufficient_permissions")
+
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    db = await get_db()
+
+    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not res_job.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = res_job.data
+    assignee_id = job.get("assignee_id")
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Update cancel_rate — dispatch score penalty only (no cash deduction)
+    if assignee_id and assignee_id != "default_user":
+        try:
+            res_m = await db.table("vendor_members").select(
+                "total_assignments, cancel_rate"
+            ).eq("id", assignee_id).maybe_single().execute()
+            if res_m.data:
+                total = (res_m.data.get("total_assignments") or 0) + 1
+                prev_cancel = res_m.data.get("cancel_rate") or 0.0
+                prev_cancels = round(prev_cancel * (total - 1))
+                new_rate = round((prev_cancels + 1) / total, 4)
+                await db.table("vendor_members").update({
+                    "total_assignments": total,
+                    "cancel_rate": new_rate,
+                    "updated_at": now,
+                }).eq("id", assignee_id).execute()
+                logger.warning(f"Contractor {assignee_id} no-show: cancel_rate now {new_rate:.1%}")
+        except Exception as e:
+            logger.error(f"cancel_rate update failed for member {assignee_id}: {e}")
+
+    await write_audit_event(
+        actor_id, "job", job_id, "contractor_no_show", vendor_id=vendor_id,
+        details={"assignee_id": assignee_id}
+    )
+
+    # Re-dispatch
+    await db.table("jobs").update({
+        "status": "pending",
+        "assignee_id": "default_user",
+        "updated_at": now,
+    }).eq("id", job_id).execute()
+
+    redispatch_member_id = None
+    try:
+        from ..services.vendor_selection import assign_vendor_for_job
+        redispatch_member_id = await assign_vendor_for_job(job_id)
+    except Exception as e:
+        logger.error(f"Re-dispatch after contractor no-show failed for job {job_id}: {e}")
+
+    try:
+        from ..services.client_comms import notify_booking_confirmed
+        if redispatch_member_id:
+            await notify_booking_confirmed(job_id)
+    except Exception as e:
+        logger.error(f"Re-dispatch notification failed for job {job_id}: {e}")
+
+    return {
+        "job_id": job_id,
+        "original_contractor": assignee_id,
+        "redispatched_to": redispatch_member_id,
+        "redispatch_status": "success" if redispatch_member_id else "failed_manual_required",
+        "note": "Contractor cancel_rate updated (dispatch score impact); no cash penalty applied",
+    }

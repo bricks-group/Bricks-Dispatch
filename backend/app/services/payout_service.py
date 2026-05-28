@@ -94,13 +94,34 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # Update job with payout_amount
     await db.table("jobs").update({"payout_amount": payout_amount}).eq("id", job_id).execute()
 
+    # Add any pending trip fee claims (agent no-shows) to this payout.
+    # These are already charged to the agent — photographer is owed the pass-through.
+    assignee_id = job.get("assignee_id", "")
+    pending_trip_fees_total = 0
+    pending_trip_fee_ids = []
+    if assignee_id and assignee_id != "default_user":
+        res_fees = await db.table("agent_noshow_trip_fees").select("id, amount_cents").eq(
+            "member_id", assignee_id
+        ).eq("status", "pending").execute()
+        for fee in (res_fees.data or []):
+            pending_trip_fees_total += fee.get("amount_cents", 0)
+            pending_trip_fee_ids.append(fee["id"])
+        if pending_trip_fees_total:
+            logger.info(
+                f"Payout {payout_id}: adding ${pending_trip_fees_total/100:.2f} trip fee(s) "
+                f"to photographer {assignee_id} payout (ids: {pending_trip_fee_ids})"
+            )
+
+    # Trip fees are added on top — agent was already charged, this is the pass-through to photographer
+    net_payout = payout_amount + pending_trip_fees_total
+
     # Attempt Stripe transfer
     try:
         from ..services.stripe_connect_service import handle_payout_to_vendor
 
         stripe_transfer_id = await handle_payout_to_vendor(
             vendor_id=vendor_id,
-            amount=payout_amount,
+            amount=net_payout,
             booking_id=job.get("booking_id", job_id),
         )
 
@@ -108,18 +129,30 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         await db.table("payouts").update({
             "status": "paid",
             "stripe_transfer_id": stripe_transfer_id,
+            "trip_fees_total": pending_trip_fees_total,
+            "net_amount": net_payout,
         }).eq("id", payout_id).execute()
+
+        # Mark trip fees as paid out
+        if pending_trip_fee_ids:
+            await db.table("agent_noshow_trip_fees").update({
+                "status": "paid_out",
+                "paid_from_payout_id": payout_id,
+                "paid_at": datetime.now(timezone.utc).isoformat(),
+            }).in_("id", pending_trip_fee_ids).execute()
 
         logger.info(
             f"Payout {payout_id} completed for job {job_id}: "
-            f"${payout_amount / 100:.2f} to vendor {vendor_id} "
-            f"(tier {vendor_tier}, transfer {stripe_transfer_id})"
+            f"base=${payout_amount/100:.2f} trip_fees=${pending_trip_fees_total/100:.2f} "
+            f"total=${net_payout/100:.2f} to vendor {vendor_id} (transfer {stripe_transfer_id})"
         )
 
         return {
             "payout_id": payout_id,
             "status": "paid",
-            "amount": payout_amount,
+            "base_amount": payout_amount,
+            "trip_fees_total": pending_trip_fees_total,
+            "net_amount": net_payout,
             "stripe_transfer_id": stripe_transfer_id,
         }
 

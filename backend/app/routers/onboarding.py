@@ -131,6 +131,71 @@ async def apply_to_bricks(application: VendorApplicationCreate):
     }
 
 
+@router.post("/validate-rpas/{member_id}")
+async def validate_rpas_certificate(member_id: str):
+    """
+    Run Gemini Vision + Transport Canada registry validation on a member's uploaded RPAS cert.
+    Updates vendor_members with drone_certified, rpas_certificate_number, rpas_certificate_level.
+    Stores full validation result on the vendor_documents record.
+    """
+    db = await get_db()
+
+    res_m = await db.table("vendor_members").select("name, drone_certified").eq("id", member_id).maybe_single().execute()
+    if not res_m.data:
+        raise HTTPException(status_code=404, detail="Member not found")
+    vendor_name = res_m.data.get("name", "")
+
+    # Find most recent rpas_certificate document for this member
+    res_d = await db.table("vendor_documents").select("id, file_url, status").eq(
+        "member_id", member_id
+    ).eq("doc_type", "rpas_certificate").order("created_at", desc=True).limit(1).execute()
+    if not res_d.data:
+        raise HTTPException(status_code=404, detail="No RPAS certificate document found for this member")
+
+    doc = res_d.data[0]
+    doc_id = doc["id"]
+
+    # Resolve signed download URL for the stored cert image
+    from ..services.storage import get_signed_download_url
+    image_url = await get_signed_download_url(doc["file_url"])
+    if not image_url:
+        raise HTTPException(status_code=500, detail="Could not generate signed URL for certificate")
+
+    from ..services.rpas_validator import validate_rpas_certificate as _validate
+    validation = await _validate(image_url=image_url, vendor_name=vendor_name)
+
+    # Store validation result on document record
+    await db.table("vendor_documents").update({
+        "status": "verified" if validation["outcome"] == "verified" else (
+            "flagged" if validation["outcome"] == "suspicious" else "pending"
+        ),
+        "validation_result": validation,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", doc_id).execute()
+
+    # Auto-approve drone cert if outcome is verified or extracted
+    if validation["outcome"] in ("verified", "extracted"):
+        update_fields = {
+            "drone_certified": True,
+            "rpas_certificate_number": validation.get("certificate_number"),
+            "rpas_certificate_level": validation.get("level"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.table("vendor_members").update(update_fields).eq("id", member_id).execute()
+
+    return {
+        "member_id": member_id,
+        "doc_id": doc_id,
+        "outcome": validation["outcome"],
+        "level": validation.get("level"),
+        "certificate_number": validation.get("certificate_number"),
+        "holder_name": validation.get("holder_name"),
+        "issues": validation.get("issues", []),
+        "drone_certified": validation["outcome"] in ("verified", "extracted"),
+        "tc_registry": validation.get("tc_registry", {}),
+    }
+
+
 @router.get("/status/{member_id}")
 async def get_application_status(member_id: str):
     """
@@ -168,7 +233,7 @@ async def upload_compliance_document(
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
         
-    valid_docs = ["coi", "wsib", "hst_registry", "id_verification"]
+    valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate"]
     if doc_type not in valid_docs:
         raise HTTPException(status_code=400, detail=f"Invalid doc_type. Must be one of {valid_docs}")
 

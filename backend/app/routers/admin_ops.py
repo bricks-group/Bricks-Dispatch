@@ -156,5 +156,93 @@ async def verify_document(
     
     if not res.data:
         api_error(404, "Document not found", "document_not_found")
-        
+
     return {"id": doc_id, "status": status}
+
+
+@router.post("/validate-rpas-batch")
+async def validate_rpas_batch(
+    dry_run: bool = True,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Batch-validate all pending RPAS certificate documents.
+    Runs Gemini Vision + TC registry lookup on each uploaded cert.
+    dry_run=true (default) returns candidates without running validation.
+    dry_run=false triggers validation for each pending cert.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    db = await get_db()
+
+    # Find all pending RPAS cert documents
+    res_docs = await db.table("vendor_documents").select(
+        "id, member_id, file_url, status"
+    ).eq("doc_type", "rpas_certificate").eq("status", "pending").limit(50).execute()
+    docs = res_docs.data or []
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "pending_count": len(docs),
+            "members": [{"member_id": d["member_id"], "doc_id": d["id"]} for d in docs],
+        }
+
+    from ..services.rpas_validator import validate_rpas_certificate as _validate
+    from ..services.storage import get_signed_download_url
+
+    results = []
+    for doc in docs:
+        member_id = doc["member_id"]
+        try:
+            res_m = await db.table("vendor_members").select("name").eq("id", member_id).maybe_single().execute()
+            vendor_name = (res_m.data or {}).get("name", "")
+
+            image_url = await get_signed_download_url(doc["file_url"])
+            if not image_url:
+                results.append({"member_id": member_id, "outcome": "failed", "error": "no_signed_url"})
+                continue
+
+            validation = await _validate(image_url=image_url, vendor_name=vendor_name)
+
+            doc_status = "verified" if validation["outcome"] == "verified" else (
+                "flagged" if validation["outcome"] == "suspicious" else "pending"
+            )
+            await db.table("vendor_documents").update({
+                "status": doc_status,
+                "validation_result": validation,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", doc["id"]).execute()
+
+            if validation["outcome"] in ("verified", "extracted"):
+                await db.table("vendor_members").update({
+                    "drone_certified": True,
+                    "rpas_certificate_number": validation.get("certificate_number"),
+                    "rpas_certificate_level": validation.get("level"),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", member_id).execute()
+
+            results.append({
+                "member_id": member_id,
+                "doc_id": doc["id"],
+                "outcome": validation["outcome"],
+                "level": validation.get("level"),
+                "issues": validation.get("issues", []),
+                "drone_certified": validation["outcome"] in ("verified", "extracted"),
+            })
+        except Exception as e:
+            results.append({"member_id": member_id, "outcome": "error", "error": str(e)})
+
+    verified = sum(1 for r in results if r.get("drone_certified"))
+    return {
+        "dry_run": False,
+        "processed": len(results),
+        "verified": verified,
+        "flagged": sum(1 for r in results if r.get("outcome") == "suspicious"),
+        "failed": sum(1 for r in results if r.get("outcome") in ("failed", "error")),
+        "results": results,
+    }
