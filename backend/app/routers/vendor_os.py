@@ -221,7 +221,10 @@ async def create_job(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     from ..shared.auth import resolve_actor_id
-    internal_keys = os.environ.get("INTERNAL_API_KEYS", "br-ef7ddf0e84582e6746668881873f61cc,bk-5274a1f72baf20a0699c405").split(",")
+    raw_keys = os.environ.get("INTERNAL_API_KEYS")
+    if not raw_keys:
+        raise HTTPException(status_code=500, detail="INTERNAL_API_KEYS not configured")
+    internal_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
     if x_internal_api_key and x_internal_api_key in internal_keys:
         actor_id = "booking_system"
     else:
@@ -266,7 +269,7 @@ async def create_job(
 @router.put("/jobs/{job_id}/assign")
 async def assign_job_to_member(
     job_id: str,
-    payload: JobAssignmentUpdate, JobStatusUpdate,
+    payload: JobAssignmentUpdate,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
@@ -294,7 +297,10 @@ async def assign_job_to_member(
     res_final = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
 
     # POST callback to Booking backend when job is assigned
-    booking_callback_url = os.environ.get("BOOKING_CALLBACK_URL", "http://10.0.0.219:8001")
+    booking_callback_url = os.environ.get("BOOKING_CALLBACK_URL")
+    if not booking_callback_url:
+        logger.warning("BOOKING_CALLBACK_URL not set — skipping assignment callback")
+        return res_final.data
     callback_payload = {
         "booking_id": res_final.data.get("booking_id"),
         "job_id": job_id,
@@ -457,8 +463,9 @@ async def get_vendor_os_earnings(
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     week_end = week_start + timedelta(days=7)
 
-    res_members = await (await get_db()).table("vendor_members").select("id, commission_rate").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
-    member_rate_map = {m["id"]: m.get("commission_rate", 0.62) for m in res_members.data}
+    from ..services.payout_service import TIER_PERCENTAGES, DEFAULT_TIER_PERCENTAGE
+    res_members = await (await get_db()).table("vendor_members").select("id, tier").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
+    member_rate_map = {m["id"]: TIER_PERCENTAGES.get(m.get("tier"), DEFAULT_TIER_PERCENTAGE) for m in res_members.data}
     member_ids = list(member_rate_map.keys()) or ["__none__"]
 
     res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).order("scheduled_date", desc=True).limit(50).execute()
@@ -471,8 +478,8 @@ async def get_vendor_os_earnings(
 
     for j in jobs:
         raw_price = j.get("package_price") or 0
-        rate = member_rate_map.get(j.get("assignee_id", ""), 0.62)
-        payout = round(raw_price * rate)
+        rate = member_rate_map.get(j.get("assignee_id", ""), DEFAULT_TIER_PERCENTAGE)
+        payout = round(raw_price * rate * 100) / 100
         sched = j.get("scheduled_date", "")
         is_this_week = False
         try:
@@ -557,7 +564,14 @@ async def update_vendor_job_status(
     
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
-    
+
+    if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
+        try:
+            from ..services.payout_service import trigger_payout_for_job
+            await trigger_payout_for_job(db, job_id)
+        except Exception as e:
+            logger.error(f"Payout trigger failed for job {job_id}: {e}")
+
     if booking_id:
         await send_dispatch_status_update_webhook(
             booking_id=booking_id,
@@ -567,5 +581,5 @@ async def update_vendor_job_status(
             actor_id=actor_id,
             actor_type="vendor_member"
         )
-    
+
     return {"status": "updated", "job_id": job_id, "new_status": new_status}

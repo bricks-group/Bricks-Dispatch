@@ -119,6 +119,11 @@ async def create_upload(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
 
+    # Trigger post-production when all deliverables are uploaded
+    deliverables = job.get("deliverables_count") or 0
+    if deliverables and new_uploaded >= deliverables:
+        background_tasks.add_task(process_job_assets, job_id)
+
     return record.dict()
 
 
