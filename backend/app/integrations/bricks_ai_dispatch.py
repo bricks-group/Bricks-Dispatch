@@ -46,6 +46,10 @@ _REPEAT_AGENT_BONUS = 5   # added on top; doesn't affect weight sum
 _MAX_DAILY_CAP      = 4   # default if availability not queried
 _DRONE_MAX_WIND_KMH = 25  # above this → drone_unsafe flag in job context
 
+# IC agreement Clause 2: decline rate below this threshold has zero score effect.
+# Only the excess above 40% over a rolling 30-day period reduces reliability.
+_DECLINE_NEUTRAL_THRESHOLD = 0.40
+
 
 # ---------------------------------------------------------------------------
 # Weather helper (Open-Meteo — free, no key required)
@@ -176,8 +180,11 @@ def _score_vendor(
     # Quality: normalize 1-5 scale to 0-1
     quality = max(0.0, min(1.0, (v.quality_rating - 1.0) / 4.0))
 
-    # Reliability: inverse of cancel_rate
-    reliability = max(0.0, min(1.0, 1.0 - v.cancel_rate))
+    # Reliability: cancel_rate penalizes accepted-then-abandoned jobs.
+    # Decline rate (refusing an offer before acceptance) is IC Clause 2 neutral
+    # below 40%/30d — only the excess above the threshold reduces reliability.
+    decline_penalty = max(0.0, (v.decline_rate or 0.0) - _DECLINE_NEUTRAL_THRESHOLD)
+    reliability = max(0.0, min(1.0, 1.0 - v.cancel_rate - decline_penalty))
 
     # Load balance: inverse of fractional load (default cap = 4 jobs/day)
     load = max(0.0, 1.0 - v.active_assignments / _MAX_DAILY_CAP)

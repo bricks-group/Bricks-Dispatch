@@ -274,6 +274,7 @@ class VendorMember(BaseModel):
     quality_rating: float = 4.0
     on_time_rate: float = 1.0
     cancel_rate: float = 0.0
+    decline_rate: float = 0.0  # job-offer refusals / offers received (rolling 30d)
     acceptance_latency_avg_sec: Optional[int] = None
     total_assignments: int = 0
     active_assignments: int = 0
