@@ -72,9 +72,9 @@ pick_vendor_rule_based(job, vendors)
 ```
 
 ## Vendor Tier System
-- Tier 1 (A): 40% payout — Standard routing only
-- Tier 2 (B): 50% payout — Standard + Premium routing
-- Tier 3 (C): 60% payout — Full routing (Standard + Premium + Luxury + Estate)
+- Tier 1 (C): 35% payout — entry, Standard routing only
+- Tier 2 (B): 45% payout — core, Standard + Premium routing
+- Tier 3 (A): 55% payout — elite, full routing (Standard + Premium + Luxury + Estate)
 - `min_tier_required` on job is a hard gate — never assigned below it
 
 ## Vendor Model: Snappr/Homejab IC Model
@@ -169,7 +169,7 @@ pick_vendor_rule_based(job, vendors)
 - Client comms: booking confirmed + photographer en route emails ✅
 - Rate limiting + Sentry ✅
 - Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
-- Vendor tier payouts: Tier A=40%, B=50%, C=60% ✅
+- Vendor tier payouts: Tier C=35% (entry), B=45% (core), A=55% (elite) ✅
 - **Snappr/Homejab IC model: no compliance gate, IC agreement v1.0 (15 clauses, Ontario law)** ✅
 - **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅
 - **Agent no-show: claim validation gates + admin review queue + Booking penalty callback** ✅
