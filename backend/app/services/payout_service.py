@@ -5,12 +5,25 @@ Vendor tiers (Bricks Dispatch — matches brxs.ca/vendors):
   Tier 1 (A): 40% of package price
   Tier 2 (B): 50% of package price
   Tier 3 (C): 60% of package price
+
+HST on contractor payouts (ETA principal model):
+  Fees are EXCLUSIVE of HST. When a photographer is HST-registered (hst_number
+  present), they supply photography services to Bricks and must charge HST on
+  their fee. Bricks pays the HST component and records it as an ITC.
+  T4A Box 048 reports the pre-HST fee only (not the HST component).
+  Standard rate used for GTA photographers: Ontario HST 13%.
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# HST rate applied when photographer has an HST number.
+# GTA-based: Ontario 13%. Adjust per photographer province when province tracking
+# is added. For now, 13% is the correct rate for the vast majority of Bricks contractors.
+_PHOTOGRAPHER_HST_RATE = 0.13
 
 # Tier percentage mapping: tier number -> percentage of package price
 # Tier A=1, Tier B=2, Tier C=3 — matches the public-facing Dispatch pitch
@@ -63,6 +76,28 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         )
         return {"error": "zero_payout_amount", "job_id": job_id}
 
+    # Look up photographer's HST registration status via assignee_id → vendor_members
+    assignee_id = job.get("assignee_id", "")
+    hst_paid_cents = 0
+    contractor_hst_rate = 0.0
+    contractor_id = assignee_id
+    if assignee_id and assignee_id != "default_user":
+        try:
+            res_m = await db.table("vendor_members").select("id, hst_number").eq(
+                "id", assignee_id
+            ).maybe_single().execute()
+            member = res_m.data or {}
+            if member.get("hst_number"):
+                # Photographer is HST-registered: Bricks owes HST on top of fee
+                contractor_hst_rate = _PHOTOGRAPHER_HST_RATE
+                hst_paid_cents = round(payout_amount * contractor_hst_rate)
+                logger.info(
+                    f"Photographer {assignee_id} is HST-registered (#{member['hst_number']}); "
+                    f"adding ${hst_paid_cents/100:.2f} HST to payout {job_id}"
+                )
+        except Exception as e:
+            logger.warning(f"HST lookup failed for assignee {assignee_id}: {e}")
+
     now = datetime.now(timezone.utc).isoformat()
 
     # Check if payout already exists for this job
@@ -80,7 +115,10 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     payout_record = {
         "job_id": job_id,
         "vendor_id": vendor_id,
+        "contractor_id": contractor_id,
         "amount": payout_amount,
+        "hst_paid_cents": hst_paid_cents,
+        "contractor_hst_rate": contractor_hst_rate,
         "status": "pending",
         "created_at": now,
     }
@@ -96,7 +134,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
 
     # Add any pending trip fee claims (agent no-shows) to this payout.
     # These are already charged to the agent — photographer is owed the pass-through.
-    assignee_id = job.get("assignee_id", "")
+    # Trip fees also attract HST if photographer is registered (T4A Box 048 includes them).
     pending_trip_fees_total = 0
     pending_trip_fee_ids = []
     if assignee_id and assignee_id != "default_user":
@@ -112,8 +150,13 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
                 f"to photographer {assignee_id} payout (ids: {pending_trip_fee_ids})"
             )
 
-    # Trip fees are added on top — agent was already charged, this is the pass-through to photographer
-    net_payout = payout_amount + pending_trip_fees_total
+    # HST on trip fees (if photographer is registered)
+    if contractor_hst_rate and pending_trip_fees_total:
+        trip_fee_hst = round(pending_trip_fees_total * contractor_hst_rate)
+        hst_paid_cents += trip_fee_hst
+
+    # net_payout = base fee + trip fees + HST (if registered)
+    net_payout = payout_amount + pending_trip_fees_total + hst_paid_cents
 
     # Attempt Stripe transfer
     try:
@@ -130,7 +173,9 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             "status": "paid",
             "stripe_transfer_id": stripe_transfer_id,
             "trip_fees_total": pending_trip_fees_total,
+            "hst_paid_cents": hst_paid_cents,
             "net_amount": net_payout,
+            "paid_at": now,
         }).eq("id", payout_id).execute()
 
         # Mark trip fees as paid out
