@@ -22,7 +22,7 @@ import stripe as stripe_lib
 from unittest.mock import AsyncMock, MagicMock, patch, call
 from app.services.payout_service import calculate_payout_amount, trigger_payout_for_job
 from app.services.stripe_connect_service import handle_payout_to_vendor
-from app.routers.vendor_os import _validate_noshow_claim
+from app.routers.vendor_os import _validate_noshow_claim  # no Stripe charge logic here
 
 
 # ── Guards ───────────────────────────────────────────────────────────────────

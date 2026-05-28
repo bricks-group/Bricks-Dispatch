@@ -636,22 +636,22 @@ async def update_vendor_job_status(
 
 # ---------------------------------------------------------------------------
 # No-show policy (Snappr model):
-# - Agent/client no-show → photographer gets $60 trip fee.
-#   Bricks charges the AGENT immediately via their saved Stripe payment method.
-#   Bricks is a pure pass-through (agent charged $60, photographer paid $60, net $0).
+# - Agent/client no-show → photographer gets $60 trip fee funded from Bricks
+#   margin / cancellation policy revenue. No separate charge to the client.
 # - Contractor no-show → cancel_rate hurt only, no cash penalty, job re-dispatched.
 #
-# Anti-abuse validation gates (all must pass before charge fires):
-#   1. Time window: claim only valid T-15min → T+90min relative to scheduled shoot start
-#   2. Job ownership: reporter must be the assigned photographer
-#   3. Idempotency: duplicate claim for same job is rejected
-#   4. Rate limit: >2 approved claims in 30 days → hold for admin review (no auto-charge)
-#   5. Booking status: booking must not have been cancelled prior to shoot start
+# Anti-abuse validation gates (all must pass before claim is recorded):
+#   1. Job ownership: reporter must be the assigned photographer
+#   2. Job state: must be active (not completed/cancelled/previously claimed)
+#   3. Idempotency: duplicate claim for same job rejected
+#   4. Time window: claim only valid T-15min → T+90min of scheduled shoot start
+#   5. Booking status: booking must not have been cancelled before shoot start
+#   6. Rate limit: 2nd+ claim in 30 days → held for admin review before payout
 # ---------------------------------------------------------------------------
 AGENT_NOSHOW_TRIP_FEE_CENTS = 6000   # $60 CAD
-_NOSHOW_WINDOW_BEFORE_MIN = 15       # can report starting 15min before scheduled time
-_NOSHOW_WINDOW_AFTER_MIN = 90        # must report within 90min after scheduled time
-_NOSHOW_RATE_LIMIT_DAYS = 30         # rolling window for rate limiting
+_NOSHOW_WINDOW_BEFORE_MIN = 15
+_NOSHOW_WINDOW_AFTER_MIN = 90
+_NOSHOW_RATE_LIMIT_DAYS = 30
 _NOSHOW_RATE_LIMIT_THRESHOLD = 1     # 2nd+ claim in 30 days → hold for admin review
 
 
@@ -660,9 +660,9 @@ async def _validate_noshow_claim(
 ) -> dict:
     """
     Run all anti-abuse checks. Returns:
-      {"ok": True, "hold_for_review": False}                     → auto-approve, charge immediately
-      {"ok": True, "hold_for_review": True, "reason": "..."}     → record, hold for admin review
-      {"ok": False, "reason": "..."}                             → reject outright (HTTP 422)
+      {"ok": True, "hold_for_review": False}                  → record claim, paid on next payout
+      {"ok": True, "hold_for_review": True, "reason": "..."}  → hold for admin review before payout
+      {"ok": False, "reason": "..."}                          → reject outright (HTTP 422)
     """
     assignee_id = job.get("assignee_id")
     job_id = job.get("id")
@@ -749,56 +749,13 @@ async def _validate_noshow_claim(
                 "hold_for_review": True,
                 "reason": (
                     f"Rate limit: {recent_count} claims in the last {_NOSHOW_RATE_LIMIT_DAYS} days "
-                    f"— held for admin review before charge fires"
+                    f"— held for admin review before payout"
                 ),
             }
     except Exception:
         pass
 
     return {"ok": True, "hold_for_review": False}
-
-
-def _charge_agent_for_noshow(stripe_customer_id: str, booking_id: str, job_id: str) -> str | None:
-    """
-    Immediately charge the agent's saved payment method $60 for the no-show.
-    Returns Stripe PaymentIntent ID on success, None on failure.
-    """
-    import stripe as stripe_lib
-    stripe_lib.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
-    if not stripe_lib.api_key:
-        return None
-    try:
-        intent = stripe_lib.PaymentIntent.create(
-            amount=AGENT_NOSHOW_TRIP_FEE_CENTS,
-            currency="cad",
-            customer=stripe_customer_id,
-            payment_method_types=["card"],
-            confirm=True,
-            off_session=True,
-            description=f"No-show fee — Bricks booking {booking_id}",
-            metadata={"booking_id": booking_id, "job_id": job_id, "type": "agent_noshow_fee"},
-            idempotency_key=f"noshow_{job_id}",
-        )
-        return intent.id if intent.status in ("succeeded", "processing") else None
-    except Exception as exc:
-        logger.error(f"Agent no-show Stripe charge failed for booking {booking_id}: {exc}")
-        return None
-
-
-async def _resolve_agent_stripe_customer(db, booking_id: str) -> str | None:
-    """Look up the booking agent's Stripe customer ID from the shared users table."""
-    try:
-        res_b = await db.table("bookings").select("user_id").eq(
-            "id", booking_id
-        ).maybe_single().execute()
-        if not res_b.data or not res_b.data.get("user_id"):
-            return None
-        user_id = res_b.data["user_id"]
-        res_u = await db.table("users").select("payment_method").eq("id", user_id).maybe_single().execute()
-        return ((res_u.data or {}).get("payment_method") or {}).get("stripe_customer_id")
-    except Exception as exc:
-        logger.warning(f"Could not resolve Stripe customer for booking {booking_id}: {exc}")
-        return None
 
 
 @router.post("/jobs/{job_id}/agent-no-show")
@@ -811,23 +768,16 @@ async def report_agent_no_show(
     """
     Photographer reports that the agent/client was not home.
 
-    Anti-abuse validation runs before any charge or record is created:
-    - Must be the assigned photographer (not any vendor member)
-    - Job must be in active state (not already completed/cancelled/claimed)
-    - Duplicate claims rejected outright
+    Trip fee ($60) is paid to the photographer from Bricks margin / cancellation
+    policy revenue — no separate charge is issued to the client at this point.
+
+    Validation gates (all must pass):
+    - Must be the assigned photographer
+    - Job must be in an active state
+    - No duplicate claim for this job
     - Must be within T-15min → T+90min of scheduled shoot time
-    - Booking must not have been cancelled before the shoot
-    - >2 claims in 30 days → held for admin review, no auto-charge
-
-    When validated:
-    - Charges agent's saved Stripe payment method $60 immediately
-    - Records trip fee claim; paid to photographer on next payout cycle
-    - Job status → 'agent_no_show'
-
-    When held for review:
-    - Claim recorded with status='pending_review'
-    - Admin approves/rejects via POST /api/admin/noshow-claims/{id}/review
-    - Charge only fires after admin approval
+    - Booking must not have been cancelled before the shoot start
+    - 2nd+ claim in 30 days → held for admin review before payout is released
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     db = await get_db()
@@ -842,29 +792,12 @@ async def report_agent_no_show(
     booking_id = job.get("booking_id")
     now = datetime.now(timezone.utc).isoformat()
 
-    # Run all anti-abuse checks before anything is created or charged
     validation = await _validate_noshow_claim(db, job, actor_id)
     if not validation["ok"]:
         raise HTTPException(status_code=422, detail=validation["reason"])
 
     hold_for_review = validation.get("hold_for_review", False)
     review_reason = validation.get("reason", "")
-
-    agent_charge_id: str | None = None
-    agent_charge_status = "not_attempted"
-
-    if not hold_for_review:
-        # Validated — attempt to charge agent immediately
-        if booking_id:
-            stripe_customer_id = await _resolve_agent_stripe_customer(db, booking_id)
-            if stripe_customer_id:
-                agent_charge_id = _charge_agent_for_noshow(stripe_customer_id, booking_id, job_id)
-                agent_charge_status = "charged" if agent_charge_id else "charge_failed_needs_manual"
-            else:
-                agent_charge_status = "no_payment_method_on_file"
-        else:
-            agent_charge_status = "no_booking_id"
-
     claim_status = "pending_review" if hold_for_review else "pending"
 
     await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()
@@ -877,8 +810,6 @@ async def report_agent_no_show(
             "amount_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
             "booking_id": booking_id,
             "notes": notes or "",
-            "agent_charge_id": agent_charge_id,
-            "agent_charge_status": agent_charge_status,
             "status": claim_status,
             "review_reason": review_reason or None,
             "created_at": now,
@@ -890,8 +821,6 @@ async def report_agent_no_show(
             "assignee_id": assignee_id,
             "trip_fee_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
             "claim_status": claim_status,
-            "agent_charge_status": agent_charge_status,
-            "agent_charge_id": agent_charge_id,
             "hold_for_review": hold_for_review,
             "review_reason": review_reason,
         }
@@ -903,7 +832,6 @@ async def report_agent_no_show(
             "photographer_id": assignee_id,
             "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
             "claim_status": "pending_review",
-            "agent_charge_status": "on_hold",
             "note": review_reason,
         }
 
@@ -912,9 +840,7 @@ async def report_agent_no_show(
         "photographer_id": assignee_id,
         "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
         "claim_status": "pending",
-        "agent_charge_status": agent_charge_status,
-        "agent_charge_id": agent_charge_id,
-        "note": "Agent charged $60. Photographer receives $60 on next payout cycle.",
+        "note": "Trip fee will be included in photographer's next payout.",
     }
 
 

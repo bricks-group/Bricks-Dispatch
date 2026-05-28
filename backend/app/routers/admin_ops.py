@@ -323,47 +323,20 @@ async def review_noshow_claim(
             detail=f"Claim is not pending review (current status: {claim.get('status')})"
         )
 
-    if action == "reject":
-        await db.table("agent_noshow_trip_fees").update({
-            "status": "rejected",
-            "reviewed_by": actor_id,
-            "reviewed_at": now,
-            "admin_notes": admin_notes or "",
-        }).eq("id", claim_id).execute()
-        return {"claim_id": claim_id, "status": "rejected", "reviewed_by": actor_id}
-
-    # action == "approve" → fire the Stripe charge now
-    booking_id = claim.get("booking_id")
-    job_id = claim.get("job_id")
-    agent_charge_id: str | None = None
-    agent_charge_status = "no_payment_method_on_file"
-
-    if booking_id:
-        from ..routers.vendor_os import _resolve_agent_stripe_customer, _charge_agent_for_noshow
-        stripe_customer_id = await _resolve_agent_stripe_customer(db, booking_id)
-        if stripe_customer_id:
-            agent_charge_id = _charge_agent_for_noshow(stripe_customer_id, booking_id, job_id)
-            agent_charge_status = "charged" if agent_charge_id else "charge_failed_needs_manual"
+    new_status = "rejected" if action == "reject" else "pending"
 
     await db.table("agent_noshow_trip_fees").update({
-        "status": "pending",          # eligible for next payout cycle
-        "agent_charge_id": agent_charge_id,
-        "agent_charge_status": agent_charge_status,
+        "status": new_status,
         "reviewed_by": actor_id,
         "reviewed_at": now,
         "admin_notes": admin_notes or "",
     }).eq("id", claim_id).execute()
 
-    logger.info(
-        f"No-show claim {claim_id} approved by {actor_id}: "
-        f"agent_charge={agent_charge_status} charge_id={agent_charge_id}"
-    )
+    logger.info(f"No-show claim {claim_id} {action}d by {actor_id}")
 
     return {
         "claim_id": claim_id,
-        "status": "pending",
-        "agent_charge_status": agent_charge_status,
-        "agent_charge_id": agent_charge_id,
+        "status": new_status,
         "reviewed_by": actor_id,
-        "note": "Photographer will receive $60 on next payout cycle.",
+        "note": "Photographer will receive $60 on next payout cycle." if action == "approve" else "Claim voided.",
     }
