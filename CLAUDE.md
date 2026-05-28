@@ -130,6 +130,30 @@ pick_vendor_rule_based(job, vendors)
 - Never hardcode secrets as default values in `os.environ.get()`
 - Storage is Supabase Storage (`db.storage.from_(STORAGE_BUCKET)`), bucket `brxs-deliverables` — NOT AWS S3
 
+## No-Show Policy (Snappr model)
+
+**Agent/client no-show** → photographer gets $60 trip fee from Bricks margin (cancellation revenue):
+- `POST /api/vendor-os/jobs/{job_id}/agent-no-show` — photographer reports no-show
+- 6 validation gates: job ownership, active state, idempotency, time window (T-15→T+90), booking not pre-cancelled, rate limit
+- Rate limit: 2nd+ claim in 30 days → `pending_review` (held for admin before payout released)
+- On pass: `agent_noshow_trip_fees` record created, Booking notified via status webhook
+- Booking applies 100% retention penalty (no refund, no credit returned); sends agent email
+- Estate/high-value cap: max $500 retention on no-shows (chargeback protection)
+- $60 added to photographer's next payout cycle by `payout_service.py`
+
+**Admin review queue:**
+- `GET /api/admin/noshow-claims?status=pending_review`
+- `POST /api/admin/noshow-claims/{id}/review?action=approve|reject`
+
+**Contractor no-show** (photographer ghosts) → `cancel_rate` penalty only, no cash, job re-dispatched.
+
+**Known gaps (pre-launch):**
+- No GPS/geofence check at claim time (mobile app change needed)
+- No automated SMS/call escalation before flag button activates
+- No in-app agent dispute flow (frontend TODO)
+- No per-agent rate limit (only per-photographer) — collusion axis not covered
+- Timezone: verify `scheduled_time` is UTC before T-15/T+90 window math (risk of 4-5h drift)
+
 ## Current Status (2026-05-28)
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - **Deterministic weighted dispatch scorer (specialty/proximity/on_time/quality/reliability/load)** ✅
@@ -138,42 +162,44 @@ pick_vendor_rule_based(job, vendors)
 - **Gemini 1.5 Flash: explainability only (async, non-blocking, dashboard display)** ✅
 - Rule-based fallback with tier gate ✅
 - Payout flow (tier % → Stripe Connect transfer → record) ✅
-- Payout router registered and mounted ✅
 - Post-production pipeline: BoxBrownie + Fotello (primary) + Autoenhance (fallback) ✅
-- Post-production callbacks: Fotello/Autoenhance/BoxBrownie webhook handlers ✅
 - Media delivery: signed URLs → media_delivery row → Resend email to agent ✅
-- Reconciliation endpoint: polls BoxBrownie, clears stuck Fotello/Autoenhance uploads ✅
-- **Post-production stuck-job alert: logs ERROR for jobs stuck >4h; v_stuck_postprod_jobs DB view** ✅
 - QC vision agent: Gemini 1.5 Flash gates delivery; rejected photos excluded ✅
-- Earnings endpoint: reads real payouts.status (not inferred from job.status) ✅
-- **On-time rate: updated on every job completion (rolling avg, feeds dispatch score)** ✅
-- Client comms agent: booking confirmed + photographer en route emails ✅
-- Vendor system consolidation Phase 1: contractor_id/user_id/tier on vendor_members ✅
+- On-time rate: updated on every job completion (rolling avg, feeds dispatch score) ✅
+- Client comms: booking confirmed + photographer en route emails ✅
 - Rate limiting + Sentry ✅
 - Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
-- Vendor tier payouts aligned to brxs.ca/vendors (Tier A=40%, B=50%, C=60%) ✅
-- Bouncing logo (brickPop on press) + 3D rotating brick loader ✅
-- E2E payout test suite (calculate, idempotency, Stripe happy path, Stripe failure) ✅
-- app.json bundle IDs + EAS project ID configured (`com.bricks.dispatch`) ✅
+- Vendor tier payouts: Tier A=40%, B=50%, C=60% ✅
 - **Snappr/Homejab IC model: no compliance gate, IC agreement v1.0 (15 clauses, Ontario law)** ✅
-- **Weather context: Open-Meteo API for outdoor/drone jobs (condition + wind + drone_unsafe flag)** ✅
+- **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅
+- **Agent no-show: claim validation gates + admin review queue + Booking penalty callback** ✅
+- **Payout service: trip fees added to photographer payout (not deducted); correct table name** ✅
+- **Stripe Connect E2E test suite (idempotency, zero-amount, trip fee addition logic)** ✅
+- **Weather context: Open-Meteo API for outdoor/drone jobs** ✅
+- app.json bundle IDs + EAS project ID configured (`com.bricks.dispatch`) ✅
 
 ## Remaining Before Live Traffic
 
 **Vercel env vars (bricks-dispatch-api):**
 - `BOXBROWNIE_PUBLIC_KEY` + `BOXBROWNIE_PRIVATE_KEY` ✅
-- `RESEND_API_KEY` — for delivery + client comms emails ✅ (set)
+- `RESEND_API_KEY` ✅ (set)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)
 - `GEMINI_API_KEY` — for QC agent + dispatch explainability
 - `FOTELLO_API_KEY` — add once Fotello plan is active
 - `INTERNAL_API_KEYS` — rotated; current value stored in app_secrets table
 
 **Ops tasks (pre-launch):**
-- [ ] **Ontario employment lawyer review of IC agreement** — budget $2-4K (non-negotiable before scale)
-- [ ] Register Fotello/Autoenhance webhook URLs: `{dispatch-api.brxs.ca}/api/v1/post-production/callback/{provider}?secret=<SECRET>`
-- [ ] Stripe Connect live E2E verification (real CAD transfer with test vendor)
-- [ ] TestFlight upload (Kam — `eas build --platform ios --profile production` + `eas submit`)
-- [ ] Play Store internal track (Kam — `eas build --platform android --profile production` + `eas submit`)
-- [ ] Verify Transport Canada Advanced RPAS cert for any drone-capable photographers in GTA (Pearson/Billy Bishop airspace)
-- [ ] Define ops escalation for dispatch failures (3x retry → manual ops queue)
-- [ ] Define trip fee policy for contractor no-show ($50-75 recommended, à la Snappr)
+- [ ] **Ontario employment lawyer review of IC agreement** — budget $2-4K (non-negotiable)
+- [ ] **Agent ToS must explicitly disclose 100% no-show retention** — conspicuous at booking, not buried
+- [ ] **Confirm HST treatment of forfeited no-show bookings** with accountant (service never rendered)
+- [ ] **GPS/geofence gate at claim time** — photographer must be within ~100m of property
+- [ ] **Automated escalation before flag** — T+10 SMS to agent, T+20 call; no flag button until T+30
+- [ ] **Agent in-app dispute flow** — 72hr window; reply-to email presently only fallback
+- [ ] **No-show reconciliation nightly job** — match `agent_noshow_trip_fees` vs `bookings.status`
+- [ ] **Trip fee amount in photographer payout summary UI** — they should see pending trip fees
+- [ ] Register Fotello/Autoenhance webhook URLs
+- [ ] Stripe Connect live E2E verification
+- [ ] TestFlight upload (Kam)
+- [ ] Play Store internal track (Kam)
+- [ ] Verify Transport Canada Advanced RPAS for GTA drone photographers
+- [ ] Define ops escalation for dispatch failures (3x retry → manual queue)
