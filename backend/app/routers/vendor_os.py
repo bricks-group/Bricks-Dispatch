@@ -471,6 +471,15 @@ async def get_vendor_os_earnings(
     res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).order("scheduled_date", desc=True).limit(50).execute()
     jobs = res_jobs.data
 
+    # Fetch real payout statuses from the payouts table
+    job_ids = [j["id"] for j in jobs if j.get("id")]
+    payout_status_map: dict[str, str] = {}
+    if job_ids:
+        res_payouts = await (await get_db()).table("payouts").select("job_id, status").in_("job_id", job_ids).execute()
+        for p in (res_payouts.data or []):
+            if p.get("job_id"):
+                payout_status_map[p["job_id"]] = p.get("status", "pending")
+
     week_total = 0
     paid_total = 0
     pending_total = 0
@@ -488,7 +497,8 @@ async def get_vendor_os_earnings(
         except Exception:
             pass
 
-        is_paid = j.get("status") == "completed"
+        actual_payout_status = payout_status_map.get(j.get("id", ""), "pending")
+        is_paid = actual_payout_status == "paid"
         if is_this_week:
             week_total += payout
             if is_paid:
@@ -503,7 +513,7 @@ async def get_vendor_os_earnings(
                 "scheduled_date": sched,
                 "status": j.get("status", "assigned"),
                 "payout_amount": payout,
-                "payout_status": "paid" if is_paid else "pending",
+                "payout_status": actual_payout_status,
             })
 
     return {

@@ -9,7 +9,7 @@ from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 
 # Import routers
-from app.routers import dispatch, jobs, vendors, notifications, payouts
+from app.routers import dispatch, jobs, vendors, notifications, payouts, post_production
 
 limiter = Limiter(key_func=get_remote_address, default_limits=['100/minute'])
 
@@ -57,6 +57,7 @@ app.include_router(payouts.router, tags=["payouts"])
 app.include_router(jobs.router, prefix="/dispatch/jobs", tags=["jobs"])
 app.include_router(vendors.router, prefix="/dispatch/vendors", tags=["vendors"])
 app.include_router(notifications.router, prefix="/dispatch/notifications", tags=["notifications"])
+app.include_router(post_production.router, tags=["post-production"])
 
 # --- Rate Limited Endpoints (Placeholders) ---
 # These would typically be defined within their respective routers
