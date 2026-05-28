@@ -652,7 +652,7 @@ AGENT_NOSHOW_TRIP_FEE_CENTS = 6000   # $60 CAD
 _NOSHOW_WINDOW_BEFORE_MIN = 15       # can report starting 15min before scheduled time
 _NOSHOW_WINDOW_AFTER_MIN = 90        # must report within 90min after scheduled time
 _NOSHOW_RATE_LIMIT_DAYS = 30         # rolling window for rate limiting
-_NOSHOW_RATE_LIMIT_THRESHOLD = 2     # claims above this → hold for admin review
+_NOSHOW_RATE_LIMIT_THRESHOLD = 1     # 2nd+ claim in 30 days → hold for admin review
 
 
 async def _validate_noshow_claim(

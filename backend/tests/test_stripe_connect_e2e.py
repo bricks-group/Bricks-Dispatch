@@ -153,10 +153,11 @@ class TestNoshowValidation:
 
     @pytest.mark.asyncio
     async def test_rate_limit_triggers_review_hold(self):
-        # Photographer has 2 prior claims in 30 days → threshold hit → hold for review
+        # Photographer already has 1 prior claim in 30 days → threshold hit → hold for review
+        # (threshold=1 means 2nd+ claim requires admin sign-off before charge fires)
         execute_calls = [
-            MagicMock(data=None),                                              # no duplicate
-            MagicMock(data=[{"id": "f1"}, {"id": "f2"}]),                     # 2 recent claims
+            MagicMock(data=None),                  # no duplicate claim for this specific job
+            MagicMock(data=[{"id": "f1"}]),        # 1 prior recent claim → at threshold
         ]
         call_idx = 0
         async def _seq():
