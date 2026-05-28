@@ -582,6 +582,14 @@ async def update_vendor_job_status(
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
 
+    # Client communications: notify agent on key status transitions
+    if new_status == "in_progress" and old_status != "in_progress":
+        try:
+            from ..services.client_comms import notify_photographer_en_route
+            await notify_photographer_en_route(job_id)
+        except Exception as e:
+            logger.error(f"En-route notification failed for job {job_id}: {e}")
+
     if booking_id:
         await send_dispatch_status_update_webhook(
             booking_id=booking_id,

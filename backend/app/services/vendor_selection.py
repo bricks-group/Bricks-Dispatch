@@ -1,4 +1,5 @@
 import logging
+import os
 import httpx
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
@@ -10,6 +11,9 @@ from .webhooks import send_dispatch_status_update_webhook
 from typing import List, Optional
 
 from ..integrations.bricks_ai_dispatch import bricks_smart_assign
+
+# Set REQUIRE_VENDOR_COMPLIANCE=true in Vercel env when insurance records are populated
+REQUIRE_VENDOR_COMPLIANCE = os.environ.get("REQUIRE_VENDOR_COMPLIANCE", "false").lower() == "true"
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +61,13 @@ async def _update_job_assignee(job_id: str, member_id: str):
         "updated_at": now
     }).eq("id", job_id).execute()
 
+    # Notify agent that shoot is confirmed
+    try:
+        from .client_comms import notify_booking_confirmed
+        await notify_booking_confirmed(job_id)
+    except Exception as e:
+        logger.error(f"Booking confirmed notification failed for job {job_id}: {e}")
+
 async def assign_vendor_for_job(job_id: str) -> Optional[str]:
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
@@ -79,6 +90,23 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
 
     min_tier = job.min_tier_required or 1
     eligible_ids = {v.id for v in vendors if v.tier >= min_tier}
+
+    # Compliance gate: check insurance/WSIB at the vendor (company) level once.
+    # Enabled by REQUIRE_VENDOR_COMPLIANCE=true (flip when insurance records are populated).
+    if REQUIRE_VENDOR_COMPLIANCE:
+        db = await get_db()
+        try:
+            res_ok = await db.rpc("vendor_compliance_ok", {"p_vendor_id": vendor_id}).execute()
+            is_compliant = bool(res_ok.data)
+        except Exception as e:
+            logger.warning(f"Compliance check RPC failed for vendor {vendor_id}: {e} — failing closed")
+            is_compliant = False
+
+        if not is_compliant:
+            logger.warning(f"Vendor {vendor_id} failed compliance gate (insurance/WSIB) — job {job_id} cannot be assigned")
+            return None
+    else:
+        logger.debug(f"Compliance gate disabled (REQUIRE_VENDOR_COMPLIANCE not set) for vendor {vendor_id}")
 
     try:
         chosen_id = await bricks_smart_assign(job, vendors)
