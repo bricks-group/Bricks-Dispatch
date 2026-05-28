@@ -18,6 +18,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from ..services.qc_agent import run_qc_for_job
+from ..services.post_production import poll_boxbrownie_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.database import get_db
 
@@ -326,35 +327,60 @@ async def reconcile_stuck_uploads(
     background_tasks: BackgroundTasks,
     x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
-    """Re-trigger finalization check for jobs where all uploads are done but status hasn't advanced."""
+    """
+    Poll BoxBrownie jobs for completion (no webhook — polling only).
+    Mark non-BoxBrownie uploads stuck >2h as failed, then re-trigger finalization.
+    """
     if not INTERNAL_API_KEY:
         raise HTTPException(status_code=500, detail="INTERNAL_API_KEY not configured")
     if x_internal_api_key != INTERNAL_API_KEY:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     db = await get_db()
 
-    # Find uploads stuck in processing for > 2h
-    res = await db.table("uploads").select("id, job_id, provider, provider_job_id").eq(
+    # --- BoxBrownie: poll ALL in-flight jobs regardless of age ---
+    res_bb = await db.table("uploads").select("id, job_id, provider_job_id").eq(
         "processing_status", "processing"
-    ).lt("created_at", cutoff).limit(100).execute()
+    ).eq("provider", "box_brownie").limit(100).execute()
 
-    stuck = res.data or []
-    job_ids = list({u["job_id"] for u in stuck if u.get("job_id")})
+    bb_completed = 0
+    bb_jobs_to_finalize: set[str] = set()
+    for u in (res_bb.data or []):
+        ref = u.get("provider_job_id")
+        if not ref:
+            continue
+        file_url = await poll_boxbrownie_job(ref)
+        if file_url:
+            await _mark_upload_done(u["id"], file_url)
+            bb_jobs_to_finalize.add(u["job_id"])
+            bb_completed += 1
 
-    # Mark timed-out individual uploads as failed
+    for job_id in bb_jobs_to_finalize:
+        background_tasks.add_task(_finalize_job_if_complete, job_id)
+
+    # --- Fotello/Autoenhance: mark stuck (>2h) as failed, then finalize ---
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    res_stuck = await db.table("uploads").select("id, job_id, provider").eq(
+        "processing_status", "processing"
+    ).neq("provider", "box_brownie").lt("created_at", cutoff).limit(100).execute()
+
+    stuck = res_stuck.data or []
     stuck_ids = [u["id"] for u in stuck]
+    other_job_ids = list({u["job_id"] for u in stuck if u.get("job_id")})
+
     if stuck_ids:
         await db.table("uploads").update({
             "processing_status": "failed",
             "processed_at": datetime.now(timezone.utc).isoformat(),
         }).in_("id", stuck_ids).execute()
-        logger.warning(f"Reconcile: marked {len(stuck_ids)} stuck uploads as failed")
+        logger.warning(f"Reconcile: marked {len(stuck_ids)} non-BoxBrownie stuck uploads as failed")
 
-    # Re-attempt finalization for affected jobs
-    # (failed uploads don't block delivery — they are excluded from the pending check)
-    for job_id in job_ids:
+    for job_id in other_job_ids:
         background_tasks.add_task(_finalize_job_if_complete, job_id)
 
-    return {"reconciled_uploads": len(stuck_ids), "affected_jobs": len(job_ids)}
+    return {
+        "boxbrownie_polled": len(res_bb.data or []),
+        "boxbrownie_completed": bb_completed,
+        "other_timed_out": len(stuck_ids),
+        "jobs_queued_for_finalization": len(bb_jobs_to_finalize) + len(other_job_ids),
+    }

@@ -48,9 +48,42 @@ async def trigger_boxbrownie_staging(source_url: str, room_type: str = "Living R
             )
             resp.raise_for_status()
             data = resp.json()
-            return data.get("jobId") or data.get("job_id")
+            job = data.get("job", {})
+            # Must store jobReference (e.g. "VS373735194179") — the GET endpoint uses this,
+            # not jobId (hex hash). BoxBrownie has no webhooks; we poll via jobReference.
+            return job.get("jobReference") or data.get("jobReference")
     except Exception as e:
         logger.exception(f"BoxBrownie staging request failed: {e}")
+        return None
+
+
+async def poll_boxbrownie_job(job_reference: str) -> Optional[str]:
+    """
+    Poll BoxBrownie for a single job's status.
+    Returns the first completed fileURL, or None if not done yet or on error.
+    BoxBrownie has no webhooks — this is the only way to know when a job is done.
+    """
+    if not BOXBROWNIE_PUBLIC_KEY or not BOXBROWNIE_PRIVATE_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"https://www.boxbrownie.com/api/v2/job/{job_reference}",
+                headers={"Api-Public-Key": BOXBROWNIE_PUBLIC_KEY, "Api-Private-Key": BOXBROWNIE_PRIVATE_KEY},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            job = data.get("job", {})
+            status = job.get("jobStatus", "")
+            if status == "Completed":
+                files = job.get("output", {}).get("file", [])
+                if isinstance(files, dict):
+                    files = [files]
+                if files:
+                    return files[0].get("fileURL")
+            return None
+    except Exception as e:
+        logger.error(f"BoxBrownie poll failed for {job_reference}: {e}")
         return None
 
 # --- Autoenhance Helpers ---
