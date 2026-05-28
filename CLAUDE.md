@@ -77,8 +77,7 @@ app.include_router(vendors.router, prefix="/dispatch/vendors")
 
 ## Remaining Before Live Traffic
 **Vercel env vars to add (bricks-dispatch-api):**
-- `BOXBROWNIE_PUBLIC_KEY` + `BOXBROWNIE_PRIVATE_KEY`
-- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_S3_ENDPOINT_URL`
+- `BOXBROWNIE_PUBLIC_KEY` + `BOXBROWNIE_PRIVATE_KEY` ✅ (added)
 - `FOTELLO_API_KEY` → add once plan is active
 - `RESEND_API_KEY` → for delivery + booking confirmation emails
 - `POST_PRODUCTION_CALLBACK_SECRET` → set same secret in BoxBrownie/Fotello/Autoenhance webhook URL
