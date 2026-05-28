@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
+from ..services.qc_agent import run_qc_for_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.database import get_db
 
@@ -71,11 +72,29 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         logger.info(f"Job {job_id}: {len(pending)} upload(s) still processing — waiting")
         return
 
+    # Run QC vision agent on all processed uploads before delivery
+    try:
+        qc_counts = await run_qc_for_job(job_id)
+        logger.info(f"Job {job_id}: QC complete — {qc_counts}")
+    except Exception as e:
+        logger.error(f"Job {job_id}: QC agent failed (continuing to delivery): {e}")
+
+    # Re-fetch uploads after QC (qc_status now populated)
+    res_uploads = await db.table("uploads").select(
+        "id, filename, file_url, processed_url, processing_status, qc_status"
+    ).eq("job_id", job_id).execute()
+    uploads = res_uploads.data or []
+
     # Build delivery URL list — prefer processed_url, fallback to signed original
+    # Rejected uploads are excluded; flagged uploads are included with a warning label
     delivery_urls = []
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=SIGNED_URL_EXPIRY)).isoformat()
 
     for u in uploads:
+        # Skip rejected uploads — not delivered
+        if u.get("qc_status") == "rejected":
+            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — QC rejected")
+            continue
         path = u.get("processed_url") or u.get("file_url")
         if not path:
             continue
@@ -86,6 +105,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
                 "filename": u.get("filename", ""),
                 "url": signed,
                 "expires_at": expires_at,
+                "qc_flagged": u.get("qc_status") == "flagged",
             })
 
     # Upsert media_delivery row (idempotent)
