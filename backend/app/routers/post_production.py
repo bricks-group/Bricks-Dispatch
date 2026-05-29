@@ -6,14 +6,12 @@ Providers call back here when processing is complete:
   POST /api/v1/post-production/callback/autoenhance
   POST /api/v1/post-production/callback/boxbrownie
 
-BoxBrownie handles photo editing, retouching, day-to-dusk, and item removal.
-Virtual staging (inserting furniture into empty rooms) is NOT a Bricks service
-and is blocked at the endpoint level.
+BoxBrownie handles: photo editing, retouching, day-to-dusk, item removal, and virtual staging.
+BoxBrownie uses polling (not webhooks) — this endpoint handles any push
+notifications they may send for completed orders.
 
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
-
-Note: Virtual staging is not available — not a Bricks service.
 """
 import logging
 import os
@@ -283,13 +281,11 @@ async def autoenhance_callback(
 # ---------------------------------------------------------------------------
 # BoxBrownie callback
 # POST /api/v1/post-production/callback/boxbrownie?secret=<CALLBACK_SECRET>
-# BoxBrownie handles: photo editing, retouching, day-to-dusk, item removal.
-# Virtual staging (requires_staging=True / staging_style) is NOT a Bricks
-# product and is blocked here.
+# BoxBrownie handles: photo editing, retouching, day-to-dusk, item removal, virtual staging.
 # BoxBrownie uses polling (not webhooks) — this endpoint handles any push
-# notifications they may send for completed editing orders.
+# notifications they may send for completed orders.
 # Payload: {"order_id": "...", "status": "completed", "result_url": "...",
-#           "service_type": "day_to_dusk" | "item_removal" | "photo_editing" | ...}
+#           "service_type": "day_to_dusk" | "item_removal" | "photo_editing" | "virtual_staging" | ...}
 # ---------------------------------------------------------------------------
 
 @router.post("/callback/boxbrownie")
@@ -301,13 +297,6 @@ async def boxbrownie_callback(
     _verify_callback_secret(secret)
 
     body: Dict[str, Any] = await request.json()
-
-    # Block virtual staging — not a Bricks product
-    service_type = body.get("service_type", "")
-    requires_staging = body.get("requires_staging", False)
-    staging_style = body.get("staging_style")
-    if requires_staging or staging_style or service_type in ("virtual_staging", "staging"):
-        raise HTTPException(status_code=404, detail="Virtual staging is not an available service.")
 
     provider_job_id = body.get("order_id") or body.get("image_id") or body.get("job_id")
     status = body.get("status", "")

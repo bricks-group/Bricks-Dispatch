@@ -115,7 +115,7 @@ pick_vendor_rule_based(job, vendors)
 ## Post-Production Pipeline
 1. Fotello — primary AI photo edits (webhook callback)
 2. Autoenhance — fallback if Fotello key missing (webhook callback)
-3. BoxBrownie — photo editing, retouching, day-to-dusk, item removal. Polling only (no webhooks). Note: virtual staging feature is disabled — Bricks does not offer virtual staging as a product.
+3. BoxBrownie — photo editing, retouching, day-to-dusk, item removal, and virtual staging. Polling only (no webhooks).
 4. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
 5. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
 6. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
@@ -173,6 +173,7 @@ pick_vendor_rule_based(job, vendors)
 - **Payout service: trip fees added to photographer payout (not deducted); correct table name** ✅
 - **Stripe Connect E2E test suite (idempotency, zero-amount, trip fee addition logic)** ✅
 - **Weather context: Open-Meteo API for outdoor/drone jobs** ✅
+- **BoxBrownie virtual staging: fully active (photo editing, retouching, day-to-dusk, item removal, virtual staging)** ✅
 - app.json bundle IDs + EAS project ID configured (`com.bricks.dispatch`) ✅
 
 ## Remaining Before Live Traffic
