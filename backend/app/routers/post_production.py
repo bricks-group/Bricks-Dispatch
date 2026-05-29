@@ -4,10 +4,11 @@ Post-production callback and reconciliation endpoints.
 Providers call back here when processing is complete:
   POST /api/v1/post-production/callback/fotello
   POST /api/v1/post-production/callback/autoenhance
-  POST /api/v1/post-production/callback/boxbrownie
 
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
+
+Note: Virtual staging is not available — not a Bricks service.
 """
 import logging
 import os
@@ -18,7 +19,6 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from ..services.qc_agent import run_qc_for_job
-from ..services.post_production import poll_boxbrownie_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.database import get_db
 
@@ -276,9 +276,9 @@ async def autoenhance_callback(
 
 
 # ---------------------------------------------------------------------------
-# BoxBrownie callback
-# POST /api/v1/post-production/callback/boxbrownie?secret=<CALLBACK_SECRET>
-# Payload: {"jobId": "...", "status": "complete", "files": [{"url": "..."}]}
+# BoxBrownie / virtual staging — NOT AVAILABLE
+# Virtual staging removed from canonical product — not available
+# POST /api/v1/post-production/callback/boxbrownie
 # ---------------------------------------------------------------------------
 
 @router.post("/callback/boxbrownie")
@@ -287,34 +287,8 @@ async def boxbrownie_callback(
     background_tasks: BackgroundTasks,
     secret: Optional[str] = None,
 ):
-    _verify_callback_secret(secret)
-
-    body: Dict[str, Any] = await request.json()
-    provider_job_id = body.get("jobId") or body.get("job_id")
-    status = body.get("status", "")
-    files = body.get("files") or []
-    processed_url = files[0].get("url") if files else None
-
-    if not provider_job_id:
-        raise HTTPException(status_code=422, detail="Missing jobId in BoxBrownie callback")
-
-    if status not in ("complete", "completed", "done"):
-        logger.info(f"BoxBrownie callback: job {provider_job_id} status={status} — not complete")
-        return {"received": True}
-
-    db = await get_db()
-    res = await db.table("uploads").select("id, job_id").eq("provider_job_id", provider_job_id).eq("provider", "box_brownie").maybe_single().execute()
-    if not res.data:
-        logger.warning(f"BoxBrownie callback: no upload for provider_job_id={provider_job_id}")
-        return {"received": True}
-
-    upload_id = res.data["id"]
-    job_id = res.data["job_id"]
-
-    await _mark_upload_done(upload_id, processed_url)
-    background_tasks.add_task(_finalize_job_if_complete, job_id)
-
-    return {"received": True, "upload_id": upload_id}
+    # Virtual staging removed from canonical product — not available
+    raise HTTPException(status_code=404, detail="Virtual staging is not available")
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +302,7 @@ async def reconcile_stuck_uploads(
     x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """
-    Poll BoxBrownie jobs for completion (no webhook — polling only).
-    Mark non-BoxBrownie uploads stuck >2h as failed, then re-trigger finalization.
+    Mark Fotello/Autoenhance uploads stuck >2h as failed, then re-trigger finalization.
     """
     if not INTERNAL_API_KEY:
         raise HTTPException(status_code=500, detail="INTERNAL_API_KEY not configured")
@@ -338,31 +311,11 @@ async def reconcile_stuck_uploads(
 
     db = await get_db()
 
-    # --- BoxBrownie: poll ALL in-flight jobs regardless of age ---
-    res_bb = await db.table("uploads").select("id, job_id, provider_job_id").eq(
-        "processing_status", "processing"
-    ).eq("provider", "box_brownie").limit(100).execute()
-
-    bb_completed = 0
-    bb_jobs_to_finalize: set[str] = set()
-    for u in (res_bb.data or []):
-        ref = u.get("provider_job_id")
-        if not ref:
-            continue
-        file_url = await poll_boxbrownie_job(ref)
-        if file_url:
-            await _mark_upload_done(u["id"], file_url)
-            bb_jobs_to_finalize.add(u["job_id"])
-            bb_completed += 1
-
-    for job_id in bb_jobs_to_finalize:
-        background_tasks.add_task(_finalize_job_if_complete, job_id)
-
     # --- Fotello/Autoenhance: mark stuck (>2h) as failed, then finalize ---
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     res_stuck = await db.table("uploads").select("id, job_id, provider").eq(
         "processing_status", "processing"
-    ).neq("provider", "box_brownie").lt("created_at", cutoff).limit(100).execute()
+    ).lt("created_at", cutoff).limit(100).execute()
 
     stuck = res_stuck.data or []
     stuck_ids = [u["id"] for u in stuck]
@@ -373,7 +326,7 @@ async def reconcile_stuck_uploads(
             "processing_status": "failed",
             "processed_at": datetime.now(timezone.utc).isoformat(),
         }).in_("id", stuck_ids).execute()
-        logger.warning(f"Reconcile: marked {len(stuck_ids)} non-BoxBrownie stuck uploads as failed")
+        logger.warning(f"Reconcile: marked {len(stuck_ids)} stuck uploads as failed")
 
     for job_id in other_job_ids:
         background_tasks.add_task(_finalize_job_if_complete, job_id)
@@ -393,8 +346,6 @@ async def reconcile_stuck_uploads(
         pass
 
     return {
-        "boxbrownie_polled": len(res_bb.data or []),
-        "boxbrownie_completed": bb_completed,
-        "other_timed_out": len(stuck_ids),
-        "jobs_queued_for_finalization": len(bb_jobs_to_finalize) + len(other_job_ids),
+        "timed_out": len(stuck_ids),
+        "jobs_queued_for_finalization": len(other_job_ids),
     }

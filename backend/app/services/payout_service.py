@@ -39,8 +39,8 @@ DEFAULT_TIER_PERCENTAGE = 0.35  # fallback to Tier C (entry)
 def calculate_payout_amount(package_price: int | None, vendor_tier: int | None) -> int:
     """
     Calculate payout amount in cents.
-    package_price is stored as dollars (e.g. 449). Stripe expects cents.
-    Tier 3 (A) on Standard ($449): int(449 * 100 * 0.55) = 24695 cents = $246.95.
+    package_price is stored as dollars (e.g. 299). Stripe expects cents.
+    Tier A (55%) on Standard condo ($299): int(299 * 100 * 0.55) = 16445 cents = $164.45.
     """
     if not package_price:
         return 0
