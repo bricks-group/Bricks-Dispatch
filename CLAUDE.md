@@ -22,13 +22,13 @@ All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
 - `backend/app/routers/vendors.py` — Vendor management (`/dispatch/vendors/*`)
 - `backend/app/routers/vendor_os.py` — Vendor OS dashboard: overview, team, jobs, earnings, performance
 - `backend/app/routers/onboarding.py` — Contractor application, IC agreement, document upload
-- `backend/app/routers/post_production.py` — Provider callbacks (Fotello/Autoenhance), reconcile
+- `backend/app/routers/post_production.py` — Provider callbacks (Fotello/Autoenhance/BoxBrownie), reconcile
 - `backend/app/routers/admin_ops.py` — Leads, applicant vetting
 - `backend/app/services/vendor_selection.py` — Primary + fallback vendor assignment
 - `backend/app/integrations/bricks_ai_dispatch.py` — **Deterministic weighted scorer** (primary dispatch)
 - `backend/app/services/client_comms.py` — Resend emails: booking confirmed + photographer en route
 - `backend/app/services/qc_agent.py` — Gemini vision QC agent (scores uploaded photos 0-100)
-- `backend/app/services/post_production.py` — Fotello/Autoenhance integration
+- `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration
 - `backend/app/services/payout_service.py` — Stripe Connect transfers, tier percentages
 - `backend/app/shared/schemas.py` — Pydantic models
 
@@ -115,9 +115,10 @@ pick_vendor_rule_based(job, vendors)
 ## Post-Production Pipeline
 1. Fotello — primary AI photo edits (webhook callback)
 2. Autoenhance — fallback if Fotello key missing (webhook callback)
-3. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
-4. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
-5. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
+3. BoxBrownie — photo editing, retouching, day-to-dusk, item removal. Polling only (no webhooks). Note: virtual staging feature is disabled — Bricks does not offer virtual staging as a product.
+4. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
+5. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
+6. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
 
 ## Rules
 - `INTERNAL_API_KEY` header (`X-Internal-Api-Key`) required on dispatch intake endpoint

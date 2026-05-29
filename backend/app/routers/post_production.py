@@ -4,6 +4,11 @@ Post-production callback and reconciliation endpoints.
 Providers call back here when processing is complete:
   POST /api/v1/post-production/callback/fotello
   POST /api/v1/post-production/callback/autoenhance
+  POST /api/v1/post-production/callback/boxbrownie
+
+BoxBrownie handles photo editing, retouching, day-to-dusk, and item removal.
+Virtual staging (inserting furniture into empty rooms) is NOT a Bricks service
+and is blocked at the endpoint level.
 
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
@@ -276,9 +281,15 @@ async def autoenhance_callback(
 
 
 # ---------------------------------------------------------------------------
-# BoxBrownie / virtual staging — NOT AVAILABLE
-# Virtual staging removed from canonical product — not available
-# POST /api/v1/post-production/callback/boxbrownie
+# BoxBrownie callback
+# POST /api/v1/post-production/callback/boxbrownie?secret=<CALLBACK_SECRET>
+# BoxBrownie handles: photo editing, retouching, day-to-dusk, item removal.
+# Virtual staging (requires_staging=True / staging_style) is NOT a Bricks
+# product and is blocked here.
+# BoxBrownie uses polling (not webhooks) — this endpoint handles any push
+# notifications they may send for completed editing orders.
+# Payload: {"order_id": "...", "status": "completed", "result_url": "...",
+#           "service_type": "day_to_dusk" | "item_removal" | "photo_editing" | ...}
 # ---------------------------------------------------------------------------
 
 @router.post("/callback/boxbrownie")
@@ -287,8 +298,41 @@ async def boxbrownie_callback(
     background_tasks: BackgroundTasks,
     secret: Optional[str] = None,
 ):
-    # Virtual staging removed from canonical product — not available
-    raise HTTPException(status_code=404, detail="Virtual staging is not available")
+    _verify_callback_secret(secret)
+
+    body: Dict[str, Any] = await request.json()
+
+    # Block virtual staging — not a Bricks product
+    service_type = body.get("service_type", "")
+    requires_staging = body.get("requires_staging", False)
+    staging_style = body.get("staging_style")
+    if requires_staging or staging_style or service_type in ("virtual_staging", "staging"):
+        raise HTTPException(status_code=404, detail="Virtual staging is not an available service.")
+
+    provider_job_id = body.get("order_id") or body.get("image_id") or body.get("job_id")
+    status = body.get("status", "")
+    processed_url = body.get("result_url") or body.get("output_url") or body.get("url")
+
+    if not provider_job_id:
+        raise HTTPException(status_code=422, detail="Missing order_id in BoxBrownie callback")
+
+    if status not in ("completed", "done", "success", ""):
+        logger.info(f"BoxBrownie callback: order {provider_job_id} status={status} — not yet complete")
+        return {"received": True}
+
+    db = await get_db()
+    res = await db.table("uploads").select("id, job_id").eq("provider_job_id", provider_job_id).eq("provider", "boxbrownie").maybe_single().execute()
+    if not res.data:
+        logger.warning(f"BoxBrownie callback: no upload found for provider_job_id={provider_job_id}")
+        return {"received": True}
+
+    upload_id = res.data["id"]
+    job_id = res.data["job_id"]
+
+    await _mark_upload_done(upload_id, processed_url)
+    background_tasks.add_task(_finalize_job_if_complete, job_id)
+
+    return {"received": True, "upload_id": upload_id}
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +346,7 @@ async def reconcile_stuck_uploads(
     x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """
-    Mark Fotello/Autoenhance uploads stuck >2h as failed, then re-trigger finalization.
+    Mark Fotello/Autoenhance/BoxBrownie uploads stuck >2h as failed, then re-trigger finalization.
     """
     if not INTERNAL_API_KEY:
         raise HTTPException(status_code=500, detail="INTERNAL_API_KEY not configured")
@@ -311,7 +355,7 @@ async def reconcile_stuck_uploads(
 
     db = await get_db()
 
-    # --- Fotello/Autoenhance: mark stuck (>2h) as failed, then finalize ---
+    # --- Fotello/Autoenhance/BoxBrownie: mark stuck (>2h) as failed, then finalize ---
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     res_stuck = await db.table("uploads").select("id, job_id, provider").eq(
         "processing_status", "processing"
