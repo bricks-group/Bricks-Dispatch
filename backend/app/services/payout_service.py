@@ -194,6 +194,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             vendor_id=vendor_id,
             amount=net_payout,
             booking_id=job.get("booking_id", job_id),
+            payout_id=payout_id,
         )
     except Exception as e:
         logger.error(f"Stripe transfer failed for payout {payout_id} job {job_id}: {e}")

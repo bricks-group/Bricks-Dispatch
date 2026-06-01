@@ -174,7 +174,7 @@ async def process_job_assets(job_id: str):
         if asset.get("requires_staging"):
             bb_id = await trigger_boxbrownie_staging(file_url)
             if bb_id:
-                results.append({"asset_id": asset["id"], "provider": "box_brownie", "provider_job_id": bb_id})
+                results.append({"asset_id": asset["id"], "provider": "boxbrownie", "provider_job_id": bb_id})
         else:
             if FOTELLO_API_KEY:
                 ft_id = await trigger_fotello_edit(file_url)

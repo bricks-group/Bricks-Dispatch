@@ -93,7 +93,7 @@ def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[st
 
         # Travel proximity bonus — prefer vendors closer to the job
         proximity_score = 0.0
-        if v.home_lat and v.home_lng and job.lat and job.lng:
+        if v.home_lat is not None and v.home_lng is not None and job.lat is not None and job.lng is not None:
             dist_km = _haversine_km(v.home_lat, v.home_lng, job.lat, job.lng)
             # Normalize: 0 km → 1.0, 50 km → 0.5, 100+ km → ~0
             proximity_score = max(0.0, 1.0 - dist_km / 100.0)

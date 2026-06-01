@@ -18,10 +18,13 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str) -> str:
+async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, payout_id: str = "") -> str:
     """
     Transfer funds to the vendor's connected Stripe account.
     Amount must be in cents. Returns the Stripe transfer ID.
+    payout_id is used as the Stripe idempotency key — scoped per payout so a retry
+    with the same payout_id and amount is safe, but a new payout (different id) gets
+    a fresh key even for the same booking.
     """
     response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
     contractor = response.data
@@ -30,13 +33,14 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str) 
         raise ValueError(f"Stripe account not found for vendor: {vendor_id}")
 
     stripe_account_id = contractor["stripe_account_id"]
+    idempotency_key = f"payout_{payout_id}" if payout_id else f"payout_{booking_id}"
 
     transfer = stripe_lib.Transfer.create(
         amount=amount,
         currency="cad",
         destination=stripe_account_id,
-        metadata={"booking_id": booking_id, "vendor_id": vendor_id},
-        idempotency_key=f"payout_{booking_id}",
+        metadata={"booking_id": booking_id, "payout_id": payout_id, "vendor_id": vendor_id},
+        idempotency_key=idempotency_key,
     )
 
     logger.info(f"Transfer {transfer.id} created: ${amount/100:.2f} to vendor {vendor_id} ({stripe_account_id})")
