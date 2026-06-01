@@ -13,6 +13,7 @@ Repeat-agent bonus: +5 points if vendor has previously completed a job for this 
 Drone gate: vendor must have drone_certified=True for drone job_type.
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -207,6 +208,19 @@ Return ONLY the explanation sentence as a plain JSON string.
         return None
 
 
+async def _save_dispatch_explanation(job: Job, vendor: VendorMember, score: float) -> None:
+    """Fire-and-forget: generate Gemini explanation and persist to jobs table."""
+    try:
+        explanation = await generate_dispatch_explanation(job, vendor, score)
+        if explanation:
+            from ..shared.database import get_db
+            db = await get_db()
+            await db.table("jobs").update({"dispatch_explanation": explanation}).eq("id", job.id).execute()
+            logger.info(f"Dispatch explanation saved for job {job.id}")
+    except Exception as e:
+        logger.debug(f"Dispatch explanation skipped for job {job.id}: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -286,5 +300,8 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
         f"chose {best_vendor.name} (id={best_id}, score={best_score:.1f}, "
         f"tier={best_vendor.tier}, on_time={best_vendor.on_time_rate:.0%})"
     )
+
+    # Gemini explainability — fire-and-forget; never blocks dispatch.
+    asyncio.create_task(_save_dispatch_explanation(job, best_vendor, best_score))
 
     return best_id

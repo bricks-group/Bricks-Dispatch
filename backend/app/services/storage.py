@@ -9,7 +9,7 @@ from PIL import Image
 from ..shared.database import get_db
 
 STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "brxs-deliverables")
-SIGNED_URL_EXPIRY = int(os.getenv("SIGNED_URL_EXPIRY_SECONDS", "3600"))
+SIGNED_URL_EXPIRY = int(os.getenv("SIGNED_URL_EXPIRY_SECONDS", "86400"))
 
 _KEY_PREFIX = "bricks-dispatch"
 

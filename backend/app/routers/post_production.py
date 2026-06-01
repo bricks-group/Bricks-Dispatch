@@ -218,8 +218,8 @@ async def fotello_callback(
     if not provider_job_id:
         raise HTTPException(status_code=422, detail="Missing image_id in Fotello callback")
 
-    if status not in ("completed", "done", "success", ""):
-        logger.info(f"Fotello callback: image {provider_job_id} status={status} — not yet complete")
+    if not status or status not in ("completed", "done", "success"):
+        logger.info(f"Fotello callback: image {provider_job_id} status={status!r} — not yet complete")
         return {"received": True}
 
     db = await get_db()
@@ -305,8 +305,8 @@ async def boxbrownie_callback(
     if not provider_job_id:
         raise HTTPException(status_code=422, detail="Missing order_id in BoxBrownie callback")
 
-    if status not in ("completed", "done", "success", ""):
-        logger.info(f"BoxBrownie callback: order {provider_job_id} status={status} — not yet complete")
+    if not status or status not in ("completed", "done", "success"):
+        logger.info(f"BoxBrownie callback: order {provider_job_id} status={status!r} — not yet complete")
         return {"received": True}
 
     db = await get_db()

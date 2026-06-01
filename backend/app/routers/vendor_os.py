@@ -494,7 +494,7 @@ async def get_vendor_os_earnings(
     for j in jobs:
         raw_price = j.get("package_price") or 0
         rate = member_rate_map.get(j.get("assignee_id", ""), DEFAULT_TIER_PERCENTAGE)
-        payout = round(raw_price * rate * 100) / 100
+        payout = round(raw_price * rate, 2)  # CAD dollars for display
         sched = j.get("scheduled_date", "")
         is_this_week = False
         try:
@@ -823,7 +823,9 @@ async def _validate_noshow_claim(
         except Exception:
             pass
 
-    # Gate 6: photographer rate limit
+    # Gate 6: photographer rate limit — accumulate flag, do NOT early-return so Gate 7 (collusion) always runs.
+    rate_hold = False
+    rate_hold_reason = ""
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
         res_recent = await db.table("agent_noshow_trip_fees").select("id").eq(
@@ -833,18 +835,17 @@ async def _validate_noshow_claim(
         ).execute()
         recent_count = len(res_recent.data or [])
         if recent_count >= _NOSHOW_RATE_LIMIT_THRESHOLD:
-            return {
-                "ok": True,
-                "hold_for_review": True,
-                "reason": (
-                    f"Rate limit: {recent_count} claims in the last {_NOSHOW_RATE_LIMIT_DAYS} days "
-                    f"— held for admin review before payout"
-                ),
-            }
+            rate_hold = True
+            rate_hold_reason = (
+                f"Rate limit: {recent_count} claims in the last {_NOSHOW_RATE_LIMIT_DAYS} days "
+                f"— held for admin review before payout"
+            )
     except Exception:
         pass
 
-    # Gate 7: per-agent rate limit (collusion detection)
+    # Gate 7: per-agent rate limit (collusion detection) — always runs regardless of Gate 6.
+    collusion_hold = False
+    collusion_hold_reason = ""
     if booking_id:
         try:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
@@ -863,19 +864,18 @@ async def _validate_noshow_claim(
                     ).in_("id", recent_booking_ids).execute()
                     agent_noshow_count = len(res_agent_prev.data or [])
                     if agent_noshow_count >= _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD:
-                        return {
-                            "ok": True,
-                            "hold_for_review": True,
-                            "reason": (
-                                f"Agent-level flag: {agent_noshow_count} no-show claims against this agent "
-                                f"in {_NOSHOW_RATE_LIMIT_DAYS} days — held for admin review"
-                            ),
-                        }
+                        collusion_hold = True
+                        collusion_hold_reason = (
+                            f"Agent-level flag: {agent_noshow_count} no-show claims against this agent "
+                            f"in {_NOSHOW_RATE_LIMIT_DAYS} days — held for admin review"
+                        )
         except Exception as e:
             logger.warning(f"Agent rate limit check failed for job {job_id}: {e}")
 
-    if gps_hold:
-        return {"ok": True, "hold_for_review": True, "reason": gps_hold_reason}
+    # Combine all soft-hold flags — include all reasons in the review note.
+    hold_reasons = [r for r in [rate_hold_reason, collusion_hold_reason, gps_hold_reason] if r]
+    if rate_hold or collusion_hold or gps_hold:
+        return {"ok": True, "hold_for_review": True, "reason": "; ".join(hold_reasons)}
     return {"ok": True, "hold_for_review": False}
 
 

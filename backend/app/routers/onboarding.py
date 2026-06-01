@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
+import os
 import uuid
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Form
+from fastapi import APIRouter, HTTPException, Form, Request
 
 from ..services.storage import upload_file
 from ..shared.database import get_db
@@ -137,12 +138,18 @@ async def apply_to_bricks(application: VendorApplicationCreate):
 
 
 @router.post("/validate-rpas/{member_id}")
-async def validate_rpas_certificate(member_id: str):
+async def validate_rpas_certificate(member_id: str, request: Request):
     """
     Run Gemini Vision + Transport Canada registry validation on a member's uploaded RPAS cert.
     Updates vendor_members with drone_certified, rpas_certificate_number, rpas_certificate_level.
     Stores full validation result on the vendor_documents record.
+    Requires X-Internal-Api-Key header (exempt from middleware; admin/internal callers only).
     """
+    _api_keys = set(k for k in os.environ.get("INTERNAL_API_KEYS", "").split(",") if k)
+    _caller_key = request.headers.get("X-Internal-Api-Key", "")
+    if not _api_keys or _caller_key not in _api_keys:
+        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+
     db = await get_db()
 
     res_m = await db.table("vendor_members").select("name, drone_certified").eq("id", member_id).maybe_single().execute()
