@@ -746,7 +746,10 @@ async def _validate_noshow_claim(
             )
         }
 
-    # Gate 4.5: GPS proximity — soft block (hold for review) if photographer is far from property
+    # Gate 4.5: GPS proximity — soft hold if photographer is far from property.
+    # Do NOT return early here — subsequent hard-reject gates (4.6, 5, 6, 7) must still run.
+    gps_hold = False
+    gps_hold_reason = ""
     if photographer_lat is not None and photographer_lng is not None:
         job_lat = job.get("lat")
         job_lng = job.get("lng")
@@ -757,14 +760,11 @@ async def _validate_noshow_claim(
                     float(job_lat), float(job_lng),
                 )
                 if dist_km > _GPS_MAX_DISTANCE_KM:
-                    return {
-                        "ok": True,
-                        "hold_for_review": True,
-                        "reason": (
-                            f"Photographer GPS is {dist_km:.1f} km from property — "
-                            f"held for location verification (threshold {_GPS_MAX_DISTANCE_KM * 1000:.0f} m)"
-                        ),
-                    }
+                    gps_hold = True
+                    gps_hold_reason = (
+                        f"Photographer GPS is {dist_km:.1f} km from property — "
+                        f"held for location verification (threshold {_GPS_MAX_DISTANCE_KM * 1000:.0f} m)"
+                    )
             except (TypeError, ValueError):
                 pass
 
@@ -874,6 +874,8 @@ async def _validate_noshow_claim(
         except Exception as e:
             logger.warning(f"Agent rate limit check failed for job {job_id}: {e}")
 
+    if gps_hold:
+        return {"ok": True, "hold_for_review": True, "reason": gps_hold_reason}
     return {"ok": True, "hold_for_review": False}
 
 
@@ -1029,8 +1031,9 @@ async def report_agent_no_show(
     review_reason = validation.get("reason", "")
     claim_status = "pending_review" if hold_for_review else "pending"
 
-    await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()
-
+    # Insert trip fee BEFORE updating job status.
+    # If the insert fails we return an error and the job is still in its prior state (retryable).
+    # If status were updated first and the insert then failed, Gate 2 would block any retry.
     if assignee_id and assignee_id != "default_user":
         await db.table("agent_noshow_trip_fees").insert({
             "job_id": job_id,
@@ -1043,6 +1046,8 @@ async def report_agent_no_show(
             "review_reason": review_reason or None,
             "created_at": now,
         }).execute()
+
+    await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()
 
     if booking_id:
         try:

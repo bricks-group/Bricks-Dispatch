@@ -106,25 +106,8 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         existing_payout_id = existing.data["id"]
         existing_status = existing.data.get("status", "pending")
         logger.info(f"Payout already exists for job {job_id}: {existing_payout_id} (status={existing_status})")
-
-        # Attach any pending trip fees filed after the original payout ran.
-        # If the payout is already paid, promote them directly (Stripe already cleared).
-        if assignee_id and assignee_id != "default_user" and existing_status == "paid":
-            try:
-                res_late = await db.table("agent_noshow_trip_fees").select("id, amount_cents").eq(
-                    "member_id", assignee_id
-                ).eq("status", "pending").execute()
-                late_ids = [f["id"] for f in (res_late.data or [])]
-                if late_ids:
-                    await db.table("agent_noshow_trip_fees").update({
-                        "status": "paid_out",
-                        "paid_from_payout_id": existing_payout_id,
-                        "paid_at": datetime.now(timezone.utc).isoformat(),
-                    }).in_("id", late_ids).execute()
-                    logger.info(f"Late trip fees {late_ids} attached to existing payout {existing_payout_id}")
-            except Exception as e:
-                logger.warning(f"Late trip fee attachment failed for job {job_id}: {e}")
-
+        # Any pending trip fees filed after this payout ran will be included in the next payout trigger.
+        # Do NOT mark them paid_out here — no Stripe transfer was made for them in this cycle.
         return {
             "payout_id": existing_payout_id,
             "status": existing_status,

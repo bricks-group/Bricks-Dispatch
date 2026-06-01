@@ -69,6 +69,7 @@ from app.routers.onboarding import router as onboarding_router
 from app.routers.admin_ops import router as admin_ops_router
 from app.routers.uploads import router as uploads_router
 from app.routers.payouts import router as payouts_router
+from app.routers.post_production import router as post_production_router
 from app.shared.database import get_db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -166,6 +167,7 @@ app.include_router(onboarding_router)
 app.include_router(admin_ops_router)
 app.include_router(uploads_router)
 app.include_router(payouts_router)
+app.include_router(post_production_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
 _ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
