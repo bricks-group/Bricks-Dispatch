@@ -189,10 +189,12 @@ pick_vendor_rule_based(job, vendors)
 **Vercel env vars (bricks-dispatch-api):**
 - `RESEND_API_KEY` ✅ (set)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)
-- `GEMINI_API_KEY` — for QC agent + dispatch explainability
-- `FOTELLO_API_KEY` — add once Fotello plan is active
-- `INTERNAL_API_KEYS` — rotated; current value stored in app_secrets table
-- `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` — for no-show SMS escalation
+- `GEMINI_API_KEY` ✅ (set)
+- `FOTELLO_API_KEY` ✅ (set)
+- `INTERNAL_API_KEYS` — rotated; current value stored in app_secrets table ✅ (set)
+- `TWILIO_ACCOUNT_SID` ✅ (set)
+- `TWILIO_AUTH_TOKEN` ✅ (set)
+- `TWILIO_FROM_NUMBER` ✅ (set)
 
 **Ops tasks (pre-launch):**
 - [ ] **Ontario employment lawyer review of IC agreement** — budget $2-4K (non-negotiable)
