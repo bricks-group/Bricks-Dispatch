@@ -103,10 +103,31 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # Check if payout already exists for this job
     existing = await db.table("payouts").select("*").eq("job_id", job_id).maybe_single().execute()
     if existing.data:
-        logger.info(f"Payout already exists for job {job_id}: {existing.data['id']}")
+        existing_payout_id = existing.data["id"]
+        existing_status = existing.data.get("status", "pending")
+        logger.info(f"Payout already exists for job {job_id}: {existing_payout_id} (status={existing_status})")
+
+        # Attach any pending trip fees filed after the original payout ran.
+        # If the payout is already paid, promote them directly (Stripe already cleared).
+        if assignee_id and assignee_id != "default_user" and existing_status == "paid":
+            try:
+                res_late = await db.table("agent_noshow_trip_fees").select("id, amount_cents").eq(
+                    "member_id", assignee_id
+                ).eq("status", "pending").execute()
+                late_ids = [f["id"] for f in (res_late.data or [])]
+                if late_ids:
+                    await db.table("agent_noshow_trip_fees").update({
+                        "status": "paid_out",
+                        "paid_from_payout_id": existing_payout_id,
+                        "paid_at": datetime.now(timezone.utc).isoformat(),
+                    }).in_("id", late_ids).execute()
+                    logger.info(f"Late trip fees {late_ids} attached to existing payout {existing_payout_id}")
+            except Exception as e:
+                logger.warning(f"Late trip fee attachment failed for job {job_id}: {e}")
+
         return {
-            "payout_id": existing.data["id"],
-            "status": existing.data["status"],
+            "payout_id": existing_payout_id,
+            "status": existing_status,
             "amount": existing.data["amount"],
             "already_exists": True,
         }
@@ -165,17 +186,32 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             "status": "reserved",
         }).in_("id", pending_trip_fee_ids).execute()
 
-    # Attempt Stripe transfer
+    # Attempt Stripe transfer — separate try/except so post-Stripe DB failures
+    # don't roll back a transfer that already cleared.
+    from ..services.stripe_connect_service import handle_payout_to_vendor
     try:
-        from ..services.stripe_connect_service import handle_payout_to_vendor
-
         stripe_transfer_id = await handle_payout_to_vendor(
             vendor_id=vendor_id,
             amount=net_payout,
             booking_id=job.get("booking_id", job_id),
         )
+    except Exception as e:
+        logger.error(f"Stripe transfer failed for payout {payout_id} job {job_id}: {e}")
+        # Stripe never charged — safe to release trip fees and mark failed
+        if pending_trip_fee_ids:
+            await db.table("agent_noshow_trip_fees").update({
+                "status": "pending",
+            }).in_("id", pending_trip_fee_ids).execute()
+        await db.table("payouts").update({"status": "failed"}).eq("id", payout_id).execute()
+        return {
+            "payout_id": payout_id,
+            "status": "failed",
+            "amount": payout_amount,
+            "error": str(e),
+        }
 
-        # Mark payout as paid
+    # Stripe succeeded — post-Stripe DB updates; fail open (never rollback a completed transfer)
+    try:
         await db.table("payouts").update({
             "status": "paid",
             "stripe_transfer_id": stripe_transfer_id,
@@ -185,46 +221,30 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             "paid_at": now,
         }).eq("id", payout_id).execute()
 
-        # Promote trip fees to paid_out now that Stripe succeeded
         if pending_trip_fee_ids:
             await db.table("agent_noshow_trip_fees").update({
                 "status": "paid_out",
                 "paid_from_payout_id": payout_id,
                 "paid_at": datetime.now(timezone.utc).isoformat(),
             }).in_("id", pending_trip_fee_ids).execute()
-
-        logger.info(
-            f"Payout {payout_id} completed for job {job_id}: "
-            f"base=${payout_amount/100:.2f} trip_fees=${pending_trip_fees_total/100:.2f} "
-            f"total=${net_payout/100:.2f} to vendor {vendor_id} (transfer {stripe_transfer_id})"
+    except Exception as e:
+        # Transfer cleared — log for manual reconciliation; do NOT revert payout status
+        logger.error(
+            f"Post-Stripe DB update failed for payout {payout_id} job {job_id}: {e} — "
+            f"Stripe transfer {stripe_transfer_id} succeeded; manual reconciliation required"
         )
 
-        return {
-            "payout_id": payout_id,
-            "status": "paid",
-            "base_amount": payout_amount,
-            "trip_fees_total": pending_trip_fees_total,
-            "net_amount": net_payout,
-            "stripe_transfer_id": stripe_transfer_id,
-        }
+    logger.info(
+        f"Payout {payout_id} completed for job {job_id}: "
+        f"base=${payout_amount/100:.2f} trip_fees=${pending_trip_fees_total/100:.2f} "
+        f"total=${net_payout/100:.2f} to vendor {vendor_id} (transfer {stripe_transfer_id})"
+    )
 
-    except Exception as e:
-        logger.error(f"Payout {payout_id} failed for job {job_id}: {e}")
-
-        # Release reserved trip fees so they are included in the next payout attempt
-        if pending_trip_fee_ids:
-            await db.table("agent_noshow_trip_fees").update({
-                "status": "pending",
-            }).in_("id", pending_trip_fee_ids).execute()
-
-        # Mark payout as failed
-        await db.table("payouts").update({
-            "status": "failed",
-        }).eq("id", payout_id).execute()
-
-        return {
-            "payout_id": payout_id,
-            "status": "failed",
-            "amount": payout_amount,
-            "error": str(e),
-        }
+    return {
+        "payout_id": payout_id,
+        "status": "paid",
+        "base_amount": payout_amount,
+        "trip_fees_total": pending_trip_fees_total,
+        "net_amount": net_payout,
+        "stripe_transfer_id": stripe_transfer_id,
+    }

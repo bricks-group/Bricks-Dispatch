@@ -1,5 +1,4 @@
 import logging
-import math
 import os
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -7,6 +6,7 @@ from typing import List, Optional
 import httpx
 
 from ..shared.database import get_db
+from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.schemas import Job, VendorMember
 from .webhooks import send_dispatch_status_update_webhook
 from ..integrations.bricks_ai_dispatch import bricks_smart_assign
@@ -56,14 +56,6 @@ async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: s
     except Exception as e:
         logger.error(f"Resend ops escalation email failed for job {job.id}: {e}")
 
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
-    return R * 2 * math.asin(math.sqrt(a))
 
 
 def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[str]:

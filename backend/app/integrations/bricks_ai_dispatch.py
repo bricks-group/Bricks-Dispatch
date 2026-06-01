@@ -22,6 +22,7 @@ from typing import List, Optional
 
 import httpx
 from ..shared.schemas import Job, VendorMember
+from ..shared.geospatial import haversine_km as _haversine_km
 
 logger = logging.getLogger(__name__)
 
@@ -112,43 +113,6 @@ async def _get_weather_context(lat: float, lng: float, scheduled_date: str) -> O
 
 
 # ---------------------------------------------------------------------------
-# Haversine distance
-# ---------------------------------------------------------------------------
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
-    return R * 2 * math.asin(math.sqrt(a))
-
-
-# ---------------------------------------------------------------------------
-# Repeat-agent bonus (non-blocking; fails open)
-# ---------------------------------------------------------------------------
-
-async def _has_repeat_agent_history(vendor_member_ids: List[str], agent_user_id: Optional[str]) -> bool:
-    """
-    Return True if this vendor's members have previously completed a job for this agent.
-    Uses the shared Supabase project — jobs table has agent_user_id.
-    """
-    if not agent_user_id or not vendor_member_ids:
-        return False
-    try:
-        from ..shared.database import get_db
-        res = await (await get_db()).table("jobs").select("id").eq(
-            "agent_user_id", agent_user_id
-        ).in_(
-            "assignee_id", vendor_member_ids[:50]
-        ).in_(
-            "status", ["completed", "delivered"]
-        ).limit(1).execute()
-        return bool(res.data)
-    except Exception:
-        return False
-
-
-# ---------------------------------------------------------------------------
 # Core deterministic scoring
 # ---------------------------------------------------------------------------
 
@@ -170,7 +134,7 @@ def _score_vendor(
 
     # Proximity: 1.0 at 0 km, 0.0 at 100+ km
     proximity = 0.5  # neutral default when coordinates unknown
-    if v.home_lat and v.home_lng and job.lat and job.lng:
+    if v.home_lat is not None and v.home_lng is not None and job.lat is not None and job.lng is not None:
         dist = _haversine_km(v.home_lat, v.home_lng, job.lat, job.lng)
         proximity = max(0.0, 1.0 - dist / 100.0)
 
@@ -307,14 +271,15 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
             v, job, preferred_tier,
             has_repeat_history=has_history_by_vendor.get(v.id, False),
         )
-        scored.append((score, -v.active_assignments, v.id, v))
+        scored.append((score, v.id, v))
 
     if not scored:
         return None
 
-    # Sort: highest score first; tiebreak: fewest active assignments
-    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    best_score, _, best_id, best_vendor = scored[0]
+    # Sort: highest score first; stable UUID tiebreak avoids double-counting active_assignments
+    # (already factored into the load_balance score component — no need to repeat it here)
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    best_score, best_id, best_vendor = scored[0]
 
     logger.info(
         f"Dispatch scored {len(scored)} candidates for job {job.id}: "
