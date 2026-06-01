@@ -14,17 +14,17 @@ from app.services.payout_service import calculate_payout_amount, TIER_PERCENTAGE
 # ── Unit: payout amount calculation ──────────────────────────────────────────
 
 class TestCalculatePayoutAmount:
-    def test_tier_a_standard(self):
-        # Tier A (40%) of $299 → 11960 cents
-        assert calculate_payout_amount(299, 1) == int(299 * 100 * 0.40)
+    def test_tier_c_entry_standard(self):
+        # Tier C/entry (35%) of $299 → 10465 cents
+        assert calculate_payout_amount(299, 1) == int(299 * 100 * 0.35)
 
-    def test_tier_b_premium(self):
-        # Tier B (50%) of $599 → 29950 cents
-        assert calculate_payout_amount(599, 2) == int(599 * 100 * 0.50)
+    def test_tier_b_core_premium(self):
+        # Tier B/core (45%) of $599 → 26955 cents
+        assert calculate_payout_amount(599, 2) == int(599 * 100 * 0.45)
 
-    def test_tier_c_luxury(self):
-        # Tier C (60%) of $999 → 59940 cents
-        assert calculate_payout_amount(999, 3) == int(999 * 100 * 0.60)
+    def test_tier_a_elite_luxury(self):
+        # Tier A/elite (55%) of $999 → 54945 cents
+        assert calculate_payout_amount(999, 3) == int(999 * 100 * 0.55)
 
     def test_zero_price_returns_zero(self):
         assert calculate_payout_amount(0, 1) == 0
@@ -35,10 +35,10 @@ class TestCalculatePayoutAmount:
         assert result == int(299 * 100 * DEFAULT_TIER_PERCENTAGE)
 
     def test_tier_percentages_match_pitch(self):
-        assert TIER_PERCENTAGES[1] == 0.40
-        assert TIER_PERCENTAGES[2] == 0.50
-        assert TIER_PERCENTAGES[3] == 0.60
-        assert DEFAULT_TIER_PERCENTAGE == 0.40
+        assert TIER_PERCENTAGES[1] == 0.35
+        assert TIER_PERCENTAGES[2] == 0.45
+        assert TIER_PERCENTAGES[3] == 0.55
+        assert DEFAULT_TIER_PERCENTAGE == 0.35
 
 
 # ── Unit: trigger_payout_for_job ─────────────────────────────────────────────
@@ -158,8 +158,8 @@ class TestTriggerPayoutForJob:
             result = await trigger_payout_for_job(db, "job_3")
 
         assert result["status"] == "paid"
-        # Tier B (50%) of $599 × 100 = 29950 cents
-        assert result["amount"] == int(599 * 100 * 0.50)
+        # Tier B/core (45%) of $599 × 100 = 26955 cents
+        assert result["base_amount"] == int(599 * 100 * 0.45)
         assert result["stripe_transfer_id"] == "tr_test_stripe_id"
 
     @pytest.mark.asyncio

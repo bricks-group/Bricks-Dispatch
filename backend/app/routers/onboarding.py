@@ -74,7 +74,7 @@ async def get_ic_agreement():
     """Return the current Bricks IC agreement text and version number."""
     return {
         "version": _IC_AGREEMENT_VERSION,
-        "effective_date": "2026-01-01",
+        "effective_date": "2026-06-01",
         "text": _IC_AGREEMENT_TEXT,
     }
 

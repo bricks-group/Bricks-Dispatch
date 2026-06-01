@@ -39,7 +39,7 @@ async def _send_email(to: str, subject: str, html: str) -> bool:
         return False
 
 
-async def _get_agent_email_for_job(job_id: str) -> Optional[str]:
+async def _get_agent_email_for_job(job_id: str) -> Optional[tuple]:
     from ..shared.database import get_db
     db = await get_db()
     res_job = await db.table("jobs").select("booking_id").eq("id", job_id).maybe_single().execute()

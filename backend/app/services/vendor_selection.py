@@ -142,7 +142,7 @@ async def _update_job_assignee(job_id: str, member_id: str):
 _MAX_ASSIGNMENT_ATTEMPTS = 3
 
 
-async def assign_vendor_for_job(job_id: str, attempt: int = 1) -> Optional[str]:
+async def assign_vendor_for_job(job_id: str) -> Optional[str]:
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
     Retries up to _MAX_ASSIGNMENT_ATTEMPTS times; on final failure writes an
@@ -161,37 +161,36 @@ async def assign_vendor_for_job(job_id: str, attempt: int = 1) -> Optional[str]:
     vendors = [VendorMember(**m) for m in (res_members.data or [])]
 
     if not vendors:
-        logger.warning(f"No vendor members found for vendor_id {vendor_id} (attempt {attempt}).")
-        if attempt >= _MAX_ASSIGNMENT_ATTEMPTS:
-            await _escalate_no_vendor(job, attempt, "No vendor members in this vendor account.")
+        logger.warning(f"No vendor members found for vendor_id {vendor_id}.")
+        await _escalate_no_vendor(job, 1, "No vendor members in this vendor account.")
         return None
 
     min_tier = job.min_tier_required or 1
     eligible_ids = {v.id for v in vendors if v.tier >= min_tier}
 
-    try:
-        chosen_id = await bricks_smart_assign(job, vendors)
-        if chosen_id:
-            logger.info(f"Job {job_id} assigned via Bricks AI to {chosen_id}")
-            if chosen_id in eligible_ids:
+    for attempt in range(1, _MAX_ASSIGNMENT_ATTEMPTS + 1):
+        try:
+            chosen_id = await bricks_smart_assign(job, vendors)
+            if chosen_id and chosen_id in eligible_ids:
+                logger.info(f"Job {job_id} assigned via Bricks AI to {chosen_id} (attempt {attempt})")
                 await _update_job_assignee(job_id, chosen_id)
                 return chosen_id
-            else:
+            if chosen_id:
                 logger.warning(
                     f"Bricks AI suggested vendor {chosen_id} which is ineligible "
-                    f"(not found or below min_tier={min_tier}). Falling back."
+                    f"(not found or below min_tier={min_tier}). Falling back (attempt {attempt})."
                 )
-    except Exception:
-        logger.exception(f"Bricks AI assignment failed for job {job_id}")
+        except Exception:
+            logger.exception(f"Bricks AI assignment failed for job {job_id} (attempt {attempt})")
 
-    chosen_id = pick_vendor_rule_based(job, vendors)
-    if chosen_id is not None:
-        logger.info(f"Job {job.id} assigned via rule-based fallback to {chosen_id}")
-        await _update_job_assignee(job_id, chosen_id)
-        return chosen_id
+        chosen_id = pick_vendor_rule_based(job, vendors)
+        if chosen_id is not None:
+            logger.info(f"Job {job.id} assigned via rule-based fallback to {chosen_id} (attempt {attempt})")
+            await _update_job_assignee(job_id, chosen_id)
+            return chosen_id
 
-    logger.warning(f"No vendor could be assigned for job {job_id} (attempt {attempt}/{_MAX_ASSIGNMENT_ATTEMPTS}).")
-    if attempt >= _MAX_ASSIGNMENT_ATTEMPTS:
-        await db.table("jobs").update({"status": "dispatch_failed"}).eq("id", job_id).execute()
-        await _escalate_no_vendor(job, attempt)
+        logger.warning(f"No vendor assigned for job {job_id} (attempt {attempt}/{_MAX_ASSIGNMENT_ATTEMPTS}).")
+
+    await db.table("jobs").update({"status": "dispatch_failed"}).eq("id", job_id).execute()
+    await _escalate_no_vendor(job, _MAX_ASSIGNMENT_ATTEMPTS)
     return None

@@ -715,29 +715,45 @@ async def _validate_noshow_claim(
     if existing.data:
         return {"ok": False, "reason": "A no-show claim already exists for this job"}
 
-    # Gate 4: time window (T-15min → T+90min)
-    shoot_start_str = job.get("time_window_start") or job.get("scheduled_at")
-    if shoot_start_str:
+    # Gate 4: time window — claim must be filed within T-15 to T+90 of shoot start.
+    # time_window_start is stored as "HH:MM" so we combine it with scheduled_date to
+    # build a full datetime. Fail-closed: if we cannot determine the window, reject.
+    scheduled_date_str = job.get("scheduled_date", "")
+    time_window_str = job.get("time_window_start") or ""
+    if time_window_str and not scheduled_date_str:
+        # Legacy: scheduled_at may be a full ISO datetime
+        scheduled_at_str = job.get("scheduled_at", "")
         try:
-            shoot_start = datetime.fromisoformat(shoot_start_str.replace("Z", "+00:00"))
-            now_utc = datetime.now(timezone.utc)
-            earliest = shoot_start - timedelta(minutes=_NOSHOW_WINDOW_BEFORE_MIN)
-            latest = shoot_start + timedelta(minutes=_NOSHOW_WINDOW_AFTER_MIN)
-            if now_utc < earliest:
-                return {
-                    "ok": False,
-                    "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M UTC')}"
-                }
-            if now_utc > latest:
-                return {
-                    "ok": False,
-                    "reason": (
-                        f"Claim window expired — must be filed within "
-                        f"{_NOSHOW_WINDOW_AFTER_MIN} minutes of scheduled shoot time"
-                    )
-                }
+            shoot_start = datetime.fromisoformat(scheduled_at_str.replace("Z", "+00:00"))
         except (ValueError, TypeError):
-            pass
+            return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
+    elif scheduled_date_str and time_window_str:
+        try:
+            # time_window_start is "HH:MM"; combine with scheduled_date
+            shoot_start = datetime.fromisoformat(
+                f"{scheduled_date_str}T{time_window_str[:5]}:00"
+            ).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
+    else:
+        return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
+
+    now_utc = datetime.now(timezone.utc)
+    earliest = shoot_start - timedelta(minutes=_NOSHOW_WINDOW_BEFORE_MIN)
+    latest = shoot_start + timedelta(minutes=_NOSHOW_WINDOW_AFTER_MIN)
+    if now_utc < earliest:
+        return {
+            "ok": False,
+            "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M UTC')}"
+        }
+    if now_utc > latest:
+        return {
+            "ok": False,
+            "reason": (
+                f"Claim window expired — must be filed within "
+                f"{_NOSHOW_WINDOW_AFTER_MIN} minutes of scheduled shoot time"
+            )
+        }
 
     # Gate 4.5: GPS proximity — soft block (hold for review) if photographer is far from property
     if photographer_lat is not None and photographer_lng is not None:
@@ -806,10 +822,7 @@ async def _validate_noshow_claim(
                 if bk_status == "cancelled" and cancelled_at:
                     try:
                         cancel_dt = datetime.fromisoformat(cancelled_at.replace("Z", "+00:00"))
-                        shoot_dt = datetime.fromisoformat(
-                            (shoot_start_str or "").replace("Z", "+00:00")
-                        ) if shoot_start_str else None
-                        if shoot_dt and cancel_dt < shoot_dt:
+                        if cancel_dt < shoot_start:
                             return {
                                 "ok": False,
                                 "reason": "Booking was cancelled before the shoot — no trip fee applies"

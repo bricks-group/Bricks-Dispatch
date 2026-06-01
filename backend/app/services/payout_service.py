@@ -158,6 +158,13 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # net_payout = base fee + trip fees + HST (if registered)
     net_payout = payout_amount + pending_trip_fees_total + hst_paid_cents
 
+    # Reserve trip fees before touching Stripe to prevent double-payout on retry.
+    # If Stripe succeeds we promote to paid_out; if it fails we release the reservation.
+    if pending_trip_fee_ids:
+        await db.table("agent_noshow_trip_fees").update({
+            "status": "reserved",
+        }).in_("id", pending_trip_fee_ids).execute()
+
     # Attempt Stripe transfer
     try:
         from ..services.stripe_connect_service import handle_payout_to_vendor
@@ -178,7 +185,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             "paid_at": now,
         }).eq("id", payout_id).execute()
 
-        # Mark trip fees as paid out
+        # Promote trip fees to paid_out now that Stripe succeeded
         if pending_trip_fee_ids:
             await db.table("agent_noshow_trip_fees").update({
                 "status": "paid_out",
@@ -203,6 +210,12 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
 
     except Exception as e:
         logger.error(f"Payout {payout_id} failed for job {job_id}: {e}")
+
+        # Release reserved trip fees so they are included in the next payout attempt
+        if pending_trip_fee_ids:
+            await db.table("agent_noshow_trip_fees").update({
+                "status": "pending",
+            }).in_("id", pending_trip_fee_ids).execute()
 
         # Mark payout as failed
         await db.table("payouts").update({
