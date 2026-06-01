@@ -677,7 +677,7 @@ _NOSHOW_WINDOW_BEFORE_MIN = 15
 _NOSHOW_WINDOW_AFTER_MIN = 90
 _NOSHOW_RATE_LIMIT_DAYS = 30
 _NOSHOW_RATE_LIMIT_THRESHOLD = 1
-_NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 3
+_NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 2
 _GPS_MAX_DISTANCE_KM = 0.5            # 500m — flag if photographer is further away
 _ESCALATION_MIN_WAIT_MIN = 15         # must wait 15 min after first SMS before filing
 
@@ -1126,19 +1126,24 @@ async def report_contractor_no_show(
     if assignee_id and assignee_id != "default_user":
         try:
             res_m = await db.table("vendor_members").select(
-                "total_assignments, cancel_rate"
+                "total_assignments, cancel_rate, on_time_rate"
             ).eq("id", assignee_id).maybe_single().execute()
             if res_m.data:
-                total = (res_m.data.get("total_assignments") or 0) + 1
+                prev_total = res_m.data.get("total_assignments") or 0
+                total = prev_total + 1
                 prev_cancel = res_m.data.get("cancel_rate") or 0.0
-                prev_cancels = round(prev_cancel * (total - 1))
-                new_rate = round((prev_cancels + 1) / total, 4)
+                prev_cancels = round(prev_cancel * prev_total)
+                new_cancel_rate = round((prev_cancels + 1) / total, 4)
+                prev_on_time_rate = res_m.data.get("on_time_rate") or 1.0
+                prev_on_time_count = round(prev_on_time_rate * prev_total)
+                new_on_time_rate = round(prev_on_time_count / total, 4)
                 await db.table("vendor_members").update({
                     "total_assignments": total,
-                    "cancel_rate": new_rate,
+                    "cancel_rate": new_cancel_rate,
+                    "on_time_rate": new_on_time_rate,
                     "updated_at": now,
                 }).eq("id", assignee_id).execute()
-                logger.warning(f"Contractor {assignee_id} no-show: cancel_rate now {new_rate:.1%}")
+                logger.warning(f"Contractor {assignee_id} no-show: cancel_rate now {new_cancel_rate:.1%}, on_time_rate now {new_on_time_rate:.1%}")
         except Exception as e:
             logger.error(f"cancel_rate update failed for member {assignee_id}: {e}")
 
@@ -1159,13 +1164,6 @@ async def report_contractor_no_show(
         redispatch_member_id = await assign_vendor_for_job(job_id)
     except Exception as e:
         logger.error(f"Re-dispatch after contractor no-show failed for job {job_id}: {e}")
-
-    try:
-        from ..services.client_comms import notify_booking_confirmed
-        if redispatch_member_id:
-            await notify_booking_confirmed(job_id)
-    except Exception as e:
-        logger.error(f"Re-dispatch notification failed for job {job_id}: {e}")
 
     return {
         "job_id": job_id,

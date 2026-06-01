@@ -185,7 +185,7 @@ START_TIME = time.time()
 
 
 def _uptime_seconds() -> int:
-    return int(time.time() - _START_TIME)
+    return int(time.time() - START_TIME)
 
 
 def _sentry_status() -> str:

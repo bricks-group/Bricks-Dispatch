@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/v1/post-production", tags=["post-production"])
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 CALLBACK_SECRET = os.environ.get("POST_PRODUCTION_CALLBACK_SECRET", "")
 
-INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
+INTERNAL_API_KEYS_STR = os.environ.get("INTERNAL_API_KEYS", "")
 
 
 def _verify_callback_secret(secret: Optional[str]) -> None:
@@ -337,9 +337,10 @@ async def reconcile_stuck_uploads(
     """
     Mark Fotello/Autoenhance/BoxBrownie uploads stuck >2h as failed, then re-trigger finalization.
     """
-    if not INTERNAL_API_KEY:
-        raise HTTPException(status_code=500, detail="INTERNAL_API_KEY not configured")
-    if x_internal_api_key != INTERNAL_API_KEY:
+    if not INTERNAL_API_KEYS_STR:
+        raise HTTPException(status_code=401, detail="INTERNAL_API_KEYS not configured")
+    _keys = [k.strip() for k in INTERNAL_API_KEYS_STR.split(",") if k.strip()]
+    if not x_internal_api_key or x_internal_api_key not in _keys:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     db = await get_db()
