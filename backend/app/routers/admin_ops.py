@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Header, HTTPException
 
@@ -20,9 +20,6 @@ async def create_lead(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """
-    Record a new potential vendor lead discovered during acquisition.
-    """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
@@ -39,9 +36,6 @@ async def list_leads(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """
-    View the acquisition funnel.
-    """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
@@ -62,9 +56,6 @@ async def list_applicants(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """
-    List vendors in the onboarding pipeline.
-    """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     
@@ -89,9 +80,6 @@ async def update_applicant_status(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """
-    Update onboarding status or vetting details for an applicant.
-    """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     
@@ -106,10 +94,9 @@ async def update_applicant_status(
         
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
-    # Special logic for final approval
     if update_data.get("onboarding_status") == "approved":
         update_data["is_active"] = True
-        update_data["role"] = "Photographer" # Upgrade from 'Applicant'
+        update_data["role"] = "Photographer"
     
     res = await (await get_db()).table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()
     
@@ -124,9 +111,6 @@ async def get_applicant_documents(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """
-    Retrieve compliance documents for a vendor.
-    """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     
@@ -140,13 +124,10 @@ async def get_applicant_documents(
 async def verify_document(
     member_id: str,
     doc_id: str,
-    status: str = "verified", # verified or rejected
+    status: str = "verified",
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """
-    Approve or Reject a compliance document (COI, WSIB, etc).
-    """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     
@@ -170,12 +151,6 @@ async def validate_rpas_batch(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """
-    Batch-validate all pending RPAS certificate documents.
-    Runs Gemini Vision + TC registry lookup on each uploaded cert.
-    dry_run=true (default) returns candidates without running validation.
-    dry_run=false triggers validation for each pending cert.
-    """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
@@ -183,7 +158,6 @@ async def validate_rpas_batch(
 
     db = await get_db()
 
-    # Find all pending RPAS cert documents
     res_docs = await db.table("vendor_documents").select(
         "id, member_id, file_url, status"
     ).eq("doc_type", "rpas_certificate").eq("status", "pending").limit(50).execute()
@@ -254,7 +228,6 @@ async def validate_rpas_batch(
 
 # ---------------------------------------------------------------------------
 # No-show claim review queue
-# Claims flagged by the rate-limit gate arrive here before any charge fires.
 # ---------------------------------------------------------------------------
 
 @router.get("/noshow-claims")
@@ -266,7 +239,7 @@ async def list_noshow_claims(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    List no-show trip fee claims. Defaults to pending_review (the admin work queue).
+    List no-show trip fee claims. Defaults to pending_review (admin work queue).
     Pass status=all to see every claim regardless of state.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
@@ -288,16 +261,15 @@ async def list_noshow_claims(
 @router.post("/noshow-claims/{claim_id}/review")
 async def review_noshow_claim(
     claim_id: str,
-    action: str,  # "approve" or "reject"
+    action: str,
     admin_notes: Optional[str] = None,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
     Approve or reject a flagged no-show claim.
-
-    approve → fires the Stripe charge against the agent, sets status='pending' (paid on next payout)
-    reject  → voids the claim, sets status='rejected', job status remains agent_no_show for ops review
+    approve → status='pending' (paid on next payout cycle)
+    reject  → status='rejected', claim voided
     """
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
@@ -339,4 +311,117 @@ async def review_noshow_claim(
         "status": new_status,
         "reviewed_by": actor_id,
         "note": "Photographer will receive $60 on next payout cycle." if action == "approve" else "Claim voided.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# No-show reconciliation
+# ---------------------------------------------------------------------------
+
+@router.get("/reconcile-noshow")
+async def reconcile_noshow_claims(
+    dry_run: bool = True,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Match agent_noshow_trip_fees against bookings.status to surface discrepancies.
+
+    Detects:
+    - fee_without_retention: trip fee exists but booking not marked as retained
+    - retention_without_fee: booking shows no-show but no trip fee record (photographer did not file)
+    - booking_missing: trip fee references a booking that no longer exists
+
+    dry_run=true (default): report mismatches, write nothing.
+    dry_run=false: write reconciliation_events rows for each mismatch.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    db = await get_db()
+
+    # All active (non-rejected) trip fee claims
+    res_fees = await db.table("agent_noshow_trip_fees").select(
+        "id, job_id, booking_id, member_id, status, amount_cents, created_at"
+    ).in_("status", ["pending", "paid_out", "pending_review"]).execute()
+    fees = res_fees.data or []
+
+    mismatches = []
+
+    for fee in fees:
+        booking_id = fee.get("booking_id")
+        if not booking_id:
+            continue
+        try:
+            res_bk = await db.table("bookings").select(
+                "id, status"
+            ).eq("id", booking_id).maybe_single().execute()
+
+            if not res_bk.data:
+                mismatches.append({
+                    "type": "booking_missing",
+                    "fee_id": fee["id"],
+                    "booking_id": booking_id,
+                    "note": "Booking record not found",
+                })
+                continue
+
+            bk_status = res_bk.data.get("status", "")
+            if bk_status not in ("retained", "agent_no_show", "no_show"):
+                mismatches.append({
+                    "type": "fee_without_retention",
+                    "fee_id": fee["id"],
+                    "booking_id": booking_id,
+                    "booking_status": bk_status,
+                    "fee_status": fee["status"],
+                    "amount_cents": fee["amount_cents"],
+                    "note": "Trip fee exists but booking not marked as retained — Booking webhook may need retry",
+                })
+        except Exception as e:
+            mismatches.append({
+                "type": "error",
+                "fee_id": fee["id"],
+                "booking_id": booking_id,
+                "note": str(e),
+            })
+
+    # Reverse check: retained bookings with no trip fee
+    try:
+        res_bk_noshow = await db.table("bookings").select(
+            "id, status"
+        ).in_("status", ["retained", "agent_no_show", "no_show"]).limit(200).execute()
+        fee_booking_ids = {f.get("booking_id") for f in fees}
+        for bk in (res_bk_noshow.data or []):
+            if bk["id"] not in fee_booking_ids:
+                mismatches.append({
+                    "type": "retention_without_fee",
+                    "booking_id": bk["id"],
+                    "booking_status": bk["status"],
+                    "note": "Booking retained but no photographer trip fee — photographer may not have filed",
+                })
+    except Exception as e:
+        logger.warning(f"Reverse reconciliation check failed: {e}")
+
+    if not dry_run and mismatches:
+        now = datetime.now(timezone.utc).isoformat()
+        for m in mismatches:
+            try:
+                await db.table("reconciliation_events").insert({
+                    "event_type": m["type"],
+                    "booking_id": m.get("booking_id"),
+                    "fee_id": m.get("fee_id"),
+                    "note": m.get("note", ""),
+                    "created_at": now,
+                    "resolved": False,
+                }).execute()
+            except Exception:
+                pass
+
+    return {
+        "dry_run": dry_run,
+        "checked_fees": len(fees),
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
     }
