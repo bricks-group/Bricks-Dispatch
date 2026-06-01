@@ -23,14 +23,16 @@ All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
 - `backend/app/routers/vendor_os.py` — Vendor OS dashboard: overview, team, jobs, earnings, performance
 - `backend/app/routers/onboarding.py` — Contractor application, IC agreement, document upload
 - `backend/app/routers/post_production.py` — Provider callbacks (Fotello/Autoenhance/BoxBrownie), reconcile
-- `backend/app/routers/admin_ops.py` — Leads, applicant vetting
+- `backend/app/routers/admin_ops.py` — Leads, applicant vetting, no-show review, reconciliation
 - `backend/app/services/vendor_selection.py` — Primary + fallback vendor assignment
 - `backend/app/integrations/bricks_ai_dispatch.py` — **Deterministic weighted scorer** (primary dispatch)
 - `backend/app/services/client_comms.py` — Resend emails: booking confirmed + photographer en route
 - `backend/app/services/qc_agent.py` — Gemini vision QC agent (scores uploaded photos 0-100)
 - `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration
 - `backend/app/services/payout_service.py` — Stripe Connect transfers, tier percentages
+- `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (T+15 before claim)
 - `backend/app/shared/schemas.py` — Pydantic models
+- `backend/migrations/20260601_agent_noshow_escalations.sql` — new tables: agent_noshow_escalations, reconciliation_events
 
 ## Router Prefix Architecture
 Routers carry their own prefix internally — do NOT add an outer prefix at `include_router`:
@@ -129,29 +131,31 @@ pick_vendor_rule_based(job, vendors)
 
 ## No-Show Policy (Snappr model)
 
-**Agent/client no-show** → photographer gets $60 trip fee from Bricks margin (cancellation revenue):
-- `POST /api/vendor-os/jobs/{job_id}/agent-no-show` — photographer reports no-show
-- 6 validation gates: job ownership, active state, idempotency, time window (T-15→T+90), booking not pre-cancelled, rate limit
+**Agent/client no-show** → photographer gets $60 trip fee from Bricks margin:
+- `POST /api/vendor-os/jobs/{job_id}/escalate-absent-agent` — sends Twilio SMS to agent (attempt 1 + 2); must be called before claiming when Twilio is configured
+- `POST /api/vendor-os/jobs/{job_id}/agent-no-show` — files the claim (accepts JSON body: notes, photographer_lat, photographer_lng)
+- 8 validation gates: ownership, active state, idempotency, time window (T-15→T+90), GPS proximity (>500m → hold), escalation check (15 min wait after SMS), booking not pre-cancelled, rate limits
+- GPS gate: if photographer submits lat/lng and is >500m from property → held for review (not hard rejected)
+- Escalation gate: if `TWILIO_ACCOUNT_SID` set, must have called `escalate-absent-agent` + waited 15 min; gracefully degrades if Twilio not configured
 - Rate limit: 2nd+ claim in 30 days → `pending_review` (held for admin before payout released)
 - On pass: `agent_noshow_trip_fees` record created, Booking notified via status webhook
 - Booking applies 100% retention penalty (no refund, no credit returned); sends agent email
 - Estate/high-value cap: max $500 retention on no-shows (chargeback protection)
 - $60 added to photographer's next payout cycle by `payout_service.py`
+- Payout earnings endpoint returns `pending_trip_fees` list and `pending_trip_fees_total` ✅
 
 **Admin review queue:**
 - `GET /api/admin/noshow-claims?status=pending_review`
 - `POST /api/admin/noshow-claims/{id}/review?action=approve|reject`
+- `GET /api/admin/reconcile-noshow?dry_run=true` — matches trip fees vs booking retention status
 
 **Contractor no-show** (photographer ghosts) → `cancel_rate` penalty only, no cash, job re-dispatched.
 
-**Known gaps (pre-launch):**
-- No GPS/geofence check at claim time (mobile app change needed)
-- No automated SMS/call escalation before flag button activates
-- No in-app agent dispute flow (frontend TODO)
-- No per-agent rate limit (only per-photographer) — collusion axis not covered
-- Timezone: verify `scheduled_time` is UTC before T-15/T+90 window math (risk of 4-5h drift)
+**No-show escalation tables (apply migration: backend/migrations/20260601_agent_noshow_escalations.sql):**
+- `agent_noshow_escalations` — SMS attempt log (job_id, attempt_number, sms_sid, sent_at)
+- `reconciliation_events` — fee vs booking mismatch log (written by reconcile-noshow dry_run=false)
 
-## Current Status (2026-05-28)
+## Current Status (2026-06-01)
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - **Deterministic weighted dispatch scorer (specialty/proximity/on_time/quality/reliability/load)** ✅
 - **Repeat-agent bonus (+5pts if vendor has shot for this agent before)** ✅
@@ -175,6 +179,10 @@ pick_vendor_rule_based(job, vendors)
 - **Weather context: Open-Meteo API for outdoor/drone jobs** ✅
 - **BoxBrownie virtual staging: fully active (photo editing, retouching, day-to-dusk, item removal, virtual staging)** ✅
 - app.json bundle IDs + EAS project ID configured (`com.bricks.dispatch`) ✅
+- **GPS geofence gate: >500m from property → hold_for_review (soft gate, coordinates optional)** ✅
+- **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; gate in no-show claim flow (15-min wait after first SMS); graceful no-op if Twilio not configured** ✅
+- **Reconcile-noshow: GET /api/admin/reconcile-noshow detects fee/booking mismatches; writes reconciliation_events on dry_run=false** ✅
+- **Trip fee pending total in earnings API (pending_trip_fees + pending_trip_fees_total)** ✅
 
 ## Remaining Before Live Traffic
 
@@ -184,19 +192,17 @@ pick_vendor_rule_based(job, vendors)
 - `GEMINI_API_KEY` — for QC agent + dispatch explainability
 - `FOTELLO_API_KEY` — add once Fotello plan is active
 - `INTERNAL_API_KEYS` — rotated; current value stored in app_secrets table
+- `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` — for no-show SMS escalation
 
 **Ops tasks (pre-launch):**
 - [ ] **Ontario employment lawyer review of IC agreement** — budget $2-4K (non-negotiable)
 - [ ] **Agent ToS must explicitly disclose 100% no-show retention** — conspicuous at booking, not buried
 - [ ] **Confirm HST treatment of forfeited no-show bookings** with accountant (service never rendered)
-- [ ] **GPS/geofence gate at claim time** — photographer must be within ~100m of property
-- [ ] **Automated escalation before flag** — T+10 SMS to agent, T+20 call; no flag button until T+30
-- [ ] **Agent in-app dispute flow** — 72hr window; reply-to email presently only fallback
-- [ ] **No-show reconciliation nightly job** — match `agent_noshow_trip_fees` vs `bookings.status`
-- [ ] **Trip fee amount in photographer payout summary UI** — they should see pending trip fees
-- [ ] Register Fotello/Autoenhance webhook URLs
-- [ ] Stripe Connect live E2E verification
+- [ ] **Apply migration**: `backend/migrations/20260601_agent_noshow_escalations.sql` in Supabase SQL editor
+- [ ] Register Fotello/Autoenhance webhook callback URLs in each provider dashboard
+- [ ] Stripe Connect live E2E verification (test real CAD transfer end-to-end)
 - [ ] TestFlight upload (Kam)
 - [ ] Play Store internal track (Kam)
 - [ ] Verify Transport Canada Advanced RPAS for GTA drone photographers
 - [ ] Define ops escalation for dispatch failures (3x retry → manual queue)
+- [ ] **Agent in-app dispute flow**: mobile app frontend — 72hr window, dispute form that sends to Booking `POST /api/bookings/{id}/dispute` (backend already handles in Booking)
