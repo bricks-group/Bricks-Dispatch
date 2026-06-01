@@ -82,17 +82,19 @@ pick_vendor_rule_based(job, vendors)
 ## Vendor Model: Snappr/Homejab IC Model
 - No insurance/WSIB blocking at dispatch — contractors self-certify at onboarding
 - `REQUIRE_VENDOR_COMPLIANCE` **removed entirely** from dispatch code
-- IC agreement v1.0 — 15 clauses covering Ontario law:
+- IC agreement **v1.1** (effective 2026-06-01) — 15 clauses covering Ontario law:
   - Independent contractor status (ESA 2000 exclusion explicit)
-  - Right to refuse work (no penalty for declining jobs)
+  - Right to refuse work (no penalty for declines within 40% rolling-30d threshold)
   - Right to engage others / no exclusivity / no non-compete
   - HST registration responsibility (>$30K threshold)
   - Insurance/liability disclaimer + contractor indemnity
   - Transport Canada drone compliance
   - IP assignment to Bricks
-  - Ontario arbitration governing law
+  - Ontario arbitration governing law; Heller compliance
+  - Clause 8 payout rates: "Bricks retains platform fee (Tier A: 60%; Tier B: 50%; Tier C: 40%); your payout is the remainder" — these are Bricks' FEES, the inverse of vendor payout (40%/50%/60% → vendor gets 60%/50%/40%). **Do not "fix" these numbers** — they are correct.
 - `GET /api/onboarding/ic-agreement` — returns versioned agreement text
 - Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`
+- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.1"`
 - `ic_agreement_version='0.0'` = pre-dates new agreement; re-prompt on next login
 
 ## Drone Certification (Transport Canada RPAS)
@@ -128,6 +130,10 @@ pick_vendor_rule_based(job, vendors)
 - Stripe Connect is Express (CA) — transfers use `stripe_account` parameter
 - Never hardcode secrets as default values in `os.environ.get()`
 - Storage is Supabase Storage (`db.storage.from_(STORAGE_BUCKET)`), bucket `brxs-deliverables` — NOT AWS S3
+- `time_window_start` is stored as `"HH:MM"` string — **always combine with `scheduled_date` before datetime math**. `datetime.fromisoformat("HH:MM")` raises ValueError. Gate 4 is fail-closed.
+- Trip fees flow: `pending` → `reserved` (before Stripe) → `paid_out` (after Stripe). Never go pending→paid_out directly.
+- `assign_vendor_for_job(job_id)` has an internal 3-attempt retry loop — callers do not need to retry
+- IC Clause 8 lists Bricks' platform FEE (60%/50%/40%), not vendor payout — the numbers are correct and intentionally inverse of TIER_PERCENTAGES
 
 ## No-Show Policy (Snappr model)
 
@@ -183,6 +189,14 @@ pick_vendor_rule_based(job, vendors)
 - **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; gate in no-show claim flow (15-min wait after first SMS); graceful no-op if Twilio not configured** ✅
 - **Reconcile-noshow: GET /api/admin/reconcile-noshow detects fee/booking mismatches; writes reconciliation_events on dry_run=false** ✅
 - **Trip fee pending total in earnings API (pending_trip_fees + pending_trip_fees_total)** ✅
+- **PR #2 bug fixes (2026-06-01)** ✅
+  - Gate 4 fail-closed: `time_window_start` ("HH:MM") combined with `scheduled_date` before fromisoformat; missing/invalid → 400 (not silent pass)
+  - Trip fee double-payout prevented: fees reserved before Stripe, released on failure, promoted to paid_out on success
+  - `assign_vendor_for_job` has internal 3-attempt retry loop; escalation is now reachable
+  - `_get_agent_email_for_job` annotation fixed: `Optional[str]` → `Optional[tuple]`
+  - `VendorApplicationCreate.ic_agreement_version` default `"1.0"` → `"1.1"`
+  - IC agreement `effective_date` `"2026-01-01"` → `"2026-06-01"`
+  - `test_e2e_payout_flow.py`: tier percentages updated to 35/45/55%; result key `amount` → `base_amount`
 
 ## Remaining Before Live Traffic
 
