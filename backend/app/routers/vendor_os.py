@@ -528,7 +528,9 @@ async def get_vendor_os_earnings(
     if member_id:
         res_fees = await (await get_db()).table("agent_noshow_trip_fees").select(
             "id, amount_cents, job_id, created_at, status"
-        ).eq("member_id", member_id).in_("status", ["pending", "pending_review"]).execute()
+        ).eq("member_id", member_id).in_("status", ["pending", "pending_review"]).gte(
+            "created_at", week_start.isoformat()
+        ).execute()
         for fee in (res_fees.data or []):
             amount_cad = (fee.get("amount_cents") or 0) / 100
             pending_trip_fees.append({
@@ -603,7 +605,7 @@ async def update_vendor_job_status(
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
 
-    if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
+    if new_status in ("completed", "delivered"):
         try:
             from ..services.payout_service import trigger_payout_for_job
             await trigger_payout_for_job(db, job_id)

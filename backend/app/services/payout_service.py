@@ -15,7 +15,6 @@ HST on contractor payouts (ETA principal model):
 """
 
 import logging
-import os
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -113,14 +112,19 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         existing_payout_id = existing.data["id"]
         existing_status = existing.data.get("status", "pending")
         logger.info(f"Payout already exists for job {job_id}: {existing_payout_id} (status={existing_status})")
-        # Any pending trip fees filed after this payout ran will be included in the next payout trigger.
-        # Do NOT mark them paid_out here — no Stripe transfer was made for them in this cycle.
-        return {
-            "payout_id": existing_payout_id,
-            "status": existing_status,
-            "amount": existing.data["amount"],
-            "already_exists": True,
-        }
+        if existing_status != "failed":
+            # Already paid or in-flight — idempotent return. Trip fees filed after this
+            # payout completed will be included in the next payout cycle.
+            return {
+                "payout_id": existing_payout_id,
+                "status": existing_status,
+                "base_amount": existing.data.get("amount"),
+                "already_exists": True,
+            }
+        # Failed payout — delete the stale record and retry from scratch so the
+        # photographer is not permanently blocked from receiving payment.
+        logger.info(f"Retrying failed payout for job {job_id} (removing stale record {existing_payout_id})")
+        await db.table("payouts").delete().eq("id", existing_payout_id).execute()
 
     # Fetch pending trip fees BEFORE creating the payout record so we can compute the
     # complete hst_paid_cents (base fee HST + trip fee HST) in the initial insert.
@@ -184,6 +188,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     try:
         stripe_transfer_id = await handle_payout_to_vendor(
             vendor_id=vendor_id,
+            contractor_id=contractor_id or "",
             amount=net_payout,
             booking_id=job.get("booking_id", job_id),
             payout_id=payout_id,

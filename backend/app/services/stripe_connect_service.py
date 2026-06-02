@@ -18,19 +18,25 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, payout_id: str = "") -> str:
+async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, payout_id: str = "", contractor_id: str = "") -> str:
     """
     Transfer funds to the vendor's connected Stripe account.
     Amount must be in cents. Returns the Stripe transfer ID.
     payout_id is used as the Stripe idempotency key — scoped per payout so a retry
     with the same payout_id and amount is safe, but a new payout (different id) gets
     a fresh key even for the same booking.
+    contractor_id should be the assignee's vendor_members.id (photographer-level).
+    When provided it is used to look up the Stripe account directly, avoiding the
+    multi-row ambiguity of querying by org-level vendor_id.
     """
-    response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
+    if contractor_id:
+        response = supabase.table("contractors").select("id, stripe_account_id").eq("id", contractor_id).maybe_single().execute()
+    else:
+        response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
     contractor = response.data
 
     if not contractor or not contractor.get("stripe_account_id"):
-        raise ValueError(f"Stripe account not found for vendor: {vendor_id}")
+        raise ValueError(f"Stripe account not found for vendor: {vendor_id} contractor: {contractor_id}")
 
     stripe_account_id = contractor["stripe_account_id"]
     idempotency_key = f"payout_{payout_id}" if payout_id else f"payout_{booking_id}"

@@ -16,7 +16,6 @@ Drone gate: vendor must have drone_certified=True for drone job_type.
 import asyncio
 import json
 import logging
-import math
 import os
 from datetime import datetime, timezone
 from typing import List, Optional
