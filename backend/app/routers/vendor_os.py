@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import httpx
 import os
 import uuid
@@ -31,6 +32,8 @@ from ..shared.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/vendor-os", tags=["vendor-os"])
+
+_TORONTO_TZ = ZoneInfo("America/Toronto")
 
 
 
@@ -401,7 +404,7 @@ async def get_vendor_performance(
     on_time = 0
     for job in completed:
         try:
-            deadline = datetime.strptime(f"{job.get('scheduled_date')} {job.get('time_window_end', '23:59')}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            deadline = datetime.strptime(f"{job.get('scheduled_date')} {job.get('time_window_end', '23:59')}", "%Y-%m-%d %H:%M").replace(tzinfo=_TORONTO_TZ)
             updated_at = datetime.fromisoformat(job.get("updated_at"))
             if updated_at <= deadline:
                 on_time += 1
@@ -619,7 +622,7 @@ async def update_vendor_job_status(
                 if sched_date and time_end:
                     deadline = datetime.strptime(
                         f"{sched_date} {time_end}", "%Y-%m-%d %H:%M"
-                    ).replace(tzinfo=timezone.utc)
+                    ).replace(tzinfo=_TORONTO_TZ)
                     was_on_time = datetime.now(timezone.utc) <= deadline
 
                 res_m = await db.table("vendor_members").select(
@@ -720,10 +723,10 @@ async def _validate_noshow_claim(
             return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
     elif scheduled_date_str and time_window_str:
         try:
-            # time_window_start is "HH:MM"; combine with scheduled_date
+            # time_window_start is "HH:MM" in Ontario local time — localize before UTC math
             shoot_start = datetime.fromisoformat(
                 f"{scheduled_date_str}T{time_window_str[:5]}:00"
-            ).replace(tzinfo=timezone.utc)
+            ).replace(tzinfo=_TORONTO_TZ)
         except (ValueError, TypeError):
             return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
     else:
@@ -849,25 +852,33 @@ async def _validate_noshow_claim(
     if booking_id:
         try:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
-            res_agent_bookings = await db.table("agent_noshow_trip_fees").select(
-                "booking_id"
-            ).gte("created_at", cutoff).in_("status", ["pending", "paid_out", "pending_review"]).execute()
-            recent_booking_ids = list({r["booking_id"] for r in (res_agent_bookings.data or []) if r.get("booking_id")})
-            if recent_booking_ids:
-                res_this_bk = await db.table("bookings").select("user_id").eq(
-                    "id", booking_id
-                ).maybe_single().execute()
-                agent_user_id = (res_this_bk.data or {}).get("user_id") if res_this_bk.data else None
-                if agent_user_id:
-                    res_agent_prev = await db.table("bookings").select("id").eq(
-                        "user_id", agent_user_id
-                    ).in_("id", recent_booking_ids).execute()
-                    agent_noshow_count = len(res_agent_prev.data or [])
-                    if agent_noshow_count >= _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD:
+            # Find bookings by this agent that had no-show trip fees in the window
+            res_this_bk = await db.table("bookings").select("user_id").eq(
+                "id", booking_id
+            ).maybe_single().execute()
+            agent_user_id = (res_this_bk.data or {}).get("user_id") if res_this_bk.data else None
+            if agent_user_id:
+                res_agent_bks = await db.table("bookings").select("id").eq(
+                    "user_id", agent_user_id
+                ).execute()
+                agent_booking_ids = [r["id"] for r in (res_agent_bks.data or []) if r.get("id")]
+                if agent_booking_ids:
+                    # Count DISTINCT photographers who filed claims against this agent —
+                    # collusion requires multiple photographers, not just multiple claims from one.
+                    res_against = await db.table("agent_noshow_trip_fees").select(
+                        "member_id"
+                    ).in_("booking_id", agent_booking_ids[:100]).gte("created_at", cutoff).in_(
+                        "status", ["pending", "paid_out", "pending_review"]
+                    ).execute()
+                    distinct_photographers = len({
+                        r["member_id"] for r in (res_against.data or []) if r.get("member_id")
+                    })
+                    if distinct_photographers >= _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD:
                         collusion_hold = True
                         collusion_hold_reason = (
-                            f"Agent-level flag: {agent_noshow_count} no-show claims against this agent "
-                            f"in {_NOSHOW_RATE_LIMIT_DAYS} days — held for admin review"
+                            f"Agent-level flag: {distinct_photographers} distinct photographers filed "
+                            f"no-show claims against this agent in {_NOSHOW_RATE_LIMIT_DAYS} days "
+                            f"— held for admin review"
                         )
         except Exception as e:
             logger.warning(f"Agent rate limit check failed for job {job_id}: {e}")

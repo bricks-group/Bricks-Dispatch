@@ -115,7 +115,35 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             "already_exists": True,
         }
 
-    # Create pending payout record
+    # Fetch pending trip fees BEFORE creating the payout record so we can compute the
+    # complete hst_paid_cents (base fee HST + trip fee HST) in the initial insert.
+    # This avoids an inconsistent state where the payout record has stale HST if the
+    # post-Stripe DB update fails.
+    pending_trip_fees_total = 0
+    pending_trip_fee_ids = []
+    if assignee_id and assignee_id != "default_user":
+        res_fees = await db.table("agent_noshow_trip_fees").select("id, amount_cents").eq(
+            "member_id", assignee_id
+        ).eq("status", "pending").execute()
+        for fee in (res_fees.data or []):
+            pending_trip_fees_total += fee.get("amount_cents", 0)
+            pending_trip_fee_ids.append(fee["id"])
+
+    # HST on trip fees (if photographer is registered); add to base-fee HST
+    if contractor_hst_rate and pending_trip_fees_total:
+        trip_fee_hst = round(pending_trip_fees_total * contractor_hst_rate)
+        hst_paid_cents += trip_fee_hst
+
+    # net_payout = base fee + trip fees + total HST (if registered)
+    net_payout = payout_amount + pending_trip_fees_total + hst_paid_cents
+
+    if pending_trip_fees_total:
+        logger.info(
+            f"Payout for job {job_id}: adding ${pending_trip_fees_total/100:.2f} trip fee(s) "
+            f"to photographer {assignee_id} (ids: {pending_trip_fee_ids})"
+        )
+
+    # Create payout record with fully computed HST (base + trip fees) in one shot
     payout_record = {
         "job_id": job_id,
         "vendor_id": vendor_id,
@@ -135,32 +163,6 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
 
     # Update job with payout_amount
     await db.table("jobs").update({"payout_amount": payout_amount}).eq("id", job_id).execute()
-
-    # Add any pending trip fee claims (agent no-shows) to this payout.
-    # These are already charged to the agent — photographer is owed the pass-through.
-    # Trip fees also attract HST if photographer is registered (T4A Box 048 includes them).
-    pending_trip_fees_total = 0
-    pending_trip_fee_ids = []
-    if assignee_id and assignee_id != "default_user":
-        res_fees = await db.table("agent_noshow_trip_fees").select("id, amount_cents").eq(
-            "member_id", assignee_id
-        ).eq("status", "pending").execute()
-        for fee in (res_fees.data or []):
-            pending_trip_fees_total += fee.get("amount_cents", 0)
-            pending_trip_fee_ids.append(fee["id"])
-        if pending_trip_fees_total:
-            logger.info(
-                f"Payout {payout_id}: adding ${pending_trip_fees_total/100:.2f} trip fee(s) "
-                f"to photographer {assignee_id} payout (ids: {pending_trip_fee_ids})"
-            )
-
-    # HST on trip fees (if photographer is registered)
-    if contractor_hst_rate and pending_trip_fees_total:
-        trip_fee_hst = round(pending_trip_fees_total * contractor_hst_rate)
-        hst_paid_cents += trip_fee_hst
-
-    # net_payout = base fee + trip fees + HST (if registered)
-    net_payout = payout_amount + pending_trip_fees_total + hst_paid_cents
 
     # Reserve trip fees before touching Stripe to prevent double-payout on retry.
     # If Stripe succeeds we promote to paid_out; if it fails we release the reservation.

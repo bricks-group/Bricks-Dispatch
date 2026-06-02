@@ -27,6 +27,10 @@ from ..shared.geospatial import haversine_km as _haversine_km
 
 logger = logging.getLogger(__name__)
 
+# Module-level set keeps a strong reference to fire-and-forget tasks so the garbage
+# collector cannot cancel them before they complete (per Python asyncio docs).
+_background_tasks: set = set()
+
 _GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "gemini-1.5-flash:generateContent"
@@ -302,6 +306,9 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
     )
 
     # Gemini explainability — fire-and-forget; never blocks dispatch.
-    asyncio.create_task(_save_dispatch_explanation(job, best_vendor, best_score))
+    # Store task reference to prevent garbage collection mid-execution (Python asyncio docs).
+    _task = asyncio.create_task(_save_dispatch_explanation(job, best_vendor, best_score))
+    _background_tasks.add(_task)
+    _task.add_done_callback(_background_tasks.discard)
 
     return best_id
