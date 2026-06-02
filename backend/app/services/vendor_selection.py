@@ -98,11 +98,17 @@ def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[st
             # Normalize: 0 km → 1.0, 50 km → 0.5, 100+ km → ~0
             proximity_score = max(0.0, 1.0 - dist_km / 100.0)
 
+        # Reliability: penalise cancel_rate plus decline_rate above the 40% neutral band.
+        # Declines within the 40% threshold are treated as zero penalty (IC right to refuse).
+        _decline_penalty = max(0.0, (v.decline_rate or 0.0) - 0.40)
+        _reliability = max(0.0, 1.0 - (v.cancel_rate or 0.0) - _decline_penalty)
+
         return (
             specialty_match,
             tier_match,
             round(v.on_time_rate, 2),
             round(v.quality_rating, 2),
+            round(_reliability, 2),
             -v.active_assignments,
             round(proximity_score, 2),
         )
@@ -160,7 +166,9 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
     min_tier = job.min_tier_required or 1
     eligible_ids = {v.id for v in vendors if v.tier >= min_tier}
 
+    actual_attempts = 0
     for attempt in range(1, _MAX_ASSIGNMENT_ATTEMPTS + 1):
+        actual_attempts = attempt
         _had_exception = False
         try:
             chosen_id = await bricks_smart_assign(job, vendors)
@@ -190,5 +198,5 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
             break
 
     await db.table("jobs").update({"status": "dispatch_failed"}).eq("id", job_id).execute()
-    await _escalate_no_vendor(job, _MAX_ASSIGNMENT_ATTEMPTS)
+    await _escalate_no_vendor(job, actual_attempts)
     return None

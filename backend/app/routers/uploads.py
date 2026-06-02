@@ -88,7 +88,7 @@ async def create_upload(
 
     upload_id = str(uuid.uuid4())
 
-    # Upload to S3 (or store thumbnail-only if credentials not configured)
+    # Upload to storage; fail fast if storage is unavailable rather than inserting a bad record.
     file_url, thumbnail_url, thumbnail_b64 = await upload_file(
         file_bytes=file_bytes,
         job_id=job_id,
@@ -96,6 +96,9 @@ async def create_upload(
         filename=filename,
         mime_type=mime_type,
     )
+
+    if file_url is None:
+        raise HTTPException(status_code=500, detail="File upload to storage failed")
 
     # Persist record
     record = UploadRecord(

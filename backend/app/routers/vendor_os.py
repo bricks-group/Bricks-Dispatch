@@ -615,13 +615,19 @@ async def update_vendor_job_status(
             assignee_id = job.get("assignee_id")
             if assignee_id and assignee_id != "default_user":
                 res_m = await db.table("vendor_members").select(
-                    "total_assignments, decline_rate"
+                    "total_assignments"
                 ).eq("id", assignee_id).maybe_single().execute()
                 if res_m.data:
-                    total_offers = max((res_m.data.get("total_assignments") or 0), 1)
-                    current_rate = res_m.data.get("decline_rate") or 0.0
-                    declined_so_far = round(current_rate * total_offers)
-                    new_rate = round((declined_so_far + 1) / (total_offers + 1), 4)
+                    completed = res_m.data.get("total_assignments") or 0
+                    # Query actual decline count from jobs table for accurate denominator.
+                    # total_assignments tracks completed jobs, not total offers received.
+                    res_declined = await db.table("jobs").select("id", count="exact").eq(
+                        "assignee_id", assignee_id
+                    ).eq("status", "declined").execute()
+                    actual_declined = res_declined.count or 0
+                    # Denominator = completed + previously declined + this new decline
+                    total_offers = completed + actual_declined + 1
+                    new_rate = round((actual_declined + 1) / total_offers, 4)
                     await db.table("vendor_members").update({
                         "decline_rate": new_rate,
                         "updated_at": now,
