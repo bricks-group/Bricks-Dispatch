@@ -872,7 +872,7 @@ async def _validate_noshow_claim(
                     ).execute()
                     distinct_photographers = len({
                         r["member_id"] for r in (res_against.data or [])
-                        if r.get("member_id") and r["member_id"] != member_id
+                        if r.get("member_id") and r["member_id"] != reporter_id
                     })
                     if distinct_photographers >= _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD - 1:
                         collusion_hold = True
