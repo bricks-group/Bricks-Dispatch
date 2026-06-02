@@ -232,10 +232,7 @@ async def create_job(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     from ..shared.auth import resolve_actor_id
-    raw_keys = os.environ.get("INTERNAL_API_KEYS")
-    if not raw_keys:
-        raise HTTPException(status_code=500, detail="INTERNAL_API_KEYS not configured")
-    internal_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+    internal_keys = [k.strip() for k in (os.environ.get("INTERNAL_API_KEYS") or "").split(",") if k.strip()]
     if x_internal_api_key and x_internal_api_key in internal_keys:
         actor_id = "booking_system"
     else:
@@ -545,7 +542,7 @@ async def get_vendor_os_earnings(
                 pending_trip_fees_total += amount_cad
 
     return {
-        "week_total": week_total,
+        "week_total": week_total + pending_trip_fees_total,
         "paid_amount": paid_total,
         "pending_amount": pending_total + pending_trip_fees_total,
         "payout_day": week_end.strftime("%A"),
@@ -738,7 +735,7 @@ async def _validate_noshow_claim(
     if now_utc < earliest:
         return {
             "ok": False,
-            "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M UTC')}"
+            "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M ET')}"
         }
     if now_utc > latest:
         return {

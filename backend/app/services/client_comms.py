@@ -8,6 +8,7 @@ Events handled:
 
 Delivery: Resend email (primary) + future push notification hook.
 """
+import html
 import logging
 import os
 from datetime import datetime, timezone
@@ -88,15 +89,21 @@ async def notify_booking_confirmed(job_id: str) -> None:
             photographer_name = res_member.data.get("name", photographer_name)
 
     subject = f"Shoot confirmed — {job.get('address', 'your property')}"
-    html = f"""
-<p>Hi {agent_name or 'there'},</p>
+    _safe_name = html.escape(agent_name or 'there')
+    _safe_addr = html.escape(job.get('address', ''))
+    _safe_photo = html.escape(photographer_name)
+    _safe_date = html.escape(job.get('scheduled_date', ''))
+    _safe_time = html.escape(job.get('time_window_start', ''))
+    _safe_pkg = html.escape(job.get('package_name', ''))
+    body = f"""
+<p>Hi {_safe_name},</p>
 <p>Your shoot is confirmed. Here are the details:</p>
 <table style="border-collapse:collapse;font-size:14px;">
-  <tr><td style="padding:6px 12px;color:#888;">Property</td><td style="padding:6px 12px;"><strong>{job.get('address', '')}</strong></td></tr>
-  <tr><td style="padding:6px 12px;color:#888;">Date</td><td style="padding:6px 12px;">{job.get('scheduled_date', '')}</td></tr>
-  <tr><td style="padding:6px 12px;color:#888;">Time</td><td style="padding:6px 12px;">{job.get('time_window_start', '')}</td></tr>
-  <tr><td style="padding:6px 12px;color:#888;">Package</td><td style="padding:6px 12px;">{job.get('package_name', '')}</td></tr>
-  <tr><td style="padding:6px 12px;color:#888;">Photographer</td><td style="padding:6px 12px;">{photographer_name}</td></tr>
+  <tr><td style="padding:6px 12px;color:#888;">Property</td><td style="padding:6px 12px;"><strong>{_safe_addr}</strong></td></tr>
+  <tr><td style="padding:6px 12px;color:#888;">Date</td><td style="padding:6px 12px;">{_safe_date}</td></tr>
+  <tr><td style="padding:6px 12px;color:#888;">Time</td><td style="padding:6px 12px;">{_safe_time}</td></tr>
+  <tr><td style="padding:6px 12px;color:#888;">Package</td><td style="padding:6px 12px;">{_safe_pkg}</td></tr>
+  <tr><td style="padding:6px 12px;color:#888;">Photographer</td><td style="padding:6px 12px;">{_safe_photo}</td></tr>
 </table>
 <p style="margin-top:16px;font-size:13px;color:#888;">
   Need to reschedule or cancel? Reply to this email or contact support@brxs.ca.
@@ -104,7 +111,7 @@ async def notify_booking_confirmed(job_id: str) -> None:
 </p>
 <p style="font-size:13px;color:#bbb;">— The Bricks team · brxs.ca</p>
 """
-    await _send_email(agent_email, subject, html)
+    await _send_email(agent_email, subject, body)
     logger.info(f"Booking confirmed email sent for job {job_id} to {agent_email}")
 
 
@@ -135,12 +142,17 @@ async def notify_photographer_en_route(job_id: str) -> None:
             photographer_name = res_member.data.get("name", photographer_name)
 
     subject = f"Photographer en route — {job.get('address', 'your property')}"
-    html = f"""
-<p>Hi {agent_name or 'there'},</p>
-<p><strong>{photographer_name}</strong> is on their way to your property now.</p>
+    _safe_name = html.escape(agent_name or 'there')
+    _safe_addr = html.escape(job.get('address', ''))
+    _safe_photo = html.escape(photographer_name)
+    _safe_date = html.escape(job.get('scheduled_date', ''))
+    _safe_time = html.escape(job.get('time_window_start', ''))
+    body = f"""
+<p>Hi {_safe_name},</p>
+<p><strong>{_safe_photo}</strong> is on their way to your property now.</p>
 <table style="border-collapse:collapse;font-size:14px;">
-  <tr><td style="padding:6px 12px;color:#888;">Property</td><td style="padding:6px 12px;">{job.get('address', '')}</td></tr>
-  <tr><td style="padding:6px 12px;color:#888;">Scheduled</td><td style="padding:6px 12px;">{job.get('scheduled_date', '')} at {job.get('time_window_start', '')}</td></tr>
+  <tr><td style="padding:6px 12px;color:#888;">Property</td><td style="padding:6px 12px;">{_safe_addr}</td></tr>
+  <tr><td style="padding:6px 12px;color:#888;">Scheduled</td><td style="padding:6px 12px;">{_safe_date} at {_safe_time}</td></tr>
 </table>
 <p style="margin-top:16px;font-size:13px;color:#888;">
   Please ensure the property is accessible. If you need to reach the photographer,
@@ -148,5 +160,5 @@ async def notify_photographer_en_route(job_id: str) -> None:
 </p>
 <p style="font-size:13px;color:#bbb;">— The Bricks team · brxs.ca</p>
 """
-    await _send_email(agent_email, subject, html)
+    await _send_email(agent_email, subject, body)
     logger.info(f"En-route email sent for job {job_id} to {agent_email}")

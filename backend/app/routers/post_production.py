@@ -13,6 +13,7 @@ notifications they may send for completed orders.
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
 """
+import html
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -172,7 +173,7 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
                     f"are ready. You can access {len(delivery_urls)} file(s) via the Bricks app or "
                     f"the link(s) below (valid for 24 hours).</p>"
                     + "".join(
-                        f'<p><a href="{u["url"]}">{u["filename"]}</a></p>'
+                        f'<p><a href="{u["url"]}">{html.escape(u["filename"])}</a></p>'
                         for u in delivery_urls[:5]
                     )
                     + ("<p>…and more in the app.</p>" if len(delivery_urls) > 5 else "")
