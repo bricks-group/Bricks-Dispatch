@@ -30,8 +30,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/post-production", tags=["post-production"])
 
-INTERNAL_API_KEYS_STR = os.environ.get("INTERNAL_API_KEYS", "")
-
 
 def _verify_callback_secret(secret: Optional[str]) -> None:
     """Verify webhook secret token. Read at request time so late-injected env vars work."""
@@ -337,9 +335,10 @@ async def reconcile_stuck_uploads(
     """
     Mark Fotello/Autoenhance/BoxBrownie uploads stuck >2h as failed, then re-trigger finalization.
     """
-    if not INTERNAL_API_KEYS_STR:
+    _internal_api_keys_str = os.environ.get("INTERNAL_API_KEYS", "")
+    if not _internal_api_keys_str:
         raise HTTPException(status_code=401, detail="INTERNAL_API_KEYS not configured")
-    _keys = [k.strip() for k in INTERNAL_API_KEYS_STR.split(",") if k.strip()]
+    _keys = [k.strip() for k in _internal_api_keys_str.split(",") if k.strip()]
     if not x_internal_api_key or x_internal_api_key not in _keys:
         raise HTTPException(status_code=403, detail="Forbidden")
 

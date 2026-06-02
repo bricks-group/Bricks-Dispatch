@@ -605,7 +605,7 @@ async def update_vendor_job_status(
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
 
-    if new_status in ("completed", "delivered"):
+    if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         try:
             from ..services.payout_service import trigger_payout_for_job
             await trigger_payout_for_job(db, job_id)
@@ -926,10 +926,10 @@ async def escalate_absent_agent(
     existing = res_esc.data or []
 
     if len(existing) >= 2:
-        last_sent = max(
+        first_sent = min(
             datetime.fromisoformat(e["sent_at"].replace("Z", "+00:00")) for e in existing
         )
-        elapsed_min = (datetime.now(timezone.utc) - last_sent).total_seconds() / 60
+        elapsed_min = (datetime.now(timezone.utc) - first_sent).total_seconds() / 60
         can_file_now = elapsed_min >= _ESCALATION_MIN_WAIT_MIN
         wait = max(int(_ESCALATION_MIN_WAIT_MIN - elapsed_min) + 1, 0)
         return {

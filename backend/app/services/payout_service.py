@@ -108,6 +108,8 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
 
     # Check if payout already exists for this job
     existing = await db.table("payouts").select("*").eq("job_id", job_id).maybe_single().execute()
+    is_retry = False
+    reuse_payout_id = None
     if existing.data:
         existing_payout_id = existing.data["id"]
         existing_status = existing.data.get("status", "pending")
@@ -121,10 +123,13 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
                 "base_amount": existing.data.get("amount"),
                 "already_exists": True,
             }
-        # Failed payout — delete the stale record and retry from scratch so the
-        # photographer is not permanently blocked from receiving payment.
-        logger.info(f"Retrying failed payout for job {job_id} (removing stale record {existing_payout_id})")
-        await db.table("payouts").delete().eq("id", existing_payout_id).execute()
+        # Failed payout — reuse the existing record's ID so the Stripe idempotency key
+        # (`payout_{id}`) is unchanged. If the original transfer actually succeeded but
+        # the DB status-update was lost, Stripe returns the existing transfer instead of
+        # creating a duplicate payment.
+        logger.info(f"Retrying failed payout for job {job_id} (reusing record {existing_payout_id})")
+        is_retry = True
+        reuse_payout_id = existing_payout_id
 
     # Fetch pending trip fees BEFORE creating the payout record so we can compute the
     # complete hst_paid_cents (base fee HST + trip fee HST) in the initial insert.
@@ -154,23 +159,33 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             f"to photographer {assignee_id} (ids: {pending_trip_fee_ids})"
         )
 
-    # Create payout record with fully computed HST (base + trip fees) in one shot
-    payout_record = {
-        "job_id": job_id,
-        "vendor_id": vendor_id,
-        "contractor_id": contractor_id,
-        "amount": payout_amount,
-        "hst_paid_cents": hst_paid_cents,
-        "contractor_hst_rate": contractor_hst_rate,
-        "status": "pending",
-        "created_at": now,
-    }
-    payout_res = await db.table("payouts").insert(payout_record).execute()
-    if not payout_res.data:
-        logger.error(f"Failed to create payout record for job {job_id}")
-        return {"error": "payout_record_creation_failed", "job_id": job_id}
-
-    payout_id = payout_res.data[0]["id"]
+    # Create or reset the payout record
+    if is_retry:
+        # Update existing failed record in-place — same payout_id preserves Stripe idempotency key
+        await db.table("payouts").update({
+            "amount": payout_amount,
+            "hst_paid_cents": hst_paid_cents,
+            "contractor_hst_rate": contractor_hst_rate,
+            "contractor_id": contractor_id or "",
+            "status": "pending",
+        }).eq("id", reuse_payout_id).execute()
+        payout_id = reuse_payout_id
+    else:
+        payout_record = {
+            "job_id": job_id,
+            "vendor_id": vendor_id,
+            "contractor_id": contractor_id,
+            "amount": payout_amount,
+            "hst_paid_cents": hst_paid_cents,
+            "contractor_hst_rate": contractor_hst_rate,
+            "status": "pending",
+            "created_at": now,
+        }
+        payout_res = await db.table("payouts").insert(payout_record).execute()
+        if not payout_res.data:
+            logger.error(f"Failed to create payout record for job {job_id}")
+            return {"error": "payout_record_creation_failed", "job_id": job_id}
+        payout_id = payout_res.data[0]["id"]
 
     # Update job with payout_amount
     await db.table("jobs").update({"payout_amount": payout_amount}).eq("id", job_id).execute()
