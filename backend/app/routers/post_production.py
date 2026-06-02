@@ -30,17 +30,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/post-production", tags=["post-production"])
 
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-CALLBACK_SECRET = os.environ.get("POST_PRODUCTION_CALLBACK_SECRET", "")
-
 INTERNAL_API_KEYS_STR = os.environ.get("INTERNAL_API_KEYS", "")
 
 
 def _verify_callback_secret(secret: Optional[str]) -> None:
-    """Verify webhook secret token. Fail closed if secret not configured."""
-    if not CALLBACK_SECRET:
+    """Verify webhook secret token. Read at request time so late-injected env vars work."""
+    _secret = os.environ.get("POST_PRODUCTION_CALLBACK_SECRET", "")
+    if not _secret:
         raise HTTPException(status_code=500, detail="Callback secret not configured")
-    if secret != CALLBACK_SECRET:
+    if secret != _secret:
         raise HTTPException(status_code=401, detail="Invalid callback secret")
 
 
@@ -137,6 +135,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
 
 
 async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
+    RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
     if not RESEND_API_KEY:
         logger.info(f"Job {job_id}: RESEND_API_KEY not set — skipping delivery email")
         return

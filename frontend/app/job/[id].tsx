@@ -236,7 +236,7 @@ export default function JobDetailScreen() {
     if (!job.scheduled_date || !job.time_window_start) return false;
     try {
       const time24 = (job.time_window_start || '').slice(0, 5);
-      const shootMs = new Date(`${job.scheduled_date}T${time24}:00Z`).getTime();
+      const shootMs = new Date(`${job.scheduled_date}T${time24}:00`).getTime();
       if (isNaN(shootMs)) return false;
       const now = Date.now();
       return now >= shootMs - 15 * 60 * 1000 && now <= shootMs + 90 * 60 * 1000;

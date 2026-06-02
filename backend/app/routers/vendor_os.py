@@ -612,6 +612,7 @@ async def update_vendor_job_status(
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
 
+    if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         try:
             assignee_id = job.get("assignee_id")
             if assignee_id and assignee_id != "default_user":
