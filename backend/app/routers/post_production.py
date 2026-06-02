@@ -344,6 +344,24 @@ async def reconcile_stuck_uploads(
 
     db = await get_db()
 
+    # --- BoxBrownie: poll all in-flight uploads (no webhooks — polling only) ---
+    # Run before the timeout check so completed jobs aren't falsely marked failed.
+    from ..services.post_production import poll_boxbrownie_job
+    bb_completed = 0
+    try:
+        res_bb = await db.table("uploads").select("id, job_id, provider_job_id").eq(
+            "processing_status", "processing"
+        ).eq("provider", "boxbrownie").limit(100).execute()
+        for upload in (res_bb.data or []):
+            if upload.get("provider_job_id"):
+                result_url = await poll_boxbrownie_job(upload["provider_job_id"])
+                if result_url:
+                    await _mark_upload_done(upload["id"], result_url)
+                    background_tasks.add_task(_finalize_job_if_complete, upload["job_id"])
+                    bb_completed += 1
+    except Exception as e:
+        logger.error(f"BoxBrownie poll sweep failed: {e}")
+
     # --- Fotello/Autoenhance/BoxBrownie: mark stuck (>2h) as failed, then finalize ---
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     res_stuck = await db.table("uploads").select("id, job_id, provider").eq(
@@ -379,6 +397,7 @@ async def reconcile_stuck_uploads(
         pass
 
     return {
+        "boxbrownie_completed": bb_completed,
         "timed_out": len(stuck_ids),
         "jobs_queued_for_finalization": len(other_job_ids),
     }

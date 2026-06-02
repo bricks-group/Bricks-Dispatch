@@ -113,7 +113,38 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     if existing.data:
         existing_payout_id = existing.data["id"]
         existing_status = existing.data.get("status", "pending")
+        existing_transfer_id = existing.data.get("stripe_transfer_id")
         logger.info(f"Payout already exists for job {job_id}: {existing_payout_id} (status={existing_status})")
+
+        if existing_status == "pending" and existing_transfer_id:
+            # Stripe transfer succeeded but the post-Stripe DB update was lost.
+            # Complete reconciliation now: promote to paid and finalize any reserved trip fees.
+            logger.info(
+                f"Reconciling orphaned payout {existing_payout_id} for job {job_id}: "
+                f"transfer {existing_transfer_id} already succeeded"
+            )
+            try:
+                await db.table("payouts").update({
+                    "status": "paid",
+                    "paid_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", existing_payout_id).execute()
+                # Promote any trip fees that were reserved for this payout cycle
+                if assignee_id and assignee_id != "default_user":
+                    await db.table("agent_noshow_trip_fees").update({
+                        "status": "paid_out",
+                        "paid_from_payout_id": existing_payout_id,
+                        "paid_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("member_id", assignee_id).eq("status", "reserved").execute()
+            except Exception as e:
+                logger.error(f"Reconciliation update failed for payout {existing_payout_id}: {e}")
+            return {
+                "payout_id": existing_payout_id,
+                "status": "paid",
+                "base_amount": existing.data.get("amount"),
+                "already_exists": True,
+                "reconciled": True,
+            }
+
         if existing_status != "failed":
             # Already paid or in-flight — idempotent return. Trip fees filed after this
             # payout completed will be included in the next payout cycle.

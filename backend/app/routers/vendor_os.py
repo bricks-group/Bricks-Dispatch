@@ -528,9 +528,7 @@ async def get_vendor_os_earnings(
     if member_id:
         res_fees = await (await get_db()).table("agent_noshow_trip_fees").select(
             "id, amount_cents, job_id, created_at, status"
-        ).eq("member_id", member_id).in_("status", ["pending", "pending_review"]).gte(
-            "created_at", week_start.isoformat()
-        ).execute()
+        ).eq("member_id", member_id).in_("status", ["pending", "pending_review"]).execute()
         for fee in (res_fees.data or []):
             amount_cad = (fee.get("amount_cents") or 0) / 100
             pending_trip_fees.append({
@@ -611,6 +609,25 @@ async def update_vendor_job_status(
             await trigger_payout_for_job(db, job_id)
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
+
+    if new_status == "declined" and old_status == "pending_assignment":
+        try:
+            assignee_id = job.get("assignee_id")
+            if assignee_id and assignee_id != "default_user":
+                res_m = await db.table("vendor_members").select(
+                    "total_assignments, decline_rate"
+                ).eq("id", assignee_id).maybe_single().execute()
+                if res_m.data:
+                    total_offers = max((res_m.data.get("total_assignments") or 0), 1)
+                    current_rate = res_m.data.get("decline_rate") or 0.0
+                    declined_so_far = round(current_rate * total_offers)
+                    new_rate = round((declined_so_far + 1) / (total_offers + 1), 4)
+                    await db.table("vendor_members").update({
+                        "decline_rate": new_rate,
+                        "updated_at": now,
+                    }).eq("id", assignee_id).execute()
+        except Exception as e:
+            logger.error(f"decline_rate update failed for job {job_id}: {e}")
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         try:

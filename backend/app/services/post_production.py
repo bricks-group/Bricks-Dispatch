@@ -4,6 +4,7 @@ import logging
 from typing import List, Optional, Dict
 from datetime import datetime, timezone
 from ..shared.database import get_db
+from ..services.storage import get_signed_download_url
 
 logger = logging.getLogger(__name__)
 
@@ -161,27 +162,33 @@ async def process_job_assets(job_id: str):
     
     results = []
     for asset in assets:
-        file_url = asset.get("file_url")
+        storage_path = asset.get("file_url")
         filename = (asset.get("filename") or "").lower()
-        if not file_url: continue
-        
+        if not storage_path: continue
+
         # SKIP 3D assets (Virtual Visit / Gaussian Splats)
         if filename.endswith(".splat") or filename.endswith(".ply"):
             logger.info(f"Skipping processing for 3D asset: {filename}")
             continue
-            
+
+        # Providers need an HTTP URL — generate a short-lived signed URL from the storage path
+        provider_url = await get_signed_download_url(storage_path)
+        if not provider_url:
+            logger.warning(f"Could not generate signed URL for asset {asset['id']} ({storage_path}) — skipping")
+            continue
+
         # ROUTE based on metadata
         if asset.get("requires_staging"):
-            bb_id = await trigger_boxbrownie_staging(file_url)
+            bb_id = await trigger_boxbrownie_staging(provider_url)
             if bb_id:
                 results.append({"asset_id": asset["id"], "provider": "boxbrownie", "provider_job_id": bb_id})
         else:
             if FOTELLO_API_KEY:
-                ft_id = await trigger_fotello_edit(file_url)
+                ft_id = await trigger_fotello_edit(provider_url)
                 if ft_id:
                     results.append({"asset_id": asset["id"], "provider": "fotello", "provider_job_id": ft_id})
             elif AUTOENHANCE_API_KEY:
-                ae_id = await trigger_autoenhance_edit(file_url)
+                ae_id = await trigger_autoenhance_edit(provider_url)
                 if ae_id:
                     results.append({"asset_id": asset["id"], "provider": "autoenhance", "provider_job_id": ae_id})
 
