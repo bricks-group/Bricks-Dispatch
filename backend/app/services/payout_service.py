@@ -66,8 +66,26 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     vendor_id = job.get("vendor_id", "default_vendor")
     package_price = job.get("package_price")
     vendor_tier = job.get("vendor_tier")
+    assignee_id = job.get("assignee_id", "")
 
-    # Calculate payout amount
+    # Look up the assignee's current tier and HST status in a single query.
+    # vendor_members.tier is the authoritative source — jobs.vendor_tier can be stale
+    # after reassignment (e.g. contractor no-show → new photographer of a different tier).
+    _member_hst_number = None
+    contractor_id = assignee_id
+    if assignee_id and assignee_id != "default_user":
+        try:
+            res_m = await db.table("vendor_members").select("id, tier, hst_number").eq(
+                "id", assignee_id
+            ).maybe_single().execute()
+            member = res_m.data or {}
+            if member.get("tier"):
+                vendor_tier = member["tier"]
+            _member_hst_number = member.get("hst_number")
+        except Exception as e:
+            logger.warning(f"Member lookup failed for assignee {assignee_id}: {e}")
+
+    # Calculate payout amount after vendor_tier is finalised from vendor_members
     payout_amount = calculate_payout_amount(package_price, vendor_tier)
     if payout_amount <= 0:
         logger.warning(
@@ -76,27 +94,16 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         )
         return {"error": "zero_payout_amount", "job_id": job_id}
 
-    # Look up photographer's HST registration status via assignee_id → vendor_members
-    assignee_id = job.get("assignee_id", "")
+    # HST on contractor fee (ETA principal model — paid on top of base fee)
     hst_paid_cents = 0
     contractor_hst_rate = 0.0
-    contractor_id = assignee_id
-    if assignee_id and assignee_id != "default_user":
-        try:
-            res_m = await db.table("vendor_members").select("id, hst_number").eq(
-                "id", assignee_id
-            ).maybe_single().execute()
-            member = res_m.data or {}
-            if member.get("hst_number"):
-                # Photographer is HST-registered: Bricks owes HST on top of fee
-                contractor_hst_rate = _PHOTOGRAPHER_HST_RATE
-                hst_paid_cents = round(payout_amount * contractor_hst_rate)
-                logger.info(
-                    f"Photographer {assignee_id} is HST-registered (#{member['hst_number']}); "
-                    f"adding ${hst_paid_cents/100:.2f} HST to payout {job_id}"
-                )
-        except Exception as e:
-            logger.warning(f"HST lookup failed for assignee {assignee_id}: {e}")
+    if _member_hst_number and assignee_id and assignee_id != "default_user":
+        contractor_hst_rate = _PHOTOGRAPHER_HST_RATE
+        hst_paid_cents = round(payout_amount * contractor_hst_rate)
+        logger.info(
+            f"Photographer {assignee_id} is HST-registered (#{_member_hst_number}); "
+            f"adding ${hst_paid_cents/100:.2f} HST to payout {job_id}"
+        )
 
     now = datetime.now(timezone.utc).isoformat()
 

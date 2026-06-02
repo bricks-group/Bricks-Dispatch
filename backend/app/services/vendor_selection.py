@@ -161,6 +161,7 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
     eligible_ids = {v.id for v in vendors if v.tier >= min_tier}
 
     for attempt in range(1, _MAX_ASSIGNMENT_ATTEMPTS + 1):
+        _had_exception = False
         try:
             chosen_id = await bricks_smart_assign(job, vendors)
             if chosen_id and chosen_id in eligible_ids:
@@ -173,6 +174,7 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
                     f"(not found or below min_tier={min_tier}). Falling back (attempt {attempt})."
                 )
         except Exception:
+            _had_exception = True
             logger.exception(f"Bricks AI assignment failed for job {job_id} (attempt {attempt})")
 
         chosen_id = pick_vendor_rule_based(job, vendors)
@@ -182,6 +184,10 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
             return chosen_id
 
         logger.warning(f"No vendor assigned for job {job_id} (attempt {attempt}/{_MAX_ASSIGNMENT_ATTEMPTS}).")
+        if not _had_exception:
+            # Both scorers are deterministic — retrying identical inputs won't change the result.
+            # Only loop again if a transient exception occurred in bricks_smart_assign.
+            break
 
     await db.table("jobs").update({"status": "dispatch_failed"}).eq("id", job_id).execute()
     await _escalate_no_vendor(job, _MAX_ASSIGNMENT_ATTEMPTS)

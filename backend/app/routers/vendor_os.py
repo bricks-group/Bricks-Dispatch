@@ -873,7 +873,7 @@ async def _validate_noshow_claim(
                     distinct_photographers = len({
                         r["member_id"] for r in (res_against.data or []) if r.get("member_id")
                     })
-                    if distinct_photographers >= _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD:
+                    if distinct_photographers >= _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD - 1:
                         collusion_hold = True
                         collusion_hold_reason = (
                             f"Agent-level flag: {distinct_photographers} distinct photographers filed "
@@ -1141,16 +1141,14 @@ async def report_contractor_no_show(
                 prev_cancel = res_m.data.get("cancel_rate") or 0.0
                 prev_cancels = round(prev_cancel * prev_total)
                 new_cancel_rate = round((prev_cancels + 1) / total, 4)
-                prev_on_time_rate = res_m.data.get("on_time_rate") or 1.0
-                prev_on_time_count = round(prev_on_time_rate * prev_total)
-                new_on_time_rate = round(prev_on_time_count / total, 4)
+                # on_time_rate is NOT updated here — contractor no-shows are cancellations,
+                # not late completions; recalculating would unfairly dilute dispatch scores.
                 await db.table("vendor_members").update({
                     "total_assignments": total,
                     "cancel_rate": new_cancel_rate,
-                    "on_time_rate": new_on_time_rate,
                     "updated_at": now,
                 }).eq("id", assignee_id).execute()
-                logger.warning(f"Contractor {assignee_id} no-show: cancel_rate now {new_cancel_rate:.1%}, on_time_rate now {new_on_time_rate:.1%}")
+                logger.warning(f"Contractor {assignee_id} no-show: cancel_rate now {new_cancel_rate:.1%}")
         except Exception as e:
             logger.error(f"cancel_rate update failed for member {assignee_id}: {e}")
 
