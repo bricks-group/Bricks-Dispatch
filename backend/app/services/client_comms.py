@@ -22,7 +22,7 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 FROM_EMAIL = "Bricks <noreply@brxs.ca>"
 
 
-async def _send_email(to: str, subject: str, html: str) -> bool:
+async def _send_email(to: str, subject: str, html_body: str) -> bool:
     if not RESEND_API_KEY:
         logger.info(f"RESEND_API_KEY not set — skipping email to {to}: {subject}")
         return False
@@ -31,7 +31,7 @@ async def _send_email(to: str, subject: str, html: str) -> bool:
             resp = await client.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                json={"from": FROM_EMAIL, "to": [to], "subject": subject, "html": html},
+                json={"from": FROM_EMAIL, "to": [to], "subject": subject, "html": html_body},
             )
             resp.raise_for_status()
             return True

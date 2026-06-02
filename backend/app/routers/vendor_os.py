@@ -622,21 +622,24 @@ async def update_vendor_job_status(
                     ).replace(tzinfo=_TORONTO_TZ)
                     was_on_time = datetime.now(timezone.utc) <= deadline
 
-                res_m = await db.table("vendor_members").select(
-                    "total_assignments, on_time_rate"
-                ).eq("id", assignee_id).maybe_single().execute()
-                if res_m.data:
-                    prev_total = res_m.data.get("total_assignments") or 0
-                    prev_rate = res_m.data.get("on_time_rate") or 1.0
-                    new_total = prev_total + 1
-                    prev_on_time = round(prev_rate * prev_total)
-                    new_on_time = prev_on_time + (1 if was_on_time else 0)
-                    new_rate = round(new_on_time / new_total, 4)
-                    await db.table("vendor_members").update({
-                        "total_assignments": new_total,
-                        "on_time_rate": new_rate,
-                        "updated_at": now,
-                    }).eq("id", assignee_id).execute()
+                    # Only update on-time rate when we have schedule data to evaluate.
+                    # Jobs with missing time_window_end or scheduled_date cannot be assessed;
+                    # updating with was_on_time=False would unfairly penalise the photographer.
+                    res_m = await db.table("vendor_members").select(
+                        "total_assignments, on_time_rate"
+                    ).eq("id", assignee_id).maybe_single().execute()
+                    if res_m.data:
+                        prev_total = res_m.data.get("total_assignments") or 0
+                        prev_rate = res_m.data.get("on_time_rate") or 1.0
+                        new_total = prev_total + 1
+                        prev_on_time = round(prev_rate * prev_total)
+                        new_on_time = prev_on_time + (1 if was_on_time else 0)
+                        new_rate = round(new_on_time / new_total, 4)
+                        await db.table("vendor_members").update({
+                            "total_assignments": new_total,
+                            "on_time_rate": new_rate,
+                            "updated_at": now,
+                        }).eq("id", assignee_id).execute()
         except Exception as e:
             logger.error(f"on_time_rate update failed for job {job_id}: {e}")
 
@@ -668,7 +671,7 @@ _NOSHOW_WINDOW_BEFORE_MIN = 15
 _NOSHOW_WINDOW_AFTER_MIN = 90
 _NOSHOW_RATE_LIMIT_DAYS = 30
 _NOSHOW_RATE_LIMIT_THRESHOLD = 1
-_NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 2
+_NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 3
 _GPS_MAX_DISTANCE_KM = 0.5            # 500m — flag if photographer is further away
 _ESCALATION_MIN_WAIT_MIN = 15         # must wait 15 min after first SMS before filing
 
