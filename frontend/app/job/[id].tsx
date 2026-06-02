@@ -73,6 +73,7 @@ export default function JobDetailScreen() {
   const [noShowVisible, setNoShowVisible] = useState(false);
   const [noShowNotes, setNoShowNotes] = useState('');
   const [submittingNoShow, setSubmittingNoShow] = useState(false);
+  const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -89,6 +90,20 @@ export default function JobDetailScreen() {
       }
     })();
   }, [id]);
+
+  // Update distance to job when job loads and photographer is active, to enforce geofence.
+  useEffect(() => {
+    if (!job || !['assigned', 'in_progress'].includes(job.status)) return;
+    if (job.lat == null || job.lng == null) return;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        setDistanceMeters(haversineMeters(pos.coords.latitude, pos.coords.longitude, job.lat!, job.lng!));
+      } catch {}
+    })();
+  }, [job?.id, job?.status]);
 
   useEffect(() => {
     if (!escalationSentAt) return;
@@ -215,6 +230,9 @@ export default function JobDetailScreen() {
   const isComplete = job.status === 'completed';
   const isActive = ['assigned', 'in_progress'].includes(job.status);
   const canReportNoShow = isActive && (() => {
+    // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
+    // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
+    if (job.lat != null && job.lng != null && distanceMeters !== null && distanceMeters > NOSHOW_GEOFENCE_METERS) return false;
     if (!job.scheduled_date || !job.time_window_start) return false;
     try {
       const time24 = (job.time_window_start || '').slice(0, 5);
