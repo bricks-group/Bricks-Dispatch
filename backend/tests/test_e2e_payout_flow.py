@@ -151,7 +151,7 @@ class TestTriggerPayoutForJob:
         db.table = MagicMock(side_effect=table_dispatch)
 
         with patch(
-            "app.services.payout_service.handle_payout_to_vendor",
+            "app.services.stripe_connect_service.handle_payout_to_vendor",
             new_callable=AsyncMock,
             return_value="tr_test_stripe_id",
         ):
@@ -193,7 +193,7 @@ class TestTriggerPayoutForJob:
         db.table = MagicMock(side_effect=table_dispatch)
 
         with patch(
-            "app.services.payout_service.handle_payout_to_vendor",
+            "app.services.stripe_connect_service.handle_payout_to_vendor",
             new_callable=AsyncMock,
             side_effect=Exception("Stripe Connect error"),
         ):

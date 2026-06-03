@@ -230,7 +230,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
 
     # Attempt Stripe transfer — separate try/except so post-Stripe DB failures
     # don't roll back a transfer that already cleared.
-    from ..services.stripe_connect_service import handle_payout_to_vendor
+    from .stripe_connect_service import handle_payout_to_vendor
     try:
         stripe_transfer_id = await handle_payout_to_vendor(
             vendor_id=vendor_id,
