@@ -116,7 +116,13 @@ async def _finalize_job_if_complete(job_id: str) -> None:
             })
 
     if not delivery_urls:
-        logger.warning(f"Job {job_id}: no deliverable URLs after QC — skipping delivery")
+        # All uploads were QC-rejected or had no path — job cannot be delivered.
+        # Advance to qc_failed so it doesn't stay stuck in processing indefinitely.
+        logger.error(f"Job {job_id}: no deliverable URLs after QC — marking qc_failed")
+        await db.table("jobs").update({
+            "status": "qc_failed",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", job_id).execute()
         return
 
     # Upsert media_delivery row (idempotent)

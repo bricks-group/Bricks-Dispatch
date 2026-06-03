@@ -603,26 +603,31 @@ async def update_vendor_job_status(
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
 
-    if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
+    # Payout fires on "delivered" only (after post-production and media delivery to agent).
+    # "completed" means shoot is done but media not yet processed/sent — paying on completed
+    # is premature. post_production.py::_finalize_job_if_complete also triggers payout;
+    # payout_service is idempotent so both paths are safe, but only one should fire normally.
+    if new_status == "delivered" and old_status != "delivered":
         try:
             from ..services.payout_service import trigger_payout_for_job
             await trigger_payout_for_job(db, job_id)
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
 
-    if new_status == "declined" and old_status == "pending_assignment":
+    if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
         try:
             assignee_id = job.get("assignee_id")
             if assignee_id and assignee_id != "default_user":
                 # Rolling 30-day decline rate (per IC agreement §40% threshold).
-                # The job status was already written to the DB above, so the declined
-                # query already includes this job — no +1 needed.
+                # Denominator = ALL jobs offered to this vendor in the last 30 days,
+                # regardless of current status (includes in-progress, assigned, completed).
+                # Using only terminal states in the denominator overstates the rate —
+                # a single decline would show 100% when active jobs are excluded.
+                # Filter by created_at (when the offer was made), not updated_at.
                 _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
                 res_recent = await db.table("jobs").select("id, status").eq(
                     "assignee_id", assignee_id
-                ).in_("status", ["completed", "delivered", "declined"]).gte(
-                    "updated_at", _thirty_days_ago
-                ).execute()
+                ).gte("created_at", _thirty_days_ago).execute()
                 recent_jobs = res_recent.data or []
                 recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
                 total_recent = len(recent_jobs)
@@ -886,7 +891,7 @@ async def _validate_noshow_claim(
                     # collusion requires multiple photographers, not just multiple claims from one.
                     res_against = await db.table("agent_noshow_trip_fees").select(
                         "member_id"
-                    ).in_("booking_id", agent_booking_ids[:100]).gte("created_at", cutoff).in_(
+                    ).in_("booking_id", agent_booking_ids).gte("created_at", cutoff).in_(
                         "status", ["pending", "paid_out", "pending_review"]
                     ).execute()
                     distinct_photographers = len({

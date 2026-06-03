@@ -152,14 +152,15 @@ async def process_job_assets(job_id: str):
     """
     db = await get_db()
 
-    # Atomic gate: only advance to processing if the job is not already processing,
-    # completed, or delivered. Two concurrent upload completions can both call this
-    # function — the second one will find 0 rows updated here and bail out early,
-    # preventing double-submission to post-production providers.
+    # Atomic gate: only advance to processing if the job is not already processing or terminal.
+    # Two concurrent upload completions can both call this function — the second one will find
+    # 0 rows updated here and bail out early, preventing double-submission to providers.
+    # NOTE: "completed" is the expected input state (shoot done, post-production starting),
+    # so it must NOT be in the exclusion list.
     gate = await db.table("jobs").update({
         "status": "processing",
         "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", job_id).not_.in_("status", ["processing", "completed", "delivered"]).execute()
+    }).eq("id", job_id).not_.in_("status", ["processing", "delivered", "cancelled", "agent_no_show", "dispatch_failed"]).execute()
     if not (gate.data):
         logger.info(f"Job {job_id}: skipping process_job_assets — already processing or terminal")
         return
