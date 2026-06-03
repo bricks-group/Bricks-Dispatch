@@ -122,11 +122,12 @@ async def create_upload(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
 
-    # Trigger post-production when the upload count reaches the declared target.
-    # When no target is set (deliverables_count=0), trigger on every upload — the
-    # atomic status gate in process_job_assets prevents double-processing.
+    # Trigger post-production when uploads reach the declared count.
+    # When deliverables_count=0 (not set by Booking), post-production fires from the
+    # "completed" status transition in vendor_os.py instead — triggering here on every
+    # upload would fire before all files arrive, processing only a partial set.
     deliverables = job.get("deliverables_count") or 0
-    if not deliverables or new_uploaded == deliverables:
+    if deliverables and new_uploaded == deliverables:
         background_tasks.add_task(process_job_assets, job_id)
 
     return record.dict()

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -545,7 +546,7 @@ async def get_vendor_os_earnings(
                 "status": fee.get("status"),
                 "created_at": fee.get("created_at"),
             })
-            if fee.get("status") == "pending":
+            if fee.get("status") in ("pending", "pending_review"):
                 pending_trip_fees_total += amount_cad
 
     return {
@@ -624,6 +625,17 @@ async def update_vendor_job_status(
             await trigger_payout_for_job(db, job_id)
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
+
+    # When vendor marks completed, start post-production.
+    # This is the canonical trigger when deliverables_count=0 (no count set by Booking).
+    # For jobs with a count, uploads.py fires post-production when the count is reached —
+    # this is a safe second trigger due to the atomic gate in process_job_assets.
+    if new_status == "completed" and old_status != "completed":
+        try:
+            from ..services.post_production import process_job_assets
+            asyncio.create_task(process_job_assets(job_id))
+        except Exception as e:
+            logger.error(f"Post-production trigger failed for job {job_id}: {e}")
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
         try:
@@ -1146,6 +1158,7 @@ async def report_agent_no_show(
             "photographer_id": assignee_id,
             "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
             "claim_status": "pending_review",
+            "hold_for_review": True,
             "note": review_reason,
         }
 
