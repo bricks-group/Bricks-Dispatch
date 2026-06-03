@@ -256,6 +256,7 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
         if (
             v.is_active
             and v.onboarding_status == "approved"
+            and v.status == "available"
             and v.tier >= min_tier
             and (not is_drone_job or v.drone_certified)
         )

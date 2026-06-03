@@ -151,15 +151,29 @@ async def process_job_assets(job_id: str):
     Triggered when all assets are uploaded.
     """
     db = await get_db()
+
+    # Atomic gate: only advance to processing if the job is not already processing,
+    # completed, or delivered. Two concurrent upload completions can both call this
+    # function — the second one will find 0 rows updated here and bail out early,
+    # preventing double-submission to post-production providers.
+    gate = await db.table("jobs").update({
+        "status": "processing",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", job_id).not_.in_("status", ["processing", "completed", "delivered"]).execute()
+    if not (gate.data):
+        logger.info(f"Job {job_id}: skipping process_job_assets — already processing or terminal")
+        return
+
     res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data: return
-    
+    if not res_job.data:
+        return
+
     job = res_job.data
     res_assets = await db.table("uploads").select("*").eq("job_id", job_id).execute()
     assets = res_assets.data
-    
+
     logger.info(f"Starting post-production for job {job_id}")
-    
+
     results = []
     for asset in assets:
         storage_path = asset.get("file_url")
@@ -198,8 +212,3 @@ async def process_job_assets(job_id: str):
             "provider": res["provider"],
             "provider_job_id": res["provider_job_id"]
         }).eq("id", res["asset_id"]).execute()
-
-    await db.table("jobs").update({
-        "status": "processing",
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }).eq("id", job_id).execute()

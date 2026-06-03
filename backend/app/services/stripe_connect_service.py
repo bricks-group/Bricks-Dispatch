@@ -30,7 +30,12 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
     multi-row ambiguity of querying by org-level vendor_id.
     """
     if contractor_id:
-        response = supabase.table("contractors").select("id, stripe_account_id").eq("id", contractor_id).maybe_single().execute()
+        # contractor_id is vendor_members.id (photographer-level); contractors are linked via
+        # vendor_id FK — not a shared PK — so resolve the vendor_id from vendor_members first.
+        member_res = supabase.table("vendor_members").select("vendor_id").eq("id", contractor_id).maybe_single().execute()
+        member = member_res.data or {}
+        resolved_vendor_id = member.get("vendor_id") or vendor_id
+        response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", resolved_vendor_id).maybe_single().execute()
     else:
         response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
     contractor = response.data

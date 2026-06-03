@@ -123,18 +123,23 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
                 f"Reconciling orphaned payout {existing_payout_id} for job {job_id}: "
                 f"transfer {existing_transfer_id} already succeeded"
             )
+            payout_created_at = existing.data.get("created_at", "")
             try:
                 await db.table("payouts").update({
                     "status": "paid",
                     "paid_at": datetime.now(timezone.utc).isoformat(),
                 }).eq("id", existing_payout_id).execute()
-                # Promote any trip fees that were reserved for this payout cycle
+                # Promote only trip fees that were reserved at or before this payout's created_at;
+                # fees added after payout creation belong to the next payout cycle.
                 if assignee_id and assignee_id != "default_user":
-                    await db.table("agent_noshow_trip_fees").update({
+                    q = db.table("agent_noshow_trip_fees").update({
                         "status": "paid_out",
                         "paid_from_payout_id": existing_payout_id,
                         "paid_at": datetime.now(timezone.utc).isoformat(),
-                    }).eq("member_id", assignee_id).eq("status", "reserved").execute()
+                    }).eq("member_id", assignee_id).eq("status", "reserved")
+                    if payout_created_at:
+                        q = q.lte("created_at", payout_created_at)
+                    await q.execute()
             except Exception as e:
                 logger.error(f"Reconciliation update failed for payout {existing_payout_id}: {e}")
             return {
@@ -145,7 +150,12 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
                 "reconciled": True,
             }
 
-        if existing_status != "failed":
+        # A pending record with no Stripe transfer ID means the process crashed before the
+        # Stripe call was made — treat it as retriable, same as "failed".
+        is_retriable = existing_status == "failed" or (
+            existing_status == "pending" and not existing_transfer_id
+        )
+        if not is_retriable:
             # Already paid or in-flight — idempotent return. Trip fees filed after this
             # payout completed will be included in the next payout cycle.
             return {
@@ -154,11 +164,11 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
                 "base_amount": existing.data.get("amount"),
                 "already_exists": True,
             }
-        # Failed payout — reuse the existing record's ID so the Stripe idempotency key
-        # (`payout_{id}`) is unchanged. If the original transfer actually succeeded but
-        # the DB status-update was lost, Stripe returns the existing transfer instead of
-        # creating a duplicate payment.
-        logger.info(f"Retrying failed payout for job {job_id} (reusing record {existing_payout_id})")
+        # Failed or stale-pending payout — reuse the existing record's ID so the Stripe
+        # idempotency key (`payout_{id}`) is unchanged. If the original transfer actually
+        # succeeded but the DB status-update was lost, Stripe returns the existing transfer
+        # instead of creating a duplicate payment.
+        logger.info(f"Retrying payout for job {job_id} (status={existing_status}, reusing record {existing_payout_id})")
         is_retry = True
         reuse_payout_id = existing_payout_id
 

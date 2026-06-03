@@ -99,15 +99,25 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         path = u.get("processed_url") or u.get("file_url")
         if not path:
             continue
-        signed = await get_signed_download_url(path)
-        if signed:
+        # Provider-returned HTTPS URLs are already public signed links — no need to re-sign.
+        # Calling get_signed_download_url on an HTTPS URL would pass it as a Supabase storage
+        # path, causing a 404 error.
+        if path.startswith("https://"):
+            url = path
+        else:
+            url = await get_signed_download_url(path)
+        if url:
             delivery_urls.append({
                 "upload_id": u["id"],
                 "filename": u.get("filename", ""),
-                "url": signed,
+                "url": url,
                 "expires_at": expires_at,
                 "qc_flagged": u.get("qc_status") == "flagged",
             })
+
+    if not delivery_urls:
+        logger.warning(f"Job {job_id}: no deliverable URLs after QC — skipping delivery")
+        return
 
     # Upsert media_delivery row (idempotent)
     delivery_row = {
@@ -127,6 +137,13 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     }).eq("id", job_id).execute()
 
     logger.info(f"Job {job_id}: all {len(uploads)} uploads processed → status=delivered, {len(delivery_urls)} URLs generated")
+
+    # Trigger vendor payout now that job is delivered (best-effort — payout_service is idempotent)
+    try:
+        from ..services.payout_service import trigger_payout_for_job
+        await trigger_payout_for_job(db, job_id)
+    except Exception as e:
+        logger.error(f"Job {job_id}: payout trigger failed after delivery: {e}")
 
     # Notify booking agent via Resend (best-effort)
     await _send_delivery_notification(job_id, delivery_urls)

@@ -396,7 +396,7 @@ async def get_vendor_performance(
             continue
         if week_start <= scheduled <= week_end:
             week_jobs.append(job)
-            if job.get("status") == "completed":
+            if job.get("status") in ("completed", "delivered"):
                 completed.append(job)
     on_time = 0
     for job in completed:
@@ -614,24 +614,23 @@ async def update_vendor_job_status(
         try:
             assignee_id = job.get("assignee_id")
             if assignee_id and assignee_id != "default_user":
-                res_m = await db.table("vendor_members").select(
-                    "total_assignments"
-                ).eq("id", assignee_id).maybe_single().execute()
-                if res_m.data:
-                    completed = res_m.data.get("total_assignments") or 0
-                    # Query actual decline count from jobs table for accurate denominator.
-                    # total_assignments tracks completed jobs, not total offers received.
-                    res_declined = await db.table("jobs").select("id", count="exact").eq(
-                        "assignee_id", assignee_id
-                    ).eq("status", "declined").execute()
-                    actual_declined = res_declined.count or 0
-                    # Denominator = completed + previously declined + this new decline
-                    total_offers = completed + actual_declined + 1
-                    new_rate = round((actual_declined + 1) / total_offers, 4)
-                    await db.table("vendor_members").update({
-                        "decline_rate": new_rate,
-                        "updated_at": now,
-                    }).eq("id", assignee_id).execute()
+                # Rolling 30-day decline rate (per IC agreement §40% threshold).
+                # The job status was already written to the DB above, so the declined
+                # query already includes this job — no +1 needed.
+                _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+                res_recent = await db.table("jobs").select("id, status").eq(
+                    "assignee_id", assignee_id
+                ).in_("status", ["completed", "delivered", "declined"]).gte(
+                    "updated_at", _thirty_days_ago
+                ).execute()
+                recent_jobs = res_recent.data or []
+                recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
+                total_recent = len(recent_jobs)
+                new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
+                await db.table("vendor_members").update({
+                    "decline_rate": new_rate,
+                    "updated_at": now,
+                }).eq("id", assignee_id).execute()
         except Exception as e:
             logger.error(f"decline_rate update failed for job {job_id}: {e}")
 
@@ -639,33 +638,27 @@ async def update_vendor_job_status(
         try:
             assignee_id = job.get("assignee_id")
             if assignee_id and assignee_id != "default_user":
-                was_on_time = False
                 time_end = job.get("time_window_end", "")
                 sched_date = job.get("scheduled_date", "")
-                if sched_date and time_end:
-                    deadline = datetime.strptime(
-                        f"{sched_date} {time_end}", "%Y-%m-%d %H:%M"
-                    ).replace(tzinfo=_TORONTO_TZ)
-                    was_on_time = datetime.now(timezone.utc) <= deadline
-
-                    # Only update on-time rate when we have schedule data to evaluate.
-                    # Jobs with missing time_window_end or scheduled_date cannot be assessed;
-                    # updating with was_on_time=False would unfairly penalise the photographer.
-                    res_m = await db.table("vendor_members").select(
-                        "total_assignments, on_time_rate"
-                    ).eq("id", assignee_id).maybe_single().execute()
-                    if res_m.data:
-                        prev_total = res_m.data.get("total_assignments") or 0
-                        prev_rate = res_m.data.get("on_time_rate") or 1.0
-                        new_total = prev_total + 1
+                res_m = await db.table("vendor_members").select(
+                    "total_assignments, on_time_rate"
+                ).eq("id", assignee_id).maybe_single().execute()
+                if res_m.data:
+                    prev_total = res_m.data.get("total_assignments") or 0
+                    prev_rate = res_m.data.get("on_time_rate") or 1.0
+                    new_total = prev_total + 1
+                    update_fields: dict = {"total_assignments": new_total, "updated_at": now}
+                    if sched_date and time_end:
+                        # Only update on_time_rate when schedule data exists; updating with
+                        # was_on_time=False when data is missing would unfairly penalise the vendor.
+                        deadline = datetime.strptime(
+                            f"{sched_date} {time_end}", "%Y-%m-%d %H:%M"
+                        ).replace(tzinfo=_TORONTO_TZ)
+                        was_on_time = datetime.now(timezone.utc) <= deadline
                         prev_on_time = round(prev_rate * prev_total)
                         new_on_time = prev_on_time + (1 if was_on_time else 0)
-                        new_rate = round(new_on_time / new_total, 4)
-                        await db.table("vendor_members").update({
-                            "total_assignments": new_total,
-                            "on_time_rate": new_rate,
-                            "updated_at": now,
-                        }).eq("id", assignee_id).execute()
+                        update_fields["on_time_rate"] = round(new_on_time / new_total, 4)
+                    await db.table("vendor_members").update(update_fields).eq("id", assignee_id).execute()
         except Exception as e:
             logger.error(f"on_time_rate update failed for job {job_id}: {e}")
 
