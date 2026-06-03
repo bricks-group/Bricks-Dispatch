@@ -112,6 +112,7 @@ class JobIntakeRequest(BaseModel):
 
 class JobStatusUpdate(BaseModel):
     status: str
+    completed_at: Optional[str] = None  # vendor device timestamp for on-time accuracy
 
 
 class ChecklistProgress(BaseModel):

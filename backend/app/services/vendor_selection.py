@@ -9,7 +9,7 @@ from ..shared.database import get_db
 from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.schemas import Job, VendorMember
 from .webhooks import send_dispatch_status_update_webhook
-from ..integrations.bricks_ai_dispatch import bricks_smart_assign
+from ..integrations.bricks_ai_dispatch import bricks_smart_assign, _get_weather_context
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +140,13 @@ async def _update_job_assignee(job_id: str, member_id: str):
 _MAX_ASSIGNMENT_ATTEMPTS = 3
 
 
-async def assign_vendor_for_job(job_id: str) -> Optional[str]:
+async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = None) -> Optional[str]:
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
     Retries up to _MAX_ASSIGNMENT_ATTEMPTS times; on final failure writes an
     ops_escalation record and fires an email to ops@brxs.ca.
+
+    exclude_member_id: skip this vendor member on all attempts (e.g. contractor who no-showed).
     """
     db = await get_db()
     res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
@@ -158,10 +160,29 @@ async def assign_vendor_for_job(job_id: str) -> Optional[str]:
     res_members = await db.table("vendor_members").select("*").eq("vendor_id", vendor_id).execute()
     vendors = [VendorMember(**m) for m in (res_members.data or [])]
 
+    # Exclude the specified member (e.g. contractor who no-showed — must not be re-selected)
+    if exclude_member_id:
+        vendors = [v for v in vendors if v.id != exclude_member_id]
+
     if not vendors:
         logger.warning(f"No vendor members found for vendor_id {vendor_id}.")
         await _escalate_no_vendor(job, 1, "No vendor members in this vendor account.")
         return None
+
+    # Drone weather gate: if unsafe, block dispatch entirely — the rule-based fallback
+    # has no weather awareness, so we must short-circuit before the retry loop.
+    if job.job_type == "drone" and job.lat and job.lng and job.scheduled_date:
+        try:
+            _weather = await _get_weather_context(job.lat, job.lng, job.scheduled_date)
+            if _weather and _weather.get("drone_unsafe"):
+                logger.warning(
+                    f"Job {job_id}: drone_unsafe weather ({_weather.get('condition')}, "
+                    f"wind={_weather.get('max_wind_kmh')}km/h) — blocking all assignment attempts"
+                )
+                await _escalate_no_vendor(job, 0, "drone weather unsafe — dispatch blocked")
+                return None
+        except Exception as _we:
+            logger.warning(f"Job {job_id}: weather check failed during assignment ({_we}) — continuing")
 
     min_tier = job.min_tier_required or 1
     eligible_ids = {v.id for v in vendors if v.tier >= min_tier}

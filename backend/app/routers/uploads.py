@@ -122,10 +122,11 @@ async def create_upload(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
 
-    # Trigger post-production exactly once — when the count first reaches the target.
-    # Using == (not >=) prevents re-triggering on extra uploads beyond the target count.
+    # Trigger post-production when the upload count reaches the declared target.
+    # When no target is set (deliverables_count=0), trigger on every upload — the
+    # atomic status gate in process_job_assets prevents double-processing.
     deliverables = job.get("deliverables_count") or 0
-    if deliverables and new_uploaded == deliverables:
+    if not deliverables or new_uploaded == deliverables:
         background_tasks.add_task(process_job_assets, job_id)
 
     return record.dict()

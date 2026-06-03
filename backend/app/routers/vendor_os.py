@@ -670,7 +670,22 @@ async def update_vendor_job_status(
                         deadline = datetime.strptime(
                             f"{sched_date} {time_end}", "%Y-%m-%d %H:%M"
                         ).replace(tzinfo=_TORONTO_TZ)
-                        was_on_time = datetime.now(timezone.utc) <= deadline
+                        # Use vendor-submitted completed_at if provided and not in the future.
+                        # Vendors submit from their device when the shoot ends — using
+                        # API call time unfairly penalises late status submissions.
+                        _reported_at = None
+                        if payload.completed_at:
+                            try:
+                                _reported_at = datetime.fromisoformat(
+                                    payload.completed_at.replace("Z", "+00:00")
+                                )
+                            except ValueError:
+                                pass
+                        _completion_time = min(
+                            _reported_at if _reported_at else datetime.now(timezone.utc),
+                            datetime.now(timezone.utc),
+                        )
+                        was_on_time = _completion_time <= deadline
                         prev_on_time = round(prev_rate * prev_total)
                         new_on_time = prev_on_time + (1 if was_on_time else 0)
                         update_fields["on_time_rate"] = round(new_on_time / new_total, 4)
@@ -732,9 +747,10 @@ async def _validate_noshow_claim(
     if assignee_id != reporter_id:
         return {"ok": False, "reason": "Only the assigned photographer can report a no-show"}
 
-    # Gate 2: job must be in an active state
+    # Gate 2: job must be in an active state — completed/delivered/processing mean the
+    # shoot happened or media is in-flight; no-show claims are invalid in those states.
     current_status = job.get("status", "")
-    if current_status in ("completed", "agent_no_show", "cancelled"):
+    if current_status in ("completed", "delivered", "processing", "qc_failed", "agent_no_show", "cancelled"):
         return {"ok": False, "reason": f"Cannot report no-show on a job with status '{current_status}'"}
 
     # Gate 3: idempotency
@@ -837,7 +853,9 @@ async def _validate_noshow_claim(
                     ),
                 }
         except Exception as e:
-            logger.warning(f"Escalation gate check failed for job {job_id}: {e}")
+            # Twilio is configured — fail closed so the gate isn't bypassed by a transient error.
+            logger.error(f"Escalation gate check failed for job {job_id}: {e}")
+            return {"ok": False, "reason": "Escalation check unavailable — please retry in a moment"}
 
     # Gate 5: booking must not have been cancelled before shoot start
     if booking_id:
@@ -1202,7 +1220,8 @@ async def report_contractor_no_show(
     redispatch_member_id = None
     try:
         from ..services.vendor_selection import assign_vendor_for_job
-        redispatch_member_id = await assign_vendor_for_job(job_id)
+        # Exclude the no-show vendor so they cannot be immediately re-selected
+        redispatch_member_id = await assign_vendor_for_job(job_id, exclude_member_id=assignee_id)
     except Exception as e:
         logger.error(f"Re-dispatch after contractor no-show failed for job {job_id}: {e}")
 
