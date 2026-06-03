@@ -197,6 +197,12 @@ pick_vendor_rule_based(job, vendors)
   - `VendorApplicationCreate.ic_agreement_version` default `"1.0"` → `"1.1"`
   - IC agreement `effective_date` `"2026-01-01"` → `"2026-06-01"`
   - `test_e2e_payout_flow.py`: tier percentages updated to 35/45/55%; result key `amount` → `base_amount`
+- **PR #2 bug fixes Round 2 (2026-06-03)** ✅
+  - `decline_rate` denominator: uses actual offer count (completed + declined + 1), not just `total_assignments`
+  - `_escalate_no_vendor` receives actual attempt count instead of hardcoded max
+  - Fallback vendor scorer: decline_rate above 40% neutral band penalises reliability score
+  - Upload guard: `file_url=None` from storage → HTTP 500 instead of inserting bad record
+- **Stripe Connect E2E test suite (2026-06-03)** ✅ — `tests/conftest.py` stubs external deps; all 11 tests pass
 
 ## Remaining Before Live Traffic
 
@@ -214,9 +220,10 @@ pick_vendor_rule_based(job, vendors)
 - [ ] **Ontario employment lawyer review of IC agreement** — budget $2-4K (non-negotiable)
 - [ ] **Agent ToS must explicitly disclose 100% no-show retention** — conspicuous at booking, not buried
 - [ ] **Confirm HST treatment of forfeited no-show bookings** with accountant (service never rendered)
-- [ ] **Apply migration**: `backend/migrations/20260601_agent_noshow_escalations.sql` in Supabase SQL editor
+- [x] **Apply migration**: `backend/migrations/20260601_agent_noshow_escalations.sql` ✅ (applied to ctqwxwrcxwruaqojohpf 2026-06-03)
+- [x] **Stripe Connect E2E test suite** ✅ (all 11 tests pass; conftest stubs + correct patch target — 2026-06-03)
 - [ ] Register Fotello/Autoenhance webhook callback URLs in each provider dashboard
-- [ ] Stripe Connect live E2E verification (test real CAD transfer end-to-end)
+- [ ] Stripe Connect live E2E verification (test real CAD transfer end-to-end with live credentials)
 - [ ] TestFlight upload (Kam)
 - [ ] Play Store internal track (Kam)
 - [ ] Verify Transport Canada Advanced RPAS for GTA drone photographers
