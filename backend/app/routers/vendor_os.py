@@ -72,9 +72,9 @@ async def get_vendor_os_overview(
         if week_start <= scheduled <= week_end:
             assigned_week += 1
             scheduled_this_week += 1
-            if job.get("status") == "completed":
+            if job.get("status") in ("completed", "delivered"):
                 completed_week += 1
-        if scheduled >= today and job.get("status") != "completed":
+        if scheduled >= today and job.get("status") not in ("completed", "delivered"):
             upcoming.append(job)
     return {
         "jobs_assigned_today": assigned_today,
@@ -303,6 +303,13 @@ async def assign_job_to_member(
 
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if payload.member_id == "auto" else "manual"})
     res_final = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+
+    # Send booking confirmed email to agent (best-effort — same as auto-assign path)
+    try:
+        from ..services.client_comms import notify_booking_confirmed
+        await notify_booking_confirmed(job_id)
+    except Exception as _e:
+        logger.error(f"Booking confirmed notification failed for job {job_id}: {_e}")
 
     booking_callback_url = os.environ.get("BOOKING_CALLBACK_URL")
     if not booking_callback_url:
@@ -600,6 +607,10 @@ async def update_vendor_job_status(
     new_status = payload.status
     booking_id = job.get("booking_id")
     
+    _IMMUTABLE_STATUSES = {"cancelled", "delivered", "agent_no_show", "dispatch_failed", "qc_failed"}
+    if old_status in _IMMUTABLE_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Job is in terminal state '{old_status}' — status cannot be changed")
+
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
 

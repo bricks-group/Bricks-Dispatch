@@ -67,8 +67,10 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     if not uploads:
         return
 
-    # Only finalize when every non-skipped upload is done
-    pending = [u for u in uploads if u.get("processing_status") not in ("done", "skipped", "failed")]
+    # Only finalize when no uploads are actively in-flight.
+    # Uploads with null processing_status were never submitted (3D assets, missing API keys,
+    # URL failures) and should not block finalization — treat them as terminal.
+    pending = [u for u in uploads if u.get("processing_status") == "processing"]
     if pending:
         logger.info(f"Job {job_id}: {len(pending)} upload(s) still processing — waiting")
         return
@@ -95,6 +97,10 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         # Skip rejected uploads — not delivered
         if u.get("qc_status") == "rejected":
             logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — QC rejected")
+            continue
+        # Skip failed uploads — processing failed, raw file_url not deliverable
+        if u.get("processing_status") == "failed":
+            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — processing failed")
             continue
         path = u.get("processed_url") or u.get("file_url")
         if not path:

@@ -246,7 +246,8 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
         if weather_context:
             job_ctx = f"weather={weather_context['condition']}, wind={weather_context['max_wind_kmh']}km/h"
             if weather_context.get("drone_unsafe") and is_drone_job:
-                logger.warning(f"Job {job.id}: drone conditions unsafe on {job.scheduled_date} — {job_ctx}")
+                logger.warning(f"Job {job.id}: drone conditions unsafe on {job.scheduled_date} — {job_ctx} — blocking dispatch")
+                return None
             elif weather_context.get("outdoor_caution"):
                 logger.info(f"Job {job.id}: outdoor caution on {job.scheduled_date} — {job_ctx}")
 
