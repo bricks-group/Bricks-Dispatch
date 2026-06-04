@@ -313,12 +313,14 @@ async def review_noshow_claim(
     if action == "approve" and booking_id and job_id:
         # Booking webhook was deferred at claim time for pending_review holds.
         # Fire it now that admin has confirmed the no-show is valid.
+        # previous_status="pending_review" signals this is the deferred notification
+        # confirming a held claim — Booking uses it to apply the retention penalty.
         try:
             await send_dispatch_status_update_webhook(
                 booking_id=booking_id,
                 job_id=job_id,
                 new_status="agent_no_show",
-                previous_status="agent_no_show",
+                previous_status="pending_review",
                 actor_id=actor_id,
                 actor_type="admin",
             )
