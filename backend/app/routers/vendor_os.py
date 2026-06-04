@@ -1144,7 +1144,9 @@ async def report_agent_no_show(
 
     await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()
 
-    if booking_id:
+    # Only notify Booking when the claim is immediately approved — for pending_review holds,
+    # defer until admin approves so the agent is not charged before admin review completes.
+    if booking_id and not hold_for_review:
         try:
             await send_dispatch_status_update_webhook(
                 booking_id=booking_id,

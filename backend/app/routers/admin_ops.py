@@ -307,31 +307,38 @@ async def review_noshow_claim(
 
     logger.info(f"No-show claim {claim_id} {action}d by {actor_id}")
 
-    # On rejection: reverse the no-show penalty — reset job to completed and notify Booking
-    # so the agent is not left fully charged for a claim that was voided by admin review.
-    if action == "reject":
-        job_id = claim.get("job_id")
-        booking_id = claim.get("booking_id")
-        if job_id:
-            try:
-                await db.table("jobs").update({
-                    "status": "completed",
-                    "updated_at": now,
-                }).eq("id", job_id).eq("status", "agent_no_show").execute()
-            except Exception as e:
-                logger.error(f"Failed to reset job {job_id} status after claim rejection: {e}")
-        if booking_id and job_id:
-            try:
-                await send_dispatch_status_update_webhook(
-                    booking_id=booking_id,
-                    job_id=job_id,
-                    new_status="no_show_reversed",
-                    previous_status="agent_no_show",
-                    actor_id=actor_id,
-                    actor_type="admin",
-                )
-            except Exception as e:
-                logger.warning(f"Booking reversal webhook failed for {booking_id} (claim {claim_id}): {e}")
+    job_id = claim.get("job_id")
+    booking_id = claim.get("booking_id")
+
+    if action == "approve" and booking_id and job_id:
+        # Booking webhook was deferred at claim time for pending_review holds.
+        # Fire it now that admin has confirmed the no-show is valid.
+        try:
+            await send_dispatch_status_update_webhook(
+                booking_id=booking_id,
+                job_id=job_id,
+                new_status="agent_no_show",
+                previous_status="agent_no_show",
+                actor_id=actor_id,
+                actor_type="admin",
+            )
+        except Exception as e:
+            logger.warning(f"Booking no-show webhook failed for {booking_id} (claim {claim_id}): {e}")
+
+    elif action == "reject" and booking_id and job_id:
+        # Trip fee voided — notify Booking to reverse the agent retention penalty.
+        # Job stays in agent_no_show; only the financial consequence is reversed.
+        try:
+            await send_dispatch_status_update_webhook(
+                booking_id=booking_id,
+                job_id=job_id,
+                new_status="no_show_reversed",
+                previous_status="agent_no_show",
+                actor_id=actor_id,
+                actor_type="admin",
+            )
+        except Exception as e:
+            logger.warning(f"Booking reversal webhook failed for {booking_id} (claim {claim_id}): {e}")
 
     return {
         "claim_id": claim_id,
