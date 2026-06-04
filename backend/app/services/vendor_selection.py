@@ -182,7 +182,9 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
                 await _escalate_no_vendor(job, 0, "drone weather unsafe — dispatch blocked")
                 return None
         except Exception as _we:
-            logger.warning(f"Job {job_id}: weather check failed during assignment ({_we}) — continuing")
+            logger.error(f"Job {job_id}: weather check failed for drone job ({_we}) — blocking dispatch (fail-closed)")
+            await _escalate_no_vendor(job, 0, f"drone weather check failed — dispatch blocked: {_we}")
+            return None
 
     min_tier = job.min_tier_required or 1
     eligible_ids = {v.id for v in vendors if v.tier >= min_tier}

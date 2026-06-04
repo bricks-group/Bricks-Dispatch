@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/vendor-os", tags=["vendor-os"])
 
+# Module-level set keeps strong references to background tasks so the GC
+# cannot collect them before they complete (asyncio only weakly refs tasks).
+_background_tasks: set = set()
+
 _TORONTO_TZ = ZoneInfo("America/Toronto")
 
 
@@ -111,7 +115,7 @@ async def get_vendor_team(
     total = res.count or 0
     
     for member in members:
-        res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member["id"]).neq("status", "completed").execute()
+        res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member["id"]).in_("status", ["pending_assignment", "assigned", "in_progress", "processing"]).execute()
         member["assigned_jobs"] = res_count.count or 0
         
     return paginated_response(members, total, page, page_size)
@@ -626,16 +630,21 @@ async def update_vendor_job_status(
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
 
-    # When vendor marks completed, start post-production.
-    # This is the canonical trigger when deliverables_count=0 (no count set by Booking).
-    # For jobs with a count, uploads.py fires post-production when the count is reached —
-    # this is a safe second trigger due to the atomic gate in process_job_assets.
+    # When vendor marks completed, start post-production only when uploads are
+    # either not expected (deliverables_count=0) or already fully received.
+    # For jobs with a count, uploads.py fires post-production when the count is
+    # reached — this path is a safe fallback due to the atomic gate in process_job_assets.
     if new_status == "completed" and old_status != "completed":
-        try:
-            from ..services.post_production import process_job_assets
-            asyncio.create_task(process_job_assets(job_id))
-        except Exception as e:
-            logger.error(f"Post-production trigger failed for job {job_id}: {e}")
+        _deliverables = job.get("deliverables_count") or 0
+        _uploaded = job.get("uploaded_count") or 0
+        if _deliverables == 0 or _uploaded >= _deliverables:
+            try:
+                from ..services.post_production import process_job_assets
+                _t = asyncio.create_task(process_job_assets(job_id))
+                _background_tasks.add(_t)
+                _t.add_done_callback(_background_tasks.discard)
+            except Exception as e:
+                logger.error(f"Post-production trigger failed for job {job_id}: {e}")
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
         try:
