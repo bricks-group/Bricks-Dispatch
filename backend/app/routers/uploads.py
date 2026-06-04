@@ -76,7 +76,7 @@ async def create_upload(
     db = await get_db()
 
     # Verify job belongs to this vendor
-    res_job = await db.table("jobs").select("id, uploaded_count, deliverables_count").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    res_job = await db.table("jobs").select("id, uploaded_count, deliverables_count, status").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
     if not res_job.data:
         api_error(404, "Job not found", "job_not_found")
 

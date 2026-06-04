@@ -925,7 +925,9 @@ async def _validate_noshow_claim(
                 f"— held for admin review before payout"
             )
     except Exception:
-        pass
+        # Query failed — fail closed so the claim is held for review rather than auto-approved
+        rate_hold = True
+        rate_hold_reason = "Rate-limit check unavailable — held for admin review"
 
     # Gate 7: per-agent rate limit (collusion detection) — always runs regardless of Gate 6.
     collusion_hold = False
@@ -1241,7 +1243,7 @@ async def report_contractor_no_show(
     )
 
     await db.table("jobs").update({
-        "status": "pending",
+        "status": "pending_assignment",
         "assignee_id": "default_user",
         "updated_at": now,
     }).eq("id", job_id).execute()

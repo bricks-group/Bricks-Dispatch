@@ -110,6 +110,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     existing = await db.table("payouts").select("*").eq("job_id", job_id).maybe_single().execute()
     is_retry = False
     reuse_payout_id = None
+    retry_created_at = ""  # set below when reusing an existing payout record
     if existing.data:
         existing_payout_id = existing.data["id"]
         existing_status = existing.data.get("status", "pending")
@@ -185,6 +186,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         logger.info(f"Retrying payout for job {job_id} (status={existing_status}, reusing record {existing_payout_id})")
         is_retry = True
         reuse_payout_id = existing_payout_id
+        retry_created_at = existing.data.get("created_at", "")
 
     # Fetch pending trip fees BEFORE creating the payout record so we can compute the
     # complete hst_paid_cents (base fee HST + trip fee HST) in the initial insert.
@@ -193,9 +195,15 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     pending_trip_fees_total = 0
     pending_trip_fee_ids = []
     if assignee_id and assignee_id != "default_user":
-        res_fees = await db.table("agent_noshow_trip_fees").select("id, amount_cents").eq(
+        q_fees = db.table("agent_noshow_trip_fees").select("id, amount_cents").eq(
             "member_id", assignee_id
-        ).eq("status", "pending").execute()
+        ).eq("status", "pending")
+        if is_retry and retry_created_at:
+            # Cap to fees that existed when the original payout was created — Stripe
+            # idempotency requires the transfer amount to be identical on retry.
+            # Fees that arrived after the original attempt belong to the next payout cycle.
+            q_fees = q_fees.lte("created_at", retry_created_at)
+        res_fees = await q_fees.execute()
         for fee in (res_fees.data or []):
             pending_trip_fees_total += fee.get("amount_cents", 0)
             pending_trip_fee_ids.append(fee["id"])
