@@ -156,8 +156,22 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             existing_status == "pending" and not existing_transfer_id
         )
         if not is_retriable:
-            # Already paid or in-flight — idempotent return. Trip fees filed after this
-            # payout completed will be included in the next payout cycle.
+            # Already paid — idempotent return, but reconcile any reserved trip fees
+            # that survived a prior post-Stripe DB failure (stuck in "reserved" forever
+            # because the normal L278-283 update threw and the payout is now closed).
+            if existing_status == "paid" and assignee_id and assignee_id != "default_user":
+                payout_created_at = existing.data.get("created_at", "")
+                try:
+                    q = db.table("agent_noshow_trip_fees").update({
+                        "status": "paid_out",
+                        "paid_from_payout_id": existing_payout_id,
+                        "paid_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("member_id", assignee_id).eq("status", "reserved")
+                    if payout_created_at:
+                        q = q.lte("created_at", payout_created_at)
+                    await q.execute()
+                except Exception as e:
+                    logger.error(f"Trip-fee reconciliation failed for paid payout {existing_payout_id}: {e}")
             return {
                 "payout_id": existing_payout_id,
                 "status": existing_status,

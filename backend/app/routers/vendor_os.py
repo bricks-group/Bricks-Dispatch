@@ -822,12 +822,14 @@ async def _validate_noshow_claim(
         }
 
     # Gate 4.5: GPS proximity — soft hold if photographer is far from property.
+    # Also hold when the job has known coordinates but the photographer omits their GPS:
+    # omitting coordinates would otherwise bypass proximity enforcement via direct API calls.
     # Do NOT return early here — subsequent hard-reject gates (4.6, 5, 6, 7) must still run.
     gps_hold = False
     gps_hold_reason = ""
+    job_lat = job.get("lat")
+    job_lng = job.get("lng")
     if photographer_lat is not None and photographer_lng is not None:
-        job_lat = job.get("lat")
-        job_lng = job.get("lng")
         if job_lat is not None and job_lng is not None:
             try:
                 dist_km = _haversine_km(
@@ -842,6 +844,11 @@ async def _validate_noshow_claim(
                     )
             except (TypeError, ValueError):
                 pass
+    elif job_lat is not None and job_lng is not None:
+        # Job has a known location but photographer omitted coordinates — hold for review
+        # so proximity cannot be bypassed by calling the API directly without GPS.
+        gps_hold = True
+        gps_hold_reason = "GPS coordinates required for property-located jobs — held for location verification"
 
     # Gate 4.6: escalation required — photographer must have attempted to notify agent via SMS
     # (only enforced when Twilio is configured; gracefully degrades otherwise)
