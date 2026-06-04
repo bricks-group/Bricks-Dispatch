@@ -283,6 +283,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             "payout_id": payout_id,
             "status": "failed",
             "amount": payout_amount,
+            "net_amount": net_payout,
             "error": str(e),
         }
 

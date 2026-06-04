@@ -102,6 +102,12 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         if u.get("processing_status") == "failed":
             logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — processing failed")
             continue
+        # Skip 3D assets — .splat/.ply files are handled separately (Virtual Visit embed),
+        # not delivered as photo files to the booking agent
+        _fname = (u.get("filename") or "").lower()
+        if _fname.endswith(".splat") or _fname.endswith(".ply"):
+            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — 3D asset")
+            continue
         path = u.get("processed_url") or u.get("file_url")
         if not path:
             continue

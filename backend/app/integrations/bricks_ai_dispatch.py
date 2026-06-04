@@ -251,17 +251,19 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
             elif weather_context.get("outdoor_caution"):
                 logger.info(f"Job {job.id}: outdoor caution on {job.scheduled_date} — {job_ctx}")
 
-    # Filter eligible candidates
+    # Filter eligible candidates — prefer available but fall back to all active/approved
+    # so the scorer behaves consistently with pick_vendor_rule_based rather than hard-blocking
+    # on status and forcing every unavailable-pool job through the rule-based path.
     eligible = [
         v for v in vendors
         if (
             v.is_active
             and v.onboarding_status == "approved"
-            and v.status == "available"
             and v.tier >= min_tier
             and (not is_drone_job or v.drone_certified)
         )
     ]
+    candidates = [v for v in eligible if v.status == "available"] or eligible
 
     if not eligible:
         reason = "drone_certified filter" if is_drone_job else f"min_tier={min_tier}"
@@ -269,7 +271,7 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
         return None
 
     # Enrich with repeat-agent history (single DB call for all candidates)
-    all_member_ids = [v.id for v in eligible]
+    all_member_ids = [v.id for v in candidates]
     agent_user_id = getattr(job, "agent_user_id", None)
     has_history_by_vendor: dict[str, bool] = {}
     if agent_user_id:
@@ -285,7 +287,7 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
 
     # Score all candidates
     scored = []
-    for v in eligible:
+    for v in candidates:
         score = _score_vendor(
             v, job, preferred_tier,
             has_repeat_history=has_history_by_vendor.get(v.id, False),

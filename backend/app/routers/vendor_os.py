@@ -309,12 +309,15 @@ async def assign_job_to_member(
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if payload.member_id == "auto" else "manual"})
     res_final = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
 
-    # Send booking confirmed email to agent (best-effort — same as auto-assign path)
-    try:
-        from ..services.client_comms import notify_booking_confirmed
-        await notify_booking_confirmed(job_id)
-    except Exception as _e:
-        logger.error(f"Booking confirmed notification failed for job {job_id}: {_e}")
+    # Send booking confirmed email for manual assignments only.
+    # Auto-assign path calls notify_booking_confirmed inside assign_vendor_for_job already;
+    # duplicating it here would fire a second email. Skip entirely if auto-assign returned None.
+    if payload.member_id != "auto" and new_assignee_id:
+        try:
+            from ..services.client_comms import notify_booking_confirmed
+            await notify_booking_confirmed(job_id)
+        except Exception as _e:
+            logger.error(f"Booking confirmed notification failed for job {job_id}: {_e}")
 
     booking_callback_url = os.environ.get("BOOKING_CALLBACK_URL")
     if not booking_callback_url:
@@ -965,7 +968,10 @@ async def _validate_noshow_claim(
                             f"— held for admin review"
                         )
         except Exception as e:
-            logger.warning(f"Agent rate limit check failed for job {job_id}: {e}")
+            # Query failed — fail closed so the claim is held rather than auto-approved
+            collusion_hold = True
+            collusion_hold_reason = "Collusion check unavailable — held for admin review"
+            logger.error(f"Agent rate limit check failed for job {job_id}: {e}")
 
     # Combine all soft-hold flags — include all reasons in the review note.
     hold_reasons = [r for r in [rate_hold_reason, collusion_hold_reason, gps_hold_reason] if r]
