@@ -3,15 +3,15 @@
 You are working on **Bricks-Dispatch**, the vendor-facing job orchestration layer of the BRICKS ecosystem.
 
 ## Ecosystem Context
-- **Bricks-Brokerage** — brokerage admin web dashboard. Manages vendors.
-- **Bricks-Booking** — sends confirmed shoot jobs to this service via `POST /api/v1/dispatch/jobs`
-- **Bricks-Dispatch** (this repo) — assigns jobs to vendors, tracks status, processes payouts
+- **Bricks-Brokerage** — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors.
+- **Bricks-Booking** — agent mobile app (iOS + Android). Sends confirmed shoot jobs to this service via `POST /api/v1/dispatch/jobs`
+- **Bricks-Dispatch** (this repo) — vendor mobile app (iOS + Android) + web dashboard. Assigns jobs to vendors, tracks status, processes payouts.
 
 All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
 
 ## Stack
 - Backend: FastAPI (Python 3.14), Supabase, Stripe Connect, Gemini 1.5 Flash (explainability only)
-- Frontend: Expo (React Native) + web dashboard (`dispatch.brxs.ca`)
+- Frontend: Expo (React Native) + web dashboard (`dispatch.brxs.ca`) — **remain on Expo; SwiftUI rebuild rejected** (Android parity, ship-readiness, team expertise — native features can be added via Expo native modules if needed)
 - Deployed: `https://bricks-dispatch-api.vercel.app` / `https://dispatch-api.brxs.ca`
 
 ## Key Files
