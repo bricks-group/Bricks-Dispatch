@@ -738,6 +738,92 @@ async def update_vendor_job_status(
 
 
 # ---------------------------------------------------------------------------
+# watchOS quick-action endpoint
+# ---------------------------------------------------------------------------
+
+class WatchActionRequest(BaseModel):
+    action: str  # "accept" | "decline" | "on_way" | "arrived"
+
+
+_WATCH_ACTION_STATUS_MAP = {
+    "accept":  "assigned",
+    "decline": "declined",
+    "on_way":  "in_progress",
+    "arrived": "in_progress",
+}
+
+
+@router.post("/jobs/{job_id}/watch-action")
+async def watch_job_action(
+    job_id: str,
+    body: WatchActionRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Called by the watchOS app to accept, decline, mark on-way, or mark arrived."""
+    if body.action not in _WATCH_ACTION_STATUS_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown action '{body.action}'")
+
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    db = await get_db()
+    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not res_job.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = res_job.data
+    assignee_id = job.get("assignee_id")
+    if assignee_id != actor_id:
+        raise HTTPException(status_code=403, detail="You are not the assigned photographer for this job")
+
+    old_status = job.get("status")
+    _IMMUTABLE = {"cancelled", "delivered", "agent_no_show", "dispatch_failed", "qc_failed"}
+    if old_status in _IMMUTABLE:
+        raise HTTPException(status_code=409, detail=f"Job is in terminal state '{old_status}'")
+
+    new_status = _WATCH_ACTION_STATUS_MAP[body.action]
+    if new_status == old_status:
+        return {"status": "no_change", "job_id": job_id, "current_status": old_status}
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
+
+    if new_status == "in_progress" and old_status != "in_progress":
+        try:
+            from ..services.client_comms import notify_photographer_en_route
+            await notify_photographer_en_route(job_id)
+        except Exception as e:
+            logger.error(f"En-route notification failed for job {job_id}: {e}")
+
+    if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
+        try:
+            _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            res_recent = await db.table("jobs").select("id, status").eq("assignee_id", actor_id).gte("created_at", _thirty_days_ago).execute()
+            recent_jobs = res_recent.data or []
+            recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
+            total_recent = len(recent_jobs)
+            new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
+            await db.table("vendor_members").update({"decline_rate": new_rate, "updated_at": now}).eq("id", actor_id).execute()
+        except Exception as e:
+            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+
+    booking_id = job.get("booking_id")
+    if booking_id:
+        await send_dispatch_status_update_webhook(
+            booking_id=booking_id,
+            job_id=job_id,
+            new_status=new_status,
+            previous_status=old_status,
+            actor_id=actor_id,
+            actor_type="vendor_member",
+        )
+
+    return {"status": "updated", "job_id": job_id, "action": body.action, "new_status": new_status}
+
+
+# ---------------------------------------------------------------------------
 # No-show policy (Snappr model)
 # ---------------------------------------------------------------------------
 AGENT_NOSHOW_TRIP_FEE_CENTS = 6000   # $60 CAD
