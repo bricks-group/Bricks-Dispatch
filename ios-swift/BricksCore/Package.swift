@@ -10,7 +10,10 @@ let package = Package(
     targets: [
         .target(
             name: "BricksCore",
-            path: "Sources/BricksCore"
+            path: "Sources/BricksCore",
+            resources: [
+                .process("Splat/GaussianSplat.metal"),
+            ]
         ),
         .testTarget(
             name: "BricksCoreTests",

@@ -30,6 +30,12 @@ struct TodayJobsView: View {
             .navigationDestination(item: $selectedJob) { job in
                 JobDetailView(job: job)
             }
+            .fullScreenCover(isPresented: Binding(
+                get: { store.pendingOffer != nil },
+                set: { if !$0 { store.pendingOffer = nil } }
+            )) {
+                JobOfferHost(store: store)
+            }
         }
     }
 
