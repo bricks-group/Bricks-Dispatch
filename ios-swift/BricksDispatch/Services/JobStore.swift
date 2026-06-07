@@ -10,6 +10,9 @@ final class JobStore: ObservableObject {
     @Published private(set) var todayJobs: [DispatchJob] = []
     @Published private(set) var isLoading = false
     @Published private(set) var error: String?
+    /// Non-nil when a newly-assigned job is waiting for the photographer to accept or decline.
+    /// Set by push notification handler or poll. Cleared by acceptOffer/declineOffer.
+    @Published var pendingOffer: DispatchJob?
 
     private let api = BricksAPIClient.shared
     private let watch = WatchConnectivityManager.shared
@@ -41,6 +44,29 @@ final class JobStore: ObservableObject {
             syncToWidget()
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    // MARK: — Offer accept / decline (called from JobOfferCard)
+
+    func acceptOffer(_ job: DispatchJob) async {
+        pendingOffer = nil
+        await markInProgress(job)
+    }
+
+    func declineOffer(_ job: DispatchJob) async {
+        pendingOffer = nil
+        await markDeclined(job)
+    }
+
+    /// Called when a "job_assigned" push arrives. Surfaces the offer card.
+    func receivePushOffer(jobId: String) async {
+        // If the job is already in todayJobs use it, otherwise reload
+        if let job = todayJobs.first(where: { $0.id == jobId }) {
+            pendingOffer = job
+        } else {
+            await loadTodayJobs()
+            pendingOffer = todayJobs.first(where: { $0.id == jobId })
         }
     }
 

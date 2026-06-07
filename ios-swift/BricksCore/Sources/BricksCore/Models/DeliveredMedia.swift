@@ -19,15 +19,21 @@ public struct DeliveredPhoto: Codable, Identifiable, Sendable {
 }
 
 /// The full delivery payload for a job.
-/// Fetched from GET /api/jobs/{id}/delivery (or embedded in job detail response).
+/// Fetched from GET /api/bookings/{id}/delivery (Booking API, reads shared media_delivery table).
 public struct JobDelivery: Codable, Sendable {
     public let jobId: String
     public let photos: [DeliveredPhoto]
     public let deliveredAt: String
+    /// Signed URL to the .splat Gaussian splat file — non-nil for Premium/Luxury/Estate jobs
+    /// where a 3D capture was performed and passed post-production.
+    public let splatURL: String?
+
+    public var splatFileURL: URL? { splatURL.flatMap(URL.init) }
 
     enum CodingKeys: String, CodingKey {
-        case jobId = "job_id"
-        case photos = "delivery_urls"
+        case jobId      = "job_id"
+        case photos     = "delivery_urls"
         case deliveredAt = "delivered_at"
+        case splatURL   = "splat_url"
     }
 }
