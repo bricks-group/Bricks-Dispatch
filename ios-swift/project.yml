@@ -12,7 +12,7 @@ options:
 
 packages:
   BricksCore:
-    path: ../../BricksCore
+    path: BricksCore
 
 settings:
   base:
