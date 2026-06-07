@@ -13,7 +13,6 @@ notifications they may send for completed orders.
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
 """
-import html
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -176,60 +175,43 @@ async def _finalize_job_if_complete(job_id: str) -> None:
 
 
 async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
-    RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-    if not RESEND_API_KEY:
-        logger.info(f"Job {job_id}: RESEND_API_KEY not set — skipping delivery email")
-        return
-
+    """Delegates delivery notification to Booking service (which owns the agent relationship)."""
     db = await get_db()
     res_job = await db.table("jobs").select("booking_id, address").eq("id", job_id).maybe_single().execute()
     if not res_job.data:
         return
 
-    job = res_job.data
-    booking_id = job.get("booking_id") or ""
+    booking_id = res_job.data.get("booking_id") or ""
+    if not booking_id:
+        logger.warning(f"Job {job_id}: no booking_id — skipping delivery notification")
+        return
 
-    # Look up agent email from bookings → users join
-    agent_email: Optional[str] = None
-    if booking_id:
-        res_booking = await db.table("bookings").select("user_id").eq("id", booking_id).maybe_single().execute()
-        if res_booking.data:
-            res_user = await db.table("users").select("email").eq("id", res_booking.data["user_id"]).maybe_single().execute()
-            if res_user.data:
-                agent_email = res_user.data.get("email")
+    _internal_api_key = os.environ.get("INTERNAL_API_KEY", "")
+    _booking_api_url = os.environ.get("BOOKING_API_URL", "https://bricks-booking-api.vercel.app")
 
-    if not agent_email:
-        logger.warning(f"Job {job_id}: no agent email found — skipping delivery notification")
+    if not _internal_api_key:
+        logger.info(f"Job {job_id}: INTERNAL_API_KEY not set — skipping delivery notification")
         return
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            payload = {
-                "from": "Bricks <noreply@brxs.ca>",
-                "to": [agent_email],
-                "subject": f"Your photos are ready — {job.get('address', '')}",
-                "html": (
-                    f"<p>Your edited photos for <strong>{job.get('address', 'your property')}</strong> "
-                    f"are ready. You can access {len(delivery_urls)} file(s) via the Bricks app or "
-                    f"the link(s) below (valid for 24 hours).</p>"
-                    + "".join(
-                        f'<p><a href="{u["url"]}">{html.escape(u["filename"])}</a></p>'
-                        for u in delivery_urls[:5]
-                    )
-                    + ("<p>…and more in the app.</p>" if len(delivery_urls) > 5 else "")
-                ),
-            }
             resp = await client.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                json=payload,
+                f"{_booking_api_url}/api/internal/comms/job-delivered",
+                headers={"X-Internal-Api-Key": _internal_api_key},
+                json={
+                    "booking_id": booking_id,
+                    "job_id": job_id,
+                    "address": res_job.data.get("address", ""),
+                    "delivery_count": len(delivery_urls),
+                    "delivery_urls": delivery_urls[:5],
+                },
             )
             resp.raise_for_status()
             await db.table("media_delivery").update({
                 "notified_at": datetime.now(timezone.utc).isoformat(),
                 "notification_status": "sent",
             }).eq("job_id", job_id).execute()
-            logger.info(f"Job {job_id}: delivery notification sent to {agent_email}")
+            logger.info(f"Job {job_id}: delivery notification delegated to Booking service")
     except Exception as e:
         logger.error(f"Job {job_id}: delivery notification failed: {e}")
         await db.table("media_delivery").update({

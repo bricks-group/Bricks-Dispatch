@@ -207,6 +207,7 @@ pick_vendor_rule_based(job, vendors)
 ## Remaining Before Live Traffic
 
 **Vercel env vars (bricks-dispatch-api):**
+- `BOOKING_API_URL` — Booking service base URL for internal comms delegation (e.g. `https://booking-api.brxs.ca`); falls back to `BOOKING_CALLBACK_URL` if unset
 - `RESEND_API_KEY` ✅ (set)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)
 - `GEMINI_API_KEY` ✅ (set)
