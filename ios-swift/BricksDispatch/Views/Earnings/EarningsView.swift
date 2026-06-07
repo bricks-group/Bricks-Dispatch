@@ -1,5 +1,6 @@
 import SwiftUI
 import BricksCore
+import WidgetKit
 
 struct EarningsResponse: Decodable {
     let weekTotal: Double
@@ -104,8 +105,18 @@ final class EarningsViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             response = try await BricksAPIClient.shared.get("/api/vendor-os/earnings")
+            if let r = response { syncToWidget(r) }
         } catch {
             // Keep stale data
         }
+    }
+
+    private func syncToWidget(_ r: EarningsResponse) {
+        let d = UserDefaults(suiteName: "group.com.bricks.dispatch")
+        d?.set(r.weekTotal,     forKey: "dispatch.widget.todayEarnings")
+        d?.set(r.pendingAmount, forKey: "dispatch.widget.pendingEarnings")
+        d?.set(r.weekJobCount,  forKey: "dispatch.widget.weekJobCount")
+        d?.set(r.payoutDay,     forKey: "dispatch.widget.payoutDay")
+        WidgetCenter.shared.reloadTimelines(ofKind: "EarningsWidget")
     }
 }

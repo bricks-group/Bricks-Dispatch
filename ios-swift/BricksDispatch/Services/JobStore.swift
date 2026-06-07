@@ -1,6 +1,7 @@
 import Foundation
 import BricksCore
 import ActivityKit
+import WidgetKit
 
 @MainActor
 final class JobStore: ObservableObject {
@@ -37,6 +38,7 @@ final class JobStore: ObservableObject {
                 }
                 .sorted { ($0.scheduledDateTime ?? .distantFuture) < ($1.scheduledDateTime ?? .distantFuture) }
             syncToWatch()
+            syncToWidget()
         } catch {
             self.error = error.localizedDescription
         }
@@ -81,9 +83,26 @@ final class JobStore: ObservableObject {
                 todayJobs[idx].status = status
             }
             syncToWatch()
+            syncToWidget()
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    // MARK: — Widget sync
+
+    private func syncToWidget() {
+        let d = UserDefaults(suiteName: "group.com.bricks.dispatch")
+        let next = todayJobs.first { $0.isUpcoming || $0.isActive }
+        d?.set(next != nil, forKey: "dispatch.widget.nextJob.exists")
+        if let n = next {
+            d?.set(n.address,           forKey: "dispatch.widget.nextJob.address")
+            d?.set(n.scheduledDate,     forKey: "dispatch.widget.nextJob.date")
+            d?.set(n.timeWindowStart,   forKey: "dispatch.widget.nextJob.time")
+            d?.set(n.vendorPayout ?? 0, forKey: "dispatch.widget.nextJob.payout")
+            d?.set(n.jobType,           forKey: "dispatch.widget.nextJob.type")
+        }
+        WidgetCenter.shared.reloadTimelines(ofKind: "NextJobWidget")
     }
 
     // MARK: — Watch sync
