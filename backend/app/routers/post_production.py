@@ -109,11 +109,10 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         if u.get("processing_status") == "failed":
             logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — processing failed")
             continue
-        # Skip 3D assets — .splat/.ply files are handled separately (Virtual Visit embed),
-        # not delivered as photo files to the booking agent
+        # Skip 3D assets — .splat/.ply files are stored separately as splat_url, not photo files
         _fname = (u.get("filename") or "").lower()
         if _fname.endswith(".splat") or _fname.endswith(".ply"):
-            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — 3D asset")
+            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded from photo list — 3D asset")
             continue
         path = u.get("processed_url") or u.get("file_url")
         if not path:
@@ -144,12 +143,28 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         }).eq("id", job_id).execute()
         return
 
+    # Resolve splat_url — sign the first .splat upload for this job (if any)
+    splat_upload = next(
+        (u for u in uploads if (u.get("filename") or "").lower().endswith(".splat")),
+        None,
+    )
+    splat_url: Optional[str] = None
+    if splat_upload:
+        splat_path = splat_upload.get("processed_url") or splat_upload.get("file_url")
+        if splat_path:
+            if splat_path.startswith("https://"):
+                splat_url = splat_path
+            else:
+                splat_url = await get_signed_download_url(splat_path)
+        logger.info(f"Job {job_id}: splat_url {'resolved' if splat_url else 'failed to sign'}")
+
     # Upsert media_delivery row (idempotent)
     delivery_row = {
         "job_id": job_id,
         "delivery_urls": delivery_urls,
         "delivered_at": datetime.now(timezone.utc).isoformat(),
         "notification_status": "pending",
+        "splat_url": splat_url,
     }
     await db.table("media_delivery").upsert(
         delivery_row, on_conflict="job_id"
