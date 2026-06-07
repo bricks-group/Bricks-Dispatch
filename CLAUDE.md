@@ -11,8 +11,37 @@ All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
 
 ## Stack
 - Backend: FastAPI (Python 3.14), Supabase, Stripe Connect, Gemini 1.5 Flash (explainability only)
-- Frontend: Expo (React Native) + web dashboard (`dispatch.brxs.ca`) — **remain on Expo; SwiftUI rebuild rejected** (Android parity, ship-readiness, team expertise — native features can be added via Expo native modules if needed)
+- Frontend (Android): Expo (React Native) + web dashboard (`dispatch.brxs.ca`) — Android primary audience
+- Frontend (iOS): **Native Swift — `ios-swift/` directory** — SwiftUI, multi-target Xcode project (see below)
 - Deployed: `https://bricks-dispatch-api.vercel.app` / `https://dispatch-api.brxs.ca`
+
+## iOS Swift App — `ios-swift/`
+
+**This is a fully built native Swift iOS app.** Do not suggest Expo for iOS — the Swift app is the iOS experience.
+
+### Xcode Targets
+- `BricksDispatch` — main iPhone app (SwiftUI, `com.bricks.dispatch`)
+- `BricksDispatchWatch` — watchOS app: job offer card → accept/decline, active job status
+- `BricksDispatchWidgets` — WidgetKit: next job + today's earnings
+
+### Shared Package
+- `BricksCore/` — local Swift Package shared with Booking: APIClient, SupabaseAuth, models, WatchConnectivity, LiveActivities, design tokens
+
+### Key Swift Files
+- `BricksDispatch/App.swift` — app entry, APNs delegate, push → job offer routing
+- `BricksDispatch/Views/Jobs/JobListView.swift` — job list with status filters
+- `BricksDispatch/Views/Jobs/JobDetailView.swift` — job detail, Navigate button, action buttons
+- `BricksDispatch/Views/Jobs/JobNavigationView.swift` — MapKit turn-by-turn: MKDirections, polyline, LookAroundPreview, step tracking
+- `BricksDispatch/Services/JobStore.swift` — API calls, Watch sync, Live Activity
+- `BricksDispatch/Services/PushNotificationService.swift` — APNs routing: job_assigned → watch sync
+- `BricksDispatchWatch/Views/JobOfferView.swift` — accept/decline from wrist
+- `BricksDispatchWatch/Views/ActiveJobView.swift` — in-progress job status, arrived action
+
+### Build
+```bash
+cd ios-swift && xcodegen generate   # generates BricksDispatch.xcodeproj from project.yml
+```
+API base: `https://dispatch-api.brxs.ca`
 
 ## Key Files
 - `backend/app/main.py` — router registration (no outer prefix; routers carry their own `/api/v1/*`)
