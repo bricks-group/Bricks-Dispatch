@@ -1,8 +1,33 @@
 import SwiftUI
+import UIKit
 import BricksCore
+
+// MARK: — UIApplicationDelegate bridge (APNs token + silent push)
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        PushNotificationService.shared.registerDeviceToken(deviceToken)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Task { @MainActor in
+            PushNotificationService.shared.handleRemoteNotification(userInfo)
+        }
+        completionHandler(.newData)
+    }
+}
 
 @main
 struct BricksDispatchApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
     @StateObject private var auth = BricksAuth.shared
     @StateObject private var jobStore = JobStore.shared
     @StateObject private var watchBridge = WatchConnectivityManager.shared
