@@ -2,26 +2,36 @@ import SwiftUI
 import BricksCore
 
 /// The emotional core of the Dispatch app — the moment the photographer's work comes back
-/// QC-passed, edited, and delivered. Photos reveal one at a time from black with a specular
-/// sweep; earnings resolve last with a count-up and haptic pattern.
+/// QC-passed, edited, and delivered.
+///
+/// Four-beat reveal sequence:
+///  1. Photos settle in from black with specular sweeps (staggered)
+///  2. Earnings footer fades up with AnimatedDollar count-up
+///  3. Earnings resolves to gold + haptic pattern
+///  4. 3D Tour CTA appears (Premium/Luxury/Estate jobs with a splatFile)
 ///
 /// This is the ADA demo video shot. Slow, deliberate, cinematic.
 struct DeliveryRevealView: View {
 
     let job: DispatchJob
     let photos: [DeliveredPhoto]
+    /// Nil for Standard jobs or if the splat has not yet been generated.
+    let splatFile: SplatFile?
 
     @Environment(\.dismiss) private var dismiss
-    @State private var visibleCount  = 0
-    @State private var sweepTriggers = [Bool]()      // one per photo
+    @State private var visibleCount    = 0
+    @State private var sweepTriggers   = [Bool]()
     @State private var earningsVisible  = false
     @State private var earningsResolved = false
+    @State private var splatCTAVisible  = false
+    @State private var showingFullSplat = false
 
-    private let stagger: Double = 0.38   // seconds between each photo reveal
+    private let stagger: Double = 0.38
 
-    init(job: DispatchJob, photos: [DeliveredPhoto]) {
-        self.job    = job
-        self.photos = photos
+    init(job: DispatchJob, photos: [DeliveredPhoto], splatFile: SplatFile? = nil) {
+        self.job       = job
+        self.photos    = photos
+        self.splatFile = splatFile
         _sweepTriggers = State(initialValue: Array(repeating: false, count: photos.count))
     }
 
@@ -38,6 +48,22 @@ struct DeliveryRevealView: View {
         }
         .statusBarHidden(true)
         .onAppear { startReveal() }
+        .fullScreenCover(isPresented: $showingFullSplat) {
+            if let file = splatFile {
+                ZStack(alignment: .topTrailing) {
+                    SplatView(file: file)
+                        .ignoresSafeArea()
+                    Button { showingFullSplat = false } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(20)
+                    }
+                }
+                .statusBarHidden(true)
+            }
+        }
     }
 
     // MARK: — Photo grid
@@ -54,7 +80,7 @@ struct DeliveryRevealView: View {
                 }
             }
         }
-        .padding(.top, 60)          // clear Dynamic Island
+        .padding(.top, 60)
     }
 
     private var columns: [GridItem] {
@@ -73,16 +99,13 @@ struct DeliveryRevealView: View {
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if let payout = job.vendorPayout {
-                        AnimatedDollar(
-                            target: payout,
-                            delay: 0.15
-                        )
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
-                        .foregroundStyle(earningsResolved ? Color("BricksGold") : .white)
-                        .animation(.easeInOut(duration: 0.55), value: earningsResolved)
-                        .onChange(of: earningsResolved) { _, resolved in
-                            if resolved { BricksHaptics.shared.earningsResolved() }
-                        }
+                        AnimatedDollar(target: payout, delay: 0.15)
+                            .font(.system(size: 48, weight: .bold, design: .rounded))
+                            .foregroundStyle(earningsResolved ? Color("BricksGold") : .white)
+                            .animation(.easeInOut(duration: 0.55), value: earningsResolved)
+                            .onChange(of: earningsResolved) { _, resolved in
+                                if resolved { BricksHaptics.shared.earningsResolved() }
+                            }
                     }
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.88)))
@@ -91,6 +114,12 @@ struct DeliveryRevealView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.3))
                     .transition(.opacity)
+
+                // ── 3D Tour CTA — beat 4 ──────────────────────────────────
+                if splatCTAVisible, splatFile != nil {
+                    splatButton
+                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                }
             }
         }
         .padding(.horizontal, 24)
@@ -105,15 +134,48 @@ struct DeliveryRevealView: View {
         )
     }
 
+    // MARK: — 3D Tour button
+
+    private var splatButton: some View {
+        Button {
+            BricksHaptics.shared.statusAdvanced()
+            showingFullSplat = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "cube.transparent.fill")
+                    .font(.subheadline.weight(.semibold))
+                Text("View 3D Tour")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .background(
+                LinearGradient(
+                    colors: [Color("BricksGold"), Color("BricksGold").opacity(0.82)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+            )
+        }
+        .padding(.top, 8)
+        // Pulse draw-attention animation
+        .phaseAnimator([false, true], trigger: splatCTAVisible) { content, phase in
+            content.scaleEffect(phase ? 1.0 : 0.97)
+        } animation: { phase in
+            phase ? .spring(response: 0.4, dampingFraction: 0.6) :
+                    .spring(response: 0.55, dampingFraction: 0.8)
+        }
+    }
+
     // MARK: — Close
 
     private var closeButton: some View {
         VStack {
             HStack {
                 Spacer()
-                Button {
-                    dismiss()
-                } label: {
+                Button { dismiss() } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title2)
                         .symbolRenderingMode(.hierarchical)
@@ -133,7 +195,6 @@ struct DeliveryRevealView: View {
         for i in 0..<photos.count {
             let delay = Double(i) * stagger
 
-            // Photo appears
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 withAnimation(.spring(response: 0.48, dampingFraction: 0.74)) {
                     visibleCount = i + 1
@@ -141,24 +202,32 @@ struct DeliveryRevealView: View {
                 BricksHaptics.shared.photoSettle()
             }
 
-            // Specular sweep fires ~80ms after the photo settles
             DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.08) {
                 sweepTriggers[i].toggle()
             }
         }
 
-        // Earnings footer after all photos
         let allDone = Double(photos.count) * stagger + 0.3
+
+        // Beat 2: earnings footer
         DispatchQueue.main.asyncAfter(deadline: .now() + allDone) {
             withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) {
                 earningsVisible = true
             }
         }
 
-        // Gold color resolves after the counter finishes counting (~1.6s spring)
+        // Beat 3: gold resolution
         let goldDelay = allDone + 1.8
         DispatchQueue.main.asyncAfter(deadline: .now() + goldDelay) {
             earningsResolved = true
+        }
+
+        // Beat 4: 3D CTA (only if a splat file was provided)
+        guard splatFile != nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + goldDelay + 0.7) {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.72)) {
+                splatCTAVisible = true
+            }
         }
     }
 }
@@ -177,9 +246,7 @@ private struct PhotoCell: View {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
+                            image.resizable().scaledToFill()
                         case .failure:
                             Rectangle().fill(Color.white.opacity(0.06))
                         default:
@@ -223,7 +290,9 @@ private extension Array {
     }
 }
 
-#Preview {
+// MARK: — Preview
+
+#Preview("With 3D Tour") {
     DeliveryRevealView(
         job: .preview,
         photos: (0..<6).map { i in
@@ -233,6 +302,22 @@ private extension Array {
                 url: "https://picsum.photos/seed/\(i)/800/600",
                 expiresAt: "",
                 qcFlagged: i == 2
+            )
+        },
+        splatFile: nil   // pass a real SplatFile here to preview the CTA
+    )
+}
+
+#Preview("Photos only") {
+    DeliveryRevealView(
+        job: .preview,
+        photos: (0..<4).map { i in
+            DeliveredPhoto(
+                id: "photo-\(i)",
+                filename: "IMG_\(1000 + i).jpg",
+                url: "https://picsum.photos/seed/\(i+10)/800/600",
+                expiresAt: "",
+                qcFlagged: false
             )
         }
     )
