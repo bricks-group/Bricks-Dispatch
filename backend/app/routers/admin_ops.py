@@ -405,6 +405,10 @@ async def reconcile_noshow_claims(
                 continue
 
             bk_status = res_bk.data.get("status", "")
+            # pending_review fees are held for admin approval; the Booking retention webhook
+            # fires only after approval — these are expected not to show retained yet.
+            if fee.get("status") == "pending_review":
+                continue
             if bk_status not in ("retained", "agent_no_show", "no_show"):
                 mismatches.append({
                     "type": "fee_without_retention",

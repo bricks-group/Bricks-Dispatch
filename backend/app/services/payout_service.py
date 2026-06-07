@@ -87,11 +87,28 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # Calculate payout amount after vendor_tier is finalised from vendor_members
     payout_amount = calculate_payout_amount(package_price, vendor_tier)
     if payout_amount <= 0:
-        logger.warning(
-            f"Payout amount is 0 for job {job_id} "
-            f"(package_price={package_price}, vendor_tier={vendor_tier})"
-        )
-        return {"error": "zero_payout_amount", "job_id": job_id}
+        # Don't bail if there are pending trip fees — a photographer who only earned a
+        # no-show trip fee on a zero-price job still needs to be paid out.
+        if assignee_id and assignee_id != "default_user":
+            _fee_check = await db.table("agent_noshow_trip_fees").select("id").eq(
+                "member_id", assignee_id
+            ).eq("status", "pending").limit(1).execute()
+            if not (_fee_check.data):
+                logger.warning(
+                    f"Payout amount is 0 for job {job_id} and no pending trip fees "
+                    f"(package_price={package_price}, vendor_tier={vendor_tier})"
+                )
+                return {"error": "zero_payout_amount", "job_id": job_id}
+            logger.info(
+                f"Job {job_id}: base payout is 0 but photographer {assignee_id} has pending "
+                f"trip fees — continuing to pay them out"
+            )
+        else:
+            logger.warning(
+                f"Payout amount is 0 for job {job_id} "
+                f"(package_price={package_price}, vendor_tier={vendor_tier})"
+            )
+            return {"error": "zero_payout_amount", "job_id": job_id}
 
     # HST on contractor fee (ETA principal model — paid on top of base fee)
     hst_paid_cents = 0

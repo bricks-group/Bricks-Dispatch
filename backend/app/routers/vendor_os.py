@@ -413,18 +413,15 @@ async def get_vendor_performance(
             week_jobs.append(job)
             if job.get("status") in ("completed", "delivered"):
                 completed.append(job)
-    on_time = 0
-    for job in completed:
-        try:
-            deadline = datetime.strptime(f"{job.get('scheduled_date')} {job.get('time_window_end', '23:59')}", "%Y-%m-%d %H:%M").replace(tzinfo=_TORONTO_TZ)
-            updated_at = datetime.fromisoformat(job.get("updated_at"))
-            if updated_at <= deadline:
-                on_time += 1
-        except Exception:
-            continue
+    # Use the authoritative on_time_rate from vendor_members — updated by update_vendor_job_status
+    # at the moment a job is marked `completed` (when updated_at is the actual completion time).
+    # Recomputing from job.updated_at here is inaccurate for delivered jobs where updated_at
+    # reflects delivery time (hours later), not completion time.
+    res_member = await (await get_db()).table("vendor_members").select("on_time_rate").eq("id", actor_id).maybe_single().execute()
+    on_time_rate_pct = round(((res_member.data or {}).get("on_time_rate") or 0) * 100, 1)
     return {
         "completion_rate": round((len(completed) / len(week_jobs) * 100), 1) if week_jobs else 0.0,
-        "on_time_rate": round((on_time / len(completed) * 100), 1) if completed else 0.0,
+        "on_time_rate": on_time_rate_pct,
         "job_volume_week": len(week_jobs),
     }
 
@@ -619,19 +616,18 @@ async def update_vendor_job_status(
     if old_status in _IMMUTABLE_STATUSES:
         raise HTTPException(status_code=409, detail=f"Job is in terminal state '{old_status}' — status cannot be changed")
 
+    # Only these statuses may be set by a vendor via this endpoint.
+    # "delivered" is set exclusively by the post-production pipeline
+    # (_finalize_job_if_complete) which also handles payout and delivery notification.
+    _VENDOR_SETTABLE_STATUSES = {"in_progress", "completed", "declined"}
+    if new_status not in _VENDOR_SETTABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Status '{new_status}' cannot be set via this endpoint — it is managed by the system",
+        )
+
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
-
-    # Payout fires on "delivered" only (after post-production and media delivery to agent).
-    # "completed" means shoot is done but media not yet processed/sent — paying on completed
-    # is premature. post_production.py::_finalize_job_if_complete also triggers payout;
-    # payout_service is idempotent so both paths are safe, but only one should fire normally.
-    if new_status == "delivered" and old_status != "delivered":
-        try:
-            from ..services.payout_service import trigger_payout_for_job
-            await trigger_payout_for_job(db, job_id)
-        except Exception as e:
-            logger.error(f"Payout trigger failed for job {job_id}: {e}")
 
     # When vendor marks completed, start post-production only when uploads are
     # either not expected (deliverables_count=0) or already fully received.

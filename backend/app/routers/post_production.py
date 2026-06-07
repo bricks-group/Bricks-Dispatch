@@ -67,12 +67,20 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     if not uploads:
         return
 
-    # Only finalize when no uploads are actively in-flight.
-    # Uploads with null processing_status were never submitted (3D assets, missing API keys,
-    # URL failures) and should not block finalization — treat them as terminal.
-    pending = [u for u in uploads if u.get("processing_status") == "processing"]
-    if pending:
-        logger.info(f"Job {job_id}: {len(pending)} upload(s) still processing — waiting")
+    # Idempotency guard: if media_delivery already exists, finalization already ran.
+    # Prevents duplicate QC runs, duplicate delivery emails, and double payout triggers
+    # when concurrent provider callbacks arrive close together.
+    existing_delivery = await db.table("media_delivery").select("id").eq("job_id", job_id).maybe_single().execute()
+    if existing_delivery.data:
+        logger.info(f"Job {job_id}: media_delivery already exists — skipping duplicate finalization")
+        return
+
+    # Block finalization while any uploads are still in-flight or awaiting submission.
+    # "pending" = provider submission failed/queued and never progressed; these are timed
+    # out to "failed" by the reconcile endpoint after 2 h, at which point finalization proceeds.
+    in_flight = [u for u in uploads if u.get("processing_status") in ("processing", "pending")]
+    if in_flight:
+        logger.info(f"Job {job_id}: {len(in_flight)} upload(s) still in-flight (processing/pending) — waiting")
         return
 
     # Run QC vision agent on all processed uploads before delivery
@@ -399,8 +407,10 @@ async def reconcile_stuck_uploads(
 
     # --- Fotello/Autoenhance/BoxBrownie: mark stuck (>2h) as failed, then finalize ---
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    res_stuck = await db.table("uploads").select("id, job_id, provider").eq(
-        "processing_status", "processing"
+    # Also time out "pending" uploads — these were never successfully submitted to a provider
+    # and will never receive a callback. Without this they block _finalize_job_if_complete forever.
+    res_stuck = await db.table("uploads").select("id, job_id, provider").in_(
+        "processing_status", ["processing", "pending"]
     ).lt("created_at", cutoff).limit(100).execute()
 
     stuck = res_stuck.data or []

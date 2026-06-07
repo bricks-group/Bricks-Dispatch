@@ -128,9 +128,13 @@ async def create_upload(
     # "completed" status transition in vendor_os.py instead — triggering here on every
     # upload would fire before all files arrive, processing only a partial set.
     deliverables = job.get("deliverables_count") or 0
-    job_status = job.get("status", "")
-    if deliverables and new_uploaded == deliverables and job_status == "completed":
-        background_tasks.add_task(process_job_assets, job_id)
+    if deliverables and new_uploaded == deliverables:
+        # Re-read status fresh — photographer may have marked the job `completed` while
+        # this upload was in-flight, leaving the snapshot from the top of this handler stale.
+        res_fresh = await db.table("jobs").select("status").eq("id", job_id).maybe_single().execute()
+        job_status = (res_fresh.data or {}).get("status", "")
+        if job_status == "completed":
+            background_tasks.add_task(process_job_assets, job_id)
 
     return record.dict()
 

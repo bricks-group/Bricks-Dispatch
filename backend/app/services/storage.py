@@ -80,6 +80,6 @@ async def get_signed_download_url(storage_path: str, expiry: int = SIGNED_URL_EX
     try:
         db = await get_db()
         result = await db.storage.from_(STORAGE_BUCKET).create_signed_url(storage_path, expiry)
-        return result.get("signedURL") or result.get("signed_url")
+        return result.get("signedURL") or result.get("signedUrl") or result.get("signed_url")
     except Exception:
         return None
