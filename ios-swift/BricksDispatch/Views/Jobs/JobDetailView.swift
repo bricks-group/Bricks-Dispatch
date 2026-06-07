@@ -6,6 +6,7 @@ struct JobDetailView: View {
     let job: DispatchJob
     @StateObject private var store = JobStore.shared
     @State private var cameraPosition: MapCameraPosition
+    @State private var showNavigation = false
 
     init(job: DispatchJob) {
         self.job = job
@@ -149,21 +150,20 @@ struct JobDetailView: View {
         switch job.status {
         case .assigned:
             VStack(spacing: 10) {
+                // In-app turn-by-turn navigation
+                Button { showNavigation = true } label: {
+                    Label("Navigate to Property", systemImage: "location.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(BricksPrimaryButton())
+                .fullScreenCover(isPresented: $showNavigation) {
+                    JobNavigationView(job: job)
+                }
+
                 Button {
                     Task { await store.markInProgress(job) }
                 } label: {
                     Label("I'm on my way", systemImage: "car.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(BricksPrimaryButton())
-
-                // Navigate with MapKit
-                Button {
-                    let dest = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: job.lat, longitude: job.lng)))
-                    dest.name = job.address
-                    dest.openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving])
-                } label: {
-                    Label("Navigate", systemImage: "map.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(BricksSecondaryButton())
