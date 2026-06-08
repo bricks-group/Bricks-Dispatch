@@ -16,7 +16,9 @@ final class NavigationController: NSObject, ObservableObject {
     @Published var lookAroundScene: MKLookAroundScene?
     @Published var state: NavState = .locating
 
-    enum NavState { case locating, routing, navigating, arrived, error(String) }
+    enum NavState: Equatable {
+        case locating, routing, navigating, arrived, error(String)
+    }
 
     private let locationManager = CLLocationManager()
     private let destination: CLLocationCoordinate2D
@@ -41,9 +43,13 @@ final class NavigationController: NSObject, ObservableObject {
         state = .navigating
     }
 
-    func markArrived() {
+    func stopNavigation() {
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
+    }
+
+    func markArrived() {
+        stopNavigation()
         state = .arrived
     }
 
@@ -203,7 +209,7 @@ struct JobNavigationView: View {
             HStack(alignment: .top) {
                 // Dismiss
                 Button {
-                    nav.locationManager.stopUpdatingLocation()
+                    nav.stopNavigation()
                     dismiss()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -433,10 +439,7 @@ struct JobNavigationView: View {
         Task {
             try? await Task.sleep(for: .seconds(1.8))
             withAnimation(.easeInOut(duration: 1.2)) {
-                cameraPosition = .userLocation(
-                    heading: .constant(0),
-                    fallback: .automatic
-                )
+                cameraPosition = .userLocation(fallback: .automatic)
             }
         }
     }
@@ -446,7 +449,7 @@ struct JobNavigationView: View {
     private func handleArrived() {
         // Send watch arrived action
         WatchConnectivityManager.shared.sendMessage([
-            "action": WatchAction.arrived,
+            "action": WatchAction.arrived.rawValue,
             "jobId": job.id,
         ])
         // Short delay then dismiss back to detail

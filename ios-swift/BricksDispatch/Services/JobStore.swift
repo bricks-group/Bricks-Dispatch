@@ -89,11 +89,11 @@ final class JobStore: ObservableObject {
     func handleWatchAction(_ action: String, jobId: String) async {
         guard let job = todayJobs.first(where: { $0.id == jobId }) else { return }
         switch action {
-        case WatchAction.accept:    await markInProgress(job)
-        case WatchAction.decline:   await markDeclined(job)
-        case WatchAction.onWay:     await updateStatus(job, to: .inProgress)
-        case WatchAction.arrived:   break  // no status change — just GPS confirmation
-        default:                    break
+        case WatchAction.accept.rawValue:    await markInProgress(job)
+        case WatchAction.decline.rawValue:   await markDeclined(job)
+        case WatchAction.onWay.rawValue:     await updateStatus(job, to: .inProgress)
+        case WatchAction.arrived.rawValue:   break  // no status change — just GPS confirmation
+        default:                             break
         }
     }
 

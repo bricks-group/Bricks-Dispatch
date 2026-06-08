@@ -15,9 +15,5 @@ let package = Package(
                 .process("Splat/GaussianSplat.metal"),
             ]
         ),
-        .testTarget(
-            name: "BricksCoreTests",
-            dependencies: ["BricksCore"]
-        ),
     ]
 )

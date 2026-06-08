@@ -93,11 +93,3 @@ public enum WatchContextKey {
     public static let creditsRemaining = "creditsRemaining"
 }
 
-// Watch → Phone action messages
-public enum WatchAction {
-    public static let accept = "accept"
-    public static let decline = "decline"
-    public static let onWay = "on_way"
-    public static let arrived = "arrived"
-    public static let fastBook = "fast_book"
-}

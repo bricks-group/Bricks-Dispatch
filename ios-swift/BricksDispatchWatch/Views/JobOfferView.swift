@@ -42,7 +42,7 @@ struct UpcomingJobView: View {
                 // Accept / Decline — side by side
                 HStack(spacing: 6) {
                     Button {
-                        store.sendAction(WatchAction.accept, jobId: job.id)
+                        store.sendAction(WatchAction.accept.rawValue, jobId: job.id)
                         WKInterfaceDevice.current().play(.success)
                     } label: {
                         Label("Accept", systemImage: "checkmark")
@@ -52,7 +52,7 @@ struct UpcomingJobView: View {
                     .tint(.green)
 
                     Button(role: .destructive) {
-                        store.sendAction(WatchAction.decline, jobId: job.id)
+                        store.sendAction(WatchAction.decline.rawValue, jobId: job.id)
                         WKInterfaceDevice.current().play(.failure)
                     } label: {
                         Label("Decline", systemImage: "xmark")
@@ -104,7 +104,7 @@ struct ActiveJobView: View {
 
                 VStack(spacing: 6) {
                     Button {
-                        store.sendAction(WatchAction.onWay, jobId: job.id)
+                        store.sendAction(WatchAction.onWay.rawValue, jobId: job.id)
                         WKInterfaceDevice.current().play(.click)
                     } label: {
                         Label("On my way", systemImage: "car.fill")
@@ -115,7 +115,7 @@ struct ActiveJobView: View {
                     .tint(Color(red: 0.82, green: 0.33, blue: 0.17))
 
                     Button {
-                        store.sendAction(WatchAction.arrived, jobId: job.id)
+                        store.sendAction(WatchAction.arrived.rawValue, jobId: job.id)
                         WKInterfaceDevice.current().play(.success)
                     } label: {
                         Label("Arrived", systemImage: "mappin.circle.fill")

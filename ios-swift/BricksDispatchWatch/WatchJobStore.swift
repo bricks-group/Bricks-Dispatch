@@ -26,10 +26,10 @@ final class WatchJobStore: ObservableObject {
         connectivity.sendMessage(["action": action, "jobId": jobId])
         actionSent = true
         // Optimistic update
-        if action == WatchAction.accept {
+        if action == WatchAction.accept.rawValue {
             activeJob = nextJob
             nextJob = nil
-        } else if action == WatchAction.decline {
+        } else if action == WatchAction.decline.rawValue {
             nextJob = nil
         }
     }

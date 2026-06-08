@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DispatchJob: Codable, Identifiable, Sendable {
+public struct DispatchJob: Codable, Identifiable, Hashable, Sendable {
     public let id: String
     public let bookingId: String
     public let address: String
@@ -46,6 +46,30 @@ public struct DispatchJob: Codable, Identifiable, Sendable {
 
     public var isActive: Bool { status == .inProgress }
     public var isUpcoming: Bool { status == .assigned }
+
+    public init(
+        id: String, bookingId: String, address: String, city: String,
+        state: String, zipCode: String, lat: Double, lng: Double,
+        timeWindowStart: String, timeWindowEnd: String, scheduledDate: String,
+        jobType: String, status: JobStatus, packageName: String? = nil,
+        packagePrice: Int? = nil, vendorPayout: Double? = nil,
+        agentName: String? = nil, agentPhone: String? = nil,
+        agentEmail: String? = nil, clientInstructions: String? = nil,
+        checklist: [ChecklistItem] = [], complexityScore: Int? = nil,
+        createdAt: String, updatedAt: String
+    ) {
+        self.id = id; self.bookingId = bookingId; self.address = address
+        self.city = city; self.state = state; self.zipCode = zipCode
+        self.lat = lat; self.lng = lng
+        self.timeWindowStart = timeWindowStart; self.timeWindowEnd = timeWindowEnd
+        self.scheduledDate = scheduledDate; self.jobType = jobType
+        self.status = status; self.packageName = packageName
+        self.packagePrice = packagePrice; self.vendorPayout = vendorPayout
+        self.agentName = agentName; self.agentPhone = agentPhone
+        self.agentEmail = agentEmail; self.clientInstructions = clientInstructions
+        self.checklist = checklist; self.complexityScore = complexityScore
+        self.createdAt = createdAt; self.updatedAt = updatedAt
+    }
 }
 
 public enum JobStatus: String, Codable, Sendable {
@@ -56,7 +80,7 @@ public enum JobStatus: String, Codable, Sendable {
     case dispatchFailed = "dispatch_failed"
 }
 
-public struct ChecklistItem: Codable, Identifiable, Sendable {
+public struct ChecklistItem: Codable, Identifiable, Hashable, Sendable {
     public let id: String
     public let label: String
     public var completed: Bool

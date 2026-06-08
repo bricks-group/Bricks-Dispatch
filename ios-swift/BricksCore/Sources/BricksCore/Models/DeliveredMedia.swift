@@ -11,6 +11,11 @@ public struct DeliveredPhoto: Codable, Identifiable, Sendable {
 
     public var photoURL: URL? { URL(string: url) }
 
+    public init(id: String, filename: String, url: String, expiresAt: String, qcFlagged: Bool) {
+        self.id = id; self.filename = filename; self.url = url
+        self.expiresAt = expiresAt; self.qcFlagged = qcFlagged
+    }
+
     enum CodingKeys: String, CodingKey {
         case id = "upload_id", filename, url
         case expiresAt = "expires_at"
