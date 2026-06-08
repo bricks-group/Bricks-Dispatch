@@ -496,6 +496,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.bricks.dispatch;
 				SDKROOT = iphoneos;
+				SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0cXd4d3JjeHdydWFxb2pvaHBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1ODg4NDIsImV4cCI6MjA4ODE2NDg0Mn0.8t7hYHaLVDPMz9Ubx8VNxM8rPw8-Y4IXFn4HN4YhcRw";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -514,6 +515,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.bricks.dispatch;
 				SDKROOT = iphoneos;
+				SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0cXd4d3JjeHdydWFxb2pvaHBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1ODg4NDIsImV4cCI6MjA4ODE2NDg0Mn0.8t7hYHaLVDPMz9Ubx8VNxM8rPw8-Y4IXFn4HN4YhcRw";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;

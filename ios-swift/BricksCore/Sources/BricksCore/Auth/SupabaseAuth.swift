@@ -72,7 +72,7 @@ public final class BricksAuth: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: req)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw BricksAPIError.unauthorized
+            throw BricksAPIError.loginFailed
         }
 
         let decoder = JSONDecoder()
