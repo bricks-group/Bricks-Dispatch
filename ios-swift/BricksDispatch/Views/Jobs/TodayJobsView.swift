@@ -21,8 +21,13 @@ struct TodayJobsView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { await store.loadTodayJobs() } } label: {
-                        Image(systemName: "arrow.clockwise")
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 6, height: 6)
+                        Text("Online")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -41,9 +46,14 @@ struct TodayJobsView: View {
 
     private var jobList: some View {
         List {
+            Section {
+                earningsCard
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            }
+
             if let active = store.todayJobs.first(where: { $0.isActive }) {
                 Section("ACTIVE") {
-                    JobRowView(job: active)
+                    JobRowView(job: active, isNext: true)
                         .onTapGesture { selectedJob = active }
                 }
             }
@@ -71,6 +81,48 @@ struct TodayJobsView: View {
         .listStyle(.insetGrouped)
     }
 
+    private var earningsCard: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("PROJECTED TODAY")
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .tracking(0.8)
+                    .foregroundStyle(.secondary)
+                Text(projectedPayout, format: .currency(code: "CAD"))
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text("\(store.todayJobs.count) shoot\(store.todayJobs.count == 1 ? "" : "s")")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("EARNED TODAY")
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .tracking(0.8)
+                    .foregroundStyle(.secondary)
+                Text(earnedPayout, format: .currency(code: "CAD"))
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(BricksColors.gold)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var projectedPayout: Double {
+        store.todayJobs
+            .filter { $0.status != .cancelled }
+            .compactMap { $0.vendorPayout }
+            .reduce(0, +)
+    }
+
+    private var earnedPayout: Double {
+        store.todayJobs
+            .filter { $0.status == .completed || $0.status == .delivered }
+            .compactMap { $0.vendorPayout }
+            .reduce(0, +)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "calendar.badge.checkmark")
@@ -87,26 +139,47 @@ struct TodayJobsView: View {
     }
 }
 
+// MARK: — Job row
+
 struct JobRowView: View {
     let job: DispatchJob
     var dimmed = false
+    var isNext = false
 
     var body: some View {
         HStack(spacing: 14) {
             statusDot
             VStack(alignment: .leading, spacing: 3) {
+                if isNext {
+                    HStack(spacing: 6) {
+                        Text("UP NEXT")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .tracking(0.6)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(BricksColors.brick)
+                            .clipShape(RoundedRectangle(cornerRadius: 2))
+                        Text(timeLabel)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(BricksColors.brick)
+                    }
+                    .padding(.bottom, 1)
+                }
                 Text(job.address)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(dimmed ? Color(.secondaryLabel) : .primary)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    Text(timeLabel)
-                        .font(.caption)
-                        .foregroundStyle(Color(.secondaryLabel))
-                    Text("·")
-                        .foregroundStyle(Color(.tertiaryLabel))
+                    if !isNext {
+                        Text(timeLabel)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Color(.secondaryLabel))
+                        Text("·")
+                            .foregroundStyle(Color(.tertiaryLabel))
+                    }
                     Text(job.packageName ?? job.jobType.capitalized)
-                        .font(.caption)
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Color(.secondaryLabel))
                 }
             }
