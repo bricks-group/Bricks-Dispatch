@@ -53,12 +53,16 @@ struct LoginView: View {
                         .font(.system(size: 38, weight: .semibold))
                         .foregroundStyle(.white)
                         .lineSpacing(2)
+                        .minimumScaleFactor(0.65)
+                        .allowsTightening(true)
                         .padding(.bottom, 16)
 
                     Text("Accept jobs, navigate to properties, deliver\nwork — all from your pocket.")
                         .font(.system(size: 15.5))
                         .foregroundStyle(.white.opacity(0.55))
                         .lineSpacing(3)
+                        .minimumScaleFactor(0.82)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, 32)
 
                     if showForm {

@@ -91,9 +91,17 @@ struct TodayJobsView: View {
                     .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                     .tracking(0.8)
                     .foregroundStyle(.secondary)
-                Text(projectedPayout, format: .currency(code: "CAD"))
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.primary)
+                HStack(alignment: .lastTextBaseline, spacing: 3) {
+                    AnimatedDollar(target: projectedPayout, delay: 0.15)
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .minimumScaleFactor(0.65)
+                        .lineLimit(1)
+                    Text("CAD")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 2)
+                }
                 Text("\(store.todayJobs.count) shoot\(store.todayJobs.count == 1 ? "" : "s")")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -104,9 +112,11 @@ struct TodayJobsView: View {
                     .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                     .tracking(0.8)
                     .foregroundStyle(.secondary)
-                Text(earnedPayout, format: .currency(code: "CAD"))
+                AnimatedDollar(target: earnedPayout, delay: 0.35)
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(BricksColors.gold)
+                    .minimumScaleFactor(0.75)
+                    .lineLimit(1)
             }
         }
         .padding(.vertical, 6)

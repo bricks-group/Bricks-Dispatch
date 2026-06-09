@@ -54,6 +54,8 @@ struct EarningsView: View {
                         AnimatedDollar(target: r.weekTotal, delay: 0.1)
                             .font(.system(size: 46, weight: .semibold))
                             .foregroundStyle(.primary)
+                            .minimumScaleFactor(0.55)
+                            .lineLimit(1)
                         Text("CAD")
                             .font(.system(size: 14, design: .monospaced))
                             .foregroundStyle(.secondary)
@@ -67,7 +69,7 @@ struct EarningsView: View {
                 .padding(.vertical, 6)
 
                 // 7-day bar chart
-                WeekBarChart(weekTotal: r.weekTotal)
+                WeekBarChart(dailyEarnings: weeklyEarnings(from: r.recentJobs))
             }
 
             // Next payout card
@@ -139,29 +141,62 @@ struct EarningsView: View {
             }
         }
     }
+
+    private func weeklyEarnings(from jobs: [EarningsJobItem]) -> [Double] {
+        var daily = Array(repeating: 0.0, count: 7)
+        let calendar = Calendar.current
+        let today = Date()
+        let weekday = calendar.component(.weekday, from: today)
+        let todayIdx = (weekday + 5) % 7
+        guard let monday = calendar.date(
+            byAdding: .day,
+            value: -todayIdx,
+            to: calendar.startOfDay(for: today)
+        ) else { return daily }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        for job in jobs where job.status != "cancelled" {
+            guard let date = fmt.date(from: job.scheduledDate) else { continue }
+            let offset = calendar.dateComponents([.day], from: monday, to: calendar.startOfDay(for: date)).day ?? -1
+            guard offset >= 0 && offset < 7 else { continue }
+            daily[offset] += job.payoutAmount
+        }
+        return daily
+    }
 }
 
 // MARK: — Week bar chart
 
 private struct WeekBarChart: View {
-    let weekTotal: Double
+    let dailyEarnings: [Double]   // 7 values, index 0=Mon … 6=Sun
+    @State private var revealedCount = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private let dayLabels = ["M", "T", "W", "T", "F", "S", "S"]
+    private let maxBarHeight: CGFloat = 52
+    private let minBarHeight: CGFloat = 8
 
     private var todayIndex: Int {
         let weekday = Calendar.current.component(.weekday, from: Date())
         return (weekday + 5) % 7
     }
 
+    private var maxEarning: Double { dailyEarnings.max() ?? 1 }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             ForEach(0..<7, id: \.self) { i in
                 VStack(spacing: 5) {
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(i == todayIndex
-                            ? AnyShapeStyle(BricksColors.gold)
-                            : AnyShapeStyle(Color(.tertiarySystemFill))
+                        .fill(barColor(for: i))
+                        .frame(height: i < revealedCount ? targetHeight(for: i) : minBarHeight)
+                        .animation(
+                            reduceMotion ? .none :
+                                .spring(response: 0.6, dampingFraction: 0.7)
+                                .delay(Double(i) * 0.065),
+                            value: revealedCount
                         )
-                        .frame(height: barHeight(for: i))
                     Text(dayLabels[i])
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(i == todayIndex ? BricksColors.gold : .secondary)
@@ -171,13 +206,43 @@ private struct WeekBarChart: View {
         }
         .frame(height: 72)
         .padding(.vertical, 4)
+        .onAppear { startReveal() }
+        .onChange(of: dailyEarnings) { _, _ in revealedCount = 0; startReveal() }
+        .accessibilityLabel(chartAccessibilityLabel)
     }
 
-    private func barHeight(for index: Int) -> CGFloat {
-        if index > todayIndex { return 12 }
-        if index == todayIndex { return 56 }
-        let base: [CGFloat] = [32, 24, 44, 38, 50, 56, 20]
-        return base[index % base.count]
+    private func targetHeight(for i: Int) -> CGFloat {
+        if i > todayIndex { return minBarHeight }
+        let e = dailyEarnings[i]
+        guard e > 0, maxEarning > 0 else { return minBarHeight }
+        let proportion = CGFloat(e / maxEarning)
+        return minBarHeight + (maxBarHeight - minBarHeight) * max(proportion, 0.14)
+    }
+
+    private func barColor(for i: Int) -> AnyShapeStyle {
+        if i == todayIndex { return AnyShapeStyle(BricksColors.gold) }
+        if i > todayIndex { return AnyShapeStyle(Color(.tertiarySystemFill)) }
+        return AnyShapeStyle(BricksColors.brick.opacity(0.30))
+    }
+
+    private func startReveal() {
+        if reduceMotion { revealedCount = 7; return }
+        for step in 1...7 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(step - 1) * 0.065) {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.7)) {
+                    revealedCount = step
+                }
+            }
+        }
+    }
+
+    private var chartAccessibilityLabel: String {
+        let labels = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        let parts = (0...todayIndex).map { i -> String in
+            let e = dailyEarnings[i]
+            return e > 0 ? "\(labels[i]): $\(String(format: "%.0f", e))" : "\(labels[i]): no earnings"
+        }
+        return "Weekly earnings chart. " + parts.joined(separator: ", ")
     }
 }
 
