@@ -60,6 +60,7 @@ struct DeliveryRevealView: View {
                             .foregroundStyle(.white.opacity(0.7))
                             .padding(20)
                     }
+                    .accessibilityLabel("Close 3D Tour")
                 }
                 .statusBarHidden(true)
             }
@@ -101,7 +102,7 @@ struct DeliveryRevealView: View {
                     if let payout = job.vendorPayout {
                         AnimatedDollar(target: payout, delay: 0.15)
                             .font(.system(size: 48, weight: .bold, design: .rounded))
-                            .foregroundStyle(earningsResolved ? Color("BricksGold") : .white)
+                            .foregroundStyle(earningsResolved ? BricksColors.gold : .white)
                             .animation(.easeInOut(duration: 0.55), value: earningsResolved)
                             .onChange(of: earningsResolved) { _, resolved in
                                 if resolved { BricksHaptics.shared.earningsResolved() }
@@ -152,7 +153,7 @@ struct DeliveryRevealView: View {
             .padding(.vertical, 15)
             .background(
                 LinearGradient(
-                    colors: [Color("BricksGold"), Color("BricksGold").opacity(0.82)],
+                    colors: [BricksColors.gold, BricksColors.gold.opacity(0.82)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 ),
@@ -182,6 +183,7 @@ struct DeliveryRevealView: View {
                         .foregroundStyle(.white.opacity(0.6))
                         .padding(20)
                 }
+                .accessibilityLabel("Dismiss")
             }
             Spacer()
         }

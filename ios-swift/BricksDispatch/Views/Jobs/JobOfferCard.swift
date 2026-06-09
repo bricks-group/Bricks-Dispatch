@@ -36,6 +36,11 @@ struct JobOfferCard: View {
         .rotationEffect(.degrees(Double(offset) / 28))
         .gesture(dragGesture)
         .allowsHitTesting(decision == nil)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Job offer: \(job.address). \(job.packageName ?? job.jobType.capitalized) package. Payout: \(job.formattedPayout). \(job.timeWindowStart) to \(job.timeWindowEnd) on \(job.scheduledDate).")
+        .accessibilityHint("Swipe right to accept or left to decline. Use custom actions to accept or decline with VoiceOver.")
+        .accessibilityAction(named: "Accept job") { commit(.accept) }
+        .accessibilityAction(named: "Decline job") { commit(.decline) }
     }
 
     // MARK: — Background glow that shifts green/red on drag
@@ -77,7 +82,7 @@ struct JobOfferCard: View {
             // Package + type pills
             HStack(spacing: 10) {
                 if let pkg = job.packageName {
-                    Pill(pkg.capitalized, color: Color("BricksGold"))
+                    Pill(pkg.capitalized, color: BricksColors.gold)
                 }
                 Pill(job.jobType.capitalized, color: .white.opacity(0.2))
             }
@@ -241,7 +246,7 @@ private struct Pill: View {
             .foregroundStyle(color)
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
-            .background(color.opacity(0.15), in: Capsule())
+            .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 2))
     }
 }
 

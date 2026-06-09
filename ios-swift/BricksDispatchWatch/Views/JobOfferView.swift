@@ -34,7 +34,7 @@ struct UpcomingJobView: View {
                 if let p = job.formattedPayout as String?, !p.isEmpty {
                     Text(p)
                         .font(.title3.monospacedDigit().bold())
-                        .foregroundStyle(Color(red: 0.82, green: 0.33, blue: 0.17))
+                        .foregroundStyle(BricksColors.brick)
                 }
 
                 Divider()
@@ -97,7 +97,7 @@ struct ActiveJobView: View {
                 if let p = job.formattedPayout as String?, !p.isEmpty {
                     Text(p)
                         .font(.callout.monospacedDigit().bold())
-                        .foregroundStyle(Color(red: 0.82, green: 0.33, blue: 0.17))
+                        .foregroundStyle(BricksColors.brick)
                 }
 
                 Divider()
@@ -112,7 +112,7 @@ struct ActiveJobView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.82, green: 0.33, blue: 0.17))
+                    .tint(BricksColors.brick)
 
                     Button {
                         store.sendAction(WatchAction.arrived.rawValue, jobId: job.id)

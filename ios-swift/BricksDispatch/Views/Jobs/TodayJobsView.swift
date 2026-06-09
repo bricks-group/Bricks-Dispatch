@@ -25,10 +25,13 @@ struct TodayJobsView: View {
                         Circle()
                             .fill(.green)
                             .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
                         Text("Online")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Status: Online")
                 }
             }
             .refreshable { await store.loadTodayJobs() }
@@ -189,6 +192,7 @@ struct JobRowView: View {
                 .foregroundStyle(dimmed ? Color(.tertiaryLabel) : BricksColors.brick)
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
     }
 
     private var timeLabel: String {
@@ -202,6 +206,7 @@ struct JobRowView: View {
         Circle()
             .fill(dotColor)
             .frame(width: 8, height: 8)
+            .accessibilityHidden(true)
     }
 
     private var dotColor: Color {
