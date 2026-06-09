@@ -43,13 +43,13 @@ struct LoginView: View {
                 Spacer()
 
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("DISPATCHED TO YOUR DOOR")
+                    Text("EARN ON YOUR SCHEDULE")
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .tracking(1.8)
                         .foregroundStyle(BricksColors.brick)
                         .padding(.bottom, 14)
 
-                    Text("Professional media,\non your schedule.")
+                    Text("Real estate media,\non your terms.")
                         .font(.system(size: 38, weight: .semibold))
                         .foregroundStyle(.white)
                         .lineSpacing(2)
