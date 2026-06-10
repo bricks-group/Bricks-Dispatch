@@ -53,9 +53,9 @@ API base: `https://dispatch-api.brxs.ca`
 - `backend/app/routers/jobs.py` — Job CRUD (`/dispatch/jobs/*`)
 - `backend/app/routers/vendors.py` — Vendor management (`/dispatch/vendors/*`)
 - `backend/app/routers/vendor_os.py` — Vendor OS dashboard: overview, team, jobs, earnings, performance
-- `backend/app/routers/onboarding.py` — Contractor application, IC agreement, document upload
+- `backend/app/routers/onboarding.py` — Contractor application, IC agreement, document upload (photographer-facing)
 - `backend/app/routers/post_production.py` — Provider callbacks (Fotello/Autoenhance/BoxBrownie), reconcile
-- `backend/app/routers/admin_ops.py` — Leads, applicant vetting, no-show review, reconciliation
+- `backend/app/routers/admin_ops.py` — **Bricks HR tool**: applicant vetting + approval, no-show review, reconciliation
 - `backend/app/services/vendor_selection.py` — Primary + fallback vendor assignment
 - `backend/app/integrations/bricks_ai_dispatch.py` — **Deterministic weighted scorer** (primary dispatch)
 - `backend/app/services/client_comms.py` — Resend emails: booking confirmed + photographer en route

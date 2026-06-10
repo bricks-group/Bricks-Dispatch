@@ -21,11 +21,12 @@ The Dispatch photographer web experience is built into the Brokerage React app (
 
 ## Vendor Network Model
 
-**Bricks admin** manages the photographer network — NOT brokerages:
-- Photographers apply → IC agreement v1.1 → Bricks admin approves (`onboarding_status="approved"`, `is_active=True`)
+**Bricks HR** manages the photographer network — NOT brokerages:
+- Photographers apply → IC agreement v1.1 → Bricks HR approves via `admin_ops.py` (`onboarding_status="approved"`, `is_active=True`)
+- Bricks HR handles all contractor onboarding: vetting, IC agreements, RPAS cert review, tier assignment
 - Brokerages have read-only visibility into approved vendors and can mark favourites
 - Brokerage favourites stored in `brokerage_vendor_favorites`; read by Dispatch scorer for +15pts bonus
-- Vendor tiers (C/B/A) assigned by Bricks admin; brokerages cannot change tiers
+- Vendor tiers (C/B/A) assigned by Bricks HR; brokerages cannot change tiers
 
 ## Core Photographer Flow
 
