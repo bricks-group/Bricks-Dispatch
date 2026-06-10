@@ -19,6 +19,14 @@ Vendor/photographer-facing job orchestration app. Photographers use this to rece
 
 The Dispatch photographer web experience is built into the Brokerage React app (`ruletheworld/bricks-brokerage`), not as a separate site. Photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by their `role === 'photographer'` metadata. The Expo `frontend/` remains the primary mobile experience.
 
+## Vendor Network Model
+
+**Bricks admin** manages the photographer network — NOT brokerages:
+- Photographers apply → IC agreement v1.1 → Bricks admin approves (`onboarding_status="approved"`, `is_active=True`)
+- Brokerages have read-only visibility into approved vendors and can mark favourites
+- Brokerage favourites stored in `brokerage_vendor_favorites`; read by Dispatch scorer for +15pts bonus
+- Vendor tiers (C/B/A) assigned by Bricks admin; brokerages cannot change tiers
+
 ## Core Photographer Flow
 
 1. **Onboarding**: Contractor application → IC agreement v1.1 → RPAS certification (if drone) → document upload
@@ -50,7 +58,8 @@ Key routers:
 
 ## Dispatch Scoring (Deterministic)
 
-100-point weighted score: specialty (30) + proximity (20) + on_time_rate (15) + tier_match (10) + quality (10) + reliability (10) + load (5) + repeat_agent_bonus (+5).
+100-point weighted score: specialty (30) + proximity (20) + on_time_rate (15) + tier_match (10) + quality (10) + reliability (10) + load (5) + repeat_agent_bonus (+5) + brokerage_favourite_bonus (+15).
+`brokerage_favourite_bonus` reads `brokerage_vendor_favorites` table for the booking's `brokerage_id`.
 Gemini 1.5 Flash used ONLY for async explainability string shown in admin dashboard.
 
 ## Post-Production Pipeline
@@ -69,7 +78,7 @@ All backend features complete. Pre-launch checklist:
 - [ ] TestFlight upload (Kam)
 - [ ] Play Store internal track (Kam)
 - [ ] Verify Advanced RPAS cert for GTA drone photographers
-- [ ] Stub dispatch web pages: `/dispatch/notifications`, `/dispatch/settings`, `/dispatch/profile-edit`
+- [x] Stub dispatch web pages: `/dispatch/notifications`, `/dispatch/settings`, `/dispatch/profile-edit` ✅
 
 ## Rules
 - `INTERNAL_API_KEY` (`X-Internal-Api-Key`) required on dispatch intake
