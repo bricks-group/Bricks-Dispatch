@@ -10,7 +10,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 # ── Stub external packages before any production module imports them ──────────
 
-for _mod in ("stripe", "supabase", "gotrue", "postgrest", "realtime", "storage3"):
+for _mod in (
+    "stripe", "stripe.error",
+    "supabase", "supabase.client", "supabase.lib", "supabase.lib.client_options",
+    "gotrue", "gotrue.types", "gotrue.constants",
+    "postgrest", "postgrest._sync", "postgrest._async",
+    "realtime", "storage3", "storage3.utils",
+    "httpx", "httpx._transports", "httpx._transports.asgi",
+    "sentry_sdk", "slowapi",
+):
     sys.modules.setdefault(_mod, MagicMock())
 
 # ── Stub stripe_connect_service so payout_service can do its local import ────

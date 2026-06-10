@@ -66,15 +66,23 @@ def _now_utc():
 
 
 def _job(assignee_id="member_1", status="in_progress", shoot_offset_min=0):
-    """Return a minimal job dict. shoot_offset_min: negative = future, positive = past."""
-    shoot_start = (_now_utc() - timedelta(minutes=shoot_offset_min)).isoformat()
+    """Return a minimal job dict. shoot_offset_min: negative = future, positive = past.
+
+    Uses the canonical DB format: scheduled_date (YYYY-MM-DD) + time_window_start (HH:MM).
+    time_window_start is stored in Ontario local time (America/Toronto), matching production.
+    """
+    from zoneinfo import ZoneInfo
+    _tz = ZoneInfo("America/Toronto")
+    shoot_utc = _now_utc() - timedelta(minutes=shoot_offset_min)
+    shoot_et = shoot_utc.astimezone(_tz)
     return {
         "id": str(uuid.uuid4()),
         "assignee_id": assignee_id,
         "vendor_id": "vendor_1",
         "booking_id": str(uuid.uuid4()),
         "status": status,
-        "time_window_start": shoot_start,
+        "scheduled_date": shoot_et.strftime("%Y-%m-%d"),
+        "time_window_start": shoot_et.strftime("%H:%M"),
     }
 
 
