@@ -92,6 +92,7 @@ Score = 100-point system:
 - Load balance (5): 1 - active_assignments / 4
 
 Repeat-agent bonus: +5 points if vendor completed prior job for this agent.
+Brokerage favourite bonus: +15 points if the booking's brokerage has favourited this photographer (reads `brokerage_vendor_favorites` table).
 Drone gate: `vendor.drone_certified=True` required for `job_type="drone"`.
 
 **Gemini 1.5 Flash** used ONLY for explainability string — called async after routing, shown in admin dashboard. Never on the hot dispatch path.
@@ -197,6 +198,7 @@ pick_vendor_rule_based(job, vendors)
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - **Deterministic weighted dispatch scorer (specialty/proximity/on_time/quality/reliability/load)** ✅
 - **Repeat-agent bonus (+5pts if vendor has shot for this agent before)** ✅
+- **Brokerage favourite bonus (+15pts if brokerage has favourited the photographer)** ✅
 - **Drone certification hard gate (drone_certified required for drone jobs)** ✅
 - **Gemini 1.5 Flash: explainability only (async, non-blocking, dashboard display)** ✅
 - Rule-based fallback with tier gate ✅

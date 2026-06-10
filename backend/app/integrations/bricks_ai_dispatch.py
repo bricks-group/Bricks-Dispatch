@@ -47,8 +47,9 @@ _W = {
     "reliability": 10,
     "load":      5,
 }
-_REPEAT_AGENT_BONUS = 5   # added on top; doesn't affect weight sum
-_MAX_DAILY_CAP      = 4   # default if availability not queried
+_REPEAT_AGENT_BONUS       = 5   # added on top; doesn't affect weight sum
+_BROKERAGE_FAVORITE_BONUS = 15  # brokerage has marked this photographer as a favourite
+_MAX_DAILY_CAP            = 4   # default if availability not queried
 _DRONE_MAX_WIND_KMH = 25  # above this → drone_unsafe flag in job context
 
 # IC agreement Clause 2: decline rate below this threshold has zero score effect.
@@ -125,6 +126,7 @@ def _score_vendor(
     job: Job,
     preferred_tier: int,
     has_repeat_history: bool = False,
+    is_brokerage_favorite: bool = False,
 ) -> float:
     """
     Compute a 0-100 score for a vendor candidate.
@@ -169,6 +171,9 @@ def _score_vendor(
 
     if has_repeat_history:
         score += _REPEAT_AGENT_BONUS
+
+    if is_brokerage_favorite:
+        score += _BROKERAGE_FAVORITE_BONUS
 
     return round(score, 3)
 
@@ -273,15 +278,26 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
     # Enrich with repeat-agent history (single DB call for all candidates)
     all_member_ids = [v.id for v in candidates]
     agent_user_id = getattr(job, "agent_user_id", None)
-    has_history_by_vendor: dict[str, bool] = {}
-    if agent_user_id:
+    brokerage_id  = getattr(job, "brokerage_id", None)
+    has_history_by_vendor:   dict[str, bool] = {}
+    is_brokerage_fav_vendor: dict[str, bool] = {}
+    if agent_user_id or brokerage_id:
         try:
             from ..shared.database import get_db
-            res = await (await get_db()).table("jobs").select("assignee_id").eq(
-                "agent_user_id", agent_user_id
-            ).in_("assignee_id", all_member_ids[:50]).in_("status", ["completed", "delivered"]).execute()
-            for row in (res.data or []):
-                has_history_by_vendor[row["assignee_id"]] = True
+            db = await get_db()
+            if agent_user_id:
+                res = await db.table("jobs").select("assignee_id").eq(
+                    "agent_user_id", agent_user_id
+                ).in_("assignee_id", all_member_ids[:50]).in_("status", ["completed", "delivered"]).execute()
+                for row in (res.data or []):
+                    has_history_by_vendor[row["assignee_id"]] = True
+
+            if brokerage_id:
+                fav_res = await db.table("brokerage_vendor_favorites").select("vendor_id").eq(
+                    "brokerage_id", brokerage_id
+                ).in_("vendor_id", all_member_ids[:50]).execute()
+                for row in (fav_res.data or []):
+                    is_brokerage_fav_vendor[row["vendor_id"]] = True
         except Exception:
             pass
 
@@ -291,6 +307,7 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
         score = _score_vendor(
             v, job, preferred_tier,
             has_repeat_history=has_history_by_vendor.get(v.id, False),
+            is_brokerage_favorite=is_brokerage_fav_vendor.get(v.id, False),
         )
         scored.append((score, v.id, v))
 
