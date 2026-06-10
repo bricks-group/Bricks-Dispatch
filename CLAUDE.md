@@ -3,11 +3,14 @@
 You are working on **Bricks-Dispatch**, the vendor-facing job orchestration layer of the BRICKS ecosystem.
 
 ## Ecosystem Context
-- **Bricks-Brokerage** — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors.
+- **Bricks-Brokerage** — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors. **Also hosts the photographer Dispatch web shell** — photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by role.
 - **Bricks-Booking** — agent mobile app (iOS + Android). Sends confirmed shoot jobs to this service via `POST /api/v1/dispatch/jobs`
-- **Bricks-Dispatch** (this repo) — vendor mobile app (iOS + Android) + web dashboard. Assigns jobs to vendors, tracks status, processes payouts.
+- **Bricks-Dispatch** (this repo) — vendor mobile app (iOS + Android) + Dispatch backend API. Assigns jobs to vendors, tracks status, processes payouts.
 
 All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
+
+## Two-Sided App Note (2026-06-10)
+The Dispatch photographer web experience is now built into the Brokerage React app (`ruletheworld/bricks-brokerage`), NOT as a separate `dispatch.brxs.ca` site. Photographers use `brokerage.brxs.ca` — after login, role-based routing sends them to the dark Dispatch shell at `/dispatch/*`. The Expo `frontend/` in THIS repo remains the primary Android + iOS (Swift) experience for photographers on mobile. The web shell is for desktop/browser access.
 
 ## Stack
 - Backend: FastAPI (Python 3.14), Supabase, Stripe Connect, Gemini 1.5 Flash (explainability only)
@@ -190,7 +193,7 @@ pick_vendor_rule_based(job, vendors)
 - `agent_noshow_escalations` — SMS attempt log (job_id, attempt_number, sms_sid, sent_at)
 - `reconciliation_events` — fee vs booking mismatch log (written by reconcile-noshow dry_run=false)
 
-## Current Status (2026-06-01)
+## Current Status (2026-06-10)
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - **Deterministic weighted dispatch scorer (specialty/proximity/on_time/quality/reliability/load)** ✅
 - **Repeat-agent bonus (+5pts if vendor has shot for this agent before)** ✅
@@ -232,6 +235,7 @@ pick_vendor_rule_based(job, vendors)
   - Fallback vendor scorer: decline_rate above 40% neutral band penalises reliability score
   - Upload guard: `file_url=None` from storage → HTTP 500 instead of inserting bad record
 - **Stripe Connect E2E test suite (2026-06-03)** ✅ — `tests/conftest.py` stubs external deps; all 11 tests pass
+- **Dispatch web shell in Brokerage (2026-06-10)** ✅ — photographer Dispatch experience lives at `brokerage.brxs.ca/dispatch/*`; role-based routing after login; no separate dispatch.brxs.ca web needed
 
 ## Remaining Before Live Traffic
 
