@@ -10,6 +10,7 @@ from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import VendorMemberUpdate, VendorLead
 from ..services.webhooks import send_dispatch_status_update_webhook
+from ..services.vendor_selection import assign_vendor_for_job
 
 logger = logging.getLogger(__name__)
 
@@ -464,4 +465,102 @@ async def reconcile_noshow_claims(
         "checked_fees": len(fees),
         "mismatch_count": len(mismatches),
         "mismatches": mismatches,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Dispatch failure manual queue
+# ---------------------------------------------------------------------------
+
+@router.get("/dispatch-failures")
+async def list_dispatch_failures(
+    limit: int = 50,
+    offset: int = 0,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    List jobs stuck in dispatch_failed status, joined with their ops_escalation record.
+    Returns newest first. Use POST /dispatch-failures/{job_id}/reassign to retry.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    db = await get_db()
+    res_jobs = await db.table("jobs").select(
+        "id, booking_id, address, city, job_type, package_name, min_tier_required, "
+        "scheduled_date, time_window_start, time_window_end, created_at, updated_at"
+    ).eq("status", "dispatch_failed").order("updated_at", desc=True).range(offset, offset + limit - 1).execute()
+
+    jobs = res_jobs.data or []
+    if not jobs:
+        return {"total": 0, "items": []}
+
+    job_ids = [j["id"] for j in jobs]
+    res_esc = await db.table("ops_escalations").select(
+        "job_id, attempt_count, error_message, status, created_at"
+    ).in_("job_id", job_ids).execute()
+
+    escalation_by_job = {e["job_id"]: e for e in (res_esc.data or [])}
+
+    items = []
+    for j in jobs:
+        esc = escalation_by_job.get(j["id"])
+        items.append({
+            **j,
+            "escalation": esc,
+        })
+
+    return {"total": len(items), "items": items}
+
+
+@router.post("/dispatch-failures/{job_id}/reassign")
+async def manual_reassign_dispatch_failure(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Manually retry vendor assignment for a dispatch_failed job.
+    Resets status to 'pending' before running assign_vendor_for_job.
+    If assignment still fails, the job returns to dispatch_failed and a new
+    ops_escalation record is written.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    db = await get_db()
+    res = await db.table("jobs").select("id, status").eq("id", job_id).maybe_single().execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if res.data["status"] != "dispatch_failed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is in status '{res.data['status']}' — only dispatch_failed jobs can be manually reassigned",
+        )
+
+    # Reset to pending so assign_vendor_for_job can proceed
+    await db.table("jobs").update({"status": "pending"}).eq("id", job_id).execute()
+
+    # Close the previous escalation record
+    await db.table("ops_escalations").update({"status": "manual_retry"}).eq("job_id", job_id).eq("status", "open").execute()
+
+    assigned_member_id = await assign_vendor_for_job(job_id)
+
+    if assigned_member_id:
+        return {
+            "job_id": job_id,
+            "assigned": True,
+            "assigned_member_id": assigned_member_id,
+        }
+
+    return {
+        "job_id": job_id,
+        "assigned": False,
+        "detail": "No eligible vendor found. Job returned to dispatch_failed. A new escalation has been written.",
     }

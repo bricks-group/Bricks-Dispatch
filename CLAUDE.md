@@ -238,6 +238,7 @@ pick_vendor_rule_based(job, vendors)
   - Upload guard: `file_url=None` from storage → HTTP 500 instead of inserting bad record
 - **Stripe Connect E2E test suite (2026-06-03)** ✅ — `tests/conftest.py` stubs external deps; all 11 tests pass
 - **Dispatch web shell in Brokerage (2026-06-10)** ✅ — photographer Dispatch experience lives at `brokerage.brxs.ca/dispatch/*`; role-based routing after login; no separate dispatch.brxs.ca web needed
+- **Dispatch failure manual queue (2026-06-11)** ✅ — `GET /api/admin/dispatch-failures` + `POST /api/admin/dispatch-failures/{job_id}/reassign`; ops escalation closed on retry; new escalation written on second failure
 
 ## Remaining Before Live Traffic
 
@@ -263,5 +264,5 @@ pick_vendor_rule_based(job, vendors)
 - [ ] TestFlight upload (Kam)
 - [ ] Play Store internal track (Kam)
 - [ ] Verify Transport Canada Advanced RPAS for GTA drone photographers
-- [ ] Define ops escalation for dispatch failures (3x retry → manual queue)
-- [ ] **Agent in-app dispute flow**: mobile app frontend — 72hr window, dispute form that sends to Booking `POST /api/bookings/{id}/dispute` (backend already handles in Booking)
+- [x] **Ops escalation for dispatch failures** ✅ — `GET /api/admin/dispatch-failures` lists failed jobs + escalation record; `POST /api/admin/dispatch-failures/{job_id}/reassign` resets to pending and reruns `assign_vendor_for_job`
+- [x] **Agent in-app dispute flow** ✅ — UI lives in Booking app (`frontend/app/job/[id].tsx`); dispute form + 72hr window + backend handler all complete in Bricks-Booking
