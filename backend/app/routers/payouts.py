@@ -2,17 +2,19 @@
 Payout API router for Bricks-Dispatch.
 
 Endpoints:
-  POST /api/v1/payouts/trigger  — manually trigger payout for a job
-  GET  /api/v1/payouts          — list payouts (optionally filtered by vendor_id)
-  GET  /api/v1/payouts/summary  — payout summary for brokerage dashboard
+  POST /api/v1/payouts/trigger  — manually trigger payout for a job (internal only)
+  GET  /api/v1/payouts          — list payouts (admin only)
+  GET  /api/v1/payouts/summary  — payout summary for brokerage dashboard (admin only)
 """
 
 import logging
+import os
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 from ..shared.database import get_db
+from ..shared.auth import require_vendor_admin
 from ..services.payout_service import trigger_payout_for_job
 
 logger = logging.getLogger(__name__)
@@ -21,11 +23,18 @@ router = APIRouter(prefix="/api/v1/payouts", tags=["payouts"])
 
 
 @router.post("/trigger", summary="Manually trigger payout for a job")
-async def trigger_payout(job_id: str):
+async def trigger_payout(
+    job_id: str,
+    x_internal_api_key: Optional[str] = Header(None),
+):
     """
     Manually trigger a payout for a completed job.
-    Calculates amount from vendor tier and package_price, then transfers via Stripe Connect.
+    Requires X-Internal-Api-Key header (service-to-service only).
     """
+    allowed = {k for k in os.environ.get("INTERNAL_API_KEYS", "").split(",") if k}
+    if not allowed or not x_internal_api_key or x_internal_api_key not in allowed:
+        raise HTTPException(status_code=403, detail="Invalid or missing internal API key")
+
     try:
         db = await get_db()
         result = await trigger_payout_for_job(db, job_id)
@@ -47,10 +56,16 @@ async def list_payouts(
     status: Optional[str] = Query(None, description="Filter by status (pending/paid/failed)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    authorization: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_internal_api_key: Optional[str] = Header(None),
 ):
     """
     List payouts, optionally filtered by vendor_id and/or status.
+    Requires admin vendor member or internal API key.
     """
+    await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
+
     db = await get_db()
     query = db.table("payouts").select("*")
 
@@ -64,13 +79,19 @@ async def list_payouts(
 
 
 @router.get("/summary", summary="Payout summary for brokerage dashboard")
-async def payout_summary():
+async def payout_summary(
+    authorization: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_internal_api_key: Optional[str] = Header(None),
+):
     """
     Aggregate payout summary: total pending, paid, and failed amounts + counts.
+    Requires admin vendor member or internal API key.
     """
+    await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
+
     db = await get_db()
 
-    # Fetch all payouts for aggregation
     result = await db.table("payouts").select("status, amount").execute()
     payouts = result.data or []
 
