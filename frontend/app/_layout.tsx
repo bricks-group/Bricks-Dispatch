@@ -15,7 +15,7 @@ import { actorHeaders } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 SplashScreen.preventAutoHideAsync();
 

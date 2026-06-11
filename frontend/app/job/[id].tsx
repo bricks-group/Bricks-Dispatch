@@ -12,7 +12,7 @@ import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 type ChecklistItem = { id: string; label: string; completed: boolean };
 type Job = {

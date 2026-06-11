@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
+const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 export async function actorHeaders(extra: Record<string, string> = {}) {
   const { data: { session } } = await supabase.auth.getSession();
@@ -8,10 +8,6 @@ export async function actorHeaders(extra: Record<string, string> = {}) {
   
   if (session?.access_token) {
     headers['Authorization'] = `Bearer ${session.access_token}`;
-  } else {
-    // Fallback if needed, but ideally we should be authenticated
-    const actorId = process.env.EXPO_PUBLIC_ACTOR_ID || 'default_user';
-    headers['X-User-Id'] = actorId;
   }
   
   return headers;
