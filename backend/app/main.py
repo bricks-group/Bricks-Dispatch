@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 import os
 import sentry_sdk
@@ -31,15 +30,6 @@ except Exception as e:
     print(f"Sentry init failed: {e}")
 
 app.add_middleware(SlowAPIMiddleware)
-
-_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca").split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
 
 async def get_db() -> Client:
     supabase_url = os.environ.get("SUPABASE_URL")

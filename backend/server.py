@@ -24,9 +24,9 @@ _SEED_ENABLED = os.environ.get("SEED_ENABLED", "false").lower() == "true"
 _INTERNAL_API_KEYS = set(
     k for k in os.environ.get("INTERNAL_API_KEYS", "").split(",") if k
 )
-_BROKERAGE_API_URL = os.environ.get("BROKERAGE_API_URL", "http://localhost:8003")
-_BOOKING_API_URL = os.environ.get("BOOKING_API_URL", "http://localhost:8001")
-_DISPATCH_API_URL = os.environ.get("DISPATCH_API_URL", "http://localhost:8002")
+_BROKERAGE_API_URL = os.environ.get("BROKERAGE_API_URL")
+_BOOKING_API_URL = os.environ.get("BOOKING_API_URL") or os.environ.get("BOOKING_CALLBACK_URL")
+_DISPATCH_API_URL = os.environ.get("DISPATCH_API_URL")
 
 # ── Sentry ───────────────────────────────────────────────────────────────────────
 SENTRY_DSN = os.environ.get("SENTRY_DSN")
@@ -170,8 +170,8 @@ app.include_router(payouts_router)
 app.include_router(post_production_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
-_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=_ALLOWED_ORIGINS, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_ALLOWED_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allow_headers=["*"])
 app.add_middleware(RateLimitMiddleware)
 
 # ── Structured JSON Logging ────────────────────────────────────────────────────────
