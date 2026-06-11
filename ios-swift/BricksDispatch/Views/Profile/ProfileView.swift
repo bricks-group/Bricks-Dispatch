@@ -68,7 +68,7 @@ struct ProfileView: View {
                     } label: {
                         Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                     }
-                    .accessibilityHint("Signs you out of the Bricks Dispatch app")
+                    .accessibilityHint("Signs you out of the Bricks GO app")
                 }
             }
             .navigationTitle("Profile")

@@ -39,7 +39,7 @@ async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: s
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {resend_key}"},
                 json={
-                    "from": "Bricks Dispatch <noreply@brxs.ca>",
+                    "from": "Bricks GO <noreply@brxs.ca>",
                     "to": [OPS_EMAIL],
                     "subject": f"[OPS] No vendor available — job {job.id}",
                     "html": (

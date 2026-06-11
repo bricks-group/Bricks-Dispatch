@@ -1,5 +1,5 @@
 """
-Backend API tests for Bricks Dispatch
+Backend API tests for Bricks GO
 Tests: Jobs, Schedule, Uploads, Profile endpoints
 """
 import pytest

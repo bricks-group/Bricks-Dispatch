@@ -1,5 +1,5 @@
 """
-E2E tests for the Bricks Dispatch payout pipeline.
+E2E tests for the Bricks GO payout pipeline.
 
 Covers:
   - Payout amount calculation (Tier A/B/C × package price)

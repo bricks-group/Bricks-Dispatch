@@ -1,6 +1,6 @@
 """Pydantic models for cross-service dispatch job contracts.
 
-These models define the contract between Bricks-Booking and Bricks-Dispatch
+These models define the contract between Bricks-Booking and Bricks GO
 from the Dispatch side. They mirror the Booking-side dispatch_models.py.
 
 Reference schemas at /Volumes/BRICKS/schemas/v1/:

@@ -1,5 +1,5 @@
 """
-Payout API router for Bricks-Dispatch.
+Payout API router for Bricks GO.
 
 Endpoints:
   POST /api/v1/payouts/trigger  — manually trigger payout for a job (internal only)

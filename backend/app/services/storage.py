@@ -11,7 +11,7 @@ from ..shared.database import get_db
 STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "brxs-deliverables")
 SIGNED_URL_EXPIRY = int(os.getenv("SIGNED_URL_EXPIRY_SECONDS", "3600"))
 
-_KEY_PREFIX = "bricks-dispatch"
+_KEY_PREFIX = "bricks-go"
 
 
 def _make_thumbnail_bytes(image_bytes: bytes, size: Tuple[int, int] = (400, 300)) -> bytes:

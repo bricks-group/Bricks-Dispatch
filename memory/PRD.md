@@ -1,4 +1,4 @@
-# Bricks Dispatch — Product Reference Document
+# Bricks GO — Product Reference Document
 > Last updated: 2026-06-10
 
 ## What This Is
@@ -9,8 +9,8 @@ Vendor/photographer-facing job orchestration app. Photographers use this to rece
 
 | Platform | Stack | Bundle ID | Status |
 |---|---|---|---|
-| iOS | Native Swift (`ios-swift/`) | `com.bricks.dispatch` | Built |
-| Android | Expo React Native (`frontend/`) | `com.bricks.dispatch` | Built |
+| iOS | Native Swift (`ios-swift/`) | `com.bricks.go` | Built |
+| Android | Expo React Native (`frontend/`) | `com.bricks.go` | Built |
 | watchOS | Swift (`BricksDispatchWatch`) | accept/decline from wrist | Built |
 | WidgetKit | Swift (`BricksDispatchWidgets`) | next job + earnings | Built |
 | Web shell | React (inside Brokerage repo) | — | Built (at `brokerage.brxs.ca/dispatch/*`) |

@@ -4,7 +4,7 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.bricks.dispatch</string>
+		<string>group.com.bricks.go</string>
 	</array>
 </dict>
 </plist>

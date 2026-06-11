@@ -1,11 +1,11 @@
-# Bricks-Dispatch (Python/FastAPI + Expo)
+# Bricks GO (Python/FastAPI + Expo)
 
-You are working on **Bricks-Dispatch**, the vendor-facing job orchestration layer of the BRICKS ecosystem.
+You are working on **Bricks GO**, the vendor-facing job orchestration layer of the BRICKS ecosystem.
 
 ## Ecosystem Context
 - **Bricks-Brokerage** — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors. **Also hosts the photographer Dispatch web shell** — photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by role.
 - **Bricks-Booking** — agent mobile app (iOS + Android). Sends confirmed shoot jobs to this service via `POST /api/v1/dispatch/jobs`
-- **Bricks-Dispatch** (this repo) — vendor mobile app (iOS + Android) + Dispatch backend API. Assigns jobs to vendors, tracks status, processes payouts.
+- **Bricks GO** (this repo) — vendor mobile app (iOS + Android) + Dispatch backend API. Assigns jobs to vendors, tracks status, processes payouts.
 
 All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
 
@@ -16,14 +16,14 @@ The Dispatch photographer web experience is now built into the Brokerage React a
 - Backend: FastAPI (Python 3.14), Supabase, Stripe Connect, Gemini 1.5 Flash (explainability only)
 - Frontend (Android): Expo (React Native) + web dashboard (`dispatch.brxs.ca`) — Android primary audience
 - Frontend (iOS): **Native Swift — `ios-swift/` directory** — SwiftUI, multi-target Xcode project (see below)
-- Deployed: `https://bricks-dispatch-api.vercel.app` / `https://dispatch-api.brxs.ca`
+- Deployed: `https://bricks-go-api.vercel.app` / `https://dispatch-api.brxs.ca`
 
 ## iOS Swift App — `ios-swift/`
 
 **This is a fully built native Swift iOS app.** Do not suggest Expo for iOS — the Swift app is the iOS experience.
 
 ### Xcode Targets
-- `BricksDispatch` — main iPhone app (SwiftUI, `com.bricks.dispatch`)
+- `BricksDispatch` — main iPhone app (SwiftUI, `com.bricks.go`)
 - `BricksDispatchWatch` — watchOS app: job offer card → accept/decline, active job status
 - `BricksDispatchWidgets` — WidgetKit: next job + today's earnings
 
@@ -218,7 +218,7 @@ pick_vendor_rule_based(job, vendors)
 - **Stripe Connect E2E test suite (idempotency, zero-amount, trip fee addition logic)** ✅
 - **Weather context: Open-Meteo API for outdoor/drone jobs** ✅
 - **BoxBrownie virtual staging: fully active (photo editing, retouching, day-to-dusk, item removal, virtual staging)** ✅
-- app.json bundle IDs + EAS project ID configured (`com.bricks.dispatch`) ✅
+- app.json bundle IDs + EAS project ID configured (`com.bricks.go`) ✅
 - **GPS geofence gate: >500m from property → hold_for_review (soft gate, coordinates optional)** ✅
 - **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; gate in no-show claim flow (15-min wait after first SMS); graceful no-op if Twilio not configured** ✅
 - **Reconcile-noshow: GET /api/admin/reconcile-noshow detects fee/booking mismatches; writes reconciliation_events on dry_run=false** ✅
@@ -242,7 +242,7 @@ pick_vendor_rule_based(job, vendors)
 
 ## Remaining Before Live Traffic
 
-**Vercel env vars (bricks-dispatch-api):**
+**Vercel env vars (bricks-go-api):**
 - `BOOKING_API_URL` — Booking service base URL for internal comms delegation (e.g. `https://booking-api.brxs.ca`); falls back to `BOOKING_CALLBACK_URL` if unset
 - `RESEND_API_KEY` ✅ (set)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)

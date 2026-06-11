@@ -1,5 +1,5 @@
 """
-Stripe Connect service for vendor payouts in Bricks-Dispatch.
+Stripe Connect service for vendor payouts in Bricks GO.
 
 Stripe accounts live on public.contractors (canonical vendor identity, uuid PK),
 linked to public.vendors/vendor_members via contractors.vendor_id (text FK).

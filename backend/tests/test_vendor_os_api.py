@@ -1,5 +1,5 @@
 """
-Vendor OS API tests for Bricks Dispatch backend.
+Vendor OS API tests for Bricks GO backend.
 """
 import requests
 from pathlib import Path

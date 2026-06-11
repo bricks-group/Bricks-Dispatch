@@ -1,7 +1,7 @@
 """
 Payout service for vendor payouts via Stripe Connect Express.
 
-Vendor tiers (Bricks Dispatch — matches brxs.ca/vendors):
+Vendor tiers (Bricks GO — matches brxs.ca/vendors):
   Tier 1 (C): 35% of package price — entry
   Tier 2 (B): 45% of package price — core
   Tier 3 (A): 55% of package price — elite

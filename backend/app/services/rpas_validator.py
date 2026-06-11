@@ -1,5 +1,5 @@
 """
-RPAS Certificate Validator for Bricks-Dispatch.
+RPAS Certificate Validator for Bricks GO.
 
 Two-layer validation:
 1. Gemini Vision — extracts cert details (holder, level, number, expiry) from uploaded image/PDF.

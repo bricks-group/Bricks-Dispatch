@@ -153,7 +153,7 @@ export default function LoginScreen() {
           </View>
 
           <View style={s.footer}>
-            <Text style={s.footerText}>New to Bricks Dispatch?{'  '}</Text>
+            <Text style={s.footerText}>New to Bricks GO?{'  '}</Text>
             <TouchableOpacity onPress={() => router.push('/onboarding/slides')} activeOpacity={0.7}>
               <Text style={s.footerLink}>Apply</Text>
             </TouchableOpacity>

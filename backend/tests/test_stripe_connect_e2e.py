@@ -1,5 +1,5 @@
 """
-Stripe Connect E2E test suite for Bricks-Dispatch.
+Stripe Connect E2E test suite for Bricks GO.
 
 Covers:
   - Live test-mode transfer to a Stripe Express account

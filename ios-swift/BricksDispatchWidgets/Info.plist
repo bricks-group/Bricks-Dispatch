@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Bricks Dispatch Widgets</string>
+	<string>Bricks GO Widgets</string>
 	<key>CFBundleDisplayName</key>
-	<string>Bricks Dispatch</string>
+	<string>Bricks GO</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

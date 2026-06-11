@@ -263,7 +263,7 @@ final class EarningsViewModel: ObservableObject {
     }
 
     private func syncToWidget(_ r: EarningsResponse) {
-        let d = UserDefaults(suiteName: "group.com.bricks.dispatch")
+        let d = UserDefaults(suiteName: "group.com.bricks.go")
         d?.set(r.weekTotal,     forKey: "dispatch.widget.todayEarnings")
         d?.set(r.pendingAmount, forKey: "dispatch.widget.pendingEarnings")
         d?.set(r.weekJobCount,  forKey: "dispatch.widget.weekJobCount")

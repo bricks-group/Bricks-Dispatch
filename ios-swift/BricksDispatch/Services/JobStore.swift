@@ -118,7 +118,7 @@ final class JobStore: ObservableObject {
     // MARK: — Widget sync
 
     private func syncToWidget() {
-        let d = UserDefaults(suiteName: "group.com.bricks.dispatch")
+        let d = UserDefaults(suiteName: "group.com.bricks.go")
         let next = todayJobs.first { $0.isUpcoming || $0.isActive }
         d?.set(next != nil, forKey: "dispatch.widget.nextJob.exists")
         if let n = next {
