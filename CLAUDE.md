@@ -18,6 +18,28 @@ The Dispatch photographer web experience is now built into the Brokerage React a
 - Frontend (iOS): **Native Swift — `ios-swift/` directory** — SwiftUI, multi-target Xcode project (see below)
 - Deployed: `https://bricks-go-api.vercel.app` / `https://dispatch-api.brxs.ca`
 
+## Database Ownership
+
+All schema migrations live in `ruletheworld/bricks-brokerage/supabase/migrations/` — **never in this repo**. Bricks OS is the DDL authority. The `backend/migrations/` file here was a legacy exception — all future DDL goes to Bricks OS. The live ownership registry is queryable: `SELECT * FROM public.v_service_boundaries;`
+
+**Tables owned by Bricks GO (write here freely):**
+- `dispatch_jobs` — create, assign, all status transitions
+- `vendor_assignments` — written on assignment
+- `payout_records` — Stripe Connect transfer records
+- `agent_noshow_trip_fees` — $60 trip fee per validated claim
+- `agent_noshow_escalations` — Twilio SMS attempt log
+- `reconciliation_events` — fee vs booking mismatch log
+- `media_delivery` — signed delivery URLs + Resend trigger
+- `vendor_members` — shared with Bricks OS; Bricks GO writes onboarding fields only (tier, ic_agreement_version, rpas certs, on_time_rate)
+
+**Tables Bricks GO reads but must not write:**
+- `users` — read vendor/agent identity; never write
+- `bookings` — read job intake context; status sent back to Bricks via HTTP (`PUT /api/v1/dispatch-jobs/{booking_id}/status`)
+- `brokerage_members` — read brokerage_id for favourite bonus; never write
+- `brokerage_vendor_favorites` — read for +15pt dispatch scoring; never write
+
+**Rule:** writing to another service's table → use the HTTP API instead.
+
 ## iOS Swift App — `ios-swift/`
 
 **This is a fully built native Swift iOS app.** Do not suggest Expo for iOS — the Swift app is the iOS experience.
