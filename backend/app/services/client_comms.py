@@ -18,16 +18,15 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_BOOKING_API_URL = os.environ.get("BOOKING_API_URL", "https://bricks-booking-api.vercel.app")
-_INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
-
-
 async def _call_booking_comms(path: str, payload: dict) -> bool:
     """POST an internal comms event to the Booking service."""
-    api_key = os.environ.get("INTERNAL_API_KEY", "")
-    booking_url = os.environ.get("BOOKING_API_URL", _BOOKING_API_URL)
+    api_key = os.environ.get("INTERNAL_API_KEY")
+    booking_url = os.environ.get("BOOKING_API_URL") or os.environ.get("BOOKING_CALLBACK_URL")
     if not api_key:
         logger.warning(f"INTERNAL_API_KEY not set — skipping comms call to {path}")
+        return False
+    if not booking_url:
+        logger.warning(f"BOOKING_API_URL not set — skipping comms call to {path}")
         return False
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
