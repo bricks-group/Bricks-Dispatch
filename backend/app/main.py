@@ -40,7 +40,7 @@ async def get_db() -> Client:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "bricks-dispatch"}
 
 @app.get("/health/ready")
 async def ready(db: Client = Depends(get_db)):
