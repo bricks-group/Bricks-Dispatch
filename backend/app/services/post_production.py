@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from ..shared.database import get_db
 from ..services.storage import get_signed_download_url
 
+# PIL Tier-3 enhancement is imported lazily inside the reconcile path to avoid
+# hard-importing numpy/PIL on every request in case the packages are missing.
+_FOTELLO_API_KEY_ENV = "FOTELLO_API_KEY"
+_AUTOENHANCE_API_KEY_ENV = "AUTOENHANCE_API_KEY"
+
 logger = logging.getLogger(__name__)
 
 # --- Config ---
@@ -242,11 +247,32 @@ async def process_job_assets(job_id: str):
             provider_url = await get_signed_download_url(storage_path, expiry=7200)
             if not provider_url:
                 logger.warning(f"Job {job_id}: could not sign splat source URL for asset {asset_id}")
+                # Mark upload failed so reconcile doesn't block finalization, then
+                # ensure photo delivery still proceeds independently.
+                await db.table("uploads").update({
+                    "processing_status": "failed",
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", asset_id).execute()
+                await db.table("media_delivery").upsert({
+                    "job_id": job_id,
+                    "splat_status": "processing_failed",
+                    "delivery_urls": [],
+                    "notification_status": "pending",
+                }, on_conflict="job_id").execute()
                 return
             await db.table("uploads").update({
                 "processing_status": "processing",
                 "provider": "luma",
             }).eq("id", asset_id).execute()
+            # Mark splat as processing in media_delivery so the agent can be notified
+            # that a 3D tour is coming separately, even if photos arrive first.
+            await db.table("media_delivery").upsert({
+                "job_id": job_id,
+                "splat_status": "processing",
+                "delivery_urls": [],
+                "notification_status": "pending",
+            }, on_conflict="job_id").execute()
+
             signed_ply_url = await process_splat_with_luma(source_url=provider_url, job_id=job_id)
             if signed_ply_url:
                 await db.table("uploads").update({
@@ -254,27 +280,44 @@ async def process_job_assets(job_id: str):
                     "processed_url": f"splats/{job_id}/scene.ply",
                     "processed_at": datetime.now(timezone.utc).isoformat(),
                 }).eq("id", asset_id).execute()
-                # Write / merge splat_url into media_delivery
+                # Write / merge splat_url + splat_status=completed into media_delivery.
+                # Photo delivery (_finalize_job_if_complete) runs independently and may
+                # have already written the delivery_urls — use update, not insert.
                 existing = await db.table("media_delivery").select("id").eq("job_id", job_id).maybe_single().execute()
                 if existing.data:
                     await db.table("media_delivery").update({
                         "splat_url": signed_ply_url,
+                        "splat_status": "completed",
                     }).eq("job_id", job_id).execute()
                 else:
                     await db.table("media_delivery").upsert({
                         "job_id": job_id,
                         "splat_url": signed_ply_url,
+                        "splat_status": "completed",
                         "delivery_urls": [],
                         "delivered_at": datetime.now(timezone.utc).isoformat(),
                         "notification_status": "pending",
                     }, on_conflict="job_id").execute()
                 logger.info(f"Job {job_id}: Luma splat complete — splat_url written to media_delivery")
             else:
+                # Luma failed — mark upload and media_delivery accordingly.
+                # IMPORTANT: do NOT block photo delivery.  The photo finalization path
+                # (_finalize_job_if_complete in routers/post_production.py) checks only
+                # photo upload rows; the splat upload's "failed" status will unblock it.
                 await db.table("uploads").update({
                     "processing_status": "failed",
                     "processed_at": datetime.now(timezone.utc).isoformat(),
                 }).eq("id", asset_id).execute()
-                logger.error(f"Job {job_id}: Luma processing failed for asset {asset_id}")
+                await db.table("media_delivery").upsert({
+                    "job_id": job_id,
+                    "splat_status": "processing_failed",
+                    "delivery_urls": [],
+                    "notification_status": "pending",
+                }, on_conflict="job_id").execute()
+                logger.error(
+                    f"Job {job_id}: Luma processing failed for asset {asset_id} — "
+                    f"splat_status=processing_failed; photo delivery unaffected"
+                )
 
         # Run Luma jobs concurrently (one splat source per job is typical, but handle multiples)
         await asyncio.gather(*[_run_luma_for_asset(a) for a in splat_source_assets], return_exceptions=True)

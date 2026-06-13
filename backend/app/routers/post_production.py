@@ -212,6 +212,18 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
         logger.info(f"Job {job_id}: INTERNAL_API_KEY not set — skipping delivery notification")
         return
 
+    # Determine splat_pending: True when splat is still processing or has failed,
+    # so Booking can append "Your 3D tour is processing — it will arrive separately
+    # within 24h" to the agent delivery email.
+    splat_pending = False
+    try:
+        res_md = await db.table("media_delivery").select("splat_status").eq("job_id", job_id).maybe_single().execute()
+        if res_md.data:
+            _splat_status = res_md.data.get("splat_status", "none")
+            splat_pending = _splat_status == "processing_failed"
+    except Exception as sp_err:
+        logger.warning(f"Job {job_id}: could not read splat_status for notification: {sp_err}")
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -223,6 +235,7 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
                     "address": res_job.data.get("address", ""),
                     "delivery_count": len(delivery_urls),
                     "delivery_urls": delivery_urls[:5],
+                    "splat_pending": splat_pending,
                 },
             )
             resp.raise_for_status()
@@ -230,7 +243,7 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
                 "notified_at": datetime.now(timezone.utc).isoformat(),
                 "notification_status": "sent",
             }).eq("job_id", job_id).execute()
-            logger.info(f"Job {job_id}: delivery notification delegated to Booking service")
+            logger.info(f"Job {job_id}: delivery notification delegated to Booking service (splat_pending={splat_pending})")
     except Exception as e:
         logger.error(f"Job {job_id}: delivery notification failed: {e}")
         await db.table("media_delivery").update({
@@ -494,18 +507,30 @@ async def _process_splat_background(job_id: str, upload_id: str, source_url: str
     """
     Background task: submit source to Luma Labs, poll until done, store the
     .ply output, and update the media_delivery row with splat_url.
+
+    On failure: sets splat_status="processing_failed" and marks the upload row
+    as failed so that _finalize_job_if_complete can proceed with photo delivery
+    unblocked.  Photo delivery is always independent of splat outcome.
     """
     from ..services.splat_service import process_splat_with_luma
 
     logger.info(f"Splat background job {job_id}: starting Luma Labs processing")
+
+    # Mark splat as processing in media_delivery so the agent can be notified
+    # that a 3D tour is incoming, even if photos arrive first.
+    db = await get_db()
+    await db.table("media_delivery").upsert({
+        "job_id": job_id,
+        "splat_status": "processing",
+        "delivery_urls": [],
+        "notification_status": "pending",
+    }, on_conflict="job_id").execute()
 
     try:
         signed_ply_url = await process_splat_with_luma(source_url=source_url, job_id=job_id)
     except Exception as e:
         logger.error(f"Splat background job {job_id}: process_splat_with_luma raised: {e}")
         signed_ply_url = None
-
-    db = await get_db()
 
     if signed_ply_url:
         # Mark the upload as done
@@ -515,32 +540,44 @@ async def _process_splat_background(job_id: str, upload_id: str, source_url: str
             "processed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", upload_id).execute()
 
-        # Update or create media_delivery row with the splat_url
+        # Update or create media_delivery row with the splat_url and splat_status=completed.
+        # Photo delivery may have already written delivery_urls — use update if row exists.
         existing = await db.table("media_delivery").select("id").eq("job_id", job_id).maybe_single().execute()
         if existing.data:
             await db.table("media_delivery").update({
                 "splat_url": signed_ply_url,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "splat_status": "completed",
             }).eq("job_id", job_id).execute()
-            logger.info(f"Splat background job {job_id}: media_delivery.splat_url updated")
+            logger.info(f"Splat background job {job_id}: media_delivery.splat_url updated, splat_status=completed")
         else:
             # media_delivery doesn't exist yet — create a partial row; photo delivery
             # will upsert on top of this later via _finalize_job_if_complete.
             await db.table("media_delivery").upsert({
                 "job_id": job_id,
                 "splat_url": signed_ply_url,
+                "splat_status": "completed",
                 "delivery_urls": [],
                 "delivered_at": datetime.now(timezone.utc).isoformat(),
                 "notification_status": "pending",
             }, on_conflict="job_id").execute()
-            logger.info(f"Splat background job {job_id}: media_delivery row created with splat_url")
+            logger.info(f"Splat background job {job_id}: media_delivery row created with splat_url, splat_status=completed")
     else:
-        # Mark the upload as failed so reconcile doesn't block finalization
+        # Luma processing failed.  Mark upload as failed (unblocks _finalize_job_if_complete
+        # for photos) and record the failure in media_delivery independently of photos.
         await db.table("uploads").update({
             "processing_status": "failed",
             "processed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", upload_id).execute()
-        logger.error(f"Splat background job {job_id}: Luma processing failed — upload marked failed")
+        await db.table("media_delivery").upsert({
+            "job_id": job_id,
+            "splat_status": "processing_failed",
+            "delivery_urls": [],
+            "notification_status": "pending",
+        }, on_conflict="job_id").execute()
+        logger.error(
+            f"Splat background job {job_id}: Luma processing failed — "
+            f"upload marked failed, splat_status=processing_failed; photo delivery unaffected"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -587,11 +624,82 @@ async def reconcile_stuck_uploads(
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     # Also time out "pending" uploads — these were never successfully submitted to a provider
     # and will never receive a callback. Without this they block _finalize_job_if_complete forever.
-    res_stuck = await db.table("uploads").select("id, job_id, provider").in_(
+    res_stuck = await db.table("uploads").select("id, job_id, provider, file_url, filename").in_(
         "processing_status", ["processing", "pending"]
     ).lt("created_at", cutoff).limit(100).execute()
 
     stuck = res_stuck.data or []
+
+    # --- PIL Tier-3 fallback: apply local enhancement to photo assets that are stuck
+    # and whose provider keys are unavailable.  Only activated as last resort — never
+    # when Fotello or Autoenhance are configured and healthy.
+    fotello_available = bool(os.environ.get("FOTELLO_API_KEY", ""))
+    autoenhance_available = bool(os.environ.get("AUTOENHANCE_API_KEY", ""))
+    pil_tier3_count = 0
+
+    if not fotello_available and not autoenhance_available:
+        try:
+            from ..services.local_enhance import enhance_image_pil, upload_enhanced
+            from ..services.storage import get_signed_download_url as _sign_url
+
+            _SPLAT_EXTS = (".mp4", ".mov", ".avi", ".zip", ".tar", ".ply", ".splat")
+            _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
+
+            for upload in stuck:
+                fname = (upload.get("filename") or "").lower()
+                # Only process photo-type assets — skip splat source files and 3D assets
+                if not any(fname.endswith(ext) for ext in _IMAGE_EXTS):
+                    continue
+                # Skip boxbrownie — it has its own polling path above
+                if upload.get("provider") == "boxbrownie":
+                    continue
+
+                file_path = upload.get("file_url", "")
+                if not file_path:
+                    continue
+
+                try:
+                    signed_url = await _sign_url(file_path)
+                    if not signed_url:
+                        logger.warning(f"PIL Tier-3: could not sign URL for upload {upload['id']} — skipping")
+                        continue
+
+                    import httpx as _httpx
+                    async with _httpx.AsyncClient(timeout=30.0) as client:
+                        img_resp = await client.get(signed_url)
+                        img_resp.raise_for_status()
+                        original_bytes = img_resp.content
+
+                    enhanced_bytes = enhance_image_pil(original_bytes)
+                    storage_path = await upload_enhanced(db.storage, upload["job_id"], upload["id"], enhanced_bytes)
+
+                    await db.table("uploads").update({
+                        "processing_status": "done",
+                        "processed_url": storage_path,
+                        "provider": "local_pil",
+                        "processed_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("id", upload["id"]).execute()
+
+                    pil_tier3_count += 1
+                    logger.info(
+                        f"PIL Tier-3: enhanced upload {upload['id']} for job {upload['job_id']} "
+                        f"→ {storage_path}"
+                    )
+                except Exception as pil_err:
+                    logger.error(f"PIL Tier-3: failed for upload {upload['id']}: {pil_err}")
+                    # Fall through — will be marked failed below with the rest
+
+        except ImportError as ie:
+            logger.warning(f"PIL Tier-3 fallback unavailable (Pillow/numpy not installed): {ie}")
+
+    # Re-fetch stuck list after PIL pass — any uploads now "done" should be excluded
+    # from the bulk failure sweep so they can proceed to finalization.
+    if pil_tier3_count:
+        res_stuck = await db.table("uploads").select("id, job_id, provider, file_url, filename").in_(
+            "processing_status", ["processing", "pending"]
+        ).lt("created_at", cutoff).limit(100).execute()
+        stuck = res_stuck.data or []
+
     stuck_ids = [u["id"] for u in stuck]
     other_job_ids = list({u["job_id"] for u in stuck if u.get("job_id")})
 
@@ -621,6 +729,7 @@ async def reconcile_stuck_uploads(
 
     return {
         "boxbrownie_completed": bb_completed,
+        "pil_tier3_applied": pil_tier3_count,
         "timed_out": len(stuck_ids),
         "jobs_queued_for_finalization": len(other_job_ids),
     }
