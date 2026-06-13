@@ -127,10 +127,12 @@ def _score_vendor(
     preferred_tier: int,
     has_repeat_history: bool = False,
     is_brokerage_favorite: bool = False,
-) -> float:
+    return_breakdown: bool = False,
+):
     """
     Compute a 0-100 score for a vendor candidate.
     Higher is better. Tie-break: more active_assignments = worse.
+    When return_breakdown=True, returns (score, breakdown_dict) instead of score.
     """
     # Specialty match: binary
     specialty = 1.0 if v.specialty == job.job_type else 0.0
@@ -140,9 +142,10 @@ def _score_vendor(
 
     # Proximity: 1.0 at 0 km, 0.0 at 100+ km
     proximity = 0.5  # neutral default when coordinates unknown
+    dist_km: Optional[float] = None
     if v.home_lat is not None and v.home_lng is not None and job.lat is not None and job.lng is not None:
-        dist = _haversine_km(v.home_lat, v.home_lng, job.lat, job.lng)
-        proximity = max(0.0, 1.0 - dist / 100.0)
+        dist_km = _haversine_km(v.home_lat, v.home_lng, job.lat, job.lng)
+        proximity = max(0.0, 1.0 - dist_km / 100.0)
 
     # On-time rate: already 0-1
     on_time = max(0.0, min(1.0, v.on_time_rate))
@@ -159,23 +162,80 @@ def _score_vendor(
     # Load balance: inverse of fractional load (default cap = 4 jobs/day)
     load = max(0.0, 1.0 - v.active_assignments / _MAX_DAILY_CAP)
 
-    score = (
-        _W["specialty"]    * specialty    +
-        _W["tier"]         * tier         +
-        _W["proximity"]    * proximity    +
-        _W["on_time"]      * on_time      +
-        _W["quality"]      * quality      +
-        _W["reliability"]  * reliability  +
-        _W["load"]         * load
+    specialty_pts    = round(_W["specialty"]   * specialty,   3)
+    tier_pts         = round(_W["tier"]        * tier,        3)
+    proximity_pts    = round(_W["proximity"]   * proximity,   3)
+    on_time_pts      = round(_W["on_time"]     * on_time,     3)
+    quality_pts      = round(_W["quality"]     * quality,     3)
+    reliability_pts  = round(_W["reliability"] * reliability, 3)
+    load_pts         = round(_W["load"]        * load,        3)
+
+    bonus_total = 0.0
+    if has_repeat_history:
+        bonus_total += _REPEAT_AGENT_BONUS
+    if is_brokerage_favorite:
+        bonus_total += _BROKERAGE_FAVORITE_BONUS
+
+    score = round(
+        specialty_pts + tier_pts + proximity_pts + on_time_pts +
+        quality_pts + reliability_pts + load_pts + bonus_total,
+        3,
     )
 
-    if has_repeat_history:
-        score += _REPEAT_AGENT_BONUS
+    if not return_breakdown:
+        return score
 
-    if is_brokerage_favorite:
-        score += _BROKERAGE_FAVORITE_BONUS
+    breakdown = {
+        "specialty":   specialty_pts,
+        "tier":        tier_pts,
+        "proximity":   proximity_pts,
+        "on_time":     on_time_pts,
+        "quality":     quality_pts,
+        "reliability": reliability_pts,
+        "load":        load_pts,
+        "bonuses":     round(bonus_total, 3),
+        "_dist_km":    round(dist_km, 1) if dist_km is not None else None,
+        "_on_time_pct": round(v.on_time_rate * 100),
+    }
+    return score, breakdown
 
-    return round(score, 3)
+
+# ---------------------------------------------------------------------------
+# Coded explanation fallback (deterministic — no LLM required)
+# ---------------------------------------------------------------------------
+
+_COMPONENT_LABELS = {
+    "specialty":   "specialty match",
+    "tier":        "tier match",
+    "proximity":   "proximity",
+    "on_time":     "on-time rate",
+    "quality":     "quality rating",
+    "reliability": "reliability",
+    "load":        "availability",
+    "bonuses":     "bonus",
+}
+
+
+def _coded_explanation(job: Job, vendor: VendorMember, score: float, breakdown: dict) -> str:
+    scored_components = [
+        (k, v) for k, v in breakdown.items()
+        if not k.startswith("_") and v > 0
+    ]
+    scored_components.sort(key=lambda x: x[1], reverse=True)
+    top3 = scored_components[:3]
+
+    parts = []
+    for key, pts in top3:
+        label = _COMPONENT_LABELS.get(key, key)
+        if key == "on_time" and breakdown.get("_on_time_pct") is not None:
+            parts.append(f"{breakdown['_on_time_pct']}% {label} ({round(pts)}pts)")
+        elif key == "proximity" and breakdown.get("_dist_km") is not None:
+            parts.append(f"{breakdown['_dist_km']}km from property ({round(pts)}pts)")
+        else:
+            parts.append(f"{label} ({round(pts)}pts)")
+
+    summary = ", ".join(parts)
+    return f"Matched for {summary}. Total score: {round(score)}/100."
 
 
 # ---------------------------------------------------------------------------
@@ -216,15 +276,18 @@ Return ONLY the explanation sentence as a plain JSON string.
         return None
 
 
-async def _save_dispatch_explanation(job: Job, vendor: VendorMember, score: float) -> None:
-    """Fire-and-forget: generate Gemini explanation and persist to jobs table."""
+async def _save_dispatch_explanation(job: Job, vendor: VendorMember, score: float, breakdown: dict) -> None:
+    """Fire-and-forget: generate Gemini explanation and persist to jobs table.
+    Falls back to a deterministic coded explanation when Gemini is unavailable."""
     try:
         explanation = await generate_dispatch_explanation(job, vendor, score)
-        if explanation:
-            from ..shared.database import get_db
-            db = await get_db()
-            await db.table("jobs").update({"dispatch_explanation": explanation}).eq("id", job.id).execute()
-            logger.info(f"Dispatch explanation saved for job {job.id}")
+        if not explanation:
+            logger.info(f"Using coded dispatch explanation (Gemini unavailable) for job {job.id}")
+            explanation = _coded_explanation(job, vendor, score, breakdown)
+        from ..shared.database import get_db
+        db = await get_db()
+        await db.table("jobs").update({"dispatch_explanation": explanation}).eq("id", job.id).execute()
+        logger.info(f"Dispatch explanation saved for job {job.id}")
     except Exception as e:
         logger.debug(f"Dispatch explanation skipped for job {job.id}: {e}")
 
@@ -304,12 +367,13 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
     # Score all candidates
     scored = []
     for v in candidates:
-        score = _score_vendor(
+        score, breakdown = _score_vendor(
             v, job, preferred_tier,
             has_repeat_history=has_history_by_vendor.get(v.id, False),
             is_brokerage_favorite=is_brokerage_fav_vendor.get(v.id, False),
+            return_breakdown=True,
         )
-        scored.append((score, v.id, v))
+        scored.append((score, v.id, v, breakdown))
 
     if not scored:
         return None
@@ -317,7 +381,7 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
     # Sort: highest score first; stable UUID tiebreak avoids double-counting active_assignments
     # (already factored into the load_balance score component — no need to repeat it here)
     scored.sort(key=lambda x: (-x[0], x[1]))
-    best_score, best_id, best_vendor = scored[0]
+    best_score, best_id, best_vendor, best_breakdown = scored[0]
 
     logger.info(
         f"Dispatch scored {len(scored)} candidates for job {job.id}: "
@@ -327,7 +391,7 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
 
     # Gemini explainability — fire-and-forget; never blocks dispatch.
     # Store task reference to prevent garbage collection mid-execution (Python asyncio docs).
-    _task = asyncio.create_task(_save_dispatch_explanation(job, best_vendor, best_score))
+    _task = asyncio.create_task(_save_dispatch_explanation(job, best_vendor, best_score, best_breakdown))
     _background_tasks.add(_task)
     _task.add_done_callback(_background_tasks.discard)
 
