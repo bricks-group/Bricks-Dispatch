@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
@@ -15,10 +16,18 @@ async def dispatch_root():
     return {"message": "Welcome to the Dispatch Service"}
 
 @router.post("/jobs", summary="Create a new dispatch job")
-async def create_dispatch_job(payload: JobIntakeRequest, background_tasks: BackgroundTasks):
+async def create_dispatch_job(
+    payload: JobIntakeRequest,
+    background_tasks: BackgroundTasks,
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
+):
     """
     Intake endpoint for Booking backend. Creates a job and triggers AI assignment.
     """
+    internal_keys = [k.strip() for k in (os.environ.get("INTERNAL_API_KEYS") or "").split(",") if k.strip()]
+    if not internal_keys or x_internal_api_key not in internal_keys:
+        raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
+
     db = await get_db()
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
