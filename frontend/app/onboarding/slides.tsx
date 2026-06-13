@@ -44,7 +44,7 @@ export default function OnboardingSlides() {
     <SafeAreaView style={s.container}>
       {/* Top bar: wordmark + skip */}
       <View style={s.topBar}>
-        <BricksWordmark size={0.85} color={TOKENS.brick} />
+        <BricksWordmark size={0.85} color={TOKENS.brick} pressable />
         <TouchableOpacity onPress={skip} activeOpacity={0.7}>
           <Text style={s.skip}>Skip</Text>
         </TouchableOpacity>

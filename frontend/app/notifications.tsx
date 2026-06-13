@@ -6,9 +6,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Bell, Check, ChevronLeft, UploadCloud, Briefcase, AlertTriangle } from 'lucide-react-native';
 import { TOKENS } from '../constants/Theme';
+import { supabase } from '../lib/supabase';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8000';
-const ACTOR_ID = process.env.EXPO_PUBLIC_ACTOR_ID || 'default_user';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) return {};
+  return { Authorization: `Bearer ${session.access_token}` };
+}
 
 type Notification = {
   id: string;
@@ -40,9 +46,8 @@ export default function NotificationsScreen() {
 
   const fetchNotifications = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/notifications`, {
-        headers: { 'X-User-Id': ACTOR_ID },
-      });
+      const headers = await authHeaders();
+      const res = await fetch(`${API}/api/notifications`, { headers });
       if (res.ok) setNotifications(await res.json());
     } catch {}
     setLoading(false);
@@ -51,9 +56,10 @@ export default function NotificationsScreen() {
   useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
 
   const markRead = async (id: string) => {
+    const headers = await authHeaders();
     await fetch(`${API}/api/notifications/${id}/read`, {
       method: 'PUT',
-      headers: { 'X-User-Id': ACTOR_ID },
+      headers,
     }).catch(() => {});
     setNotifications(prev =>
       prev.map(n => n.id === id ? { ...n, read: true } : n)
@@ -62,10 +68,11 @@ export default function NotificationsScreen() {
 
   const markAllRead = async () => {
     const unread = notifications.filter(n => !n.read);
+    const headers = await authHeaders();
     await Promise.all(unread.map(n =>
       fetch(`${API}/api/notifications/${n.id}/read`, {
         method: 'PUT',
-        headers: { 'X-User-Id': ACTOR_ID },
+        headers,
       }).catch(() => {})
     ));
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));

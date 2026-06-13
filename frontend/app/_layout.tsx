@@ -1,6 +1,7 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
+import { BrickLoader } from '../components/BricksWordmark';
 import { useFonts } from 'expo-font';
 import {
   JetBrainsMono_400Regular,
@@ -14,7 +15,7 @@ import { actorHeaders } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -38,7 +39,7 @@ function useInitPushNotifications() {
 
         if (Platform.OS === 'android') {
           await Notifications.setNotificationChannelAsync('default', {
-            name: 'Bricks Dispatch',
+            name: 'Bricks GO',
             importance: Notifications.AndroidImportance.MAX,
             vibrationPattern: [0, 250, 250, 250],
             lightColor: TOKENS.brick,
@@ -144,7 +145,7 @@ export default function RootLayout() {
   if (!fontsLoaded) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="small" color={TOKENS.brick} />
+        <BrickLoader />
       </View>
     );
   }

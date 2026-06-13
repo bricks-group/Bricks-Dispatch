@@ -9,7 +9,7 @@ from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 
 # Import routers
-from app.routers import dispatch, jobs, vendors, notifications, payouts
+from app.routers import dispatch, jobs, vendors, notifications, payouts, post_production, vendor_os, onboarding, admin_ops
 
 limiter = Limiter(key_func=get_remote_address, default_limits=['100/minute'])
 
@@ -40,7 +40,7 @@ async def get_db() -> Client:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "bricks-dispatch"}
 
 @app.get("/health/ready")
 async def ready(db: Client = Depends(get_db)):
@@ -57,6 +57,10 @@ app.include_router(payouts.router, tags=["payouts"])
 app.include_router(jobs.router, prefix="/dispatch/jobs", tags=["jobs"])
 app.include_router(vendors.router, prefix="/dispatch/vendors", tags=["vendors"])
 app.include_router(notifications.router, prefix="/dispatch/notifications", tags=["notifications"])
+app.include_router(post_production.router, tags=["post-production"])
+app.include_router(vendor_os.router, tags=["vendor-os"])
+app.include_router(onboarding.router, tags=["onboarding"])
+app.include_router(admin_ops.router, tags=["admin"])
 
 # --- Rate Limited Endpoints (Placeholders) ---
 # These would typically be defined within their respective routers

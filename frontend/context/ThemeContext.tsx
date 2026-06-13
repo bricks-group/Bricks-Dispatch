@@ -1,4 +1,4 @@
-// ThemeContext — Light/Dark mode for Bricks Dispatch app
+// ThemeContext — Light/Dark mode for Bricks GO app
 // Dispatch defaults to dark theme (per BRICKS.md section 14)
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useColorScheme } from 'react-native';

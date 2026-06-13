@@ -1,5 +1,5 @@
 """
-Custom in-memory rate limiter for Bricks-Dispatch.
+Custom in-memory rate limiter for Bricks GO.
 Path-based tiered rate limiting with sliding window.
 Distinct from the decorator-based pattern used by Booking/Brokerage.
 """

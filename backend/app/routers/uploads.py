@@ -76,7 +76,7 @@ async def create_upload(
     db = await get_db()
 
     # Verify job belongs to this vendor
-    res_job = await db.table("jobs").select("id, uploaded_count, deliverables_count").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    res_job = await db.table("jobs").select("id, uploaded_count, deliverables_count, status").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
     if not res_job.data:
         api_error(404, "Job not found", "job_not_found")
 
@@ -88,7 +88,7 @@ async def create_upload(
 
     upload_id = str(uuid.uuid4())
 
-    # Upload to S3 (or store thumbnail-only if credentials not configured)
+    # Upload to storage; fail fast if storage is unavailable rather than inserting a bad record.
     file_url, thumbnail_url, thumbnail_b64 = await upload_file(
         file_bytes=file_bytes,
         job_id=job_id,
@@ -96,6 +96,9 @@ async def create_upload(
         filename=filename,
         mime_type=mime_type,
     )
+
+    if file_url is None:
+        raise HTTPException(status_code=500, detail="File upload to storage failed")
 
     # Persist record
     record = UploadRecord(
@@ -118,6 +121,20 @@ async def create_upload(
         "uploaded_count": new_uploaded,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
+
+    # Trigger post-production when uploads reach the declared count, but only once
+    # the job is in `completed` status (vendor has wrapped up on-site).
+    # When deliverables_count=0 (not set by Booking), post-production fires from the
+    # "completed" status transition in vendor_os.py instead — triggering here on every
+    # upload would fire before all files arrive, processing only a partial set.
+    deliverables = job.get("deliverables_count") or 0
+    if deliverables and new_uploaded == deliverables:
+        # Re-read status fresh — photographer may have marked the job `completed` while
+        # this upload was in-flight, leaving the snapshot from the top of this handler stale.
+        res_fresh = await db.table("jobs").select("status").eq("id", job_id).maybe_single().execute()
+        job_status = (res_fresh.data or {}).get("status", "")
+        if job_status == "completed":
+            background_tasks.add_task(process_job_assets, job_id)
 
     return record.dict()
 

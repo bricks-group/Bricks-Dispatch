@@ -1,0 +1,759 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		13E5E6E7B95EC4B099127832 /* BricksCore in Frameworks */ = {isa = PBXBuildFile; productRef = 7D67B8DE57D089E7663D6FC7 /* BricksCore */; };
+		1495D87CA78C2FAEB0691287 /* PushNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 212130DC62B3E72A521A18F9 /* PushNotificationService.swift */; };
+		18CBC1C5C150F7F8D4F6A2B2 /* WatchJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51BD9916DA924EC008C1F2BF /* WatchJobStore.swift */; };
+		34FD72C4DE8C0A692121CC2D /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7086552611CE6C400B458839 /* WidgetKit.framework */; };
+		397F1EA86C4DD5D2674D880F /* BricksDispatchWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C5AE36E793A917EAE6869670 /* BricksDispatchWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		414919BE406979CC67E19F48 /* EarningsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60E57219897D6CFAA8C30D0 /* EarningsView.swift */; };
+		48A429D7AEE685C027D5E6B9 /* EarningsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FD23183F261D2F7DBF8AD0 /* EarningsWidget.swift */; };
+		4AA00B0A70A82FB68EE5AA97 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D4EE203A1CACB51F3836FB4 /* SwiftUI.framework */; };
+		54ACEA85F19A663C9BFEF31B /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42C5F0F36E0839252575953 /* App.swift */; };
+		63CDC83D3918CD9626AF51C0 /* JobDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EB18ED7956CB789E3678B0 /* JobDetailView.swift */; };
+		76EBA6B5960D1DAB76B228A4 /* BricksDispatchWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45E64E4CCF1273A71C76748 /* BricksDispatchWidgets.swift */; };
+		854C58FCE5E5E014AE38D113 /* JobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80BCC8C13F50BC7486102230 /* JobStore.swift */; };
+		8590404A516DC9F059A91248 /* JobOfferCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1DCDB558886894394C90D11 /* JobOfferCard.swift */; };
+		8A0A34A26D5796103331F583 /* BricksCore in Frameworks */ = {isa = PBXBuildFile; productRef = 92BA0BF6B657D69CEFE6F7CC /* BricksCore */; };
+		8FE830CB359BCB60CA05C127 /* BricksDispatch.app in Resources */ = {isa = PBXBuildFile; fileRef = 377E7A48FF6D67EEF4BF306D /* BricksDispatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		9BC2D7BB5B240BF318F87300 /* JobLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE8A78F8D2EB4CD128E90BC6 /* JobLiveActivity.swift */; };
+		9BF3B8AC98E7DCA44BD0D177 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E7CF8FABE9E057F9C03E758 /* ProfileView.swift */; };
+		A067AEBC878BB332EEBAB852 /* JobOfferView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87A93F941139D23AED3EA21 /* JobOfferView.swift */; };
+		AB2257E1262A3A0ACB0FD17A /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A782C0065FB3CB68D5E8EFA0 /* LoginView.swift */; };
+		B92956E430B2FA4F8B17921A /* TodayJobsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9942965733485FEDB22EBBDB /* TodayJobsView.swift */; };
+		BF65E3AD972A43F8F5D84FC1 /* DeliveryRevealView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5A5BDCFB1E6576C210BD17 /* DeliveryRevealView.swift */; };
+		D26FB0671DFD288ED40649B8 /* BricksCore in Frameworks */ = {isa = PBXBuildFile; productRef = A70A37641E8D07EBF65833F9 /* BricksCore */; };
+		E33F56138EC1F2554A98B812 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7086552611CE6C400B458839 /* WidgetKit.framework */; };
+		E5E3725644115A091AF73DBC /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C94E2CAE2EE3695A25DD31 /* App.swift */; };
+		F3048F3F96E2354076689666 /* NextJobWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E27BA42AA2616FC551268EF /* NextJobWidget.swift */; };
+		FDD22D9FA211EED49BF331AD /* JobNavigationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		66F9B72AC92160BE363383E3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F49C85D1F14DDA15B90F3634 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A0E23602FE98A24F9BFA18F9;
+			remoteInfo = BricksDispatchWidgets;
+		};
+		806DCA4A1ADBB86BE754D324 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F49C85D1F14DDA15B90F3634 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA9958FAFF8DD6732699E291;
+			remoteInfo = BricksDispatch;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		6EA1F242BD7B38596D6F6AB9 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				397F1EA86C4DD5D2674D880F /* BricksDispatchWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		1D4EE203A1CACB51F3836FB4 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		212130DC62B3E72A521A18F9 /* PushNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationService.swift; sourceTree = "<group>"; };
+		377E7A48FF6D67EEF4BF306D /* BricksDispatch.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BricksDispatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3E7CF8FABE9E057F9C03E758 /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
+		3F542233D0FE32848C75DAD7 /* BricksCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BricksCore; path = BricksCore; sourceTree = SOURCE_ROOT; };
+		4B5A5BDCFB1E6576C210BD17 /* DeliveryRevealView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveryRevealView.swift; sourceTree = "<group>"; };
+		4BAF2E779A2F84F6153F97ED /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		51BD9916DA924EC008C1F2BF /* WatchJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchJobStore.swift; sourceTree = "<group>"; };
+		59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobNavigationView.swift; sourceTree = "<group>"; };
+		5BEE98051C5D737183EA17AB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		70491078620FF0A104D59DE0 /* BricksDispatchWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BricksDispatchWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7086552611CE6C400B458839 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		7E27BA42AA2616FC551268EF /* NextJobWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextJobWidget.swift; sourceTree = "<group>"; };
+		8075E4A956E7B8217927ABF7 /* BricksDispatch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BricksDispatch.entitlements; sourceTree = "<group>"; };
+		80BCC8C13F50BC7486102230 /* JobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobStore.swift; sourceTree = "<group>"; };
+		9942965733485FEDB22EBBDB /* TodayJobsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayJobsView.swift; sourceTree = "<group>"; };
+		A5A1F5826324B71E56BD1F52 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		A60E57219897D6CFAA8C30D0 /* EarningsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarningsView.swift; sourceTree = "<group>"; };
+		A6FD23183F261D2F7DBF8AD0 /* EarningsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarningsWidget.swift; sourceTree = "<group>"; };
+		A782C0065FB3CB68D5E8EFA0 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		B45E64E4CCF1273A71C76748 /* BricksDispatchWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BricksDispatchWidgets.swift; sourceTree = "<group>"; };
+		BF6A0BFEFF71942B2840AEF1 /* BricksDispatchWatch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BricksDispatchWatch.entitlements; sourceTree = "<group>"; };
+		C5AE36E793A917EAE6869670 /* BricksDispatchWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BricksDispatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D5BE09339135F6D6205B96AB /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		E0D4824CAC65F9D1B9988AD8 /* BricksDispatchWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BricksDispatchWidgets.entitlements; sourceTree = "<group>"; };
+		E5C94E2CAE2EE3695A25DD31 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+		F1DCDB558886894394C90D11 /* JobOfferCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobOfferCard.swift; sourceTree = "<group>"; };
+		F42C5F0F36E0839252575953 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+		F7EB18ED7956CB789E3678B0 /* JobDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobDetailView.swift; sourceTree = "<group>"; };
+		F87A93F941139D23AED3EA21 /* JobOfferView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobOfferView.swift; sourceTree = "<group>"; };
+		FE8A78F8D2EB4CD128E90BC6 /* JobLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobLiveActivity.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7E7FDBF8C8EE2BE18504C9BB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8A0A34A26D5796103331F583 /* BricksCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E0BF3B9877245F2B7D01FCA1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				13E5E6E7B95EC4B099127832 /* BricksCore in Frameworks */,
+				34FD72C4DE8C0A692121CC2D /* WidgetKit.framework in Frameworks */,
+				4AA00B0A70A82FB68EE5AA97 /* SwiftUI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FF83E0A16FF9E5A9FD9F35E0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D26FB0671DFD288ED40649B8 /* BricksCore in Frameworks */,
+				E33F56138EC1F2554A98B812 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		047AC49CCB64AB56B36E853C /* Earnings */ = {
+			isa = PBXGroup;
+			children = (
+				A60E57219897D6CFAA8C30D0 /* EarningsView.swift */,
+			);
+			path = Earnings;
+			sourceTree = "<group>";
+		};
+		1C17829DCE0AA7116E9EC4AA /* BricksDispatch */ = {
+			isa = PBXGroup;
+			children = (
+				E5C94E2CAE2EE3695A25DD31 /* App.swift */,
+				8075E4A956E7B8217927ABF7 /* BricksDispatch.entitlements */,
+				5BEE98051C5D737183EA17AB /* Info.plist */,
+				7085568C00C80F750F4E8ADC /* Resources */,
+				7FF66001F7020D04E420505C /* Services */,
+				CBC999DA83EB09994D73B1B9 /* Views */,
+			);
+			path = BricksDispatch;
+			sourceTree = "<group>";
+		};
+		21ACB02844301FA5F486D1F4 /* Profile */ = {
+			isa = PBXGroup;
+			children = (
+				3E7CF8FABE9E057F9C03E758 /* ProfileView.swift */,
+			);
+			path = Profile;
+			sourceTree = "<group>";
+		};
+		37F54F7CE1770916833F4B03 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				3F542233D0FE32848C75DAD7 /* BricksCore */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		3B5A7903B44698AD15461B56 /* BricksDispatchWatch */ = {
+			isa = PBXGroup;
+			children = (
+				F42C5F0F36E0839252575953 /* App.swift */,
+				BF6A0BFEFF71942B2840AEF1 /* BricksDispatchWatch.entitlements */,
+				4BAF2E779A2F84F6153F97ED /* Info.plist */,
+				51BD9916DA924EC008C1F2BF /* WatchJobStore.swift */,
+				D2AC528946F5350A880D26F5 /* Views */,
+			);
+			path = BricksDispatchWatch;
+			sourceTree = "<group>";
+		};
+		41DC7035BD1DD695DCEB6E1E /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				A782C0065FB3CB68D5E8EFA0 /* LoginView.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		4A2BCA4E8A5B65F04865A1DC /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				377E7A48FF6D67EEF4BF306D /* BricksDispatch.app */,
+				70491078620FF0A104D59DE0 /* BricksDispatchWatch.app */,
+				C5AE36E793A917EAE6869670 /* BricksDispatchWidgets.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		64268284E9916A82DADE1867 /* BricksDispatchWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				E0D4824CAC65F9D1B9988AD8 /* BricksDispatchWidgets.entitlements */,
+				B45E64E4CCF1273A71C76748 /* BricksDispatchWidgets.swift */,
+				A6FD23183F261D2F7DBF8AD0 /* EarningsWidget.swift */,
+				A5A1F5826324B71E56BD1F52 /* Info.plist */,
+				FE8A78F8D2EB4CD128E90BC6 /* JobLiveActivity.swift */,
+				7E27BA42AA2616FC551268EF /* NextJobWidget.swift */,
+			);
+			path = BricksDispatchWidgets;
+			sourceTree = "<group>";
+		};
+		7085568C00C80F750F4E8ADC /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				D5BE09339135F6D6205B96AB /* .gitkeep */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		72D35C09EADC7B1D30F19370 = {
+			isa = PBXGroup;
+			children = (
+				1C17829DCE0AA7116E9EC4AA /* BricksDispatch */,
+				3B5A7903B44698AD15461B56 /* BricksDispatchWatch */,
+				64268284E9916A82DADE1867 /* BricksDispatchWidgets */,
+				37F54F7CE1770916833F4B03 /* Packages */,
+				F74B7FCF372AFEB9E063A23A /* Frameworks */,
+				4A2BCA4E8A5B65F04865A1DC /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		771204456DA48C19FAB532D8 /* Jobs */ = {
+			isa = PBXGroup;
+			children = (
+				F7EB18ED7956CB789E3678B0 /* JobDetailView.swift */,
+				59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */,
+				F1DCDB558886894394C90D11 /* JobOfferCard.swift */,
+				9942965733485FEDB22EBBDB /* TodayJobsView.swift */,
+			);
+			path = Jobs;
+			sourceTree = "<group>";
+		};
+		7FF66001F7020D04E420505C /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				80BCC8C13F50BC7486102230 /* JobStore.swift */,
+				212130DC62B3E72A521A18F9 /* PushNotificationService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		CBC999DA83EB09994D73B1B9 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				41DC7035BD1DD695DCEB6E1E /* Auth */,
+				D08C6A85E1110F7480AC63BF /* Delivery */,
+				047AC49CCB64AB56B36E853C /* Earnings */,
+				771204456DA48C19FAB532D8 /* Jobs */,
+				21ACB02844301FA5F486D1F4 /* Profile */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		D08C6A85E1110F7480AC63BF /* Delivery */ = {
+			isa = PBXGroup;
+			children = (
+				4B5A5BDCFB1E6576C210BD17 /* DeliveryRevealView.swift */,
+			);
+			path = Delivery;
+			sourceTree = "<group>";
+		};
+		D2AC528946F5350A880D26F5 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				F87A93F941139D23AED3EA21 /* JobOfferView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		F74B7FCF372AFEB9E063A23A /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				1D4EE203A1CACB51F3836FB4 /* SwiftUI.framework */,
+				7086552611CE6C400B458839 /* WidgetKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		412714C8724BC67F69649909 /* BricksDispatchWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 589D2DF190551E7D42A0ADAE /* Build configuration list for PBXNativeTarget "BricksDispatchWatch" */;
+			buildPhases = (
+				49B895352A74A5699F213E0E /* Sources */,
+				4657C6F38A19CDE0725EF830 /* Resources */,
+				7E7FDBF8C8EE2BE18504C9BB /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				32FD3F1561A74C702A461E43 /* PBXTargetDependency */,
+			);
+			name = BricksDispatchWatch;
+			packageProductDependencies = (
+				92BA0BF6B657D69CEFE6F7CC /* BricksCore */,
+			);
+			productName = BricksDispatchWatch;
+			productReference = 70491078620FF0A104D59DE0 /* BricksDispatchWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A0E23602FE98A24F9BFA18F9 /* BricksDispatchWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3303A22597566174524D0C49 /* Build configuration list for PBXNativeTarget "BricksDispatchWidgets" */;
+			buildPhases = (
+				3BDED1C5C683171FD3E4D1A3 /* Sources */,
+				E0BF3B9877245F2B7D01FCA1 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BricksDispatchWidgets;
+			packageProductDependencies = (
+				7D67B8DE57D089E7663D6FC7 /* BricksCore */,
+			);
+			productName = BricksDispatchWidgets;
+			productReference = C5AE36E793A917EAE6869670 /* BricksDispatchWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		AA9958FAFF8DD6732699E291 /* BricksDispatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9A96D654187A486F18C50389 /* Build configuration list for PBXNativeTarget "BricksDispatch" */;
+			buildPhases = (
+				E3A88D6308AF27D9B3F96B86 /* Sources */,
+				FF83E0A16FF9E5A9FD9F35E0 /* Frameworks */,
+				6EA1F242BD7B38596D6F6AB9 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				969448DF5D775FDCAB04521C /* PBXTargetDependency */,
+			);
+			name = BricksDispatch;
+			packageProductDependencies = (
+				A70A37641E8D07EBF65833F9 /* BricksCore */,
+			);
+			productName = BricksDispatch;
+			productReference = 377E7A48FF6D67EEF4BF306D /* BricksDispatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F49C85D1F14DDA15B90F3634 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					412714C8724BC67F69649909 = {
+						DevelopmentTeam = "";
+					};
+					A0E23602FE98A24F9BFA18F9 = {
+						DevelopmentTeam = "";
+					};
+					AA9958FAFF8DD6732699E291 = {
+						DevelopmentTeam = "";
+					};
+				};
+			};
+			buildConfigurationList = E2E0E30FC63C4660C4B2DACE /* Build configuration list for PBXProject "BricksDispatch" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 72D35C09EADC7B1D30F19370;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				894620D7DDA0A7D00A22157D /* XCLocalSwiftPackageReference "BricksCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 4A2BCA4E8A5B65F04865A1DC /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA9958FAFF8DD6732699E291 /* BricksDispatch */,
+				412714C8724BC67F69649909 /* BricksDispatchWatch */,
+				A0E23602FE98A24F9BFA18F9 /* BricksDispatchWidgets */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4657C6F38A19CDE0725EF830 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8FE830CB359BCB60CA05C127 /* BricksDispatch.app in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3BDED1C5C683171FD3E4D1A3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				76EBA6B5960D1DAB76B228A4 /* BricksDispatchWidgets.swift in Sources */,
+				48A429D7AEE685C027D5E6B9 /* EarningsWidget.swift in Sources */,
+				9BC2D7BB5B240BF318F87300 /* JobLiveActivity.swift in Sources */,
+				F3048F3F96E2354076689666 /* NextJobWidget.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		49B895352A74A5699F213E0E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				54ACEA85F19A663C9BFEF31B /* App.swift in Sources */,
+				A067AEBC878BB332EEBAB852 /* JobOfferView.swift in Sources */,
+				18CBC1C5C150F7F8D4F6A2B2 /* WatchJobStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E3A88D6308AF27D9B3F96B86 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E5E3725644115A091AF73DBC /* App.swift in Sources */,
+				BF65E3AD972A43F8F5D84FC1 /* DeliveryRevealView.swift in Sources */,
+				414919BE406979CC67E19F48 /* EarningsView.swift in Sources */,
+				63CDC83D3918CD9626AF51C0 /* JobDetailView.swift in Sources */,
+				FDD22D9FA211EED49BF331AD /* JobNavigationView.swift in Sources */,
+				8590404A516DC9F059A91248 /* JobOfferCard.swift in Sources */,
+				854C58FCE5E5E014AE38D113 /* JobStore.swift in Sources */,
+				AB2257E1262A3A0ACB0FD17A /* LoginView.swift in Sources */,
+				9BF3B8AC98E7DCA44BD0D177 /* ProfileView.swift in Sources */,
+				1495D87CA78C2FAEB0691287 /* PushNotificationService.swift in Sources */,
+				B92956E430B2FA4F8B17921A /* TodayJobsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		32FD3F1561A74C702A461E43 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA9958FAFF8DD6732699E291 /* BricksDispatch */;
+			targetProxy = 806DCA4A1ADBB86BE754D324 /* PBXContainerItemProxy */;
+		};
+		969448DF5D775FDCAB04521C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A0E23602FE98A24F9BFA18F9 /* BricksDispatchWidgets */;
+			targetProxy = 66F9B72AC92160BE363383E3 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0B49F32418727C643BBA3BD3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = BricksDispatchWidgets/BricksDispatchWidgets.entitlements;
+				INFOPLIST_FILE = BricksDispatchWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.bricks.go.widgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		24359B098094F369B3ECD13F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = BricksDispatch/BricksDispatch.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = BricksDispatch/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.bricks.go;
+				SDKROOT = iphoneos;
+				SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0cXd4d3JjeHdydWFxb2pvaHBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1ODg4NDIsImV4cCI6MjA4ODE2NDg0Mn0.8t7hYHaLVDPMz9Ubx8VNxM8rPw8-Y4IXFn4HN4YhcRw";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		3324B2B815E6792AA73B36D8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = BricksDispatch/BricksDispatch.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = BricksDispatch/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.bricks.go;
+				SDKROOT = iphoneos;
+				SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0cXd4d3JjeHdydWFxb2pvaHBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1ODg4NDIsImV4cCI6MjA4ODE2NDg0Mn0.8t7hYHaLVDPMz9Ubx8VNxM8rPw8-Y4IXFn4HN4YhcRw";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		80F51B84CACE056A43574354 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = BricksDispatchWidgets/BricksDispatchWidgets.entitlements;
+				INFOPLIST_FILE = BricksDispatchWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.bricks.go.widgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		8810CD7208888CE6EA13D7D1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		8F7879F880865C6CA45F4656 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = BricksDispatchWatch/BricksDispatchWatch.entitlements;
+				INFOPLIST_FILE = BricksDispatchWatch/Info.plist;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bricks.go.watchkitapp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		BF4BD3AFB795EE265C96B0F7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		DE2C79660E1183677DCDA7F2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = BricksDispatchWatch/BricksDispatchWatch.entitlements;
+				INFOPLIST_FILE = BricksDispatchWatch/Info.plist;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bricks.go.watchkitapp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3303A22597566174524D0C49 /* Build configuration list for PBXNativeTarget "BricksDispatchWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				80F51B84CACE056A43574354 /* Debug */,
+				0B49F32418727C643BBA3BD3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		589D2DF190551E7D42A0ADAE /* Build configuration list for PBXNativeTarget "BricksDispatchWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DE2C79660E1183677DCDA7F2 /* Debug */,
+				8F7879F880865C6CA45F4656 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9A96D654187A486F18C50389 /* Build configuration list for PBXNativeTarget "BricksDispatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3324B2B815E6792AA73B36D8 /* Debug */,
+				24359B098094F369B3ECD13F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E2E0E30FC63C4660C4B2DACE /* Build configuration list for PBXProject "BricksDispatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF4BD3AFB795EE265C96B0F7 /* Debug */,
+				8810CD7208888CE6EA13D7D1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		894620D7DDA0A7D00A22157D /* XCLocalSwiftPackageReference "BricksCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = BricksCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7D67B8DE57D089E7663D6FC7 /* BricksCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BricksCore;
+		};
+		92BA0BF6B657D69CEFE6F7CC /* BricksCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BricksCore;
+		};
+		A70A37641E8D07EBF65833F9 /* BricksCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BricksCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = F49C85D1F14DDA15B90F3634 /* Project object */;
+}

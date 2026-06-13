@@ -1,9 +1,8 @@
 """
-Stripe Connect service for vendor payouts in Bricks-Dispatch.
+Stripe Connect service for vendor payouts in Bricks GO.
 
-Wraps the Booking backend's stripe_connect_service for use in the Dispatch service.
-In production, this should call the Booking backend's API directly.
-For now, we import and re-export the functions we need.
+Stripe accounts live on public.contractors (canonical vendor identity, uuid PK),
+linked to public.vendors/vendor_members via contractors.vendor_id (text FK).
 """
 
 import logging
@@ -19,32 +18,40 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str) -> str:
+async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, payout_id: str = "", contractor_id: str = "") -> str:
     """
-    Transfer funds from the brokerage to the vendor's connected Stripe account.
-    Amount should be in cents.
-    Returns the Stripe transfer ID.
+    Transfer funds to the vendor's connected Stripe account.
+    Amount must be in cents. Returns the Stripe transfer ID.
+    payout_id is used as the Stripe idempotency key — scoped per payout so a retry
+    with the same payout_id and amount is safe, but a new payout (different id) gets
+    a fresh key even for the same booking.
+    contractor_id should be the assignee's vendor_members.id (photographer-level).
+    When provided it is used to look up the Stripe account directly, avoiding the
+    multi-row ambiguity of querying by org-level vendor_id.
     """
-    # Look up vendor's Stripe account
-    response = supabase.table("vendors").select("stripe_account_id").eq("vendor_id", vendor_id).single().execute()
-    vendor = response.data
+    if contractor_id:
+        # contractor_id is vendor_members.id (photographer-level); contractors are linked via
+        # vendor_id FK — not a shared PK — so resolve the vendor_id from vendor_members first.
+        member_res = supabase.table("vendor_members").select("vendor_id").eq("id", contractor_id).maybe_single().execute()
+        member = member_res.data or {}
+        resolved_vendor_id = member.get("vendor_id") or vendor_id
+        response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", resolved_vendor_id).maybe_single().execute()
+    else:
+        response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
+    contractor = response.data
 
-    if not vendor or not vendor.get("stripe_account_id"):
-        # Fallback: try looking up by id instead of vendor_id
-        response = supabase.table("vendors").select("stripe_account_id").eq("id", vendor_id).single().execute()
-        vendor = response.data
+    if not contractor or not contractor.get("stripe_account_id"):
+        raise ValueError(f"Stripe account not found for vendor: {vendor_id} contractor: {contractor_id}")
 
-    if not vendor or not vendor.get("stripe_account_id"):
-        raise ValueError(f"Stripe account not found for vendor: {vendor_id}")
+    stripe_account_id = contractor["stripe_account_id"]
+    idempotency_key = f"payout_{payout_id}" if payout_id else f"payout_{booking_id}"
 
-    stripe_account_id = vendor["stripe_account_id"]
-
-    # Create Stripe transfer to connected account
     transfer = stripe_lib.Transfer.create(
         amount=amount,
         currency="cad",
         destination=stripe_account_id,
-        metadata={"booking_id": booking_id, "vendor_id": vendor_id},
+        metadata={"booking_id": booking_id, "payout_id": payout_id, "vendor_id": vendor_id},
+        idempotency_key=idempotency_key,
     )
 
     logger.info(f"Transfer {transfer.id} created: ${amount/100:.2f} to vendor {vendor_id} ({stripe_account_id})")
@@ -54,24 +61,24 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str) 
 async def create_connect_account_and_link(vendor_id: str, refresh_url: str, return_url: str) -> str:
     """
     Creates a Stripe Connect Express account for a vendor and generates an account link.
+    Stripe accounts are stored on contractors (canonical vendor identity).
     """
-    # Check if a Stripe account already exists
-    response = supabase.table("vendors").select("stripe_account_id").eq("vendor_id", vendor_id).single().execute()
-    vendor = response.data
+    response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
+    contractor = response.data
 
-    stripe_account_id = None
-    if vendor and vendor.get("stripe_account_id"):
-        stripe_account_id = vendor["stripe_account_id"]
-    else:
+    if not contractor:
+        raise ValueError(f"No contractor record found for vendor: {vendor_id}")
+
+    stripe_account_id = contractor.get("stripe_account_id")
+    if not stripe_account_id:
         account = stripe_lib.Account.create(
             type="express",
             country="CA",
             capabilities={"transfers": {"requested": True}},
         )
         stripe_account_id = account.id
-        supabase.table("vendors").update({"stripe_account_id": stripe_account_id}).eq("vendor_id", vendor_id).execute()
+        supabase.table("contractors").update({"stripe_account_id": stripe_account_id}).eq("id", contractor["id"]).execute()
 
-    # Generate account link for onboarding
     account_link = stripe_lib.AccountLink.create(
         account=stripe_account_id,
         refresh_url=refresh_url,

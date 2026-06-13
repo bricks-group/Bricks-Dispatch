@@ -1,7 +1,7 @@
 {
-  "name": "bricks-dispatch-functions",
+  "name": "bricks-go-functions",
   "version": "1.0.0",
-  "description": "Supabase Edge Functions for Bricks Dispatch service",
+  "description": "Supabase Edge Functions for Bricks GO service",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

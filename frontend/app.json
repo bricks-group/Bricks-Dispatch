@@ -1,24 +1,24 @@
 {
   "expo": {
     "owner": "akashorter",
-    "name": "Bricks Dispatch",
-    "slug": "bricks-dispatch",
+    "name": "Bricks GO",
+    "slug": "bricks-go",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "bricks-dispatch",
+    "scheme": "bricks-go",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.bricks.dispatch"
+      "bundleIdentifier": "com.bricks.go"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#141210"
       },
-      "package": "com.bricks.dispatch",
+      "package": "com.bricks.go",
       "edgeToEdgeEnabled": true,
       "versionCode": 4
     },

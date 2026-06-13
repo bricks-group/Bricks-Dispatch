@@ -7,7 +7,7 @@ import { actorHeaders } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://10.0.0.219:8002';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 type Profile = {
   name: string; email: string; role: string; phone: string;

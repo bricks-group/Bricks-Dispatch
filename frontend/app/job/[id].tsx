@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, Linking,
+  ActivityIndicator, Alert, Linking, Modal, TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone } from 'lucide-react-native';
+import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X } from 'lucide-react-native';
+import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8002';
+const NOSHOW_GEOFENCE_METERS = 150;
+
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 type ChecklistItem = { id: string; label: string; completed: boolean };
 type Job = {
@@ -20,7 +23,18 @@ type Job = {
   client_instructions: string | null;
   checklist: ChecklistItem[];
   vendor_payout?: number | null;
+  lat?: number | null;
+  lng?: number | null;
 };
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
 
 function fmtTime(iso: string) {
   if (!iso) return '—';
@@ -44,6 +58,7 @@ const STATUS_COLOR: Record<string, string> = {
   in_progress: TOKENS.brick,
   completed: TOKENS.ok,
   cancelled: TOKENS.bad,
+  agent_no_show: TOKENS.bad,
 };
 
 export default function JobDetailScreen() {
@@ -52,6 +67,13 @@ export default function JobDetailScreen() {
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(true);
   const [actioning, setActioning] = useState(false);
+  const [escalating, setEscalating] = useState(false);
+  const [escalationSentAt, setEscalationSentAt] = useState<number | null>(null);
+  const [escalationWaitSecs, setEscalationWaitSecs] = useState(0);
+  const [noShowVisible, setNoShowVisible] = useState(false);
+  const [noShowNotes, setNoShowNotes] = useState('');
+  const [submittingNoShow, setSubmittingNoShow] = useState(false);
+  const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -68,6 +90,29 @@ export default function JobDetailScreen() {
       }
     })();
   }, [id]);
+
+  // Update distance to job when job loads and photographer is active, to enforce geofence.
+  useEffect(() => {
+    if (!job || !['assigned', 'in_progress'].includes(job.status)) return;
+    if (job.lat == null || job.lng == null) return;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        setDistanceMeters(haversineMeters(pos.coords.latitude, pos.coords.longitude, job.lat!, job.lng!));
+      } catch {}
+    })();
+  }, [job?.id, job?.status]);
+
+  useEffect(() => {
+    if (!escalationSentAt) return;
+    const WAIT_MS = 15 * 60 * 1000;
+    const tick = () => setEscalationWaitSecs(Math.ceil(Math.max(0, WAIT_MS - (Date.now() - escalationSentAt)) / 1000));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [escalationSentAt]);
 
   const markComplete = async () => {
     if (!job) return;
@@ -106,6 +151,60 @@ export default function JobDetailScreen() {
     if (job?.agent_phone) Linking.openURL(`tel:${job.agent_phone}`);
   };
 
+  const notifyAgent = async () => {
+    if (!job || escalating) return;
+    setEscalating(true);
+    try {
+      const headers = await actorHeaders();
+      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/escalate-absent-agent`, { method: 'POST', headers });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${res.status}`); }
+      setEscalationSentAt(Date.now());
+    } catch (e: any) {
+      Alert.alert('Could not notify agent', e.message || 'Try again.');
+    } finally {
+      setEscalating(false);
+    }
+  };
+
+  const submitNoShow = async () => {
+    if (!job || submittingNoShow) return;
+    setSubmittingNoShow(true);
+    try {
+      let lat: number | undefined, lng: number | undefined;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+          lat = pos.coords.latitude; lng = pos.coords.longitude;
+        }
+      } catch {}
+
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      const body: any = {};
+      if (noShowNotes.trim()) body.notes = noShowNotes.trim();
+      if (lat !== undefined) { body.photographer_lat = lat; body.photographer_lng = lng; }
+
+      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/agent-no-show`, {
+        method: 'POST', headers, body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+
+      setNoShowVisible(false);
+      setNoShowNotes('');
+      if (data.hold_for_review) {
+        Alert.alert('Held for Review', 'Your claim has been flagged for location verification. Our team will review within 2 business days.');
+      } else {
+        Alert.alert('Recorded', 'No-show filed. A $60 trip fee will be added to your next payout.');
+        setJob(prev => prev ? { ...prev, status: 'agent_no_show' } : prev);
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Could not file claim. Try again.');
+    } finally {
+      setSubmittingNoShow(false);
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={s.safe}>
@@ -129,6 +228,20 @@ export default function JobDetailScreen() {
 
   const statusColor = STATUS_COLOR[job.status] || TOKENS.moonMute;
   const isComplete = job.status === 'completed';
+  const isActive = ['assigned', 'in_progress'].includes(job.status);
+  const canReportNoShow = isActive && (() => {
+    // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
+    // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
+    if (job.lat != null && job.lng != null && distanceMeters !== null && distanceMeters > NOSHOW_GEOFENCE_METERS) return false;
+    if (!job.scheduled_date || !job.time_window_start) return false;
+    try {
+      const time24 = (job.time_window_start || '').slice(0, 5);
+      const shootMs = new Date(`${job.scheduled_date}T${time24}:00`).getTime();
+      if (isNaN(shootMs)) return false;
+      const now = Date.now();
+      return now >= shootMs - 15 * 60 * 1000 && now <= shootMs + 90 * 60 * 1000;
+    } catch { return false; }
+  })();
 
   return (
     <SafeAreaView style={s.safe}>
@@ -200,6 +313,40 @@ export default function JobDetailScreen() {
             ))}
           </View>
         ) : null}
+
+        {canReportNoShow && (
+          <View style={s.noShowCard}>
+            <Text style={s.sectionEye}>NO-SHOW PROCEDURE</Text>
+            {!escalationSentAt ? (
+              <>
+                <Text style={s.noShowDesc}>
+                  If the agent or client is not present, notify them by SMS first. You may file a claim 15 minutes after notification.
+                </Text>
+                <TouchableOpacity style={s.notifyBtn} onPress={notifyAgent} disabled={escalating} activeOpacity={0.7}>
+                  {escalating
+                    ? <ActivityIndicator size="small" color={TOKENS.warn} />
+                    : <><BellRing size={14} color={TOKENS.warn} strokeWidth={1.5} /><Text style={s.notifyBtnText}>Notify Agent</Text></>
+                  }
+                </TouchableOpacity>
+              </>
+            ) : escalationWaitSecs > 0 ? (
+              <>
+                <Text style={s.noShowDesc}>SMS sent to agent. File your claim in:</Text>
+                <Text style={s.countdown}>
+                  {String(Math.floor(escalationWaitSecs / 60)).padStart(2, '0')}:{String(escalationWaitSecs % 60).padStart(2, '0')}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={s.noShowDesc}>Wait complete. You may now file a no-show claim.</Text>
+                <TouchableOpacity style={s.reportBtn} onPress={() => setNoShowVisible(true)} activeOpacity={0.7}>
+                  <AlertTriangle size={14} color={TOKENS.bad} strokeWidth={1.5} />
+                  <Text style={s.reportBtnText}>Report No-Show</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
       </ScrollView>
 
       <View style={s.footer}>
@@ -226,6 +373,45 @@ export default function JobDetailScreen() {
           </TouchableOpacity>
         ) : null}
       </View>
+
+      <Modal visible={noShowVisible} animationType="slide" transparent>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <View style={s.modalOverlay}>
+            <View style={s.modalSheet}>
+              <View style={s.modalHeader}>
+                <Text style={s.sectionEye}>REPORT NO-SHOW</Text>
+                <TouchableOpacity onPress={() => { setNoShowVisible(false); setNoShowNotes(''); }}>
+                  <X size={18} color={TOKENS.moonMute} strokeWidth={1.5} />
+                </TouchableOpacity>
+              </View>
+              <Text style={s.noShowDesc}>
+                GPS location will be recorded. A $60 trip fee will be added to your next payout cycle.
+              </Text>
+              <TextInput
+                style={s.notesInput}
+                placeholder="Optional: describe what happened..."
+                placeholderTextColor={TOKENS.moonFaint}
+                multiline
+                numberOfLines={4}
+                value={noShowNotes}
+                onChangeText={setNoShowNotes}
+                maxLength={500}
+              />
+              <TouchableOpacity
+                style={[s.submitBtn, submittingNoShow && { opacity: 0.5 }]}
+                onPress={submitNoShow}
+                disabled={submittingNoShow}
+                activeOpacity={0.8}
+              >
+                {submittingNoShow
+                  ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                  : <Text style={s.submitBtnText}>Confirm No-Show</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -319,4 +505,54 @@ const s = StyleSheet.create({
     backgroundColor: TOKENS.brick, justifyContent: 'center', alignItems: 'center',
   },
   primaryBtnText: { fontSize: 15, color: TOKENS.moon, fontWeight: '600' as const },
+  noshowBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, height: 48, borderRadius: TOKENS.radius,
+    borderWidth: 1, borderColor: TOKENS.bad + '66',
+    backgroundColor: TOKENS.bad + '11',
+  },
+  noshowBtnText: { fontSize: 14, color: TOKENS.bad, fontWeight: '500' as const },
+
+  noShowCard: {
+    backgroundColor: TOKENS.nightSoft, borderRadius: TOKENS.radius,
+    borderWidth: 1, borderColor: TOKENS.nightHairS,
+    padding: 16, marginBottom: 8,
+  },
+  noShowDesc: { fontSize: 13, color: TOKENS.moonSoft, lineHeight: 20, marginBottom: 14 },
+  notifyBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1, borderColor: TOKENS.warn + '66',
+    backgroundColor: TOKENS.warn + '11', borderRadius: TOKENS.radius,
+    paddingVertical: 11, paddingHorizontal: 14,
+  },
+  notifyBtnText: { fontSize: 14, color: TOKENS.warn, fontWeight: '500' as const },
+  countdown: {
+    fontFamily: TYPOGRAPHY.mono, fontSize: 28, color: TOKENS.moon,
+    letterSpacing: 2, textAlign: 'center' as const, marginBottom: 4,
+  },
+  reportBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1, borderColor: TOKENS.bad + '66',
+    backgroundColor: TOKENS.bad + '11', borderRadius: TOKENS.radius,
+    paddingVertical: 11, paddingHorizontal: 14,
+  },
+  reportBtnText: { fontSize: 14, color: TOKENS.bad, fontWeight: '500' as const },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  modalSheet: {
+    backgroundColor: TOKENS.nightSoft, borderTopLeftRadius: 12, borderTopRightRadius: 12,
+    padding: 24, paddingBottom: 40,
+    borderTopWidth: 1, borderColor: TOKENS.nightHairS,
+  },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  notesInput: {
+    borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: TOKENS.radius,
+    backgroundColor: TOKENS.night, color: TOKENS.moon,
+    padding: 12, fontSize: 14, lineHeight: 22,
+    minHeight: 100, textAlignVertical: 'top' as const, marginBottom: 16,
+  },
+  submitBtn: {
+    height: 48, borderRadius: TOKENS.radius, backgroundColor: TOKENS.bad,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  submitBtnText: { fontSize: 15, color: TOKENS.moon, fontWeight: '600' as const },
 });

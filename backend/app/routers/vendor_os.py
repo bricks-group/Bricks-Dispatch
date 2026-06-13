@@ -1,13 +1,18 @@
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import httpx
 import os
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel
 
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
+from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.auth import get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.database import get_db
 from ..services.webhooks import send_dispatch_status_update_webhook
@@ -25,8 +30,22 @@ from ..shared.schemas import (
     VendorSettingsUpdate,
 )
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/vendor-os", tags=["vendor-os"])
+
+# Module-level set keeps strong references to background tasks so the GC
+# cannot collect them before they complete (asyncio only weakly refs tasks).
+_background_tasks: set = set()
+
+_TORONTO_TZ = ZoneInfo("America/Toronto")
+
+
+
+class AgentNoShowReport(BaseModel):
+    notes: Optional[str] = None
+    photographer_lat: Optional[float] = None
+    photographer_lng: Optional[float] = None
 
 
 @router.get("/overview")
@@ -58,9 +77,9 @@ async def get_vendor_os_overview(
         if week_start <= scheduled <= week_end:
             assigned_week += 1
             scheduled_this_week += 1
-            if job.get("status") == "completed":
+            if job.get("status") in ("completed", "delivered"):
                 completed_week += 1
-        if scheduled >= today and job.get("status") != "completed":
+        if scheduled >= today and job.get("status") not in ("completed", "delivered"):
             upcoming.append(job)
     return {
         "jobs_assigned_today": assigned_today,
@@ -88,8 +107,6 @@ async def get_vendor_team(
     if status:
         query = query.eq("status", status)
     if search:
-        # Supabase doesn't have a direct OR for multiple columns with regex as easily as MongoDB in one line, 
-        # but we can use `.or_` with filters.
         query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%,role.ilike.%{search}%")
     
     page, page_size, skip = normalize_pagination(page, page_size)
@@ -98,8 +115,7 @@ async def get_vendor_team(
     total = res.count or 0
     
     for member in members:
-        # Get assigned jobs count
-        res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member["id"]).neq("status", "completed").execute()
+        res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member["id"]).in_("status", ["pending_assignment", "assigned", "in_progress", "processing"]).execute()
         member["assigned_jobs"] = res_count.count or 0
         
     return paginated_response(members, total, page, page_size)
@@ -221,7 +237,7 @@ async def create_job(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     from ..shared.auth import resolve_actor_id
-    internal_keys = os.environ.get("INTERNAL_API_KEYS", "br-ef7ddf0e84582e6746668881873f61cc,bk-5274a1f72baf20a0699c405").split(",")
+    internal_keys = [k.strip() for k in (os.environ.get("INTERNAL_API_KEYS") or "").split(",") if k.strip()]
     if x_internal_api_key and x_internal_api_key in internal_keys:
         actor_id = "booking_system"
     else:
@@ -266,7 +282,7 @@ async def create_job(
 @router.put("/jobs/{job_id}/assign")
 async def assign_job_to_member(
     job_id: str,
-    payload: JobAssignmentUpdate, JobStatusUpdate,
+    payload: JobAssignmentUpdate,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
@@ -293,8 +309,20 @@ async def assign_job_to_member(
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if payload.member_id == "auto" else "manual"})
     res_final = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
 
-    # POST callback to Booking backend when job is assigned
-    booking_callback_url = os.environ.get("BOOKING_CALLBACK_URL", "http://10.0.0.219:8001")
+    # Send booking confirmed email for manual assignments only.
+    # Auto-assign path calls notify_booking_confirmed inside assign_vendor_for_job already;
+    # duplicating it here would fire a second email. Skip entirely if auto-assign returned None.
+    if payload.member_id != "auto" and new_assignee_id:
+        try:
+            from ..services.client_comms import notify_booking_confirmed
+            await notify_booking_confirmed(job_id)
+        except Exception as _e:
+            logger.error(f"Booking confirmed notification failed for job {job_id}: {_e}")
+
+    booking_callback_url = os.environ.get("BOOKING_CALLBACK_URL")
+    if not booking_callback_url:
+        logger.warning("BOOKING_CALLBACK_URL not set — skipping assignment callback")
+        return res_final.data
     callback_payload = {
         "booking_id": res_final.data.get("booking_id"),
         "job_id": job_id,
@@ -309,7 +337,7 @@ async def assign_job_to_member(
                 headers={"Content-Type": "application/json"},
             )
     except Exception:
-        pass  # Callback is fire-and-forget, don't block the response
+        pass
 
     return res_final.data
 
@@ -383,20 +411,17 @@ async def get_vendor_performance(
             continue
         if week_start <= scheduled <= week_end:
             week_jobs.append(job)
-            if job.get("status") == "completed":
+            if job.get("status") in ("completed", "delivered"):
                 completed.append(job)
-    on_time = 0
-    for job in completed:
-        try:
-            deadline = datetime.strptime(f"{job.get('scheduled_date')} {job.get('time_window_end', '23:59')}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
-            updated_at = datetime.fromisoformat(job.get("updated_at"))
-            if updated_at <= deadline:
-                on_time += 1
-        except Exception:
-            continue
+    # Use the authoritative on_time_rate from vendor_members — updated by update_vendor_job_status
+    # at the moment a job is marked `completed` (when updated_at is the actual completion time).
+    # Recomputing from job.updated_at here is inaccurate for delivered jobs where updated_at
+    # reflects delivery time (hours later), not completion time.
+    res_member = await (await get_db()).table("vendor_members").select("on_time_rate").eq("id", actor_id).maybe_single().execute()
+    on_time_rate_pct = round(((res_member.data or {}).get("on_time_rate") or 0) * 100, 1)
     return {
         "completion_rate": round((len(completed) / len(week_jobs) * 100), 1) if week_jobs else 0.0,
-        "on_time_rate": round((on_time / len(completed) * 100), 1) if completed else 0.0,
+        "on_time_rate": on_time_rate_pct,
         "job_volume_week": len(week_jobs),
     }
 
@@ -457,12 +482,21 @@ async def get_vendor_os_earnings(
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     week_end = week_start + timedelta(days=7)
 
-    res_members = await (await get_db()).table("vendor_members").select("id, commission_rate").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
-    member_rate_map = {m["id"]: m.get("commission_rate", 0.62) for m in res_members.data}
+    from ..services.payout_service import TIER_PERCENTAGES, DEFAULT_TIER_PERCENTAGE
+    res_members = await (await get_db()).table("vendor_members").select("id, tier").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
+    member_rate_map = {m["id"]: TIER_PERCENTAGES.get(m.get("tier"), DEFAULT_TIER_PERCENTAGE) for m in res_members.data}
     member_ids = list(member_rate_map.keys()) or ["__none__"]
 
     res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).order("scheduled_date", desc=True).limit(50).execute()
     jobs = res_jobs.data
+
+    job_ids = [j["id"] for j in jobs if j.get("id")]
+    payout_status_map: dict[str, str] = {}
+    if job_ids:
+        res_payouts = await (await get_db()).table("payouts").select("job_id, status").in_("job_id", job_ids).execute()
+        for p in (res_payouts.data or []):
+            if p.get("job_id"):
+                payout_status_map[p["job_id"]] = p.get("status", "pending")
 
     week_total = 0
     paid_total = 0
@@ -471,8 +505,8 @@ async def get_vendor_os_earnings(
 
     for j in jobs:
         raw_price = j.get("package_price") or 0
-        rate = member_rate_map.get(j.get("assignee_id", ""), 0.62)
-        payout = round(raw_price * rate)
+        rate = member_rate_map.get(j.get("assignee_id", ""), DEFAULT_TIER_PERCENTAGE)
+        payout = round(raw_price * rate, 2)  # CAD dollars for display
         sched = j.get("scheduled_date", "")
         is_this_week = False
         try:
@@ -481,7 +515,8 @@ async def get_vendor_os_earnings(
         except Exception:
             pass
 
-        is_paid = j.get("status") == "completed"
+        actual_payout_status = payout_status_map.get(j.get("id", ""), "pending")
+        is_paid = actual_payout_status == "paid"
         if is_this_week:
             week_total += payout
             if is_paid:
@@ -496,16 +531,37 @@ async def get_vendor_os_earnings(
                 "scheduled_date": sched,
                 "status": j.get("status", "assigned"),
                 "payout_amount": payout,
-                "payout_status": "paid" if is_paid else "pending",
+                "payout_status": actual_payout_status,
             })
 
+    member_id = actor_member.get("id")
+    pending_trip_fees = []
+    pending_trip_fees_total = 0.0
+    if member_id:
+        res_fees = await (await get_db()).table("agent_noshow_trip_fees").select(
+            "id, amount_cents, job_id, created_at, status"
+        ).eq("member_id", member_id).in_("status", ["pending", "pending_review"]).execute()
+        for fee in (res_fees.data or []):
+            amount_cad = (fee.get("amount_cents") or 0) / 100
+            pending_trip_fees.append({
+                "id": fee["id"],
+                "job_id": fee.get("job_id"),
+                "amount_cad": amount_cad,
+                "status": fee.get("status"),
+                "created_at": fee.get("created_at"),
+            })
+            if fee.get("status") in ("pending", "pending_review"):
+                pending_trip_fees_total += amount_cad
+
     return {
-        "week_total": week_total,
+        "week_total": week_total + pending_trip_fees_total,
         "paid_amount": paid_total,
-        "pending_amount": pending_total,
+        "pending_amount": pending_total + pending_trip_fees_total,
         "payout_day": week_end.strftime("%A"),
         "week_job_count": sum(1 for j in jobs if j.get("scheduled_date", "") >= week_start.date().isoformat()),
         "recent_jobs": recent,
+        "pending_trip_fees": pending_trip_fees,
+        "pending_trip_fees_total": pending_trip_fees_total,
     }
 
 
@@ -534,6 +590,7 @@ async def get_audit_events(
     
     return paginated_response(items, total, page, page_size)
 
+
 @router.put("/jobs/{job_id}/status")
 async def update_vendor_job_status(
     job_id: str,
@@ -555,9 +612,114 @@ async def update_vendor_job_status(
     new_status = payload.status
     booking_id = job.get("booking_id")
     
+    _IMMUTABLE_STATUSES = {"cancelled", "delivered", "agent_no_show", "dispatch_failed", "qc_failed"}
+    if old_status in _IMMUTABLE_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Job is in terminal state '{old_status}' — status cannot be changed")
+
+    # Only these statuses may be set by a vendor via this endpoint.
+    # "delivered" is set exclusively by the post-production pipeline
+    # (_finalize_job_if_complete) which also handles payout and delivery notification.
+    _VENDOR_SETTABLE_STATUSES = {"in_progress", "completed", "declined"}
+    if new_status not in _VENDOR_SETTABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Status '{new_status}' cannot be set via this endpoint — it is managed by the system",
+        )
+
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
-    
+
+    # When vendor marks completed, start post-production only when uploads are
+    # either not expected (deliverables_count=0) or already fully received.
+    # For jobs with a count, uploads.py fires post-production when the count is
+    # reached — this path is a safe fallback due to the atomic gate in process_job_assets.
+    if new_status == "completed" and old_status != "completed":
+        _deliverables = job.get("deliverables_count") or 0
+        _uploaded = job.get("uploaded_count") or 0
+        if _deliverables == 0 or _uploaded >= _deliverables:
+            try:
+                from ..services.post_production import process_job_assets
+                _t = asyncio.create_task(process_job_assets(job_id))
+                _background_tasks.add(_t)
+                _t.add_done_callback(_background_tasks.discard)
+            except Exception as e:
+                logger.error(f"Post-production trigger failed for job {job_id}: {e}")
+
+    if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
+        try:
+            assignee_id = job.get("assignee_id")
+            if assignee_id and assignee_id != "default_user":
+                # Rolling 30-day decline rate (per IC agreement §40% threshold).
+                # Denominator = ALL jobs offered to this vendor in the last 30 days,
+                # regardless of current status (includes in-progress, assigned, completed).
+                # Using only terminal states in the denominator overstates the rate —
+                # a single decline would show 100% when active jobs are excluded.
+                # Filter by created_at (when the offer was made), not updated_at.
+                _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+                res_recent = await db.table("jobs").select("id, status").eq(
+                    "assignee_id", assignee_id
+                ).gte("created_at", _thirty_days_ago).execute()
+                recent_jobs = res_recent.data or []
+                recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
+                total_recent = len(recent_jobs)
+                new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
+                await db.table("vendor_members").update({
+                    "decline_rate": new_rate,
+                    "updated_at": now,
+                }).eq("id", assignee_id).execute()
+        except Exception as e:
+            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+
+    if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
+        try:
+            assignee_id = job.get("assignee_id")
+            if assignee_id and assignee_id != "default_user":
+                time_end = job.get("time_window_end", "")
+                sched_date = job.get("scheduled_date", "")
+                res_m = await db.table("vendor_members").select(
+                    "total_assignments, on_time_rate"
+                ).eq("id", assignee_id).maybe_single().execute()
+                if res_m.data:
+                    prev_total = res_m.data.get("total_assignments") or 0
+                    prev_rate = res_m.data.get("on_time_rate") or 1.0
+                    new_total = prev_total + 1
+                    update_fields: dict = {"total_assignments": new_total, "updated_at": now}
+                    if sched_date and time_end:
+                        # Only update on_time_rate when schedule data exists; updating with
+                        # was_on_time=False when data is missing would unfairly penalise the vendor.
+                        deadline = datetime.strptime(
+                            f"{sched_date} {time_end}", "%Y-%m-%d %H:%M"
+                        ).replace(tzinfo=_TORONTO_TZ)
+                        # Use vendor-submitted completed_at if provided and not in the future.
+                        # Vendors submit from their device when the shoot ends — using
+                        # API call time unfairly penalises late status submissions.
+                        _reported_at = None
+                        if payload.completed_at:
+                            try:
+                                _reported_at = datetime.fromisoformat(
+                                    payload.completed_at.replace("Z", "+00:00")
+                                )
+                            except ValueError:
+                                pass
+                        _completion_time = min(
+                            _reported_at if _reported_at else datetime.now(timezone.utc),
+                            datetime.now(timezone.utc),
+                        )
+                        was_on_time = _completion_time <= deadline
+                        prev_on_time = round(prev_rate * prev_total)
+                        new_on_time = prev_on_time + (1 if was_on_time else 0)
+                        update_fields["on_time_rate"] = round(new_on_time / new_total, 4)
+                    await db.table("vendor_members").update(update_fields).eq("id", assignee_id).execute()
+        except Exception as e:
+            logger.error(f"on_time_rate update failed for job {job_id}: {e}")
+
+    if new_status == "in_progress" and old_status != "in_progress":
+        try:
+            from ..services.client_comms import notify_photographer_en_route
+            await notify_photographer_en_route(job_id)
+        except Exception as e:
+            logger.error(f"En-route notification failed for job {job_id}: {e}")
+
     if booking_id:
         await send_dispatch_status_update_webhook(
             booking_id=booking_id,
@@ -567,5 +729,627 @@ async def update_vendor_job_status(
             actor_id=actor_id,
             actor_type="vendor_member"
         )
-    
+
     return {"status": "updated", "job_id": job_id, "new_status": new_status}
+
+
+# ---------------------------------------------------------------------------
+# watchOS quick-action endpoint
+# ---------------------------------------------------------------------------
+
+class WatchActionRequest(BaseModel):
+    action: str  # "accept" | "decline" | "on_way" | "arrived"
+
+
+_WATCH_ACTION_STATUS_MAP = {
+    "accept":  "assigned",
+    "decline": "declined",
+    "on_way":  "in_progress",
+    "arrived": "in_progress",
+}
+
+
+@router.post("/jobs/{job_id}/watch-action")
+async def watch_job_action(
+    job_id: str,
+    body: WatchActionRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Called by the watchOS app to accept, decline, mark on-way, or mark arrived."""
+    if body.action not in _WATCH_ACTION_STATUS_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown action '{body.action}'")
+
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    db = await get_db()
+    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not res_job.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = res_job.data
+    assignee_id = job.get("assignee_id")
+    if assignee_id != actor_id:
+        raise HTTPException(status_code=403, detail="You are not the assigned photographer for this job")
+
+    old_status = job.get("status")
+    _IMMUTABLE = {"cancelled", "delivered", "agent_no_show", "dispatch_failed", "qc_failed"}
+    if old_status in _IMMUTABLE:
+        raise HTTPException(status_code=409, detail=f"Job is in terminal state '{old_status}'")
+
+    new_status = _WATCH_ACTION_STATUS_MAP[body.action]
+    if new_status == old_status:
+        return {"status": "no_change", "job_id": job_id, "current_status": old_status}
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
+
+    if new_status == "in_progress" and old_status != "in_progress":
+        try:
+            from ..services.client_comms import notify_photographer_en_route
+            await notify_photographer_en_route(job_id)
+        except Exception as e:
+            logger.error(f"En-route notification failed for job {job_id}: {e}")
+
+    if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
+        try:
+            _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            res_recent = await db.table("jobs").select("id, status").eq("assignee_id", actor_id).gte("created_at", _thirty_days_ago).execute()
+            recent_jobs = res_recent.data or []
+            recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
+            total_recent = len(recent_jobs)
+            new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
+            await db.table("vendor_members").update({"decline_rate": new_rate, "updated_at": now}).eq("id", actor_id).execute()
+        except Exception as e:
+            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+
+    booking_id = job.get("booking_id")
+    if booking_id:
+        await send_dispatch_status_update_webhook(
+            booking_id=booking_id,
+            job_id=job_id,
+            new_status=new_status,
+            previous_status=old_status,
+            actor_id=actor_id,
+            actor_type="vendor_member",
+        )
+
+    return {"status": "updated", "job_id": job_id, "action": body.action, "new_status": new_status}
+
+
+# ---------------------------------------------------------------------------
+# No-show policy (Snappr model)
+# ---------------------------------------------------------------------------
+AGENT_NOSHOW_TRIP_FEE_CENTS = 6000   # $60 CAD
+_NOSHOW_WINDOW_BEFORE_MIN = 15
+_NOSHOW_WINDOW_AFTER_MIN = 90
+_NOSHOW_RATE_LIMIT_DAYS = 30
+_NOSHOW_RATE_LIMIT_THRESHOLD = 1
+_NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 3
+_GPS_MAX_DISTANCE_KM = 0.5            # 500m — flag if photographer is further away
+_ESCALATION_MIN_WAIT_MIN = 15         # must wait 15 min after first SMS before filing
+
+
+async def _validate_noshow_claim(
+    db,
+    job: dict,
+    reporter_id: str,
+    photographer_lat: Optional[float] = None,
+    photographer_lng: Optional[float] = None,
+) -> dict:
+    """
+    Run all anti-abuse checks. Returns:
+      {"ok": True, "hold_for_review": False}                  → record claim, paid on next payout
+      {"ok": True, "hold_for_review": True, "reason": "..."}  → hold for admin review before payout
+      {"ok": False, "reason": "..."}                          → reject outright (HTTP 422)
+    """
+    assignee_id = job.get("assignee_id")
+    job_id = job.get("id")
+    booking_id = job.get("booking_id")
+
+    # Gate 1: must be the assigned photographer
+    if assignee_id != reporter_id:
+        return {"ok": False, "reason": "Only the assigned photographer can report a no-show"}
+
+    # Gate 2: job must be in an active state — completed/delivered/processing mean the
+    # shoot happened or media is in-flight; no-show claims are invalid in those states.
+    current_status = job.get("status", "")
+    if current_status in ("completed", "delivered", "processing", "qc_failed", "agent_no_show", "cancelled"):
+        return {"ok": False, "reason": f"Cannot report no-show on a job with status '{current_status}'"}
+
+    # Gate 3: idempotency
+    existing = await db.table("agent_noshow_trip_fees").select("id, status").eq(
+        "job_id", job_id
+    ).maybe_single().execute()
+    if existing.data:
+        return {"ok": False, "reason": "A no-show claim already exists for this job"}
+
+    # Gate 4: time window — claim must be filed within T-15 to T+90 of shoot start.
+    # time_window_start is stored as "HH:MM" so we combine it with scheduled_date to
+    # build a full datetime. Fail-closed: if we cannot determine the window, reject.
+    scheduled_date_str = job.get("scheduled_date", "")
+    time_window_str = job.get("time_window_start") or ""
+    if time_window_str and not scheduled_date_str:
+        # Legacy: scheduled_at may be a full ISO datetime
+        scheduled_at_str = job.get("scheduled_at", "")
+        try:
+            shoot_start = datetime.fromisoformat(scheduled_at_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
+    elif scheduled_date_str and time_window_str:
+        try:
+            # time_window_start is "HH:MM" in Ontario local time — localize before UTC math
+            shoot_start = datetime.fromisoformat(
+                f"{scheduled_date_str}T{time_window_str[:5]}:00"
+            ).replace(tzinfo=_TORONTO_TZ)
+        except (ValueError, TypeError):
+            return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
+    else:
+        return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
+
+    now_utc = datetime.now(timezone.utc)
+    earliest = shoot_start - timedelta(minutes=_NOSHOW_WINDOW_BEFORE_MIN)
+    latest = shoot_start + timedelta(minutes=_NOSHOW_WINDOW_AFTER_MIN)
+    if now_utc < earliest:
+        return {
+            "ok": False,
+            "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M ET')}"
+        }
+    if now_utc > latest:
+        return {
+            "ok": False,
+            "reason": (
+                f"Claim window expired — must be filed within "
+                f"{_NOSHOW_WINDOW_AFTER_MIN} minutes of scheduled shoot time"
+            )
+        }
+
+    # Gate 4.5: GPS proximity — soft hold if photographer is far from property.
+    # Also hold when the job has known coordinates but the photographer omits their GPS:
+    # omitting coordinates would otherwise bypass proximity enforcement via direct API calls.
+    # Do NOT return early here — subsequent hard-reject gates (4.6, 5, 6, 7) must still run.
+    gps_hold = False
+    gps_hold_reason = ""
+    job_lat = job.get("lat")
+    job_lng = job.get("lng")
+    if photographer_lat is not None and photographer_lng is not None:
+        if job_lat is not None and job_lng is not None:
+            try:
+                dist_km = _haversine_km(
+                    photographer_lat, photographer_lng,
+                    float(job_lat), float(job_lng),
+                )
+                if dist_km > _GPS_MAX_DISTANCE_KM:
+                    gps_hold = True
+                    gps_hold_reason = (
+                        f"Photographer GPS is {dist_km:.1f} km from property — "
+                        f"held for location verification (threshold {_GPS_MAX_DISTANCE_KM * 1000:.0f} m)"
+                    )
+            except (TypeError, ValueError):
+                pass
+    elif job_lat is not None and job_lng is not None:
+        # Job has a known location but photographer omitted coordinates — hold for review
+        # so proximity cannot be bypassed by calling the API directly without GPS.
+        gps_hold = True
+        gps_hold_reason = "GPS coordinates required for property-located jobs — held for location verification"
+
+    # Gate 4.6: escalation required — photographer must have attempted to notify agent via SMS
+    # (only enforced when Twilio is configured; gracefully degrades otherwise)
+    if os.environ.get("TWILIO_ACCOUNT_SID"):
+        try:
+            res_esc = await db.table("agent_noshow_escalations").select(
+                "id, sent_at"
+            ).eq("job_id", job_id).execute()
+            escalations = res_esc.data or []
+            if not escalations:
+                return {
+                    "ok": False,
+                    "reason": (
+                        "Tap \"Notify Agent\" first — an SMS alert will be sent to the agent. "
+                        "You may file a no-show claim 15 minutes after notification."
+                    ),
+                }
+            first_sent = min(
+                datetime.fromisoformat(e["sent_at"].replace("Z", "+00:00"))
+                for e in escalations
+            )
+            elapsed_min = (datetime.now(timezone.utc) - first_sent).total_seconds() / 60
+            if elapsed_min < _ESCALATION_MIN_WAIT_MIN:
+                wait = int(_ESCALATION_MIN_WAIT_MIN - elapsed_min) + 1
+                return {
+                    "ok": False,
+                    "reason": (
+                        f"Agent was notified — please wait {wait} more minute(s) "
+                        f"before filing a no-show claim."
+                    ),
+                }
+        except Exception as e:
+            # Twilio is configured — fail closed so the gate isn't bypassed by a transient error.
+            logger.error(f"Escalation gate check failed for job {job_id}: {e}")
+            return {"ok": False, "reason": "Escalation check unavailable — please retry in a moment"}
+
+    # Gate 5: booking must not have been cancelled before shoot start
+    if booking_id:
+        try:
+            res_b = await db.table("bookings").select("status, cancelled_at").eq(
+                "id", booking_id
+            ).maybe_single().execute()
+            if res_b.data:
+                bk_status = res_b.data.get("status", "")
+                cancelled_at = res_b.data.get("cancelled_at")
+                if bk_status == "cancelled" and cancelled_at:
+                    try:
+                        cancel_dt = datetime.fromisoformat(cancelled_at.replace("Z", "+00:00"))
+                        if cancel_dt < shoot_start:
+                            return {
+                                "ok": False,
+                                "reason": "Booking was cancelled before the shoot — no trip fee applies"
+                            }
+                    except (ValueError, TypeError):
+                        pass
+        except Exception:
+            pass
+
+    # Gate 6: photographer rate limit — accumulate flag, do NOT early-return so Gate 7 (collusion) always runs.
+    rate_hold = False
+    rate_hold_reason = ""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
+        res_recent = await db.table("agent_noshow_trip_fees").select("id").eq(
+            "member_id", assignee_id
+        ).in_("status", ["pending", "paid_out", "pending_review"]).gte(
+            "created_at", cutoff
+        ).execute()
+        recent_count = len(res_recent.data or [])
+        if recent_count >= _NOSHOW_RATE_LIMIT_THRESHOLD:
+            rate_hold = True
+            rate_hold_reason = (
+                f"Rate limit: {recent_count} claims in the last {_NOSHOW_RATE_LIMIT_DAYS} days "
+                f"— held for admin review before payout"
+            )
+    except Exception:
+        # Query failed — fail closed so the claim is held for review rather than auto-approved
+        rate_hold = True
+        rate_hold_reason = "Rate-limit check unavailable — held for admin review"
+
+    # Gate 7: per-agent rate limit (collusion detection) — always runs regardless of Gate 6.
+    collusion_hold = False
+    collusion_hold_reason = ""
+    if booking_id:
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
+            # Find bookings by this agent that had no-show trip fees in the window
+            res_this_bk = await db.table("bookings").select("user_id").eq(
+                "id", booking_id
+            ).maybe_single().execute()
+            agent_user_id = (res_this_bk.data or {}).get("user_id") if res_this_bk.data else None
+            if agent_user_id:
+                res_agent_bks = await db.table("bookings").select("id").eq(
+                    "user_id", agent_user_id
+                ).execute()
+                agent_booking_ids = [r["id"] for r in (res_agent_bks.data or []) if r.get("id")]
+                if agent_booking_ids:
+                    # Count DISTINCT photographers who filed claims against this agent —
+                    # collusion requires multiple photographers, not just multiple claims from one.
+                    res_against = await db.table("agent_noshow_trip_fees").select(
+                        "member_id"
+                    ).in_("booking_id", agent_booking_ids).gte("created_at", cutoff).in_(
+                        "status", ["pending", "paid_out", "pending_review"]
+                    ).execute()
+                    distinct_photographers = len({
+                        r["member_id"] for r in (res_against.data or [])
+                        if r.get("member_id") and r["member_id"] != reporter_id
+                    })
+                    if distinct_photographers >= _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD - 1:
+                        collusion_hold = True
+                        collusion_hold_reason = (
+                            f"Agent-level flag: {distinct_photographers} distinct photographers filed "
+                            f"no-show claims against this agent in {_NOSHOW_RATE_LIMIT_DAYS} days "
+                            f"— held for admin review"
+                        )
+        except Exception as e:
+            # Query failed — fail closed so the claim is held rather than auto-approved
+            collusion_hold = True
+            collusion_hold_reason = "Collusion check unavailable — held for admin review"
+            logger.error(f"Agent rate limit check failed for job {job_id}: {e}")
+
+    # Combine all soft-hold flags — include all reasons in the review note.
+    hold_reasons = [r for r in [rate_hold_reason, collusion_hold_reason, gps_hold_reason] if r]
+    if rate_hold or collusion_hold or gps_hold:
+        return {"ok": True, "hold_for_review": True, "reason": "; ".join(hold_reasons)}
+    return {"ok": True, "hold_for_review": False}
+
+
+@router.post("/jobs/{job_id}/escalate-absent-agent")
+async def escalate_absent_agent(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Photographer reports that the agent is not yet present — sends SMS alert.
+
+    Must be called before report_agent_no_show when Twilio is configured.
+    Two SMS attempts allowed per job (attempt 1 at arrival, attempt 2 if still absent).
+    After first SMS, photographer must wait 15 minutes before filing the no-show claim.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    db = await get_db()
+
+    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    if not res_job.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = res_job.data
+
+    if job.get("assignee_id") != actor_id:
+        raise HTTPException(status_code=403, detail="Not assigned to this job")
+
+    booking_id = job.get("booking_id")
+
+    res_esc = await db.table("agent_noshow_escalations").select(
+        "id, attempt_number, sent_at"
+    ).eq("job_id", job_id).execute()
+    existing = res_esc.data or []
+
+    if len(existing) >= 2:
+        first_sent = min(
+            datetime.fromisoformat(e["sent_at"].replace("Z", "+00:00")) for e in existing
+        )
+        elapsed_min = (datetime.now(timezone.utc) - first_sent).total_seconds() / 60
+        can_file_now = elapsed_min >= _ESCALATION_MIN_WAIT_MIN
+        wait = max(int(_ESCALATION_MIN_WAIT_MIN - elapsed_min) + 1, 0)
+        return {
+            "message": "Maximum escalation attempts sent.",
+            "can_file_now": can_file_now,
+            "wait_minutes": 0 if can_file_now else wait,
+            "attempts": len(existing),
+        }
+
+    attempt_number = len(existing) + 1
+
+    # Fetch agent phone from booking → users table
+    agent_phone = None
+    if booking_id:
+        try:
+            res_bk = await db.table("bookings").select("user_id").eq(
+                "id", booking_id
+            ).maybe_single().execute()
+            if res_bk.data:
+                user_id = res_bk.data.get("user_id")
+                if user_id:
+                    res_user = await db.table("users").select("phone").eq(
+                        "id", user_id
+                    ).maybe_single().execute()
+                    if res_user.data:
+                        agent_phone = res_user.data.get("phone")
+        except Exception as e:
+            logger.warning(f"Could not fetch agent phone for escalation (job {job_id}): {e}")
+
+    sms_sid = None
+    sms_sent = False
+    if agent_phone:
+        from ..services.sms_escalation import send_agent_noshow_sms
+        sms_sid, sms_sent = await send_agent_noshow_sms(
+            to_phone=agent_phone,
+            job_id=job_id,
+            address=job.get("address", "the property"),
+            attempt_number=attempt_number,
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.table("agent_noshow_escalations").insert({
+        "job_id": job_id,
+        "booking_id": booking_id,
+        "agent_phone": agent_phone,
+        "attempt_number": attempt_number,
+        "sms_sid": sms_sid,
+        "sent_at": now,
+        "delivery_status": "sent" if sms_sent else ("no_phone" if not agent_phone else "failed"),
+    }).execute()
+
+    can_file_after = (datetime.now(timezone.utc) + timedelta(minutes=_ESCALATION_MIN_WAIT_MIN)).isoformat()
+
+    return {
+        "attempt_number": attempt_number,
+        "sms_sent": sms_sent,
+        "agent_notified": bool(agent_phone),
+        "can_file_now": False,
+        "wait_minutes": _ESCALATION_MIN_WAIT_MIN,
+        "can_file_noshow_after": can_file_after,
+        "note": (
+            f"Agent notified by SMS. You may file a no-show claim after {_ESCALATION_MIN_WAIT_MIN} minutes."
+            if sms_sent else
+            f"Escalation recorded (no phone on file). You may file a no-show claim after {_ESCALATION_MIN_WAIT_MIN} minutes."
+        ),
+    }
+
+
+@router.post("/jobs/{job_id}/agent-no-show")
+async def report_agent_no_show(
+    job_id: str,
+    payload: AgentNoShowReport,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Photographer reports that the agent/client was not home.
+
+    Trip fee ($60) paid to the photographer from Bricks margin.
+
+    Validation gates:
+    - Assigned photographer only
+    - Active job state
+    - No duplicate claim
+    - T-15min → T+90min window
+    - GPS proximity check: if coordinates supplied and >500m, holds for review
+    - Escalation check: if Twilio configured, must have notified agent + waited 15 min
+    - Booking not pre-cancelled
+    - Rate limit (photographer): 2nd+ claim in 30 days → held for review
+    - Rate limit (agent): 3+ claims against same agent in 30 days → held for review
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    db = await get_db()
+
+    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    if not res_job.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = res_job.data
+    vendor_id = job.get("vendor_id", "default_vendor")
+    assignee_id = job.get("assignee_id")
+    booking_id = job.get("booking_id")
+    now = datetime.now(timezone.utc).isoformat()
+
+    validation = await _validate_noshow_claim(
+        db, job, actor_id,
+        photographer_lat=payload.photographer_lat,
+        photographer_lng=payload.photographer_lng,
+    )
+    if not validation["ok"]:
+        raise HTTPException(status_code=422, detail=validation["reason"])
+
+    hold_for_review = validation.get("hold_for_review", False)
+    review_reason = validation.get("reason", "")
+    claim_status = "pending_review" if hold_for_review else "pending"
+
+    # Insert trip fee BEFORE updating job status.
+    # If the insert fails we return an error and the job is still in its prior state (retryable).
+    # If status were updated first and the insert then failed, Gate 2 would block any retry.
+    if assignee_id and assignee_id != "default_user":
+        await db.table("agent_noshow_trip_fees").insert({
+            "job_id": job_id,
+            "member_id": assignee_id,
+            "vendor_id": vendor_id,
+            "amount_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
+            "booking_id": booking_id,
+            "notes": payload.notes or "",
+            "status": claim_status,
+            "review_reason": review_reason or None,
+            "created_at": now,
+        }).execute()
+
+    await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()
+
+    # Only notify Booking when the claim is immediately approved — for pending_review holds,
+    # defer until admin approves so the agent is not charged before admin review completes.
+    if booking_id and not hold_for_review:
+        try:
+            await send_dispatch_status_update_webhook(
+                booking_id=booking_id,
+                job_id=job_id,
+                new_status="agent_no_show",
+                previous_status=job.get("status"),
+                actor_id=actor_id,
+                actor_type="vendor_member",
+            )
+        except Exception as exc:
+            logger.warning(f"No-show Booking penalty callback failed for {booking_id}: {exc}")
+
+    await write_audit_event(
+        actor_id, "job", job_id, "agent_no_show", vendor_id=vendor_id,
+        details={
+            "assignee_id": assignee_id,
+            "trip_fee_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
+            "claim_status": claim_status,
+            "hold_for_review": hold_for_review,
+            "review_reason": review_reason,
+            "photographer_lat": payload.photographer_lat,
+            "photographer_lng": payload.photographer_lng,
+        }
+    )
+
+    if hold_for_review:
+        return {
+            "job_id": job_id,
+            "photographer_id": assignee_id,
+            "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
+            "claim_status": "pending_review",
+            "hold_for_review": True,
+            "note": review_reason,
+        }
+
+    return {
+        "job_id": job_id,
+        "photographer_id": assignee_id,
+        "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
+        "claim_status": "pending",
+        "note": "Trip fee will be included in photographer's next payout. Client booking retained.",
+    }
+
+
+@router.post("/jobs/{job_id}/contractor-no-show")
+async def report_contractor_no_show(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Admin reports that the assigned photographer failed to show up.
+    Effects: cancel_rate updated, job re-dispatched, agent notified with new assignment.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions — admin only", "insufficient_permissions")
+
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    db = await get_db()
+
+    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not res_job.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = res_job.data
+    assignee_id = job.get("assignee_id")
+    now = datetime.now(timezone.utc).isoformat()
+
+    if assignee_id and assignee_id != "default_user":
+        try:
+            res_m = await db.table("vendor_members").select(
+                "total_assignments, cancel_rate, on_time_rate"
+            ).eq("id", assignee_id).maybe_single().execute()
+            if res_m.data:
+                prev_total = res_m.data.get("total_assignments") or 0
+                total = prev_total + 1
+                prev_cancel = res_m.data.get("cancel_rate") or 0.0
+                prev_cancels = round(prev_cancel * prev_total)
+                new_cancel_rate = round((prev_cancels + 1) / total, 4)
+                # on_time_rate is NOT updated here — contractor no-shows are cancellations,
+                # not late completions; recalculating would unfairly dilute dispatch scores.
+                await db.table("vendor_members").update({
+                    "total_assignments": total,
+                    "cancel_rate": new_cancel_rate,
+                    "updated_at": now,
+                }).eq("id", assignee_id).execute()
+                logger.warning(f"Contractor {assignee_id} no-show: cancel_rate now {new_cancel_rate:.1%}")
+        except Exception as e:
+            logger.error(f"cancel_rate update failed for member {assignee_id}: {e}")
+
+    await write_audit_event(
+        actor_id, "job", job_id, "contractor_no_show", vendor_id=vendor_id,
+        details={"assignee_id": assignee_id}
+    )
+
+    await db.table("jobs").update({
+        "status": "pending_assignment",
+        "assignee_id": "default_user",
+        "updated_at": now,
+    }).eq("id", job_id).execute()
+
+    redispatch_member_id = None
+    try:
+        from ..services.vendor_selection import assign_vendor_for_job
+        # Exclude the no-show vendor so they cannot be immediately re-selected
+        redispatch_member_id = await assign_vendor_for_job(job_id, exclude_member_id=assignee_id)
+    except Exception as e:
+        logger.error(f"Re-dispatch after contractor no-show failed for job {job_id}: {e}")
+
+    return {
+        "job_id": job_id,
+        "original_contractor": assignee_id,
+        "redispatched_to": redispatch_member_id,
+        "redispatch_status": "success" if redispatch_member_id else "failed_manual_required",
+        "note": "Contractor cancel_rate updated (dispatch score impact); no cash penalty applied",
+    }

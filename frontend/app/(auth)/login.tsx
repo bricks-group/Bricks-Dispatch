@@ -80,7 +80,7 @@ export default function LoginScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={s.wordmarkWrap}>
-            <BricksWordmark size={1.0} color={TOKENS.brick} />
+            <BricksWordmark size={1.0} color={TOKENS.brick} pressable />
           </View>
 
           <Text style={s.eyebrow}>DISPATCH</Text>
@@ -153,7 +153,7 @@ export default function LoginScreen() {
           </View>
 
           <View style={s.footer}>
-            <Text style={s.footerText}>New to Bricks Dispatch?{'  '}</Text>
+            <Text style={s.footerText}>New to Bricks GO?{'  '}</Text>
             <TouchableOpacity onPress={() => router.push('/onboarding/slides')} activeOpacity={0.7}>
               <Text style={s.footerLink}>Apply</Text>
             </TouchableOpacity>

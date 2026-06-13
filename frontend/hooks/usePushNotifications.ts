@@ -30,7 +30,7 @@ export function usePushNotifications() {
 
         if (Platform.OS === 'android') {
           await Notifications.setNotificationChannelAsync('default', {
-            name: 'Bricks Dispatch',
+            name: 'Bricks GO',
             importance: Notifications.AndroidImportance.MAX,
             vibrationPattern: [0, 250, 250, 250],
             lightColor: '#3B82F6',
