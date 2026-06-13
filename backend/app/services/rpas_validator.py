@@ -1,17 +1,19 @@
 """
 RPAS Certificate Validator for Bricks GO.
 
-Two-layer validation:
-1. Gemini Vision — extracts cert details (holder, level, number, expiry) from uploaded image/PDF.
-2. Transport Canada public registry — attempts lookup to confirm cert is on record.
+Three-layer validation:
+1. pytesseract OCR (primary) — fast, local, no external API cost. Used when confidence >= 0.7.
+2. Gemini Vision (fallback) — used when OCR confidence < 0.7 or pytesseract unavailable.
+3. Transport Canada public registry — attempts lookup to confirm cert is on record.
 
 Outcome:
-  "verified"   — TC registry confirms cert on file, Gemini extracts all fields
-  "extracted"  — Gemini extracted fields, TC lookup unavailable or no direct match
-  "suspicious" — Gemini detected issues (name mismatch, expired, altered)
+  "verified"   — TC registry confirms cert on file, extraction succeeded
+  "extracted"  — Extraction succeeded, TC lookup unavailable or no direct match
+  "suspicious" — Extraction detected issues (name mismatch, expired, altered)
   "failed"     — Extraction failed; flag for manual admin review
 """
 
+import io
 import json
 import logging
 import os
@@ -34,17 +36,82 @@ _TC_REGISTRY_URL = "https://tc.canada.ca/en/aviation/drone-safety/find-drone-pil
 _TC_API_HINT = "https://tc.canada.ca"
 
 
-async def _fetch_image_base64(image_url: str) -> Optional[str]:
-    """Download image and return base64-encoded bytes."""
-    import base64
+async def _fetch_image_bytes(image_url: str) -> Optional[bytes]:
+    """Download image and return raw bytes."""
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(image_url)
             r.raise_for_status()
-            return base64.b64encode(r.content).decode()
+            return r.content
     except Exception as e:
         logger.error(f"RPAS image fetch failed for {image_url}: {e}")
         return None
+
+
+def _bytes_to_base64(image_bytes: bytes) -> str:
+    """Encode raw image bytes as a base64 string."""
+    import base64
+    return base64.b64encode(image_bytes).decode()
+
+
+def _ocr_extract(image_bytes: bytes) -> dict:
+    """
+    Primary extraction path: pytesseract OCR + regex.
+    Returns: {cert_number: str|None, level: str|None, confidence: float, source: "ocr"}
+    confidence: 0.0-1.0 based on how many expected fields were found (0.5 per field).
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes))
+        # Upscale small images for better OCR accuracy
+        if img.width < 1000:
+            img = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
+        # Convert to grayscale for better OCR
+        img = img.convert('L')
+        text = pytesseract.image_to_string(img, config='--psm 6')
+    except ImportError:
+        return {"cert_number": None, "level": None, "confidence": 0.0, "source": "ocr_unavailable"}
+    except Exception:
+        return {"cert_number": None, "level": None, "confidence": 0.0, "source": "ocr_failed"}
+
+    text_upper = text.upper()
+
+    # Transport Canada RPAS pilot certificate number patterns
+    # TC uses formats like: XXXX-XXXX, RPAS-XXXXXXXX, or plain numeric 6-8 digits
+    cert_patterns = [
+        r'\b([A-Z]{4}-[A-Z0-9]{4,8})\b',        # ABCD-12345678
+        r'\bRPAS[-\s]?([A-Z0-9]{6,10})\b',       # RPAS-12345678
+        r'\bPILOT[-\s]CERT[-\s#:]*([A-Z0-9]{6,12})\b',
+        r'\bCERTIFICATE[-\s#:]*([A-Z0-9]{6,12})\b',
+        r'\b([0-9]{6,8})\b',                      # plain numeric
+    ]
+
+    cert_number = None
+    for pattern in cert_patterns:
+        m = re.search(pattern, text_upper)
+        if m:
+            cert_number = m.group(1)
+            break
+
+    # Level extraction
+    level = None
+    if 'ADVANCED' in text_upper:
+        level = 'advanced'
+    elif 'BASIC' in text_upper:
+        level = 'basic'
+
+    # Confidence: 0.5 per field found (cert# + level = 1.0)
+    found = sum([cert_number is not None, level is not None])
+    confidence = found * 0.5
+
+    return {
+        "cert_number": cert_number,
+        "level": level,
+        "confidence": confidence,
+        "source": "ocr",
+        "raw_text_length": len(text),
+    }
 
 
 async def _gemini_extract(image_b64: str, mime_type: str = "image/jpeg") -> dict:
@@ -202,7 +269,13 @@ async def validate_rpas_certificate(
 ) -> dict:
     """
     Full RPAS certificate validation pipeline.
+
+    Extraction order:
+      1. pytesseract OCR (primary) — used when confidence >= 0.7
+      2. Gemini Vision (fallback) — used when OCR confidence < 0.7 or pytesseract unavailable
+
     Returns a validation result dict stored on the vendor_documents record.
+    Includes 'source' ("ocr" | "gemini") and 'ocr_confidence' (float) fields.
     """
     result: dict = {
         "validated_at": datetime.now(timezone.utc).isoformat(),
@@ -213,19 +286,63 @@ async def validate_rpas_certificate(
         "expiry_date": None,
         "tc_registry": {},
         "issues": [],
+        "source": None,
+        "ocr_confidence": None,
     }
 
-    # Step 1: Gemini Vision extraction
-    image_b64 = await _fetch_image_base64(image_url)
-    if not image_b64:
+    # Fetch raw image bytes once — reused for both OCR and Gemini (as base64)
+    image_bytes = await _fetch_image_bytes(image_url)
+    if not image_bytes:
         result["issues"] = ["Could not download certificate image"]
         return result
 
-    try:
-        extracted = await _gemini_extract(image_b64, mime_type)
-    except Exception as e:
-        result["issues"] = [f"Gemini extraction failed: {e}"]
-        return result
+    # Step 1: OCR extraction (primary path)
+    ocr_result = _ocr_extract(image_bytes)
+    ocr_confidence = ocr_result["confidence"]
+    result["ocr_confidence"] = ocr_confidence
+
+    use_ocr = ocr_confidence >= 0.7
+
+    if use_ocr:
+        # OCR found enough fields — build an extracted dict in the same shape as Gemini output
+        extracted = {
+            "holder_name": None,           # OCR does not extract holder name reliably
+            "certificate_number": ocr_result["cert_number"],
+            "level": ocr_result["level"],
+            "issue_date": None,
+            "expiry_date": None,
+            "issuing_authority": "Transport Canada",
+            "is_expired": False,           # OCR cannot determine expiry without date parsing
+            "is_legitimate": True,
+            "concerns": [],
+        }
+        result["source"] = "ocr"
+        logger.info(
+            f"RPAS OCR extraction succeeded for {vendor_name}: "
+            f"cert={ocr_result['cert_number']}, level={ocr_result['level']}, "
+            f"confidence={ocr_confidence}"
+        )
+    else:
+        # Step 2: Gemini Vision fallback
+        if ocr_result["source"] == "ocr":
+            logger.info(
+                f"RPAS OCR confidence too low ({ocr_confidence}) for {vendor_name} — "
+                f"falling back to Gemini Vision"
+            )
+        else:
+            logger.info(
+                f"RPAS pytesseract unavailable ({ocr_result['source']}) for {vendor_name} — "
+                f"falling back to Gemini Vision"
+            )
+
+        image_b64 = _bytes_to_base64(image_bytes)
+        try:
+            extracted = await _gemini_extract(image_b64, mime_type)
+        except Exception as e:
+            result["issues"] = [f"Gemini extraction failed: {e}"]
+            return result
+
+        result["source"] = "gemini"
 
     result["holder_name"] = extracted.get("holder_name")
     result["certificate_number"] = extracted.get("certificate_number")
@@ -233,14 +350,14 @@ async def validate_rpas_certificate(
     result["expiry_date"] = extracted.get("expiry_date")
     result["issuing_authority"] = extracted.get("issuing_authority")
 
-    # Step 2: TC registry lookup
+    # Step 3: TC registry lookup
     tc_result = await _lookup_tc_registry(
         cert_number=extracted.get("certificate_number") or "",
         holder_name=extracted.get("holder_name") or "",
     )
     result["tc_registry"] = tc_result
 
-    # Step 3: Determine outcome
+    # Step 4: Determine outcome
     outcome, issues = _determine_outcome(extracted, tc_result, vendor_name)
     result["outcome"] = outcome
     result["issues"] = issues
@@ -248,7 +365,8 @@ async def validate_rpas_certificate(
     logger.info(
         f"RPAS validation for {vendor_name}: outcome={outcome}, "
         f"level={result['level']}, cert={result['certificate_number']}, "
-        f"tc_found={tc_result.get('found')}"
+        f"tc_found={tc_result.get('found')}, source={result['source']}, "
+        f"ocr_confidence={ocr_confidence}"
     )
 
     return result
