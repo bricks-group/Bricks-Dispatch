@@ -1,16 +1,13 @@
-version: '3.9'
+version: "3.9"
 services:
-  dispatch:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+  dispatch-api:
+    build: .
     ports:
       - "8002:8002"
+    environment:
+      - PORT=8002
     env_file:
-      - ./backend/.env
-    volumes:
-      - ./backend:/app
-    restart: unless-stopped
+      - backend/.env
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
       interval: 30s
