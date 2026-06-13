@@ -175,15 +175,30 @@ async def process_job_assets(job_id: str):
 
     logger.info(f"Starting post-production for job {job_id}")
 
+    # Detect splat source files — video or zip uploads flagged for 3D processing.
+    # These are NOT photo assets; they are source captures uploaded by the photographer
+    # for Gaussian splat / NeRF generation via Luma Labs.  They are routed separately.
+    _SPLAT_SOURCE_EXTENSIONS = (".mp4", ".mov", ".avi", ".zip", ".tar")
+    splat_source_assets = [
+        a for a in assets
+        if (a.get("filename") or "").lower().endswith(_SPLAT_SOURCE_EXTENSIONS)
+        and a.get("provider") in (None, "", "luma")
+        and a.get("processing_status") not in ("processing", "done", "failed")
+    ]
+
     results = []
     for asset in assets:
         storage_path = asset.get("file_url")
         filename = (asset.get("filename") or "").lower()
         if not storage_path: continue
 
-        # SKIP 3D assets (Virtual Visit / Gaussian Splats)
+        # SKIP pre-processed .splat / .ply 3D assets (legacy direct-upload path)
         if filename.endswith(".splat") or filename.endswith(".ply"):
-            logger.info(f"Skipping processing for 3D asset: {filename}")
+            logger.info(f"Skipping processing for pre-built 3D asset: {filename}")
+            continue
+
+        # SKIP splat source files — they are handled by the Luma pipeline below
+        if filename.endswith(_SPLAT_SOURCE_EXTENSIONS):
             continue
 
         # Providers need an HTTP URL — generate a short-lived signed URL from the storage path
@@ -213,3 +228,53 @@ async def process_job_assets(job_id: str):
             "provider": res["provider"],
             "provider_job_id": res["provider_job_id"]
         }).eq("id", res["asset_id"]).execute()
+
+    # --- Luma Labs splat processing ---
+    # Trigger asynchronously for each splat source file found in this job's uploads.
+    # This is a fire-and-forget background path — photo finalization is independent.
+    if splat_source_assets:
+        import asyncio
+        from .splat_service import process_splat_with_luma
+
+        async def _run_luma_for_asset(asset: dict) -> None:
+            storage_path = asset.get("file_url", "")
+            asset_id = asset["id"]
+            provider_url = await get_signed_download_url(storage_path, expiry=7200)
+            if not provider_url:
+                logger.warning(f"Job {job_id}: could not sign splat source URL for asset {asset_id}")
+                return
+            await db.table("uploads").update({
+                "processing_status": "processing",
+                "provider": "luma",
+            }).eq("id", asset_id).execute()
+            signed_ply_url = await process_splat_with_luma(source_url=provider_url, job_id=job_id)
+            if signed_ply_url:
+                await db.table("uploads").update({
+                    "processing_status": "done",
+                    "processed_url": f"splats/{job_id}/scene.ply",
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", asset_id).execute()
+                # Write / merge splat_url into media_delivery
+                existing = await db.table("media_delivery").select("id").eq("job_id", job_id).maybe_single().execute()
+                if existing.data:
+                    await db.table("media_delivery").update({
+                        "splat_url": signed_ply_url,
+                    }).eq("job_id", job_id).execute()
+                else:
+                    await db.table("media_delivery").upsert({
+                        "job_id": job_id,
+                        "splat_url": signed_ply_url,
+                        "delivery_urls": [],
+                        "delivered_at": datetime.now(timezone.utc).isoformat(),
+                        "notification_status": "pending",
+                    }, on_conflict="job_id").execute()
+                logger.info(f"Job {job_id}: Luma splat complete — splat_url written to media_delivery")
+            else:
+                await db.table("uploads").update({
+                    "processing_status": "failed",
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", asset_id).execute()
+                logger.error(f"Job {job_id}: Luma processing failed for asset {asset_id}")
+
+        # Run Luma jobs concurrently (one splat source per job is typical, but handle multiples)
+        await asyncio.gather(*[_run_luma_for_asset(a) for a in splat_source_assets], return_exceptions=True)
