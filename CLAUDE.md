@@ -219,6 +219,7 @@ pick_vendor_rule_based(job, vendors)
 - `reconciliation_events` — fee vs booking mismatch log (written by reconcile-noshow dry_run=false)
 
 ## Current Status (2026-06-10)
+- **Centralized pricing tables (2026-06-13)** ✅ — `public.packages` table in Supabase is now the source of truth for package inclusions, sqft pricing, and delivery SLAs. Standard=photos+drone stills (24h, no splat); Premium=Standard+video+splat (24h); Luxury=Premium+twilight+extended video+specialist edit+custom domain (12h rush); Estate=Luxury+4K drone+reels+account manager ($2,499 flat, 12h rush).
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - **Deterministic weighted dispatch scorer (specialty/proximity/on_time/quality/reliability/load)** ✅
 - **Repeat-agent bonus (+5pts if vendor has shot for this agent before)** ✅
