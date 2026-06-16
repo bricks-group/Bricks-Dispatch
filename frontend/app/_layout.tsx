@@ -3,10 +3,6 @@ import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet, Platform } from 'react-native';
 import { BrickLoader } from '../components/BricksWordmark';
 import { useFonts } from 'expo-font';
-import {
-  JetBrainsMono_400Regular,
-  JetBrainsMono_500Medium,
-} from '@expo-google-fonts/jetbrains-mono';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
@@ -77,8 +73,8 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [fontsLoaded] = useFonts({
-    JetBrainsMono_400Regular,
-    JetBrainsMono_500Medium,
+    'IoskeleyMono-Regular': require('../assets/fonts/IoskeleyMono-Regular.ttf'),
+    'IoskeleyMono-Medium':  require('../assets/fonts/IoskeleyMono-Medium.ttf'),
   });
 
   const [onboardingChecked, setOnboardingChecked] = useState(false);

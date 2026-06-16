@@ -52,6 +52,6 @@ export const TYPOGRAPHY = {
   headingLight: 'GeneralSans-Regular',
   body: 'GeneralSans-Regular',
   bodyMedium: 'GeneralSans-Medium',
-  mono: 'JetBrainsMono_400Regular',
-  monoMedium: 'JetBrainsMono_500Medium',
+  mono: 'IoskeleyMono-Regular',
+  monoMedium: 'IoskeleyMono-Medium',
 };

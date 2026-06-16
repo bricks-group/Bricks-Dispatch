@@ -51,14 +51,14 @@
 
   "typography": {
     "font_display": "General Sans",
-    "font_mono":    "JetBrains Mono",
+    "font_mono":    "IoskeleyMono",
     "font_loading": {
       "general_sans": "Load via useFonts with keys 'GeneralSans-Regular' and 'GeneralSans-Medium' pointing to local OTF assets in /assets/fonts/.",
-      "jetbrains_mono": "Load via @expo-google-fonts/jetbrains-mono. Keys: JetBrainsMono_400Regular, JetBrainsMono_500Medium."
+      "ioskeley_mono": "Load via useFonts with local TTF assets. Keys: 'IoskeleyMono-Regular' → assets/fonts/IoskeleyMono-Regular.ttf, 'IoskeleyMono-Medium' → assets/fonts/IoskeleyMono-Medium.ttf."
     },
     "rules": [
       "General Sans is the sole display/body font — do NOT use System, Helvetica, Outfit, Manrope, or Inter.",
-      "JetBrains Mono is used for all numbers, IDs, times, overline labels, and tabular data.",
+      "IoskeleyMono is used for all numbers, IDs, times, overline labels, and tabular data.",
       "Overline/label style: font-mono, 10–10.5px, letter-spacing 0.14–0.18em, uppercase, color moonMute.",
       "Display headings: font-display, weight 500, letter-spacing -1 to -1.2px, line-height 1.0–1.05.",
       "KPI values: font-mono, 28–36px, weight 400, letter-spacing -1px.",
