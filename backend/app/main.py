@@ -9,7 +9,7 @@ from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 
 # Import routers
-from app.routers import dispatch, jobs, vendors, notifications, payouts, post_production, vendor_os, onboarding, admin_ops
+from app.routers import auth, dispatch, jobs, uploads, vendors, notifications, payouts, post_production, vendor_os, onboarding, admin_ops
 
 limiter = Limiter(key_func=get_remote_address, default_limits=['100/minute'])
 
@@ -52,32 +52,14 @@ async def ready(db: Client = Depends(get_db)):
 
 # --- Register Routers ---
 # dispatch.router and payouts.router carry their own /api/v1/* prefix internally.
+app.include_router(auth.router, tags=["auth"])
 app.include_router(dispatch.router, tags=["dispatch"])
 app.include_router(payouts.router, tags=["payouts"])
 app.include_router(jobs.router, prefix="/dispatch/jobs", tags=["jobs"])
+app.include_router(uploads.router, tags=["uploads"])
 app.include_router(vendors.router, prefix="/dispatch/vendors", tags=["vendors"])
 app.include_router(notifications.router, prefix="/dispatch/notifications", tags=["notifications"])
 app.include_router(post_production.router, tags=["post-production"])
 app.include_router(vendor_os.router, tags=["vendor-os"])
 app.include_router(onboarding.router, tags=["onboarding"])
 app.include_router(admin_ops.router, tags=["admin"])
-
-# --- Rate Limited Endpoints (Placeholders) ---
-# These would typically be defined within their respective routers
-
-@limiter.limit('10/minute')
-async def login(request: Request):
-    # Placeholder for actual login endpoint implementation
-    pass
-
-@limiter.limit('10/minute')
-async def register(request: Request):
-    # Placeholder for actual register endpoint implementation
-    pass
-
-@limiter.limit('10/minute')
-async def push_token_register(request: Request):
-    # Placeholder for actual push_token_register endpoint implementation
-    pass
-
-# Other routes and middleware would be imported/defined here.
