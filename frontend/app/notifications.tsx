@@ -149,7 +149,7 @@ const styles = StyleSheet.create({
   backBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontFamily: 'System', fontSize: 28, color: TOKENS.moon, letterSpacing: -0.6 },
   markAllBtn: { minWidth: 70, alignItems: 'flex-end' },
-  markAllText: { fontFamily: 'JetBrainsMono-Medium', fontSize: 10, color: TOKENS.brick, letterSpacing: 1.2 },
+  markAllText: { fontFamily: 'IoskeleyMono-Medium', fontSize: 10, color: TOKENS.brick, letterSpacing: 1.2 },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   emptyText: { fontFamily: 'System', fontSize: 13, color: TOKENS.moonMute },
@@ -168,6 +168,6 @@ const styles = StyleSheet.create({
   rowTitle: { fontFamily: 'System', fontSize: 15, color: TOKENS.moon, marginBottom: 4 },
   rowTitleRead: { color: TOKENS.moonSoft },
   rowMsg: { fontFamily: 'System', fontSize: 13, color: TOKENS.moonSoft, lineHeight: 18 },
-  rowTime: { fontFamily: 'JetBrainsMono-Regular', fontSize: 9, color: TOKENS.moonFaint, marginTop: 8, letterSpacing: 1.2 },
+  rowTime: { fontFamily: 'IoskeleyMono-Regular', fontSize: 9, color: TOKENS.moonFaint, marginTop: 8, letterSpacing: 1.2 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: TOKENS.brick, marginTop: 8 },
 });

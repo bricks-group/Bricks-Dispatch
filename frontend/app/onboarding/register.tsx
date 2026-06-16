@@ -192,7 +192,7 @@ const styles = StyleSheet.create({
   },
   subhead: {
     fontSize: 10.5,
-    fontFamily: 'JetBrainsMono-Medium',
+    fontFamily: 'IoskeleyMono-Medium',
     color: TOKENS.moonMute,
     letterSpacing: 1.8, // 0.18em
     marginTop: 8,
@@ -202,7 +202,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 10,
-    fontFamily: 'JetBrainsMono-Medium',
+    fontFamily: 'IoskeleyMono-Medium',
     color: TOKENS.moonMute,
     letterSpacing: 1.6, // 0.16em
     marginBottom: 10,
@@ -218,7 +218,7 @@ const styles = StyleSheet.create({
     padding: 14,
     color: TOKENS.moon,
     fontSize: 13,
-    fontFamily: 'JetBrainsMono-Regular',
+    fontFamily: 'IoskeleyMono-Regular',
     borderRadius: 2,
     marginBottom: 18,
   },
@@ -263,7 +263,7 @@ const styles = StyleSheet.create({
   termsText: {
     color: TOKENS.moonSoft,
     fontSize: 10,
-    fontFamily: 'JetBrainsMono-Medium',
+    fontFamily: 'IoskeleyMono-Medium',
     lineHeight: 16,
     flex: 1,
   }

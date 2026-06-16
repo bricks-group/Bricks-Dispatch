@@ -118,7 +118,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 10,
-    fontFamily: 'JetBrainsMono-Medium',
+    fontFamily: 'IoskeleyMono-Medium',
     color: '#8F8678',
     letterSpacing: 1.6,
     marginBottom: 8,
