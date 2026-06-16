@@ -104,7 +104,7 @@ struct JobDetailView: View {
     private func agentSection(name: String, phone: String?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("AGENT")
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .font(BricksFont.monoMedium(9.5))
                 .tracking(0.8)
                 .foregroundStyle(.secondary)
             HStack {
@@ -133,7 +133,7 @@ struct JobDetailView: View {
     private var checklistSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("CHECKLIST")
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .font(BricksFont.monoMedium(9.5))
                 .tracking(0.8)
                 .foregroundStyle(.secondary)
             ForEach(job.checklist) { item in
@@ -195,7 +195,7 @@ struct StatusPill: View {
 
     var body: some View {
         Text(label)
-            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+            .font(BricksFont.monoMedium(9.5))
             .tracking(0.4)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
@@ -233,7 +233,7 @@ struct DetailCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label.uppercased())
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .font(BricksFont.monoMedium(9.5))
                 .tracking(0.8)
                 .foregroundStyle(.secondary)
             Text(value)

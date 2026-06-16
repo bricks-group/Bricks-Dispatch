@@ -24,7 +24,7 @@ struct ProfileView: View {
                             Text(auth.session?.email ?? "Photographer")
                                 .font(.headline)
                             Text("VENDOR MEMBER")
-                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .font(BricksFont.monoMedium(9))
                                 .tracking(0.6)
                                 .foregroundStyle(BricksColors.brick)
                                 .padding(.horizontal, 6)

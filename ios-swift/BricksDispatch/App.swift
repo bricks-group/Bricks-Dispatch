@@ -33,6 +33,7 @@ struct BricksDispatchApp: App {
     @StateObject private var watchBridge = WatchConnectivityManager.shared
 
     init() {
+        BricksFont.registerFonts()
         BricksConfig.apiBaseURL = "https://dispatch-api.brxs.ca"
         BricksAuthConfig.supabaseAnonKey = Bundle.main.infoPlistValue(for: "SUPABASE_ANON_KEY")
         PushNotificationService.shared.configure()

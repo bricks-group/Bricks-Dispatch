@@ -44,7 +44,7 @@ struct LoginView: View {
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text("EARN ON YOUR SCHEDULE")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .font(BricksFont.monoMedium(10))
                         .tracking(1.8)
                         .foregroundStyle(BricksColors.brick)
                         .padding(.bottom, 14)
@@ -86,7 +86,7 @@ struct LoginView: View {
                         .transition(.opacity)
 
                         Text("Photography vendors only. New applicants: apply at dispatch.brxs.ca")
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(BricksFont.mono(11))
                             .foregroundStyle(.white.opacity(0.3))
                             .lineSpacing(3)
                             .padding(.bottom, 4)

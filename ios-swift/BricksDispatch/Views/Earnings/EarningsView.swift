@@ -46,7 +46,7 @@ struct EarningsView: View {
             Section {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("THIS WEEK")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .font(BricksFont.monoMedium(9.5))
                         .tracking(0.8)
                         .foregroundStyle(.secondary)
 
@@ -57,13 +57,13 @@ struct EarningsView: View {
                             .minimumScaleFactor(0.55)
                             .lineLimit(1)
                         Text("CAD")
-                            .font(.system(size: 14, design: .monospaced))
+                            .font(BricksFont.mono(14))
                             .foregroundStyle(.secondary)
                             .padding(.bottom, 6)
                     }
 
                     Text("\(r.weekJobCount) shoot\(r.weekJobCount == 1 ? "" : "s") this week")
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(BricksFont.mono(12))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 6)
@@ -77,20 +77,20 @@ struct EarningsView: View {
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("NEXT PAYOUT")
-                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .font(BricksFont.monoMedium(9.5))
                             .tracking(0.8)
                             .foregroundStyle(.secondary)
                         Text(r.pendingAmount, format: .currency(code: "CAD"))
                             .font(.system(size: 22, weight: .semibold))
                         Text(r.payoutDay)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(BricksFont.mono(11))
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     if r.pendingTripFeesTotal > 0 {
                         VStack(alignment: .trailing, spacing: 4) {
                             Text("TRIP FEES")
-                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                .font(BricksFont.monoMedium(9.5))
                                 .tracking(0.8)
                                 .foregroundStyle(.secondary)
                             Label {
@@ -123,7 +123,7 @@ struct EarningsView: View {
                                 .font(.subheadline.weight(.medium))
                                 .lineLimit(1)
                             Text(job.scheduledDate)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(BricksFont.mono(11))
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -131,7 +131,7 @@ struct EarningsView: View {
                             Text(job.payoutAmount, format: .currency(code: "CAD"))
                                 .font(.subheadline.weight(.semibold))
                             Text(job.payoutStatus.uppercased())
-                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .font(BricksFont.monoMedium(9.5))
                                 .tracking(0.5)
                                 .foregroundStyle(job.payoutStatus == "paid" ? .green : .secondary)
                         }
@@ -198,7 +198,7 @@ private struct WeekBarChart: View {
                             value: revealedCount
                         )
                     Text(dayLabels[i])
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(BricksFont.mono(10))
                         .foregroundStyle(i == todayIndex ? BricksColors.gold : .secondary)
                 }
                 .frame(maxWidth: .infinity)

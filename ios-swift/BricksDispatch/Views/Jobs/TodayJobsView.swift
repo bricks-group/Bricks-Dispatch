@@ -27,7 +27,7 @@ struct TodayJobsView: View {
                             .frame(width: 6, height: 6)
                             .accessibilityHidden(true)
                         Text("Online")
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(BricksFont.mono(12))
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
@@ -88,7 +88,7 @@ struct TodayJobsView: View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("PROJECTED TODAY")
-                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .font(BricksFont.monoMedium(9.5))
                     .tracking(0.8)
                     .foregroundStyle(.secondary)
                 HStack(alignment: .lastTextBaseline, spacing: 3) {
@@ -98,18 +98,18 @@ struct TodayJobsView: View {
                         .minimumScaleFactor(0.65)
                         .lineLimit(1)
                     Text("CAD")
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(BricksFont.mono(9))
                         .foregroundStyle(.secondary)
                         .padding(.bottom, 2)
                 }
                 Text("\(store.todayJobs.count) shoot\(store.todayJobs.count == 1 ? "" : "s")")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(BricksFont.mono(11))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {
                 Text("EARNED TODAY")
-                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .font(BricksFont.monoMedium(9.5))
                     .tracking(0.8)
                     .foregroundStyle(.secondary)
                 AnimatedDollar(target: earnedPayout, delay: 0.35)
@@ -166,7 +166,7 @@ struct JobRowView: View {
                 if isNext {
                     HStack(spacing: 6) {
                         Text("UP NEXT")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .font(BricksFont.monoMedium(9))
                             .tracking(0.6)
                             .foregroundStyle(.white)
                             .padding(.horizontal, 7)
@@ -174,7 +174,7 @@ struct JobRowView: View {
                             .background(BricksColors.brick)
                             .clipShape(RoundedRectangle(cornerRadius: 2))
                         Text(timeLabel)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(BricksFont.mono(11))
                             .foregroundStyle(BricksColors.brick)
                     }
                     .padding(.bottom, 1)
@@ -186,13 +186,13 @@ struct JobRowView: View {
                 HStack(spacing: 6) {
                     if !isNext {
                         Text(timeLabel)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(BricksFont.mono(11))
                             .foregroundStyle(Color(.secondaryLabel))
                         Text("·")
                             .foregroundStyle(Color(.tertiaryLabel))
                     }
                     Text(job.packageName ?? job.jobType.capitalized)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(BricksFont.mono(11))
                         .foregroundStyle(Color(.secondaryLabel))
                 }
             }
