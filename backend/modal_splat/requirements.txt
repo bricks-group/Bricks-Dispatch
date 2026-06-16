@@ -1,0 +1,5 @@
+# Requirements for deploying the Modal splat processing service.
+# Install with: pip install -r requirements.txt (needed for `modal deploy`)
+modal>=0.62
+httpx>=0.26
+supabase>=2.0

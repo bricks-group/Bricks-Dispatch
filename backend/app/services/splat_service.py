@@ -1,24 +1,19 @@
 """
-Luma Labs API integration for Gaussian splat / 3D scene processing.
+Bricks 3DGS Processing — splat_service.py
 
-Photographers upload a source video or image-sequence zip from the Bricks GO app.
-This service submits it to Luma Labs, polls until the generation is complete,
-downloads the resulting .ply file, stores it in Supabase Storage under
-  splats/{job_id}/scene.ply
-and returns a signed download URL.
+Two backends:
+  "bricks" (default when MODAL_SPLAT_TRIGGER_URL is set) — in-house GPU pipeline via Modal.
+     Photographer uploads video → we fire-and-forget to Modal → Modal runs COLMAP +
+     nerfstudio splatfacto (15k iters) on A10G GPU → Modal calls back via
+     POST /api/v1/post-production/splat-complete/{job_id} with the signed .ply URL.
+     Full pipeline: ~20–35 min on A10G.  We own the full stack; no third-party dependency.
 
-API surface used:
-  POST https://api.lumalabs.ai/dream-machine/v1/generations
-        (video-to-3D / NeRF capture endpoint)
-  GET  https://api.lumalabs.ai/dream-machine/v1/generations/{id}
-        (poll for state: "completed" | "failed" | "dreaming" | ...)
+  "luma" (fallback) — Luma Labs Dream Machine API.
+     Same upload → submit to Luma → poll for completion → download + store .ply.
+     Retained as fallback in case Modal is unavailable.
 
-NOTE: Luma Labs does not publish a dedicated NeRF/splat REST endpoint at the time
-of writing (2026-06-13). The Dream Machine API returns video generations. Their
-NeRF pipeline is exposed through the same generations endpoint with the correct
-request body. Verify the exact request schema against
-  https://docs.lumalabs.ai/reference
-before going to production. The URL below is the best public reference available.
+Set SPLAT_BACKEND=bricks | luma in Vercel env vars.
+Default: "bricks" if MODAL_SPLAT_TRIGGER_URL is set, otherwise "luma".
 """
 
 import asyncio
@@ -43,6 +38,52 @@ _POLL_INTERVAL_SECS = 10      # poll every 10 seconds
 _MAX_POLL_SECONDS   = 1200    # give up after 20 minutes
 
 STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "brxs-deliverables")
+
+
+# ---------------------------------------------------------------------------
+# In-house backend (Modal GPU)
+# ---------------------------------------------------------------------------
+
+async def submit_to_modal_trigger(source_url: str, job_id: str) -> bool:
+    """
+    Fire-and-forget: POST to the Modal trigger endpoint to enqueue GPU processing.
+
+    The Modal function (modal_splat/app.py) picks this up, runs COLMAP + splatfacto
+    on an A10G GPU (~25 min), uploads scene.ply to Supabase Storage, and calls back
+    via POST /api/v1/post-production/splat-complete/{job_id}.
+
+    Returns True if the trigger was accepted (202/200), False on any error.
+    The caller should NOT wait for the splat to be ready — it arrives asynchronously.
+    """
+    trigger_url = os.environ.get("MODAL_SPLAT_TRIGGER_URL", "")
+    if not trigger_url:
+        logger.error(f"Splat job {job_id}: MODAL_SPLAT_TRIGGER_URL not set")
+        return False
+
+    api_key = os.environ.get("INTERNAL_API_KEY", "")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                trigger_url,
+                json={
+                    "job_id": job_id,
+                    "source_url": source_url,
+                    "api_key": api_key,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info(f"Splat job {job_id}: submitted to Bricks 3DGS — status={data.get('status')}")
+            return True
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"Splat job {job_id}: Modal trigger HTTP {e.response.status_code}: {e.response.text[:300]}"
+        )
+        return False
+    except Exception as e:
+        logger.error(f"Splat job {job_id}: Modal trigger failed: {e}")
+        return False
 
 
 def _luma_api_key() -> str:

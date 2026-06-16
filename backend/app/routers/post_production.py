@@ -380,13 +380,16 @@ async def boxbrownie_callback(
 
 
 # ---------------------------------------------------------------------------
-# Gaussian splat upload + Luma Labs processing
+# Gaussian splat upload — in-house Bricks 3DGS or Luma Labs fallback
 # POST /api/v1/post-production/splat-upload/{job_id}
 #
 # Photographers upload a source video or image-sequence zip from the Bricks GO
-# app.  The file is stored to Supabase Storage, then Luma Labs processes it
-# into a .ply scene.  The resulting signed URL is written to the job's
-# media_delivery row as splat_url.
+# app.  The file is stored to Supabase Storage.
+#
+# SPLAT_BACKEND=bricks (default): fire-and-forget to Modal GPU trigger.
+#   Modal runs COLMAP + splatfacto → .ply; calls back via:
+#     POST /api/v1/post-production/splat-complete/{job_id}
+# SPLAT_BACKEND=luma: poll Luma Labs API until complete (legacy).
 #
 # Requires: Authorization: Bearer <supabase_jwt>  (authenticated photographer)
 # ---------------------------------------------------------------------------
@@ -467,13 +470,14 @@ async def splat_upload(
         raise HTTPException(status_code=500, detail="Failed to store splat source file")
 
     # Record the upload in the uploads table so reconcile can track it
+    _splat_provider = "bricks" if os.environ.get("SPLAT_BACKEND", "bricks") == "bricks" else "luma"
     upload_record = {
         "id": upload_id,
         "job_id": job_id,
         "filename": filename,
         "file_url": storage_path,
         "processing_status": "processing",
-        "provider": "luma",
+        "provider": _splat_provider,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -491,16 +495,59 @@ async def splat_upload(
     if not signed_source:
         raise HTTPException(status_code=500, detail="Failed to generate signed source URL for processing")
 
-    # Kick off Luma processing in the background
-    background_tasks.add_task(_process_splat_background, job_id, upload_id, signed_source)
+    # Dispatch to the right processing backend
+    _splat_backend = os.environ.get("SPLAT_BACKEND", "bricks")
+    if _splat_backend == "bricks":
+        background_tasks.add_task(_process_splat_background_bricks, job_id, upload_id, signed_source)
+        _backend_msg = "Bricks 3DGS in-house processing queued (Modal GPU)."
+    else:
+        background_tasks.add_task(_process_splat_background, job_id, upload_id, signed_source)
+        _backend_msg = "Luma Labs 3D processing started in background."
 
     return {
         "job_id": job_id,
         "upload_id": upload_id,
         "storage_path": storage_path,
         "status": "processing",
-        "message": "Splat source uploaded. Luma Labs 3D processing started in background.",
+        "message": f"Splat source uploaded. {_backend_msg}",
     }
+
+
+async def _process_splat_background_bricks(job_id: str, upload_id: str, source_url: str) -> None:
+    """
+    Background task (in-house backend): fire-and-forget to Modal GPU trigger.
+
+    The Modal function does all the work and calls back via:
+      POST /api/v1/post-production/splat-complete/{job_id}   on success
+      POST /api/v1/post-production/splat-failed/{job_id}     on failure
+
+    This task just marks splat_status="processing" and triggers Modal.
+    It returns immediately — no polling, no blocking.
+    """
+    from ..services.splat_service import submit_to_modal_trigger
+
+    db = await get_db()
+    await db.table("media_delivery").upsert({
+        "job_id": job_id,
+        "splat_status": "processing",
+        "delivery_urls": [],
+        "notification_status": "pending",
+    }, on_conflict="job_id").execute()
+
+    queued = await submit_to_modal_trigger(source_url=source_url, job_id=job_id)
+    if not queued:
+        # Modal trigger failed — mark as failed so photo delivery isn't blocked
+        await db.table("uploads").update({
+            "processing_status": "failed",
+            "processed_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", upload_id).execute()
+        await db.table("media_delivery").upsert({
+            "job_id": job_id,
+            "splat_status": "processing_failed",
+            "delivery_urls": [],
+            "notification_status": "pending",
+        }, on_conflict="job_id").execute()
+        logger.error(f"Splat job {job_id}: Modal trigger failed — splat_status=processing_failed")
 
 
 async def _process_splat_background(job_id: str, upload_id: str, source_url: str) -> None:
@@ -578,6 +625,92 @@ async def _process_splat_background(job_id: str, upload_id: str, source_url: str
             f"Splat background job {job_id}: Luma processing failed — "
             f"upload marked failed, splat_status=processing_failed; photo delivery unaffected"
         )
+
+
+# ---------------------------------------------------------------------------
+# In-house 3DGS callbacks (called by Modal GPU function)
+# POST /api/v1/post-production/splat-complete/{job_id}
+# POST /api/v1/post-production/splat-failed/{job_id}
+# Both require X-Internal-Api-Key
+# ---------------------------------------------------------------------------
+
+@router.post("/splat-complete/{job_id}")
+async def splat_complete(
+    job_id: str,
+    body: dict,
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """
+    Called by the Modal GPU function when Bricks in-house 3DGS processing completes.
+    Updates media_delivery.splat_url and marks the upload as done.
+    """
+    _internal_key = os.environ.get("INTERNAL_API_KEY", "")
+    if not _internal_key or x_internal_api_key != _internal_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Internal-Api-Key")
+
+    splat_url = body.get("splat_url")
+    if not splat_url:
+        raise HTTPException(status_code=422, detail="splat_url is required")
+
+    db = await get_db()
+    existing = await db.table("media_delivery").select("id").eq("job_id", job_id).maybe_single().execute()
+    if existing.data:
+        await db.table("media_delivery").update({
+            "splat_url": splat_url,
+            "splat_status": "completed",
+        }).eq("job_id", job_id).execute()
+    else:
+        await db.table("media_delivery").upsert({
+            "job_id": job_id,
+            "splat_url": splat_url,
+            "splat_status": "completed",
+            "delivery_urls": [],
+            "delivered_at": datetime.now(timezone.utc).isoformat(),
+            "notification_status": "pending",
+        }, on_conflict="job_id").execute()
+
+    # Mark bricks-provider upload as done
+    await db.table("uploads").update({
+        "processing_status": "done",
+        "processed_url": f"splats/{job_id}/scene.ply",
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("job_id", job_id).eq("provider", "bricks").execute()
+
+    logger.info(f"Splat complete callback job {job_id}: splat_url set, splat_status=completed")
+    return {"status": "ok", "job_id": job_id}
+
+
+@router.post("/splat-failed/{job_id}")
+async def splat_failed_callback(
+    job_id: str,
+    body: dict,
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """
+    Called by the Modal GPU function when in-house 3DGS processing fails.
+    Marks splat_status=processing_failed so photo delivery is unblocked.
+    """
+    _internal_key = os.environ.get("INTERNAL_API_KEY", "")
+    if not _internal_key or x_internal_api_key != _internal_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Internal-Api-Key")
+
+    reason = body.get("reason", "unknown")
+    db = await get_db()
+
+    await db.table("uploads").update({
+        "processing_status": "failed",
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("job_id", job_id).eq("provider", "bricks").execute()
+
+    await db.table("media_delivery").upsert({
+        "job_id": job_id,
+        "splat_status": "processing_failed",
+        "delivery_urls": [],
+        "notification_status": "pending",
+    }, on_conflict="job_id").execute()
+
+    logger.error(f"Splat failed callback job {job_id}: {reason}")
+    return {"status": "ok", "job_id": job_id}
 
 
 # ---------------------------------------------------------------------------

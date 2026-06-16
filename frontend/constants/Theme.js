@@ -42,6 +42,7 @@ export const TOKENS = {
 export const TYPOGRAPHY = {
   heading: Platform.OS === 'ios' ? 'Helvetica Neue' : 'sans-serif-medium',
   body: Platform.OS === 'ios' ? 'Helvetica' : 'sans-serif',
-  mono: 'JetBrainsMono-Regular',
-  monoMedium: 'JetBrainsMono-Medium',
+  // Must match the font names registered in app/_layout.tsx via @expo-google-fonts/jetbrains-mono
+  mono: 'JetBrainsMono_400Regular',
+  monoMedium: 'JetBrainsMono_500Medium',
 };
