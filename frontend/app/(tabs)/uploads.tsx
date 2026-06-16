@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import { Upload, FileText } from 'lucide-react-native';
+import { Upload, FileText, ScanLine } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
@@ -48,6 +49,7 @@ const PILL_COLORS: Record<string, { bg: string; fg: string }> = {
 };
 
 export default function UploadsScreen() {
+  const router = useRouter();
   const [uploads, setUploads] = useState<UploadRecord[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,6 +76,16 @@ export default function UploadsScreen() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  const goToSplatCapture = () => {
+    const activeJobs = jobs.filter(j => j.status === 'in_progress');
+    if (activeJobs.length === 0) {
+      Alert.alert('No active jobs', 'Start a job before recording a 3D tour.');
+      return;
+    }
+    const targetJob = activeJobs[0];
+    router.push({ pathname: '/splat-capture', params: { jobId: targetJob.id } });
+  };
 
   const pickAndUpload = async () => {
     const activeJobs = jobs.filter(j => j.status === 'in_progress');
@@ -155,6 +167,21 @@ export default function UploadsScreen() {
                 </View>
               </>
             )}
+          </TouchableOpacity>
+
+          {/* 3D Tour capture shortcut */}
+          <TouchableOpacity
+            style={s.splatBtn}
+            onPress={goToSplatCapture}
+            activeOpacity={0.82}
+            accessibilityLabel="Record 3D Tour"
+          >
+            <ScanLine size={20} color={TOKENS.brick} strokeWidth={1.5} />
+            <View style={{ flex: 1 }}>
+              <Text style={s.splatBtnTitle}>Record 3D Tour</Text>
+              <Text style={s.splatBtnSub}>Gaussian splat — 90 sec guided capture</Text>
+            </View>
+            <Text style={s.splatArrow}>›</Text>
           </TouchableOpacity>
 
           {/* In progress */}
@@ -264,4 +291,34 @@ const s = StyleSheet.create({
 
   empty: { paddingTop: 40, alignItems: 'center' },
   emptyText: { fontSize: 13, color: TOKENS.moonFaint },
+
+  // 3D Tour button
+  splatBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderWidth: 1,
+    borderColor: TOKENS.brick + '55',
+    borderRadius: 2,
+    padding: 16,
+    marginBottom: 28,
+    backgroundColor: TOKENS.brick + '0A',
+  },
+  splatBtnTitle: {
+    fontFamily: TYPOGRAPHY.heading,
+    fontSize: 14,
+    color: TOKENS.moon,
+    marginBottom: 2,
+  },
+  splatBtnSub: {
+    fontFamily: TYPOGRAPHY.mono,
+    fontSize: 10,
+    color: TOKENS.moonFaint,
+    letterSpacing: 0.4,
+  },
+  splatArrow: {
+    fontSize: 22,
+    color: TOKENS.brick,
+    lineHeight: 26,
+  },
 });
