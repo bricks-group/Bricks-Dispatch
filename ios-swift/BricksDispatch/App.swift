@@ -78,11 +78,17 @@ struct MainTabView: View {
             TodayJobsView()
                 .tabItem { Label("Today", systemImage: "calendar") }
 
+            ScheduleView()
+                .tabItem { Label("Schedule", systemImage: "calendar.badge.clock") }
+
+            UploadsView()
+                .tabItem { Label("Upload", systemImage: "arrow.up.circle") }
+
             EarningsView()
-                .tabItem { Label("Earnings", systemImage: "banknote") }
+                .tabItem { Label("Payouts", systemImage: "banknote") }
 
             ProfileView()
-                .tabItem { Label("Profile", systemImage: "person.circle") }
+                .tabItem { Label("Me", systemImage: "person.circle") }
         }
         .tint(BricksColors.brick)
     }
