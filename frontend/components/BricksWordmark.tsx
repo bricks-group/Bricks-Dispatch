@@ -41,7 +41,7 @@ function AnimatedLogoMark({ size, color, b1, b2, b3 }: {
   return (
     <View style={{ width: wBotL + cGap + wBotR, height: h + rGap + h, position: 'relative' }}>
       <Animated.View style={[
-        { position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color },
+        { position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color, opacity: 0.82 },
         style1,
       ]} />
       <Animated.View style={[
@@ -83,7 +83,7 @@ export function BrickLoader({ size = 2.5, color = TOKENS.brick }: { size?: numbe
   return (
     <Animated.View style={spinStyle}>
       <View style={{ width: wBotL + cGap + wBotR, height: h + rGap + h, position: 'relative' }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color }} />
+        <View style={{ position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color, opacity: 0.82 }} />
         <View style={{ position: 'absolute', left: 0, top: h + rGap, width: wBotL, height: h, borderRadius: r, backgroundColor: color }} />
         <View style={{ position: 'absolute', left: wBotL + cGap, top: h + rGap, width: wBotR, height: h, borderRadius: r, backgroundColor: color }} />
       </View>
