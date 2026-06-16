@@ -1,100 +1,177 @@
 {
-  "theme": "dark",
-  "archetype": "Archetype 4: Swiss & High-Contrast (Utilitarian Dark Mode / Operations Pattern)",
-  "typography": {
-    "heading_font": "Chivo",
-    "body_font": "IBM Plex Sans",
-    "mono_font": "JetBrains Mono",
-    "scale": {
-      "h1": "text-3xl sm:text-4xl font-black tracking-tighter uppercase",
-      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
-      "h3": "text-xl font-semibold tracking-tight",
-      "h4": "text-lg font-medium",
-      "body": "text-base leading-relaxed",
-      "small": "text-sm text-zinc-400",
-      "micro": "text-xs font-bold uppercase tracking-[0.15em]"
-    }
+  "meta": {
+    "source": "Bricks Design System — design_handoff_bricks package, June 2026",
+    "description": "Photographer field kit mobile app. Dark-first. Warm night, moon, and a single terracotta lifted from the mark."
   },
-  "colors": {
-    "background": "#050505",
-    "surface": "#121212",
-    "surface_elevated": "#1A1A1A",
-    "border": "#27272A",
-    "border_focus": "#FACC15",
-    "text_primary": "#FFFFFF",
-    "text_secondary": "#A1A1AA",
-    "text_tertiary": "#71717A",
-    "primary": "#FACC15",
-    "primary_hover": "#EAB308",
-    "primary_text": "#000000",
+
+  "theme_and_archetype": {
+    "theme": "Always Dark — field legibility at 6am, matte not glossy",
+    "archetype": "Warm Night & Moon — Focused, Professional",
+    "description": "Night surface scale with moon text. Single terracotta accent. Hairline borders, 2px radius everywhere, zero drop shadows. Information density matters in the field."
+  },
+
+  "tokens": {
+    "light": {
+      "paper":      "#F4F1EB",
+      "paperSoft":  "#EDE8DF",
+      "paperDeep":  "#E4DED2",
+      "hair":       "#1411100F",
+      "hairStrong": "#14111020",
+      "ink":        "#14110E",
+      "inkSoft":    "#3B332A",
+      "inkMute":    "#6B6054",
+      "inkFaint":   "#A39684"
+    },
+    "dark": {
+      "night":      "#141210",
+      "nightSoft":  "#1C1A17",
+      "nightDeep":  "#23201C",
+      "nightHair":  "#F4F1EB14",
+      "nightHairS": "#F4F1EB26",
+      "moon":       "#F4F1EB",
+      "moonSoft":   "#D6CFC2",
+      "moonMute":   "#8F8678",
+      "moonFaint":  "#5E574C"
+    },
+    "accent": {
+      "brick":     "#D2542B",
+      "brickDeep": "#A8401F",
+      "brickSoft": "#F4D9CC",
+      "brickTint": "#FBEFE8"
+    },
     "status": {
-      "assigned": { "bg": "#3B82F6", "text": "#FFFFFF", "soft_bg": "#1D4ED840", "soft_text": "#60A5FA" },
-      "in_progress": { "bg": "#FACC15", "text": "#000000", "soft_bg": "#CA8A0440", "soft_text": "#FDE047" },
-      "completed": { "bg": "#22C55E", "text": "#FFFFFF", "soft_bg": "#15803D40", "soft_text": "#4ADE80" },
-      "urgent": { "bg": "#EF4444", "text": "#FFFFFF", "soft_bg": "#B91C1C40", "soft_text": "#F87171" }
+      "ok":       "#6FAB5E",
+      "okTint":   "rgba(111,171,94,0.15)",
+      "warn":     "#D4903A",
+      "warnTint": "rgba(212,144,58,0.15)",
+      "bad":      "#C45547",
+      "badTint":  "rgba(196,85,71,0.15)"
     }
   },
-  "layout_spacing": {
-    "app_wrapper": "w-full min-h-[100dvh] bg-[#050505] text-white flex flex-col md:max-w-md md:mx-auto md:border-x md:border-zinc-900 shadow-2xl relative overflow-hidden",
-    "content_padding": "px-4 py-6 pb-28",
-    "card_padding": "p-5",
-    "gap_large": "gap-8",
-    "gap_medium": "gap-4",
-    "gap_small": "gap-2"
+
+  "typography": {
+    "font_display": "General Sans",
+    "font_mono":    "JetBrains Mono",
+    "font_loading": {
+      "general_sans": "Load via useFonts with keys 'GeneralSans-Regular' and 'GeneralSans-Medium' pointing to local OTF assets in /assets/fonts/.",
+      "jetbrains_mono": "Load via @expo-google-fonts/jetbrains-mono. Keys: JetBrainsMono_400Regular, JetBrainsMono_500Medium."
+    },
+    "rules": [
+      "General Sans is the sole display/body font — do NOT use System, Helvetica, Outfit, Manrope, or Inter.",
+      "JetBrains Mono is used for all numbers, IDs, times, overline labels, and tabular data.",
+      "Overline/label style: font-mono, 10–10.5px, letter-spacing 0.14–0.18em, uppercase, color moonMute.",
+      "Display headings: font-display, weight 500, letter-spacing -1 to -1.2px, line-height 1.0–1.05.",
+      "KPI values: font-mono, 28–36px, weight 400, letter-spacing -1px.",
+      "Body text: 13–15px, line-height 1.45–1.55, color moonSoft.",
+      "Numbers in billing, job IDs, and timestamps must use font-mono for tabular alignment."
+    ]
   },
+
+  "shape_and_elevation": {
+    "border_radius": "2px everywhere — buttons, cards, badges, inputs, avatars. Pills (borderRadius: 999) only on type-selector chips.",
+    "shadows": "Zero drop shadows on any content surface. No elevation prop.",
+    "borders": "Hairline 1px borders at nightHair token (~8% moon on dark). Strong borders (nightHairS) for focus rings and selected states."
+  },
+
+  "layout_and_spacing": {
+    "surface": "Mobile 390×844 (iPhone). Full-height SafeAreaView. Dark background night (#141210).",
+    "content_padding": "24px horizontal screen padding. 16px inside cards and list cells.",
+    "spacing_scale": "Consistent use of 4/6/8/10/12/14/16/18/20/24/28/32/36/48 — do not introduce arbitrary values."
+  },
+
   "components": {
-    "button": {
-      "primary": "w-full bg-[#FACC15] text-black font-bold uppercase tracking-wide rounded-sm py-4 px-6 text-center hover:bg-[#EAB308] active:scale-[0.98] transition-all flex justify-center items-center gap-2",
-      "secondary": "w-full bg-[#1A1A1A] text-white border border-zinc-800 font-semibold rounded-sm py-4 px-6 text-center hover:bg-zinc-800 active:scale-[0.98] transition-all flex justify-center items-center gap-2"
+    "header": {
+      "height": "56px",
+      "background": "night",
+      "border": "1px nightHair bottom — flat, NO glassmorphism or backdrop-blur",
+      "contains": "BricksWordmark at size=1 on auth screens; page title (General Sans 500 17px moon) + optional right action on interior screens"
     },
-    "card": "bg-[#121212] border border-zinc-800 rounded-sm shadow-none p-4",
-    "badge": "px-2 py-1 text-[10px] font-bold uppercase tracking-widest rounded-sm border border-transparent",
-    "bottom_nav": {
-      "container": "fixed bottom-0 left-0 right-0 w-full md:max-w-md md:mx-auto bg-[#0A0A0A]/95 backdrop-blur-md border-t border-zinc-900 flex justify-between px-2 pb-safe pt-2 z-50",
-      "item_active": "text-[#FACC15] flex flex-col items-center gap-1.5 p-3 w-1/4",
-      "item_inactive": "text-zinc-500 hover:text-zinc-300 flex flex-col items-center gap-1.5 p-3 w-1/4 transition-colors"
+    "tab_bar": {
+      "border": "1px nightHair top",
+      "padding": "8px 12px 28px",
+      "columns": "4-column grid",
+      "active": "moon color, 2px brick top indicator, strokeWidth 1.75",
+      "inactive": "moonFaint color, strokeWidth 1.5",
+      "label": "mono 10px tracking-[0.12em] uppercase"
     },
-    "input": "w-full bg-[#0A0A0A] border border-zinc-800 rounded-sm p-4 text-white focus:ring-1 focus:ring-[#FACC15] focus:border-[#FACC15] outline-none transition-colors",
-    "progress_bar": {
-      "track": "w-full bg-zinc-900 h-1.5 rounded-none overflow-hidden",
-      "fill": "bg-[#FACC15] h-full transition-all duration-300"
+    "job_card": "bg nightSoft, border 1px nightHair, borderRadius 2px, padding 16px. Title: moon 500. Meta: moonMute mono 11px. Status badge top-right.",
+    "kpi_strip": "Grid Borders dark: container bg nightHair, children bg night. Label: moonMute mono 10px uppercase. Value: moon mono 28px.",
+    "badge": {
+      "style": "padding 5px 9px, font-mono 10px tracking-[0.14em] uppercase, borderRadius 2px, no border",
+      "in_progress": "bg rgba(210,84,43,0.15), color brick",
+      "scheduled":   "bg nightDeep, color moonSoft",
+      "editing":     "bg rgba(212,144,58,0.15), color warn",
+      "delivered":   "bg rgba(111,171,94,0.15), color ok"
     },
-    "checkbox": "w-6 h-6 rounded-sm border-2 border-zinc-600 data-[state=checked]:bg-[#FACC15] data-[state=checked]:text-black data-[state=checked]:border-[#FACC15] transition-all",
-    "switch": "peer inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15] disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-[#FACC15] data-[state=unchecked]:bg-zinc-800"
+    "buttons": {
+      "primary_brick":"bg brick (#D2542B), color white, padding 14px 20px, fontSize 14px weight 500, borderRadius 2px, border none",
+      "primary_moon": "bg moon, color night, same sizing",
+      "secondary":    "bg transparent, color moon, border 1px nightHairS, same sizing",
+      "full_width":   "width '100%'"
+    },
+    "chips_mobile": "padding 9px 16px, borderRadius 999 (pill), active: bg moon color night, inactive: bg nightSoft border 1px nightHair",
+    "list_row": "padding 16px 24px, fontSize 13px moonSoft, borderBottom 1px nightHair (except last row). Numbers right-aligned in mono.",
+    "upload_cell": "bg nightSoft, border 1px nightHair, borderRadius 2px. Progress bar: brick color, 2px height.",
+    "avatar": "borderRadius 2px, nightSoft background, initials in moonMute mono"
   },
-  "motion": {
-    "page_transition": "animate-in slide-in-from-bottom-4 fade-in duration-300",
-    "tap_interaction": "active:scale-95 transition-transform duration-100",
-    "list_stagger": "animate-in fade-in slide-in-from-bottom-2 duration-300 delay-100"
-  },
+
   "icons": {
-    "library": "lucide-react",
-    "style": "strokeWidth={2.5} className='w-5 h-5'"
+    "style": "Custom hairline SVG set. strokeWidth 1.5 default (1.75 for active nav). strokeLinecap round, strokeLinejoin round. fill none. Color: moon (active), moonFaint (inactive).",
+    "library_note": "If using an external library, choose one that matches hairline weight at 1.5px stroke — e.g. lucide-react-native or @phosphor-icons/react-native at 'light' or 'regular' weight.",
+    "available_icons": ["home","calendar","job","camera","user","upload","map","pin","arrow","arrowUp","arrowDn","check","plus","settings","search","bell","dollar","dots","clock","trend","chevronR","chevronD","grid","users","play","nav"]
   },
-  "media_urls": {
-    "property_sample": {
-      "url": "https://images.unsplash.com/photo-1767950470198-c9cd97f8ed87?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBsdXh1cnklMjBob21lJTIwZXh0ZXJpb3IlMjBuaWdodHxlbnwwfHx8fDE3NzYwMDQ5NDJ8MA&ixlib=rb-4.1.0&q=85",
-      "description": "Modern luxury home exterior at night (for job detail header hero image)"
+
+  "logo": {
+    "mark_shape": "The mark reads as a lowercase 'b' — NOT a pyramid or centered diamond. Two bricks stacked on the left form the vertical stem; one brick on the right at the bottom level forms the bowl.",
+    "mark_layout": "3 bricks on a 24×24 viewBox with ~1.2px mortar gaps. stem-top (x=3,y=4,w=11,h=6.4,rx=0.8,opacity=0.82), stem-base (x=3,y=11.6,w=6,h=8.4,rx=0.8,opacity=1), bowl (x=10.2,y=11.6,w=10.8,h=8.4,rx=0.8,opacity=1). Top brick overhangs to the right; stem-base is narrow; bowl is wide.",
+    "mark_rn_proportions": "In React Native (absolute-positioned Views): h=7*size, wTop=11*size, wBotL=6*size, wBotR=10*size, rGap=2*size, cGap=max(1,round(size)), borderRadius=1.2*size. Top brick opacity 0.82.",
+    "mark_color": "brick (#D2542B) for the mark on dark backgrounds",
+    "mark_WRONG": "Do NOT use equal-width stem bricks — that makes a pyramid. stem-top must be wider than stem-base. stem-base must be narrow (wBotL=6 on 24px viewBox, or 6*size in RN). Do NOT use centered top brick.",
+    "wordmark": "'bricks' in GeneralSans-Medium, color moon (#F4F1EB) on dark, fontSize×(-0.035) letter-spacing, gap = fontSize×0.4"
+  },
+
+  "motion": {
+    "rules": [
+      "Transitions 180ms on color changes, 120ms for press feedback.",
+      "Press feedback: 1px Y nudge (translateY(1)).",
+      "No dramatic entrance animations — field use, fast task completion.",
+      "Respect Reduce Motion accessibility setting."
+    ]
+  },
+
+  "accessibility": {
+    "rules": [
+      "Minimum 4.5:1 contrast for body text — dark backgrounds make this easier, but verify moonFaint text.",
+      "All actionable elements must have testID (e.g. testID='upload-btn', testID='job-row-08412').",
+      "Focus rings: 2px solid moon with 2px offset."
+    ]
+  },
+
+  "app_specific": {
+    "brokerage": {
+      "surface": "Desktop web, 1440px wide",
+      "theme_default": "light (user-togglable)"
     },
-    "map_dark_mode": {
-      "url": "https://images.unsplash.com/photo-1704773988833-af2f8709a831?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBkYXJrJTIwbWFwJTIwc2F0ZWxsaXRlJTIwdmlld3xlbnwwfHx8fDE3NzYwMDQ5NDJ8MA&ixlib=rb-4.1.0&q=85",
-      "description": "Dark satellite map view for location mapping inside job details"
+    "booking": {
+      "surface": "Agent mobile, 390×844 (iPhone)",
+      "theme_default": "light (user-togglable)"
     },
-    "user_avatar": {
-      "url": "https://images.unsplash.com/photo-1772987273687-4866382c146f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdCUyMHBob3RvZ3JhcGhlciUyMGRhcmslMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3NjAwNDk0MXww&ixlib=rb-4.1.0&q=85",
-      "description": "Professional photographer avatar in dark setting for the Profile tab"
+    "dispatch": {
+      "surface": "Photographer mobile, 390×844 (iPhone)",
+      "theme_default": "dark — always. Field legibility at 6am, matte not glossy."
     }
   },
+
   "instructions_to_main_agent": [
-    "Ensure 'lucide-react' is used for all icon needs. Do not use generic emoji unless debugging.",
-    "This is a mobile-first app wrapper. Wrap the main app routes inside a container with 'w-full flex flex-col md:max-w-md md:mx-auto min-h-[100dvh] relative overflow-x-hidden' to simulate a mobile app on desktop.",
-    "CRITICAL: Do not use rounded cards. Use 'rounded-sm' or 'rounded-none'. We are going for a strict, military-grade logistics UI look (Uber Driver style).",
-    "CRITICAL: Every interactive element (buttons, tabs, inputs, list items) MUST have a 'data-testid' attribute as per accessibility rules.",
-    "Navigation should stick to the bottom. Add 'pb-28' to the main scrollable container to prevent content from hiding behind the tab bar.",
-    "The primary accent color is High-Vis Yellow (#FACC15). Use this sparingly for active states or primary 'Start/Complete Job' CTAs.",
-    "Avoid descriptive marketing text. Use data-dense labels (e.g., 'ARRIVE: 14:00', 'UPLOAD: 23/45').",
-    "Ensure there are no full-screen gradients. Keep backgrounds solid, matte black (#050505 or #121212) with sharp 1px borders.",
-    "Job Cards should clearly display the status via colored text or badges. Over-index on negative space and clear alignment.",
-    "For the Schedule timeline view, use vertical lines (border-l-2 border-zinc-800) connecting the timeslots to create a robust structural grid."
+    "CRITICAL: Use General Sans as the display/body font (fontFamily: 'GeneralSans-Medium' or 'GeneralSans-Regular') and JetBrains Mono for all data/numbers (fontFamily: 'JetBrainsMono_400Regular'). Never use System, Helvetica, or platform-conditional fonts.",
+    "CRITICAL: Dispatch is ALWAYS dark. Use night (#141210) as primary background, moon (#F4F1EB) as primary text. Never render a light theme.",
+    "CRITICAL: The color system is warm night/moon (not pure black/white or zinc). Use the exact hex values in the tokens section.",
+    "CRITICAL: Border radius is 2px everywhere (borderRadius: 2). No borderRadius > 2 except chips (borderRadius: 999).",
+    "CRITICAL: Zero drop shadows on content. No elevation, no shadowColor on cards or panels.",
+    "CRITICAL: This is a React Native / Expo TypeScript project. Write .tsx files with proper TypeScript types. Use StyleSheet.create() for styles.",
+    "Overline labels are always: fontFamily mono, ~10px, letterSpacing 0.14–0.18em, textTransform uppercase, color moonMute.",
+    "All numeric values — shot counts, prices, times, job IDs — must use JetBrains Mono.",
+    "Include testID on all actionable elements and navigation items.",
+    "Never use placeholder image URLs. Only use media URLs that are explicitly provided."
   ]
 }

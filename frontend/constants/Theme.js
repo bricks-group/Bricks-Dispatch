@@ -7,26 +7,34 @@ export const TOKENS = {
   night: '#141210',
   nightSoft: '#1C1A17',
   nightDeep: '#23201C',
-  nightHair: '#F4F1EB14',   // 1px Hairline (6% ink)
-  nightHairS: '#F4F1EB26',  // Strong borders
-  
+  nightHair: '#F4F1EB14',   // hairline border on dark
+  nightHairS: '#F4F1EB26',  // strong border / focus on dark
+
   // Light Mode (Paper)
   paper: '#F4F1EB',
   paperSoft: '#EDE8DF',
   paperDeep: '#E4DED2',
-  
-  // Text
-  moon: '#F4F1EB',          // Primary Text (Dark)
-  moonSoft: '#D6CFC2',      // Secondary Text
-  moonMute: '#8F8678',      // Labels, Icons
-  moonFaint: '#5E574C',     // Sub-labels
-  
+  hair: '#1411100F',        // hairline border on light
+  hairStrong: '#14111020',  // strong border / focus on light
+
+  // Text — light scale
+  ink: '#14110E',
+  inkSoft: '#3B332A',
+  inkMute: '#6B6054',
+  inkFaint: '#A39684',
+
+  // Text — dark scale
+  moon: '#F4F1EB',
+  moonSoft: '#D6CFC2',
+  moonMute: '#8F8678',
+  moonFaint: '#5E574C',
+
   // Accent — Terracotta
   brick: '#D2542B',
   brickDeep: '#A8401F',
   brickSoft: '#F4D9CC',
   brickTint: '#FBEFE8',
-  
+
   // Status
   ok: '#4A6B3C',
   okTint: '#E6ECDD',
@@ -34,14 +42,16 @@ export const TOKENS = {
   warnTint: '#F6E8D1',
   bad: '#8C2F24',
   badTint: '#F1DAD4',
-  
+
   // Shapes
   radius: 2,
 };
 
 export const TYPOGRAPHY = {
-  heading: Platform.OS === 'ios' ? 'Helvetica Neue' : 'sans-serif-medium',
-  body: Platform.OS === 'ios' ? 'Helvetica' : 'sans-serif',
-  mono: 'JetBrainsMono-Regular',
-  monoMedium: 'JetBrainsMono-Medium',
+  heading: 'GeneralSans-Medium',
+  headingLight: 'GeneralSans-Regular',
+  body: 'GeneralSans-Regular',
+  bodyMedium: 'GeneralSans-Medium',
+  mono: 'JetBrainsMono_400Regular',
+  monoMedium: 'JetBrainsMono_500Medium',
 };
