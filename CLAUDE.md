@@ -264,7 +264,9 @@ pick_vendor_rule_based(job, vendors)
 - **Stripe Connect E2E test suite (2026-06-03)** ✅ — `tests/conftest.py` stubs external deps; all 11 tests pass
 - **Dispatch web shell in Brokerage (2026-06-10)** ✅ — photographer Dispatch experience lives at `brokerage.brxs.ca/dispatch/*`; role-based routing after login; no separate dispatch.brxs.ca web needed
 - **Dispatch failure manual queue (2026-06-11)** ✅ — `GET /api/admin/dispatch-failures` + `POST /api/admin/dispatch-failures/{job_id}/reassign`; ops escalation closed on retry; new escalation written on second failure
-- **Gaussian splat processing via Luma Labs (2026-06-13)** ✅ — `POST /api/v1/post-production/splat-upload/{job_id}` accepts multipart video/zip from Bricks GO app; stores source to `brxs-deliverables/splat-sources/{job_id}/`; submits to Luma Labs Dream Machine API; polls every 10s (max 20 min); downloads .ply; uploads to `splats/{job_id}/scene.ply`; writes signed URL to `media_delivery.splat_url`. Also auto-triggered from `process_job_assets()` when splat source files are detected alongside photos. Service: `backend/app/services/splat_service.py`
+- **In-house 3DGS pipeline via Modal GPU (2026-06-16)** ✅ — Full self-hosted Gaussian splat pipeline. `POST /api/v1/post-production/splat-upload/{job_id}` accepts multipart video/zip; stores source to `brxs-deliverables/splat-sources/{job_id}/`; fires to Modal A10G GPU via `submit_to_modal_trigger()` (fire-and-forget, no blocking). Modal function runs COLMAP SfM → nerfstudio splatfacto (15k iterations) → ns-export .ply → uploads to `splats/{job_id}/scene.ply` → calls back via `POST /api/v1/post-production/splat-complete/{job_id}`. Total pipeline: ~25-35 min on A10G. SPLAT_BACKEND=luma falls back to Luma Labs. Modal app: `backend/modal_splat/app.py`.
+- **Guided capture UX (2026-06-16)** ✅ — iOS: `BricksDispatch/Views/Jobs/SplatCaptureView.swift` (AVCaptureSession, orbit guidance ring, upload); Android: `frontend/app/splat-capture.tsx` (expo-camera, animated ring, same guidance). "Record 3D Tour" button on uploads screen routes to capture.
+- **Design coherence fix (2026-06-16)** ✅ — `frontend/constants/Theme.js` TYPOGRAPHY.mono corrected to `JetBrainsMono_400Regular` / `JetBrainsMono_500Medium` matching font names loaded in `_layout.tsx`.
 
 ## Remaining Before Live Traffic
 
@@ -274,7 +276,9 @@ pick_vendor_rule_based(job, vendors)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)
 - `GEMINI_API_KEY` ✅ (set)
 - `FOTELLO_API_KEY` ✅ (set)
-- `LUMA_API_KEY` — Luma Labs API key for Gaussian splat / NeRF processing. Required for `POST /api/v1/post-production/splat-upload/{job_id}`. Get at https://lumalabs.ai/dream-machine/api
+- `MODAL_SPLAT_TRIGGER_URL` — URL of the Modal `trigger` web endpoint (from `modal deploy backend/modal_splat/app.py`). Required for SPLAT_BACKEND=bricks.
+- `SPLAT_BACKEND` — `bricks` (default, Modal GPU in-house) | `luma` (legacy fallback). Default is `bricks` when MODAL_SPLAT_TRIGGER_URL is set.
+- `LUMA_API_KEY` — Luma Labs API key (legacy fallback only; only needed if SPLAT_BACKEND=luma)
 - `INTERNAL_API_KEYS` — rotated; current value stored in app_secrets table ✅ (set)
 - `TWILIO_ACCOUNT_SID` ✅ (set)
 - `TWILIO_AUTH_TOKEN` ✅ (set)
