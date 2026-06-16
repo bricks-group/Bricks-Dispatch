@@ -31,6 +31,7 @@ struct BricksDispatchApp: App {
     @StateObject private var auth = BricksAuth.shared
     @StateObject private var jobStore = JobStore.shared
     @StateObject private var watchBridge = WatchConnectivityManager.shared
+    @AppStorage("welcome_seen") private var welcomeSeen = false
 
     init() {
         BricksFont.registerFonts()
@@ -44,6 +45,8 @@ struct BricksDispatchApp: App {
             Group {
                 if auth.isLoading {
                     SplashView()
+                } else if !welcomeSeen {
+                    WelcomeView()
                 } else if auth.isAuthenticated {
                     MainTabView()
                         .task { await jobStore.loadTodayJobs() }

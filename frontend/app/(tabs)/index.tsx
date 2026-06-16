@@ -229,7 +229,7 @@ const s = StyleSheet.create({
   scroll: { paddingHorizontal: 24, paddingTop: 16 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   empty: { paddingTop: 60, alignItems: 'center' },
-  emptyText: { color: TOKENS.moonFaint, fontSize: 13 },
+  emptyText: { fontFamily: TYPOGRAPHY.body, color: TOKENS.moonFaint, fontSize: 13 },
 
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 },
   dateLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 10, color: TOKENS.moonFaint, letterSpacing: 1.4, marginBottom: 4 },
@@ -261,8 +261,8 @@ const s = StyleSheet.create({
   checkRowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
   chkFilled: { width: 17, height: 17, borderRadius: 2, backgroundColor: TOKENS.brick, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   chkEmpty: { width: 17, height: 17, borderRadius: 2, borderWidth: 1.5, borderColor: TOKENS.nightHairS, flexShrink: 0 },
-  checkLabel: { flex: 1, fontSize: 13, color: TOKENS.moon },
-  checkLabelDone: { flex: 1, fontSize: 13, color: TOKENS.moonFaint, textDecorationLine: 'line-through' },
+  checkLabel: { fontFamily: TYPOGRAPHY.body, flex: 1, fontSize: 13, color: TOKENS.moon },
+  checkLabelDone: { fontFamily: TYPOGRAPHY.body, flex: 1, fontSize: 13, color: TOKENS.moonFaint, textDecorationLine: 'line-through' },
 
   laterList: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
   laterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 14 },
@@ -270,7 +270,7 @@ const s = StyleSheet.create({
   laterTime: { fontFamily: TYPOGRAPHY.mono, fontSize: 13, color: TOKENS.moon, width: 52 },
   laterDivider: { width: 1, height: 28, backgroundColor: TOKENS.nightHair },
   laterInfo: { flex: 1, paddingLeft: 4 },
-  laterAddress: { fontSize: 14, color: TOKENS.moon, marginBottom: 2 },
-  laterType: { fontSize: 11, color: TOKENS.moonFaint, textTransform: 'capitalize' },
+  laterAddress: { fontFamily: TYPOGRAPHY.heading, fontSize: 14, color: TOKENS.moon, marginBottom: 2 },
+  laterType: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moonFaint, textTransform: 'capitalize' },
   laterPayout: { fontFamily: TYPOGRAPHY.mono, fontSize: 13, color: TOKENS.moon },
 });

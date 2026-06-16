@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowRight } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import BricksWordmark from '../../components/BricksWordmark';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
@@ -31,12 +32,17 @@ export default function OnboardingSlides() {
   const [current, setCurrent] = useState(0);
   const router = useRouter();
 
-  const next = () => {
-    if (current < SLIDES.length - 1) setCurrent(current + 1);
-    else router.push('/onboarding/register');
+  const finish = async () => {
+    await AsyncStorage.setItem('welcome_seen', '1');
+    router.replace('/(auth)/login' as any);
   };
 
-  const skip = () => router.push('/onboarding/register');
+  const next = () => {
+    if (current < SLIDES.length - 1) setCurrent(current + 1);
+    else finish();
+  };
+
+  const skip = () => finish();
 
   const slide = SLIDES[current];
 
@@ -87,7 +93,7 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: TOKENS.night },
 
   topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 12 },
-  skip: { fontSize: 12, color: TOKENS.moonFaint },
+  skip: { fontFamily: TYPOGRAPHY.body, fontSize: 12, color: TOKENS.moonFaint },
 
   body: { flex: 1, paddingHorizontal: 24, paddingBottom: 24, flexDirection: 'column' },
 
@@ -106,7 +112,7 @@ const s = StyleSheet.create({
   copy: { marginBottom: 32 },
   eye: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 10, color: TOKENS.brick, letterSpacing: 1.8, marginBottom: 10 },
   head: { fontSize: 28, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, letterSpacing: -0.8, lineHeight: 34, marginBottom: 10 },
-  desc: { fontSize: 14, color: TOKENS.moonSoft, lineHeight: 22 },
+  desc: { fontFamily: TYPOGRAPHY.body, fontSize: 14, color: TOKENS.moonSoft, lineHeight: 22 },
 
   footer: {},
   bars: { flexDirection: 'row', gap: 6, height: 2, marginBottom: 20 },

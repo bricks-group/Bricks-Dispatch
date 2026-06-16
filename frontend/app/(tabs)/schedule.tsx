@@ -211,7 +211,7 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: TOKENS.night },
   center: { paddingTop: 60, alignItems: 'center' },
   empty: { paddingTop: 60, alignItems: 'center' },
-  emptyText: { color: TOKENS.moonFaint, fontSize: 13 },
+  emptyText: { fontFamily: TYPOGRAPHY.body, color: TOKENS.moonFaint, fontSize: 13 },
 
   stickyTop: { backgroundColor: TOKENS.night, paddingHorizontal: 24, paddingTop: 16, paddingBottom: 0 },
   weekHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
@@ -240,7 +240,7 @@ const s = StyleSheet.create({
   timelineDot: { position: 'absolute', top: 6, left: -3, width: 7, height: 7, borderRadius: 4 },
   timelineInfo: { flex: 1, paddingLeft: 8 },
   timelineAddr: { fontSize: 14, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, marginBottom: 3 },
-  timelineType: { fontSize: 11, color: TOKENS.moonFaint },
+  timelineType: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moonFaint },
   pill: { alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 2 },
   pillText: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, letterSpacing: 1.2 },
 });

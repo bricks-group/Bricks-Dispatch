@@ -278,7 +278,7 @@ const s = StyleSheet.create({
   identityInfo: { flex: 1 },
   name: { fontSize: 18, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, marginBottom: 3 },
   role: { fontSize: 12, color: TOKENS.brick, fontFamily: TYPOGRAPHY.monoMedium, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 3 },
-  email: { fontSize: 12, color: TOKENS.moonFaint },
+  email: { fontFamily: TYPOGRAPHY.body, fontSize: 12, color: TOKENS.moonFaint },
 
   rail: { flexDirection: 'row', backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, marginBottom: 28 },
   railCell: { flex: 1, paddingVertical: 16, paddingHorizontal: 12, alignItems: 'flex-start' },
@@ -293,18 +293,18 @@ const s = StyleSheet.create({
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, paddingHorizontal: 16, paddingVertical: 14 },
   toggleLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   statusDot: { width: 7, height: 7, borderRadius: 3.5 },
-  toggleLabel: { fontSize: 14, color: TOKENS.moon },
+  toggleLabel: { fontFamily: TYPOGRAPHY.body, fontSize: 14, color: TOKENS.moon },
 
   menuCard: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
   menuRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
   menuRowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
   menuIconWrap: { width: 28, alignItems: 'center' },
   menuText: { flex: 1 },
-  menuLabel: { fontSize: 14, color: TOKENS.moon, marginBottom: 2 },
-  menuSub: { fontSize: 11, color: TOKENS.moonFaint },
+  menuLabel: { fontFamily: TYPOGRAPHY.heading, fontSize: 14, color: TOKENS.moon, marginBottom: 2 },
+  menuSub: { fontFamily: TYPOGRAPHY.body, fontSize: 11, color: TOKENS.moonFaint },
 
   signOutRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, paddingHorizontal: 16, paddingVertical: 14 },
-  signOutLabel: { fontSize: 14, color: TOKENS.bad },
+  signOutLabel: { fontFamily: TYPOGRAPHY.heading, fontSize: 14, color: TOKENS.bad },
   retryRow: { alignItems: 'center', paddingVertical: 16 },
-  retryText: { fontSize: 13, color: TOKENS.brick },
+  retryText: { fontFamily: TYPOGRAPHY.body, fontSize: 13, color: TOKENS.brick },
 });

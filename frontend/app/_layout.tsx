@@ -5,6 +5,7 @@ import { BrickLoader } from '../components/BricksWordmark';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
 import { TOKENS } from '../constants/Theme';
 import { actorHeaders } from '../lib/api';
@@ -73,6 +74,8 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [fontsLoaded] = useFonts({
+    'GeneralSans-Medium':   require('../assets/fonts/GeneralSans-Medium.otf'),
+    'GeneralSans-Regular':  require('../assets/fonts/GeneralSans-Regular.otf'),
     'IoskeleyMono-Regular': require('../assets/fonts/IoskeleyMono-Regular.ttf'),
     'IoskeleyMono-Medium':  require('../assets/fonts/IoskeleyMono-Medium.ttf'),
   });
@@ -92,12 +95,19 @@ export default function RootLayout() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Auth routing guard
+  // Auth routing guard — new users see welcome slides first
   useEffect(() => {
     if (!authChecked || !fontsLoaded) return;
     const inAuth = segments[0] === '(auth)';
-    if (!session && !inAuth) router.replace('/(auth)/login');
-    else if (session && inAuth) router.replace('/(tabs)');
+    const inOnboardingSlides = segments[0] === 'onboarding' && segments[1] === 'slides';
+    if (!session && !inAuth && !inOnboardingSlides) {
+      AsyncStorage.getItem('welcome_seen').then(seen => {
+        if (!seen) router.replace('/onboarding/slides' as any);
+        else router.replace('/(auth)/login');
+      });
+    } else if (session && inAuth) {
+      router.replace('/(tabs)');
+    }
   }, [session, authChecked, fontsLoaded, segments]);
 
   useInitPushNotifications();
@@ -114,9 +124,9 @@ export default function RootLayout() {
         
         const inOnboarding = segments[0] === 'onboarding';
         
-        // If user is new/not approved, force onboarding
+        // New applicants skip slides (already seen pre-login) and go to registration form
         if (profile.role === 'Applicant' && !inOnboarding) {
-          router.replace('/onboarding/slides');
+          router.replace('/onboarding/register' as any);
         }
       } catch (e) {
         console.error("Onboarding check failed", e);

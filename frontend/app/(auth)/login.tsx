@@ -180,12 +180,14 @@ const s = StyleSheet.create({
     marginBottom: 10,
   },
   heading: {
+    fontFamily: TYPOGRAPHY.heading,
     fontSize: 34,
     fontWeight: '500',
     letterSpacing: -1,
     color: TOKENS.moon,
   },
   sub: {
+    fontFamily: TYPOGRAPHY.body,
     fontSize: 14,
     color: TOKENS.moonMute,
     marginTop: 6,
