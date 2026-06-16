@@ -3,182 +3,179 @@ import BricksCore
 
 struct ProfileView: View {
     @ObservedObject private var auth: BricksAuth = .shared
-    @StateObject private var vm = ProfileViewModel()
-    @State private var showEditSheet = false
+    @StateObject private var vm = DispatchProfileViewModel()
+    private let th = BricksTheme(dark: true)
+
+    private var displayName: String { vm.name ?? auth.session?.email ?? "Photographer" }
+
+    private var initials: String {
+        let parts = displayName.split(separator: " ").map(String.init)
+        if parts.count >= 2 { return String(parts[0].prefix(1)) + String(parts[1].prefix(1)) }
+        return String(displayName.prefix(2)).uppercased()
+    }
+
+    private var currentYearMonth: String {
+        let c = Calendar.current; let now = Date()
+        return String(format: "%04d-%02d", c.component(.year, from: now), c.component(.month, from: now))
+    }
 
     var body: some View {
-        NavigationStack {
-            List {
-                // Header
-                Section {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            Circle()
-                                .fill(BricksColors.brick.opacity(0.12))
-                                .frame(width: 56, height: 56)
-                            Text(initials(vm.name ?? auth.session?.email ?? "?"))
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(BricksColors.brick)
-                        }
-                        .accessibilityHidden(true)
+        ZStack {
+            th.bg.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
 
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(vm.name ?? auth.session?.email ?? "Photographer")
-                                .font(.headline)
-                            if let role = vm.role {
-                                Text(role.uppercased())
-                                    .font(BricksFont.monoMedium(9))
-                                    .tracking(0.6)
-                                    .foregroundStyle(BricksColors.brick)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(BricksColors.brick.opacity(0.08))
-                                    .clipShape(RoundedRectangle(cornerRadius: 2))
-                            }
-                            if let stats = vm.stats {
-                                HStack(spacing: 16) {
-                                    statBadge(label: "SHOOTS", value: "\(stats.totalJobsCompleted)")
-                                    if let rating = stats.rating {
-                                        statBadge(label: "RATING", value: String(format: "%.1f", rating))
-                                    }
-                                    statBadge(label: "SINCE", value: stats.memberSince)
-                                }
-                                .padding(.top, 4)
-                            }
+                    Text("Profile")
+                        .font(.system(size: 22, weight: .medium))
+                        .tracking(-0.5)
+                        .foregroundStyle(th.ink)
+                        .padding(.horizontal, 22)
+                        .padding(.top, 14)
+                        .padding(.bottom, 20)
+
+                    // ── Identity card ──
+                    HStack(spacing: 14) {
+                        BAvatar(initials, size: 56, dark: true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(displayName)
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(th.ink)
+                            Text("Freelance · Photographer")
+                                .font(BricksFont.body(12))
+                                .foregroundStyle(th.ink3)
                         }
                         Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                            .foregroundStyle(th.ink3)
                     }
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 14)
+
+                    // ── Stats strip ──
+                    HStack(spacing: 1) {
+                        BStatCell("JOBS", "\(vm.totalJobs)", dark: true)
+                        BStatCell("THIS MO.", "\(vm.jobsThisMonth)", dark: true)
+                        BStatCell("RATING", vm.rating, dark: true)
+                    }
+                    .background(BricksColors.nightHair)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .strokeBorder(BricksColors.nightHair, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 22)
+
+                    // ── Account section ──
+                    BOver("Account", color: th.ink3)
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 10)
+
+                    VStack(spacing: 0) {
+                        let rows: [(String, String)] = [
+                            ("person", "Edit profile"),
+                            ("creditcard", "Payout method"),
+                            ("doc.text", "Tax documents"),
+                            ("gearshape", "Settings"),
+                        ]
+                        ForEach(rows.indices, id: \.self) { i in
+                            HStack(spacing: 12) {
+                                Image(systemName: rows[i].0)
+                                    .font(.system(size: 17))
+                                    .foregroundStyle(th.ink2)
+                                    .frame(width: 20)
+                                Text(rows[i].1)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(th.ink)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(th.ink3)
+                            }
+                            .padding(14)
+                            if i < rows.count - 1 { BHair(dark: true) }
+                        }
+                    }
+                    .background(th.surf)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .strokeBorder(th.hair, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 22)
+
+                    // ── Support section ──
+                    BOver("Support", color: th.ink3)
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 10)
+
+                    VStack(spacing: 0) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "phone")
+                                .font(.system(size: 17))
+                                .foregroundStyle(th.ink2)
+                                .frame(width: 20)
+                            Text("Contact support")
+                                .font(.system(size: 14))
+                                .foregroundStyle(th.ink)
+                            Spacer()
+                        }
+                        .padding(14)
+
+                        BHair(dark: true)
+
+                        Button(role: .destructive) { auth.signOut() } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "rectangle.portrait.and.arrow.right")
+                                    .font(.system(size: 17))
+                                    .foregroundStyle(BricksColors.brick)
+                                    .frame(width: 20)
+                                Text("Sign out")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(BricksColors.brick)
+                                Spacer()
+                            }
+                            .padding(14)
+                        }
+                    }
+                    .background(th.surf)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .strokeBorder(th.hair, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                    .padding(.horizontal, 22)
+
+                    Spacer(minLength: 20)
                 }
-
-                Section("ACCOUNT") {
-                    Button {
-                        showEditSheet = true
-                    } label: {
-                        Label("Edit Profile", systemImage: "pencil")
-                    }
-                    .foregroundStyle(.primary)
-
-                    Toggle(isOn: $vm.availability) {
-                        Label("Available for Jobs", systemImage: "clock")
-                    }
-                    .tint(BricksColors.brick)
-                    .onChange(of: vm.availability) { val in
-                        Task { await vm.setAvailability(val) }
-                    }
-
-                    NavigationLink {
-                        SettingsView()
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-
-                    NavigationLink {
-                        NotificationsView()
-                    } label: {
-                        Label("Notifications", systemImage: "bell")
-                    }
-                }
-
-                Section("SUPPORT") {
-                    Link(destination: URL(string: "https://dispatch.brxs.ca")!) {
-                        Label("Help Centre", systemImage: "questionmark.circle")
-                    }
-                    .foregroundStyle(.primary)
-                    Link(destination: URL(string: "https://brxs.ca/privacy")!) {
-                        Label("Privacy Policy", systemImage: "lock.shield")
-                    }
-                    .foregroundStyle(.primary)
-                }
-
-                Section {
-                    Button(role: .destructive) {
-                        auth.signOut()
-                    } label: {
-                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                    .accessibilityHint("Signs you out of the Bricks GO app")
-                }
-            }
-            .navigationTitle("Me")
-            .sheet(isPresented: $showEditSheet) {
-                ProfileEditView()
-                    .onDisappear { Task { await vm.load() } }
             }
         }
         .task { await vm.load() }
     }
-
-    @ViewBuilder
-    private func statBadge(label: String, value: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(BricksFont.mono(13))
-                .foregroundStyle(.primary)
-            Text(label)
-                .font(BricksFont.monoMedium(8))
-                .tracking(0.6)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func initials(_ str: String) -> String {
-        let parts = str.split(separator: " ").map(String.init)
-        if parts.count >= 2 {
-            return String((parts[0].first ?? "?")) + String((parts[1].first ?? "?"))
-        }
-        return String(str.prefix(2)).uppercased()
-    }
 }
 
-// MARK: — ViewModel
-
 @MainActor
-final class ProfileViewModel: ObservableObject {
+final class DispatchProfileViewModel: ObservableObject {
     @Published var name: String?
-    @Published var role: String?
-    @Published var availability: Bool = true
-    @Published var stats: ProfileStats?
-
-    struct ProfileStats {
-        let totalJobsCompleted: Int
-        let rating: Double?
-        let memberSince: String
-    }
-
-    private let api = BricksAPIClient.shared
+    @Published var totalJobs: Int = 0
+    @Published var jobsThisMonth: Int = 0
+    @Published var rating: String = "—"
 
     func load() async {
         do {
-            struct Profile: Decodable {
-                let name: String; let role: String; let availability: Bool
-                let totalJobsCompleted: Int; let rating: Double?; let memberSince: String
+            struct Resp: Decodable {
+                let name: String?
+                let totalJobs: Int?
+                let jobsThisMonth: Int?
+                let rating: Double?
             }
-            let p: Profile = try await api.get("/api/profile")
-            name = p.name
-            role = p.role
-            availability = p.availability
-            let fmt = DateFormatter()
-            fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
-            let since: String
-            if let date = fmt.date(from: p.memberSince) {
-                let out = DateFormatter()
-                out.dateFormat = "MMM yyyy"
-                since = out.string(from: date)
-            } else {
-                since = p.memberSince
-            }
-            stats = ProfileStats(totalJobsCompleted: p.totalJobsCompleted, rating: p.rating, memberSince: since)
+            let r: Resp = try await BricksAPIClient.shared.get("/api/profile")
+            name = r.name
+            totalJobs = r.totalJobs ?? 0
+            jobsThisMonth = r.jobsThisMonth ?? 0
+            if let rat = r.rating { rating = String(format: "%.1f", rat) }
         } catch {}
-    }
-
-    func setAvailability(_ val: Bool) async {
-        do {
-            struct Upd: Encodable { let availability: Bool }
-            struct Resp: Decodable {}
-            let _: Resp = try await api.patch("/api/profile", body: Upd(availability: val))
-        } catch {
-            availability = !val
-        }
     }
 }

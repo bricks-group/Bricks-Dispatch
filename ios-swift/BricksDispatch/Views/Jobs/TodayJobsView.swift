@@ -3,228 +3,219 @@ import BricksCore
 
 struct TodayJobsView: View {
     @StateObject private var store = JobStore.shared
-    @State private var selectedJob: DispatchJob?
+    private let th = BricksTheme(dark: true)
+
+    private var dayLabel: String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "EEEE · MMM d"
+        return fmt.string(from: Date())
+    }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if store.isLoading && store.todayJobs.isEmpty {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if store.todayJobs.isEmpty {
-                    emptyState
-                } else {
-                    jobList
-                }
-            }
-            .navigationTitle("Today")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 6, height: 6)
-                            .accessibilityHidden(true)
-                        Text("Online")
-                            .font(BricksFont.mono(12))
-                            .foregroundStyle(.secondary)
+        ZStack {
+            th.bg.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+
+                    // ── Header ──
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            BOver(dayLabel, color: th.ink4)
+                            Text("\(store.todayJobs.count) shoots.")
+                                .font(.system(size: 22, weight: .medium))
+                                .tracking(-0.5)
+                                .foregroundStyle(th.ink)
+                        }
+                        Spacer()
+                        BAvatar(store.vendorInitials, size: 36, dark: true)
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Status: Online")
-                }
-            }
-            .refreshable { await store.loadTodayJobs() }
-            .navigationDestination(item: $selectedJob) { job in
-                JobDetailView(job: job)
-            }
-            .fullScreenCover(isPresented: Binding(
-                get: { store.pendingOffer != nil },
-                set: { if !$0 { store.pendingOffer = nil } }
-            )) {
-                JobOfferHost(store: store)
-            }
-        }
-    }
+                    .padding(.horizontal, 22)
+                    .padding(.top, 14)
+                    .padding(.bottom, 20)
 
-    private var jobList: some View {
-        List {
-            Section {
-                earningsCard
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-            }
+                    // ── Next up card ──
+                    if let next = store.nextJob {
+                        VStack(alignment: .leading, spacing: 0) {
+                            BOver("Next up · \(next.timeUntil)", color: BricksColors.brick)
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(next.address)
+                                    .font(.system(size: 22, weight: .medium))
+                                    .tracking(-0.5)
+                                    .foregroundStyle(th.ink)
+                                Text("\(next.propertyType?.uppercased() ?? "PROPERTY") · \(next.sqft.map { "\($0) SQFT" } ?? "")")
+                                    .font(BricksFont.mono(12))
+                                    .foregroundStyle(th.ink3)
+                                    .padding(.top, 4)
 
-            if let active = store.todayJobs.first(where: { $0.isActive }) {
-                Section("ACTIVE") {
-                    JobRowView(job: active, isNext: true)
-                        .onTapGesture { selectedJob = active }
-                }
-            }
+                                // Stats grid
+                                HStack(spacing: 1) {
+                                    ForEach([
+                                        ("ARRIVE", next.arriveLabel),
+                                        ("DRIVE",  next.driveLabel ?? "—"),
+                                        ("PACKAGE", next.packageName ?? "—"),
+                                    ], id: \.0) { l, v in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            BOver(l, color: th.ink4)
+                                            Text(v)
+                                                .font(BricksFont.mono(14))
+                                                .foregroundStyle(th.ink)
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(th.surf)
+                                    }
+                                }
+                                .background(th.hairS)
+                                .clipShape(RoundedRectangle(cornerRadius: 2))
+                                .padding(.top, 14)
 
-            let upcoming = store.todayJobs.filter { $0.isUpcoming }
-            if !upcoming.isEmpty {
-                Section("UPCOMING") {
-                    ForEach(upcoming) { job in
-                        JobRowView(job: job)
-                            .onTapGesture { selectedJob = job }
+                                HStack(spacing: 8) {
+                                    Button {
+                                        if let url = URL(string: "maps://?daddr=\(next.address.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") {
+                                            UIApplication.shared.open(url)
+                                        }
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "location.fill")
+                                            Text("Navigate")
+                                        }
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 13)
+                                        .background(BricksColors.brick)
+                                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                                    }
+
+                                    if let phone = next.agentPhone, let url = URL(string: "tel:\(phone)") {
+                                        Link(destination: url) {
+                                            Image(systemName: "phone")
+                                                .font(.system(size: 17))
+                                                .foregroundStyle(th.ink)
+                                                .padding(13)
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 2)
+                                                        .strokeBorder(th.hairS, lineWidth: 1)
+                                                )
+                                        }
+                                    }
+                                }
+                                .padding(.top, 14)
+                            }
+                            .padding(18)
+                            .background(th.surf)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .strokeBorder(th.hairS, lineWidth: 1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 2))
+                        }
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 24)
                     }
-                }
-            }
 
-            let done = store.todayJobs.filter { $0.status == .completed || $0.status == .delivered }
-            if !done.isEmpty {
-                Section("DONE") {
-                    ForEach(done) { job in
-                        JobRowView(job: job, dimmed: true)
-                            .onTapGesture { selectedJob = job }
+                    // ── Pre-shoot checklist ──
+                    if let next = store.nextJob {
+                        VStack(alignment: .leading, spacing: 0) {
+                            BOver("Pre-shoot checklist", color: th.ink3)
+                                .padding(.horizontal, 22)
+                                .padding(.bottom, 10)
+
+                            let items: [(String, Bool)] = [
+                                ("Agent confirmed · \(next.agentName ?? "—")", next.agentName != nil),
+                                (next.accessCode.map { "Lockbox code · \($0)" } ?? "Lockbox code pending", next.accessCode != nil),
+                                ("Drone approved for area", next.droneApproved ?? false),
+                            ]
+
+                            ForEach(items, id: \.0) { item, done in
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(done ? BricksColors.brick : Color.clear)
+                                            .frame(width: 18, height: 18)
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .strokeBorder(done ? BricksColors.brick : th.hairS, lineWidth: 1.5)
+                                            .frame(width: 18, height: 18)
+                                        if done {
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .foregroundStyle(.white)
+                                        }
+                                    }
+                                    Text(item)
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(done ? th.ink3 : th.ink)
+                                        .strikethrough(done, color: th.ink3)
+                                    Spacer()
+                                }
+                                .padding(.vertical, 12)
+                                .padding(.horizontal, 22)
+                                BHair(dark: true)
+                            }
+                        }
+                        .padding(.bottom, 24)
                     }
+
+                    // ── Later today ──
+                    let later = store.todayJobs.dropFirst()
+                    if !later.isEmpty {
+                        BOver("Later today", color: th.ink3)
+                            .padding(.horizontal, 22)
+                            .padding(.bottom, 10)
+
+                        VStack(spacing: 10) {
+                            ForEach(later) { job in
+                                LaterJobRow(job: job, th: th)
+                            }
+                        }
+                        .padding(.horizontal, 22)
+                    }
+
+                    Spacer(minLength: 20)
                 }
             }
         }
-        .listStyle(.insetGrouped)
-    }
-
-    private var earningsCard: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("PROJECTED TODAY")
-                    .font(BricksFont.monoMedium(9.5))
-                    .tracking(0.8)
-                    .foregroundStyle(.secondary)
-                HStack(alignment: .lastTextBaseline, spacing: 3) {
-                    AnimatedDollar(target: projectedPayout, delay: 0.15)
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .minimumScaleFactor(0.65)
-                        .lineLimit(1)
-                    Text("CAD")
-                        .font(BricksFont.mono(9))
-                        .foregroundStyle(.secondary)
-                        .padding(.bottom, 2)
-                }
-                Text("\(store.todayJobs.count) shoot\(store.todayJobs.count == 1 ? "" : "s")")
-                    .font(BricksFont.mono(11))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("EARNED TODAY")
-                    .font(BricksFont.monoMedium(9.5))
-                    .tracking(0.8)
-                    .foregroundStyle(.secondary)
-                AnimatedDollar(target: earnedPayout, delay: 0.35)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(BricksColors.gold)
-                    .minimumScaleFactor(0.75)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    private var projectedPayout: Double {
-        store.todayJobs
-            .filter { $0.status != .cancelled }
-            .compactMap { $0.vendorPayout }
-            .reduce(0, +)
-    }
-
-    private var earnedPayout: Double {
-        store.todayJobs
-            .filter { $0.status == .completed || $0.status == .delivered }
-            .compactMap { $0.vendorPayout }
-            .reduce(0, +)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "calendar.badge.checkmark")
-                .font(.system(size: 44))
-                .foregroundStyle(Color(.tertiaryLabel))
-            Text("No jobs today")
-                .font(.headline)
-                .foregroundStyle(Color(.secondaryLabel))
-            Text("New assignments will appear here")
-                .font(.subheadline)
-                .foregroundStyle(Color(.tertiaryLabel))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task { await store.loadTodayJobs() }
     }
 }
 
-// MARK: — Job row
-
-struct JobRowView: View {
+private struct LaterJobRow: View {
     let job: DispatchJob
-    var dimmed = false
-    var isNext = false
+    let th: BricksTheme
 
     var body: some View {
         HStack(spacing: 14) {
-            statusDot
-            VStack(alignment: .leading, spacing: 3) {
-                if isNext {
-                    HStack(spacing: 6) {
-                        Text("UP NEXT")
-                            .font(BricksFont.monoMedium(9))
-                            .tracking(0.6)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(BricksColors.brick)
-                            .clipShape(RoundedRectangle(cornerRadius: 2))
-                        Text(timeLabel)
-                            .font(BricksFont.mono(11))
-                            .foregroundStyle(BricksColors.brick)
-                    }
-                    .padding(.bottom, 1)
-                }
+            Text(job.arriveLabel)
+                .font(BricksFont.mono(13))
+                .foregroundStyle(th.ink)
+                .frame(width: 48, alignment: .leading)
+
+            Rectangle()
+                .fill(th.hair)
+                .frame(width: 1, height: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
                 Text(job.address)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(dimmed ? Color(.secondaryLabel) : .primary)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    if !isNext {
-                        Text(timeLabel)
-                            .font(BricksFont.mono(11))
-                            .foregroundStyle(Color(.secondaryLabel))
-                        Text("·")
-                            .foregroundStyle(Color(.tertiaryLabel))
-                    }
-                    Text(job.packageName ?? job.jobType.capitalized)
-                        .font(BricksFont.mono(11))
-                        .foregroundStyle(Color(.secondaryLabel))
-                }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(th.ink)
+                Text(job.propertyType ?? "Property")
+                    .font(.system(size: 11))
+                    .foregroundStyle(th.ink3)
             }
+
             Spacer()
-            Text(job.formattedPayout)
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(dimmed ? Color(.tertiaryLabel) : BricksColors.brick)
+
+            Text(job.payout.map { "$\(Int($0))" } ?? "—")
+                .font(BricksFont.mono(13))
+                .foregroundStyle(th.ink)
         }
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var timeLabel: String {
-        guard let dt = job.scheduledDateTime else { return job.timeWindowStart }
-        let fmt = DateFormatter()
-        fmt.dateFormat = "h:mm a"
-        return fmt.string(from: dt)
-    }
-
-    private var statusDot: some View {
-        Circle()
-            .fill(dotColor)
-            .frame(width: 8, height: 8)
-            .accessibilityHidden(true)
-    }
-
-    private var dotColor: Color {
-        switch job.status {
-        case .inProgress: return .green
-        case .assigned:   return BricksColors.brick
-        case .completed, .delivered: return Color(.tertiaryLabel)
-        default: return Color(.quaternaryLabel)
-        }
+        .padding(14)
+        .background(th.surf.opacity(0))
+        .overlay(
+            RoundedRectangle(cornerRadius: 2)
+                .strokeBorder(th.hair, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 2))
     }
 }

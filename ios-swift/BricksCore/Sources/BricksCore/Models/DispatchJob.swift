@@ -47,6 +47,30 @@ public struct DispatchJob: Codable, Identifiable, Hashable, Sendable {
     public var isActive: Bool { status == .inProgress }
     public var isUpcoming: Bool { status == .assigned }
 
+    // View-layer display helpers
+
+    public var arriveLabel: String {
+        let parts = timeWindowStart.split(separator: ":")
+        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return timeWindowStart }
+        let suffix = h >= 12 ? "PM" : "AM"
+        let h12 = h == 0 ? 12 : (h > 12 ? h - 12 : h)
+        return "\(h12):\(String(format: "%02d", m)) \(suffix)"
+    }
+
+    public var timeUntil: String {
+        guard let m = minutesUntilStart, m > 0 else { return "now" }
+        if m < 60 { return "\(m)m" }
+        let h = m / 60; let rem = m % 60
+        return rem == 0 ? "\(h)h" : "\(h)h \(rem)m"
+    }
+
+    public var driveLabel: String? { nil }
+    public var propertyType: String? { nil }
+    public var sqft: Int? { nil }
+    public var accessCode: String? { nil }
+    public var droneApproved: Bool? { nil }
+    public var payout: Double? { vendorPayout }
+
     public init(
         id: String, bookingId: String, address: String, city: String,
         state: String, zipCode: String, lat: Double, lng: Double,

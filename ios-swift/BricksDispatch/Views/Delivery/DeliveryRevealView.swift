@@ -102,7 +102,7 @@ struct DeliveryRevealView: View {
                     if let payout = job.vendorPayout {
                         AnimatedDollar(target: payout, delay: 0.15)
                             .font(.system(size: 48, weight: .bold, design: .rounded))
-                            .foregroundStyle(earningsResolved ? BricksColors.gold : .white)
+                            .foregroundStyle(earningsResolved ? BricksColors.accent : .white)
                             .animation(.easeInOut(duration: 0.55), value: earningsResolved)
                             .onChange(of: earningsResolved) { _, resolved in
                                 if resolved { BricksHaptics.shared.earningsResolved() }
@@ -153,7 +153,7 @@ struct DeliveryRevealView: View {
             .padding(.vertical, 15)
             .background(
                 LinearGradient(
-                    colors: [BricksColors.gold, BricksColors.gold.opacity(0.82)],
+                    colors: [BricksColors.accent, BricksColors.accent.opacity(0.82)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 ),

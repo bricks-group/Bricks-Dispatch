@@ -5,19 +5,29 @@ struct ScheduleView: View {
     @StateObject private var store = ScheduleStore()
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: .now)
     @State private var weekOffset: Int = 0
+    private let th = BricksTheme(dark: true)
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section(header: weekHeader) {
-                        dayTimeline
+        ZStack {
+            th.bg.ignoresSafeArea()
+            VStack(spacing: 0) {
+                Text("Schedule")
+                    .font(.system(size: 22, weight: .medium))
+                    .tracking(-0.5)
+                    .foregroundStyle(th.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 14)
+                    .padding(.bottom, 8)
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section(header: weekHeader) {
+                            dayTimeline
+                        }
                     }
                 }
+                .refreshable { await store.loadAllJobs() }
             }
-            .navigationTitle("Schedule")
-            .navigationBarTitleDisplayMode(.large)
-            .refreshable { await store.loadAllJobs() }
         }
         .task { await store.loadAllJobs() }
     }
@@ -38,7 +48,7 @@ struct ScheduleView: View {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 32, height: 32)
-                            .background(Color(.secondarySystemBackground))
+                            .background(th.surf)
                             .clipShape(RoundedRectangle(cornerRadius: 2))
                     }
                     .buttonStyle(.plain)
@@ -49,7 +59,7 @@ struct ScheduleView: View {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 32, height: 32)
-                            .background(Color(.secondarySystemBackground))
+                            .background(th.surf)
                             .clipShape(RoundedRectangle(cornerRadius: 2))
                     }
                     .buttonStyle(.plain)
@@ -73,19 +83,19 @@ struct ScheduleView: View {
                             Text(shortDayName(day))
                                 .font(BricksFont.monoMedium(8))
                                 .tracking(0.5)
-                                .foregroundStyle(isSelected ? Color(.systemBackground) : .secondary)
+                                .foregroundStyle(isSelected ? BricksColors.paper : th.ink3)
                             Text("\(Calendar.current.component(.day, from: day))")
                                 .font(BricksFont.mono(14))
                                 .foregroundStyle(
-                                    isSelected ? Color(.systemBackground)
+                                    isSelected ? BricksColors.paper
                                     : isToday ? BricksColors.brick
-                                    : .primary
+                                    : th.ink
                                 )
                             if count > 0 {
                                 HStack(spacing: 2) {
                                     ForEach(0..<min(count, 4), id: \.self) { _ in
                                         Circle()
-                                            .fill(isSelected ? Color(.systemBackground) : BricksColors.brick)
+                                            .fill(isSelected ? BricksColors.paper : BricksColors.brick)
                                             .frame(width: 3, height: 3)
                                     }
                                 }
@@ -95,7 +105,7 @@ struct ScheduleView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
-                        .background(isSelected ? BricksColors.brick : Color(.secondarySystemBackground))
+                        .background(isSelected ? BricksColors.brick : th.surf)
                         .clipShape(RoundedRectangle(cornerRadius: 2))
                     }
                     .buttonStyle(.plain)
@@ -250,7 +260,7 @@ private struct TimelineRow: View {
             switch job.status {
             case .completed, .delivered: return ("Delivered", .green.opacity(0.15), .green)
             case .inProgress: return ("Active", BricksColors.brick.opacity(0.15), BricksColors.brick)
-            default: return ("Scheduled", Color(.secondarySystemBackground), Color(.secondaryLabel))
+            default: return ("Scheduled", th.surf, Color(.secondaryLabel))
             }
         }()
         Text(label.uppercased())

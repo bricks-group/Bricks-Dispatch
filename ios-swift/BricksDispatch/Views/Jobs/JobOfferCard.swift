@@ -82,7 +82,7 @@ struct JobOfferCard: View {
             // Package + type pills
             HStack(spacing: 10) {
                 if let pkg = job.packageName {
-                    Pill(pkg.capitalized, color: BricksColors.gold)
+                    Pill(pkg.capitalized, color: BricksColors.brick)
                 }
                 Pill(job.jobType.capitalized, color: .white.opacity(0.2))
             }

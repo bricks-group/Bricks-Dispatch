@@ -14,6 +14,7 @@ let package = Package(
             resources: [
                 .process("Splat/GaussianSplat.metal"),
                 .process("Resources/Fonts"),
+                .process("Resources/Photography"),
             ]
         ),
     ]

@@ -54,7 +54,11 @@ struct BricksDispatchApp: App {
                             if auth.isAuthenticated { Task { await jobStore.loadTodayJobs() } }
                         }
                 } else {
+                    #if DEBUG
+                    MainTabView()
+                    #else
                     LoginView()
+                    #endif
                 }
             }
             .task { await auth.restoreSession() }
@@ -73,31 +77,31 @@ struct SplashView: View {
 }
 
 struct MainTabView: View {
+    @State private var selectedTab = 0
+
+    private let tabs: [BricksTabItem] = [
+        BricksTabItem("house", "Today"),
+        BricksTabItem("calendar", "Week"),
+        BricksTabItem("arrow.up.circle", "Upload"),
+        BricksTabItem("dollarsign", "Pay"),
+        BricksTabItem("person.circle", "Me"),
+    ]
+
     var body: some View {
-        TabView {
-            TodayJobsView()
-                .tabItem { Label("Today", systemImage: "calendar") }
+        VStack(spacing: 0) {
+            ZStack {
+                TodayJobsView() .opacity(selectedTab == 0 ? 1 : 0)
+                ScheduleView()  .opacity(selectedTab == 1 ? 1 : 0)
+                UploadsView()   .opacity(selectedTab == 2 ? 1 : 0)
+                EarningsView()  .opacity(selectedTab == 3 ? 1 : 0)
+                ProfileView()   .opacity(selectedTab == 4 ? 1 : 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            ScheduleView()
-                .tabItem { Label("Schedule", systemImage: "calendar.badge.clock") }
-
-            UploadsView()
-                .tabItem { Label("Upload", systemImage: "arrow.up.circle") }
-
-            EarningsView()
-                .tabItem { Label("Payouts", systemImage: "banknote") }
-
-            ProfileView()
-                .tabItem { Label("Me", systemImage: "person.circle") }
+            BricksTabBar(tabs: tabs, selected: $selectedTab, dark: true)
         }
-        .tint(BricksColors.brick)
+        .ignoresSafeArea(edges: .bottom)
     }
-}
-
-// MARK: — Brand colours + mark (mirrors Expo TOKENS)
-enum BricksColors {
-    static let brick = Color(red: 0.82, green: 0.33, blue: 0.17)   // #D2542B
-    static let moon  = Color(red: 0.98, green: 0.96, blue: 0.93)   // #FAF4ED
 }
 
 struct BricksLogoMark: View {

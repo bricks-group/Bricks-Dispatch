@@ -10,13 +10,16 @@
 		13E5E6E7B95EC4B099127832 /* BricksCore in Frameworks */ = {isa = PBXBuildFile; productRef = 7D67B8DE57D089E7663D6FC7 /* BricksCore */; };
 		1495D87CA78C2FAEB0691287 /* PushNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 212130DC62B3E72A521A18F9 /* PushNotificationService.swift */; };
 		18CBC1C5C150F7F8D4F6A2B2 /* WatchJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51BD9916DA924EC008C1F2BF /* WatchJobStore.swift */; };
+		19B89D6B966326282D545B67 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03FD953A821AB94425632707 /* SettingsView.swift */; };
 		34FD72C4DE8C0A692121CC2D /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7086552611CE6C400B458839 /* WidgetKit.framework */; };
 		397F1EA86C4DD5D2674D880F /* BricksDispatchWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C5AE36E793A917EAE6869670 /* BricksDispatchWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		414919BE406979CC67E19F48 /* EarningsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60E57219897D6CFAA8C30D0 /* EarningsView.swift */; };
 		48A429D7AEE685C027D5E6B9 /* EarningsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FD23183F261D2F7DBF8AD0 /* EarningsWidget.swift */; };
 		4AA00B0A70A82FB68EE5AA97 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D4EE203A1CACB51F3836FB4 /* SwiftUI.framework */; };
 		54ACEA85F19A663C9BFEF31B /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42C5F0F36E0839252575953 /* App.swift */; };
+		5E8837A203CA719A12CDE92C /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B991FC4A5BDFBE5490A79D85 /* WelcomeView.swift */; };
 		63CDC83D3918CD9626AF51C0 /* JobDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EB18ED7956CB789E3678B0 /* JobDetailView.swift */; };
+		6D8181D99AAF6411AF6896C4 /* UploadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9C48C138C6634DC01495BC /* UploadsView.swift */; };
 		76EBA6B5960D1DAB76B228A4 /* BricksDispatchWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45E64E4CCF1273A71C76748 /* BricksDispatchWidgets.swift */; };
 		854C58FCE5E5E014AE38D113 /* JobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80BCC8C13F50BC7486102230 /* JobStore.swift */; };
 		8590404A516DC9F059A91248 /* JobOfferCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1DCDB558886894394C90D11 /* JobOfferCard.swift */; };
@@ -26,12 +29,15 @@
 		9BF3B8AC98E7DCA44BD0D177 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E7CF8FABE9E057F9C03E758 /* ProfileView.swift */; };
 		A067AEBC878BB332EEBAB852 /* JobOfferView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87A93F941139D23AED3EA21 /* JobOfferView.swift */; };
 		AB2257E1262A3A0ACB0FD17A /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A782C0065FB3CB68D5E8EFA0 /* LoginView.swift */; };
+		B63E5F3494C3315AB3FA50AC /* ScheduleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8512DFEAD3EF1891036D7F /* ScheduleView.swift */; };
 		B92956E430B2FA4F8B17921A /* TodayJobsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9942965733485FEDB22EBBDB /* TodayJobsView.swift */; };
 		BF65E3AD972A43F8F5D84FC1 /* DeliveryRevealView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5A5BDCFB1E6576C210BD17 /* DeliveryRevealView.swift */; };
+		C45E532B8B66AA81883B4386 /* NotificationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 540BB0D9B9075BD6417CED4C /* NotificationsView.swift */; };
 		D26FB0671DFD288ED40649B8 /* BricksCore in Frameworks */ = {isa = PBXBuildFile; productRef = A70A37641E8D07EBF65833F9 /* BricksCore */; };
 		E33F56138EC1F2554A98B812 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7086552611CE6C400B458839 /* WidgetKit.framework */; };
 		E5E3725644115A091AF73DBC /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C94E2CAE2EE3695A25DD31 /* App.swift */; };
 		F3048F3F96E2354076689666 /* NextJobWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E27BA42AA2616FC551268EF /* NextJobWidget.swift */; };
+		F5A98EB40F6A092AAF4F58EA /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0090A352F28A63ACCE1FBA26 /* ProfileEditView.swift */; };
 		FDD22D9FA211EED49BF331AD /* JobNavigationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */; };
 /* End PBXBuildFile section */
 
@@ -67,7 +73,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0090A352F28A63ACCE1FBA26 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
+		03FD953A821AB94425632707 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		1D4EE203A1CACB51F3836FB4 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		1D9C48C138C6634DC01495BC /* UploadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadsView.swift; sourceTree = "<group>"; };
 		212130DC62B3E72A521A18F9 /* PushNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationService.swift; sourceTree = "<group>"; };
 		377E7A48FF6D67EEF4BF306D /* BricksDispatch.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BricksDispatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3E7CF8FABE9E057F9C03E758 /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
@@ -75,6 +84,7 @@
 		4B5A5BDCFB1E6576C210BD17 /* DeliveryRevealView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveryRevealView.swift; sourceTree = "<group>"; };
 		4BAF2E779A2F84F6153F97ED /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		51BD9916DA924EC008C1F2BF /* WatchJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchJobStore.swift; sourceTree = "<group>"; };
+		540BB0D9B9075BD6417CED4C /* NotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsView.swift; sourceTree = "<group>"; };
 		59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobNavigationView.swift; sourceTree = "<group>"; };
 		5BEE98051C5D737183EA17AB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		70491078620FF0A104D59DE0 /* BricksDispatchWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BricksDispatchWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -82,12 +92,14 @@
 		7E27BA42AA2616FC551268EF /* NextJobWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextJobWidget.swift; sourceTree = "<group>"; };
 		8075E4A956E7B8217927ABF7 /* BricksDispatch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BricksDispatch.entitlements; sourceTree = "<group>"; };
 		80BCC8C13F50BC7486102230 /* JobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobStore.swift; sourceTree = "<group>"; };
+		8B8512DFEAD3EF1891036D7F /* ScheduleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleView.swift; sourceTree = "<group>"; };
 		9942965733485FEDB22EBBDB /* TodayJobsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayJobsView.swift; sourceTree = "<group>"; };
 		A5A1F5826324B71E56BD1F52 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A60E57219897D6CFAA8C30D0 /* EarningsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarningsView.swift; sourceTree = "<group>"; };
 		A6FD23183F261D2F7DBF8AD0 /* EarningsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarningsWidget.swift; sourceTree = "<group>"; };
 		A782C0065FB3CB68D5E8EFA0 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		B45E64E4CCF1273A71C76748 /* BricksDispatchWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BricksDispatchWidgets.swift; sourceTree = "<group>"; };
+		B991FC4A5BDFBE5490A79D85 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		BF6A0BFEFF71942B2840AEF1 /* BricksDispatchWatch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BricksDispatchWatch.entitlements; sourceTree = "<group>"; };
 		C5AE36E793A917EAE6869670 /* BricksDispatchWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BricksDispatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5BE09339135F6D6205B96AB /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
@@ -152,9 +164,26 @@
 			path = BricksDispatch;
 			sourceTree = "<group>";
 		};
+		1EC802D7A349D3BE49D78713 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				03FD953A821AB94425632707 /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		2036F7575076BEC0882F24E6 /* Schedule */ = {
+			isa = PBXGroup;
+			children = (
+				8B8512DFEAD3EF1891036D7F /* ScheduleView.swift */,
+			);
+			path = Schedule;
+			sourceTree = "<group>";
+		};
 		21ACB02844301FA5F486D1F4 /* Profile */ = {
 			isa = PBXGroup;
 			children = (
+				0090A352F28A63ACCE1FBA26 /* ProfileEditView.swift */,
 				3E7CF8FABE9E057F9C03E758 /* ProfileView.swift */,
 			);
 			path = Profile;
@@ -184,6 +213,7 @@
 			isa = PBXGroup;
 			children = (
 				A782C0065FB3CB68D5E8EFA0 /* LoginView.swift */,
+				B991FC4A5BDFBE5490A79D85 /* WelcomeView.swift */,
 			);
 			path = Auth;
 			sourceTree = "<group>";
@@ -231,6 +261,14 @@
 			);
 			sourceTree = "<group>";
 		};
+		76F62CBE03B9A69C72991536 /* Notifications */ = {
+			isa = PBXGroup;
+			children = (
+				540BB0D9B9075BD6417CED4C /* NotificationsView.swift */,
+			);
+			path = Notifications;
+			sourceTree = "<group>";
+		};
 		771204456DA48C19FAB532D8 /* Jobs */ = {
 			isa = PBXGroup;
 			children = (
@@ -251,6 +289,14 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
+		C23462933682E77A0D09550B /* Uploads */ = {
+			isa = PBXGroup;
+			children = (
+				1D9C48C138C6634DC01495BC /* UploadsView.swift */,
+			);
+			path = Uploads;
+			sourceTree = "<group>";
+		};
 		CBC999DA83EB09994D73B1B9 /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -258,7 +304,11 @@
 				D08C6A85E1110F7480AC63BF /* Delivery */,
 				047AC49CCB64AB56B36E853C /* Earnings */,
 				771204456DA48C19FAB532D8 /* Jobs */,
+				76F62CBE03B9A69C72991536 /* Notifications */,
 				21ACB02844301FA5F486D1F4 /* Profile */,
+				2036F7575076BEC0882F24E6 /* Schedule */,
+				1EC802D7A349D3BE49D78713 /* Settings */,
+				C23462933682E77A0D09550B /* Uploads */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -441,9 +491,15 @@
 				8590404A516DC9F059A91248 /* JobOfferCard.swift in Sources */,
 				854C58FCE5E5E014AE38D113 /* JobStore.swift in Sources */,
 				AB2257E1262A3A0ACB0FD17A /* LoginView.swift in Sources */,
+				C45E532B8B66AA81883B4386 /* NotificationsView.swift in Sources */,
+				F5A98EB40F6A092AAF4F58EA /* ProfileEditView.swift in Sources */,
 				9BF3B8AC98E7DCA44BD0D177 /* ProfileView.swift in Sources */,
 				1495D87CA78C2FAEB0691287 /* PushNotificationService.swift in Sources */,
+				B63E5F3494C3315AB3FA50AC /* ScheduleView.swift in Sources */,
+				19B89D6B966326282D545B67 /* SettingsView.swift in Sources */,
 				B92956E430B2FA4F8B17921A /* TodayJobsView.swift in Sources */,
+				6D8181D99AAF6411AF6896C4 /* UploadsView.swift in Sources */,
+				5E8837A203CA719A12CDE92C /* WelcomeView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
