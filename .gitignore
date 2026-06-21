@@ -87,3 +87,4 @@ agenthub/agents/youtube/db
 .cache/
 
 memory/test_credentials.md
+.claude-flow/
