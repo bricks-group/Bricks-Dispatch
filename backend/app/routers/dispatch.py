@@ -33,7 +33,7 @@ async def create_dispatch_job(
     now = datetime.now(timezone.utc).isoformat()
     
     # Map intake request to Job schema
-    job_data = payload.dict()
+    job_data = payload.dict(exclude_none=True)
     job_data["id"] = job_id
     job_data["status"] = "pending_assignment"
     job_data["created_at"] = now
