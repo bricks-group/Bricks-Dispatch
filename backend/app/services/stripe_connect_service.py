@@ -58,16 +58,35 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
     return transfer.id
 
 
-async def create_connect_account_and_link(vendor_id: str, refresh_url: str, return_url: str) -> str:
+async def create_connect_account_and_link(
+    vendor_id: str,
+    refresh_url: str,
+    return_url: str,
+    user_id: str = "",
+    full_name: str = "",
+    email: str = "",
+) -> str:
     """
     Creates a Stripe Connect Express account for a vendor and generates an account link.
     Stripe accounts are stored on contractors (canonical vendor identity).
+
+    If no contractors row exists yet for this vendor_id, one is created on the fly —
+    user_id/full_name/email must be supplied by the caller (the authenticated actor)
+    since contractors.user_id has a FK to auth.users and full_name/email are NOT NULL.
     """
     response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
     contractor = response.data
 
     if not contractor:
-        raise ValueError(f"No contractor record found for vendor: {vendor_id}")
+        if not (user_id and full_name and email):
+            raise ValueError(f"No contractor record found for vendor: {vendor_id}")
+        insert_res = supabase.table("contractors").insert({
+            "user_id": user_id,
+            "full_name": full_name,
+            "email": email,
+            "vendor_id": vendor_id,
+        }).execute()
+        contractor = insert_res.data[0]
 
     stripe_account_id = contractor.get("stripe_account_id")
     if not stripe_account_id:

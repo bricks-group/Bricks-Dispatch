@@ -219,6 +219,7 @@ pick_vendor_rule_based(job, vendors)
 - `reconciliation_events` — fee vs booking mismatch log (written by reconcile-noshow dry_run=false)
 
 ## Current Status (2026-06-10)
+- **Stripe Connect onboarding endpoints (2026-06-25)** ✅ — `create_connect_account_and_link()` in `stripe_connect_service.py` existed but was never reachable from any router (no Connect accounts could ever be created). Added `POST /api/vendor-os/connect-stripe` (creates/resumes the contractor's Stripe Connect Express onboarding link; lazily creates the `contractors` row if missing, using the authenticated actor as `user_id`/`full_name`/`email`) and `GET /api/vendor-os/connect-status` (reports `connected`/`onboarding_complete`/`payouts_enabled` for dashboard CTA gating).
 - **Centralized pricing tables (2026-06-13)** ✅ — `public.packages` table in Supabase is now the source of truth for package inclusions, sqft pricing, and delivery SLAs. Standard=photos+drone stills (24h, no splat); Premium=Standard+video+splat (24h); Luxury=Premium+twilight+extended video+specialist edit+custom domain (12h rush); Estate=Luxury+4K drone+reels+account manager ($2,499 flat, 12h rush).
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - **Deterministic weighted dispatch scorer (specialty/proximity/on_time/quality/reliability/load)** ✅

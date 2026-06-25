@@ -565,6 +565,81 @@ async def get_vendor_os_earnings(
     }
 
 
+class ConnectStripeRequest(BaseModel):
+    refresh_url: Optional[str] = None
+    return_url: Optional[str] = None
+
+
+_DISPATCH_ACCOUNT_URL = "https://brokerage.brxs.ca/dispatch/account"
+
+
+@router.post("/connect-stripe")
+async def connect_stripe(
+    payload: ConnectStripeRequest = ConnectStripeRequest(),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Starts (or resumes) Stripe Connect Express onboarding for the calling
+    photographer's contractor record. Returns a hosted onboarding URL.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    from ..services.stripe_connect_service import create_connect_account_and_link
+
+    try:
+        onboarding_url = await create_connect_account_and_link(
+            vendor_id=vendor_id,
+            refresh_url=payload.refresh_url or f"{_DISPATCH_ACCOUNT_URL}?stripe_connect=refresh",
+            return_url=payload.return_url or f"{_DISPATCH_ACCOUNT_URL}?stripe_connect=success",
+            user_id=actor_id,
+            full_name=actor_member.get("name", ""),
+            email=actor_member.get("email", ""),
+        )
+    except ValueError as e:
+        api_error(400, str(e), "contractor_record_missing")
+
+    return {"onboarding_url": onboarding_url}
+
+
+@router.get("/connect-status")
+async def get_connect_status(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Reports whether the calling photographer's contractor record has a Stripe
+    Connect account, and whether that account has finished onboarding
+    (details_submitted / payouts_enabled) — used to gate the "connect your
+    bank account" prompt in the vendor dashboard.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    from ..services.stripe_connect_service import supabase as scs_supabase
+    res = scs_supabase.table("contractors").select("stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
+    contractor = res.data or {}
+    stripe_account_id = contractor.get("stripe_account_id")
+
+    if not stripe_account_id:
+        return {"connected": False, "onboarding_complete": False, "payouts_enabled": False}
+
+    import stripe as stripe_lib
+    try:
+        account = stripe_lib.Account.retrieve(stripe_account_id)
+        return {
+            "connected": True,
+            "onboarding_complete": bool(account.get("details_submitted")),
+            "payouts_enabled": bool(account.get("payouts_enabled")),
+        }
+    except Exception as e:
+        logger.error(f"Failed to retrieve Stripe account {stripe_account_id} for vendor {vendor_id}: {e}")
+        return {"connected": True, "onboarding_complete": False, "payouts_enabled": False}
+
+
 @router.get("/audit-events")
 async def get_audit_events(
     entity_type: Optional[str] = None,
