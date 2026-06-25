@@ -23,7 +23,7 @@ The Dispatch photographer web experience is now built into the Brokerage React a
 All schema migrations live in `ruletheworld/bricks-brokerage/supabase/migrations/` — **never in this repo**. Bricks OS is the DDL authority. The `backend/migrations/` file here was a legacy exception — all future DDL goes to Bricks OS. The live ownership registry is queryable: `SELECT * FROM public.v_service_boundaries;`
 
 **Tables owned by Bricks GO (write here freely):**
-- `dispatch_jobs` — create, assign, all status transitions
+- `jobs` — create, assign, all status transitions (the live table is named `jobs`, not `dispatch_jobs` — older docs/migrations used the wrong name; code has always targeted `jobs` correctly)
 - `vendor_assignments` — written on assignment
 - `payout_records` — Stripe Connect transfer records
 - `agent_noshow_trip_fees` — $60 trip fee per validated claim
@@ -35,8 +35,9 @@ All schema migrations live in `ruletheworld/bricks-brokerage/supabase/migrations
 **Tables Bricks GO reads but must not write:**
 - `users` — read vendor/agent identity; never write
 - `bookings` — read job intake context; status sent back to Bricks via HTTP (`PUT /api/v1/dispatch-jobs/{booking_id}/status`)
-- `brokerage_members` — read brokerage_id for favourite bonus; never write
-- `brokerage_vendor_favorites` — read for +15pt dispatch scoring; never write
+- `brokerage_vendor_favorites` — read for +15pt dispatch scoring; never write, keyed by `jobs.brokerage_id` (the Bricks-OS manager UUID bridged from Booking — see "Brokerage Favourite Bridge" below)
+
+Note: `brokerage_members` does not exist as a live table — do not write code or migrations assuming it does.
 
 **Rule:** writing to another service's table → use the HTTP API instead.
 
@@ -115,8 +116,19 @@ Score = 100-point system:
 - Load balance (5): 1 - active_assignments / 4
 
 Repeat-agent bonus: +5 points if vendor completed prior job for this agent.
-Brokerage favourite bonus: +15 points if the booking's brokerage has favourited this photographer (reads `brokerage_vendor_favorites` table).
+Brokerage favourite bonus: +15 points if the booking's brokerage has favourited this photographer (reads `brokerage_vendor_favorites` table, keyed by `jobs.brokerage_id` — see "Brokerage Favourite Bridge" below).
 Drone gate: `vendor.drone_certified=True` required for `job_type="drone"`.
+
+### Brokerage Favourite Bridge (2026-06-25)
+
+Booking's `brokerages` are text-slug-keyed (e.g. `brk_royallepage`) and have no inherent relationship to a Bricks-OS manager account, whose identity IS the `auth.users.id` UUID that `brokerage_vendor_favorites.brokerage_id` expects. The bridge:
+1. `brokerages.os_manager_user_id` (UUID, nullable FK → `auth.users.id`) — set by a brokerage manager linking their Bricks-OS account to a Booking brokerage row. Migration: Bricks-Brokerage's `20260625120000_fix_service_boundaries_and_brokerage_bridge.sql`.
+2. Booking (`server.py`) resolves `users.brokerage_id` (slug) → `brokerages.os_manager_user_id` at booking-creation time, and forwards it as `brokerage_id` on the `JobIntakeRequest` payload.
+3. `Job` / `JobIntakeRequest` (`shared/schemas.py`) carry `brokerage_id: Optional[str]`. The intake handler (`routers/dispatch.py::create_dispatch_job`) persists the whole payload dict as-is, so no handler code change was needed once the field existed.
+4. `jobs.brokerage_id` (UUID column, added in Bricks-Brokerage's `20260625120100_add_brokerage_id_to_jobs.sql`) stores the bridged value.
+5. The scorer (`bricks_ai_dispatch.py`, `getattr(job, "brokerage_id", None)`) looks this up against `brokerage_vendor_favorites` to apply the +15pt bonus.
+
+Until a brokerage's manager links a Bricks-OS account, `os_manager_user_id` is NULL and the favourite bonus simply doesn't apply for that brokerage's bookings — this fails open (no bonus), not closed (no error).
 
 **Gemini 1.5 Flash** used ONLY for explainability string — called async after routing, shown in admin dashboard. Never on the hot dispatch path.
 
@@ -147,7 +159,7 @@ pick_vendor_rule_based(job, vendors)
   - Transport Canada drone compliance
   - IP assignment to Bricks
   - Ontario arbitration governing law; Heller compliance
-  - Clause 8 payout rates: "Bricks retains platform fee (Tier A: 60%; Tier B: 50%; Tier C: 40%); your payout is the remainder" — these are Bricks' FEES, the inverse of vendor payout (40%/50%/60% → vendor gets 60%/50%/40%). **Do not "fix" these numbers** — they are correct.
+  - Clause 8 payout rates: "Bricks retains platform fee (Tier A: 45%; Tier B: 55%; Tier C: 65%); your payout is the remainder" — these are Bricks' FEES, the inverse of vendor payout (`TIER_PERCENTAGES` in `payout_service.py`: Tier A=55%, Tier B=45%, Tier C=35%). Fixed 2026-06-25 — the contract text previously said 60%/50%/40%, which did not match the code's 35%/45%/55% vendor payout. **Always keep this clause's fee numbers as `1 − vendor payout` for each tier** if `TIER_PERCENTAGES` ever changes.
 - `GET /api/onboarding/ic-agreement` — returns versioned agreement text
 - Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`
 - `VendorApplicationCreate.ic_agreement_version` defaults to `"1.1"`
@@ -190,7 +202,7 @@ pick_vendor_rule_based(job, vendors)
 - `time_window_start` is stored as `"HH:MM"` string — **always combine with `scheduled_date` before datetime math**. `datetime.fromisoformat("HH:MM")` raises ValueError. Gate 4 is fail-closed.
 - Trip fees flow: `pending` → `reserved` (before Stripe) → `paid_out` (after Stripe). Never go pending→paid_out directly.
 - `assign_vendor_for_job(job_id)` has an internal 3-attempt retry loop — callers do not need to retry
-- IC Clause 8 lists Bricks' platform FEE (60%/50%/40%), not vendor payout — the numbers are correct and intentionally inverse of TIER_PERCENTAGES
+- IC Clause 8 lists Bricks' platform FEE (45%/55%/65% for Tier A/B/C), not vendor payout — intentionally the inverse of `TIER_PERCENTAGES` (35%/45%/55% for C/B/A). Corrected 2026-06-25 from a stale 60%/50%/40% that didn't match the code.
 
 ## No-Show Policy (Snappr model)
 

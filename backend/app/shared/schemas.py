@@ -42,6 +42,9 @@ class Job(BaseModel):
     agent_name: Optional[str] = None
     agent_email: Optional[str] = None
     agent_brokerage: Optional[str] = None
+    # Bricks-OS manager account (auth.users.id) bridged from the agent's
+    # brokerage via brokerages.os_manager_user_id — keys brokerage_vendor_favorites lookups
+    brokerage_id: Optional[str] = None
     # Package context
     package_id: Optional[str] = None
     package_name: Optional[str] = None
@@ -90,6 +93,7 @@ class JobIntakeRequest(BaseModel):
     agent_name: Optional[str] = None
     agent_email: Optional[str] = None
     agent_brokerage: Optional[str] = None
+    brokerage_id: Optional[str] = None
     package_id: Optional[str] = None
     package_name: Optional[str] = None
     package_price: Optional[int] = None
