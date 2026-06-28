@@ -22,11 +22,35 @@ async def get_vendor_member(actor_id: str) -> dict:
     # actor_id is the Supabase auth.users.id (from resolve_vendor_actor_id),
     # not vendor_members.id — those are unrelated UUIDs, since vendor_members
     # rows are created at application time, before any auth account exists.
-    # auth_user_id is linked at first successful OTP login (vendor_os_verify).
-    response = await (await get_db()).table("vendor_members").select("*").eq("auth_user_id", actor_id).maybe_single().execute()
-    if not response.data:
+    # auth_user_id is normally linked at first successful OTP login
+    # (vendor_os_verify) — but the iOS/Android clients authenticate via
+    # Supabase password grant directly and never call that endpoint, so a
+    # genuinely-approved vendor could otherwise never get linked. Fall back
+    # to an email match (same approval gate as OTP login) and self-heal the
+    # link here, so it works regardless of which login flow was used.
+    db = await get_db()
+    response = await db.table("vendor_members").select("*").eq("auth_user_id", actor_id).maybe_single().execute()
+    if response.data:
+        return response.data
+
+    try:
+        user_resp = await db.auth.admin.get_user_by_id(actor_id)
+        email = (user_resp.user.email or "").strip().lower() if user_resp and user_resp.user else None
+    except Exception:
+        email = None
+
+    if not email:
         api_error(403, "Vendor member not found", "vendor_member_not_found")
-    return response.data
+
+    fallback = await db.table("vendor_members").select("*").eq("email", email).maybe_single().execute()
+    member = fallback.data
+    if not member or member.get("onboarding_status") != "approved" or not member.get("is_active"):
+        api_error(403, "Vendor member not found", "vendor_member_not_found")
+
+    if member.get("auth_user_id") != actor_id:
+        await db.table("vendor_members").update({"auth_user_id": actor_id}).eq("id", member["id"]).execute()
+        member["auth_user_id"] = actor_id
+    return member
 
 def is_vendor_admin(member: dict) -> bool:
     role = (member.get("role") or "").lower()
