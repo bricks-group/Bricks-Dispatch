@@ -18,7 +18,12 @@ def ensure_assigned_to_actor(job: dict, actor_id: str):
 async def get_vendor_member(actor_id: str) -> dict:
     # Query supabase for vendor member. No hardcoded fallback — the member
     # must actually exist in the DB (fail-closed).
-    response = await (await get_db()).table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
+    #
+    # actor_id is the Supabase auth.users.id (from resolve_vendor_actor_id),
+    # not vendor_members.id — those are unrelated UUIDs, since vendor_members
+    # rows are created at application time, before any auth account exists.
+    # auth_user_id is linked at first successful OTP login (vendor_os_verify).
+    response = await (await get_db()).table("vendor_members").select("*").eq("auth_user_id", actor_id).maybe_single().execute()
     if not response.data:
         api_error(403, "Vendor member not found", "vendor_member_not_found")
     return response.data

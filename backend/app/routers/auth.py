@@ -58,6 +58,12 @@ async def vendor_os_verify(payload: dict):
         res = await (await get_db()).auth.verify_otp({"email": email, "token": token, "type": "magiclink"})
         if res.session:
             user = res.user
+            # Link this vendor_members row to the Supabase auth identity that
+            # just logged in. vendor_members.id predates auth (set at
+            # /api/onboarding/apply time) so it can't be assumed to equal
+            # auth.users.id — get_vendor_member resolves via auth_user_id.
+            if member.get("auth_user_id") != user.id:
+                await (await get_db()).table("vendor_members").update({"auth_user_id": user.id}).eq("id", member["id"]).execute()
             await write_audit_event(user.id, "session", user.id, "login", vendor_id="default_vendor")
             return {
                 "access_token": res.session.access_token,
