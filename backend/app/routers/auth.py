@@ -11,13 +11,31 @@ from ..shared.schemas import VendorAuthLogin
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
+async def _approved_vendor_by_email(email: str) -> dict | None:
+    """Look up an admin-approved vendor application by email.
+
+    vendor_members rows are created at /api/onboarding/apply time with a
+    fresh UUID (no Supabase auth account exists yet for a pending
+    applicant), so this matches by email rather than by auth user id."""
+    res = await (await get_db()).table("vendor_members").select("*").eq("email", email).maybe_single().execute()
+    member = res.data
+    if member and member.get("onboarding_status") == "approved" and member.get("is_active"):
+        return member
+    return None
+
 @router.post("/vendor-os/auth/login")
 async def vendor_os_login(payload: VendorAuthLogin):
     email = payload.email.strip().lower()
     if not email:
         api_error(400, "Email is required", "email_required")
-    
-    # In Supabase, we send OTP
+
+    # Only send a login OTP to emails that are actually admin-approved
+    # vendors — Bricks admin approves photographers into the network, not
+    # this endpoint. Anyone else (e.g. a brokerage manager's email) must
+    # not be able to get into the vendor app.
+    if not await _approved_vendor_by_email(email):
+        api_error(403, "No approved vendor account found for this email. Apply at /onboarding/apply.", "vendor_not_approved")
+
     try:
         res = await (await get_db()).auth.sign_in_with_otp({"email": email})
         return {"message": "OTP sent to email", "email": email}
@@ -30,27 +48,22 @@ async def vendor_os_verify(payload: dict):
     token = payload.get("token") # The OTP code
     if not email or not token:
         api_error(400, "Email and token are required", "missing_fields")
-    
+    email = email.strip().lower()
+
+    member = await _approved_vendor_by_email(email)
+    if not member:
+        api_error(403, "No approved vendor account found for this email. Apply at /onboarding/apply.", "vendor_not_approved")
+
     try:
         res = await (await get_db()).auth.verify_otp({"email": email, "token": token, "type": "magiclink"})
         if res.session:
-            # We might want to ensure the member exists in our table too
             user = res.user
-            member_res = await (await get_db()).table("vendor_members").select("*").eq("id", user.id).maybe_single().execute()
-            if not member_res.data:
-                await (await get_db()).table("vendor_members").insert({
-                    "id": user.id,
-                    "email": user.email,
-                    "name": user.user_metadata.get("name", email.split("@")[0]),
-                    "role": "Photographer",
-                    "vendor_id": "default_vendor"
-                }).execute()
-            
             await write_audit_event(user.id, "session", user.id, "login", vendor_id="default_vendor")
             return {
                 "access_token": res.session.access_token,
                 "refresh_token": res.session.refresh_token,
-                "user": res.user
+                "user": res.user,
+                "member_id": member["id"],
             }
         else:
             api_error(401, "Invalid OTP", "invalid_otp")
