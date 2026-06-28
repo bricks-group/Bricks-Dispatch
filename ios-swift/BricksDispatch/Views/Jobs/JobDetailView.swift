@@ -104,8 +104,7 @@ struct JobDetailView: View {
     private func agentSection(name: String, phone: String?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("AGENT")
-                .font(BricksFont.monoMedium(9.5))
-                .tracking(0.8)
+                .font(.caption.bold())
                 .foregroundStyle(.secondary)
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -124,7 +123,6 @@ struct JobDetailView: View {
                             .background(BricksColors.brick.opacity(0.12))
                             .clipShape(Circle())
                     }
-                    .accessibilityLabel("Call \(name)")
                 }
             }
         }
@@ -133,20 +131,16 @@ struct JobDetailView: View {
     private var checklistSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("CHECKLIST")
-                .font(BricksFont.monoMedium(9.5))
-                .tracking(0.8)
+                .font(.caption.bold())
                 .foregroundStyle(.secondary)
             ForEach(job.checklist) { item in
                 HStack(spacing: 10) {
                     Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(item.completed ? .green : Color(.tertiaryLabel))
-                        .accessibilityHidden(true)
                     Text(item.label)
                         .font(.subheadline)
                         .foregroundStyle(item.completed ? .secondary : .primary)
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(item.label), \(item.completed ? "completed" : "not completed")")
             }
         }
     }
@@ -195,14 +189,12 @@ struct StatusPill: View {
 
     var body: some View {
         Text(label)
-            .font(BricksFont.monoMedium(9.5))
-            .tracking(0.4)
+            .font(.caption.bold())
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(color.opacity(0.15))
             .foregroundStyle(color)
-            .clipShape(RoundedRectangle(cornerRadius: 2))
-            .accessibilityLabel("Status: \(label)")
+            .clipShape(Capsule())
     }
 
     private var label: String {
@@ -233,9 +225,8 @@ struct DetailCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label.uppercased())
-                .font(BricksFont.monoMedium(9.5))
-                .tracking(0.8)
-                .foregroundStyle(.secondary)
+                .font(.caption2.bold())
+                .foregroundStyle(.tertiary)
             Text(value)
                 .font(.subheadline)
                 .lineLimit(2)
@@ -243,9 +234,7 @@ struct DetailCell: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label): \(value)")
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -256,7 +245,7 @@ struct BricksPrimaryButton: ButtonStyle {
             .padding(.vertical, 14)
             .background(BricksColors.brick.opacity(configuration.isPressed ? 0.85 : 1))
             .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 2))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -267,6 +256,6 @@ struct BricksSecondaryButton: ButtonStyle {
             .padding(.vertical, 14)
             .background(Color(.secondarySystemBackground))
             .foregroundStyle(.primary)
-            .clipShape(RoundedRectangle(cornerRadius: 2))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
