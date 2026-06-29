@@ -9,22 +9,22 @@ import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const SLIDES = [
   {
-    eye: 'FOR SHOOTERS',
-    head: 'Your day, queued up.',
-    body: 'Every job on the books — addresses, gate codes, packages, contact.',
-    img: 'VENDOR LOADING VAN',
+    eye: 'Bricks GO · The photographer network',
+    head: 'Shoot.\nUpload.\nGet paid.',
+    body: 'Bricks routes jobs to you by tier and drive time. You shoot and upload — we handle editing and pay you out.',
+    img: 'BRICKS GO FACADE',
   },
   {
-    eye: 'NAVIGATE',
-    head: 'Drive time baked in.',
-    body: 'Bricks only books jobs you can actually make. Tap for directions.',
-    img: 'DASHBOARD MAP',
+    eye: 'Auto-dispatch',
+    head: 'Jobs come to you.',
+    body: 'No bidding, no DMs. Every shoot is confirmed, timed, and routed before it reaches your phone.',
+    img: 'JOB OFFER CARD',
   },
   {
-    eye: 'UPLOAD',
-    head: 'Shoot. Upload. Done.',
-    body: 'Drop the SD card in. Brokerage gets notified when editing starts.',
-    img: 'SD CARD + LAPTOP',
+    eye: 'Tiered payouts',
+    head: 'Tier C to Tier A — move up.',
+    body: 'Start at 40%. Every delivered job builds your score. Tier A specialists earn 60% of each shoot.',
+    img: 'EARNINGS STRIPE CHART',
   },
 ];
 
