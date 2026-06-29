@@ -31,10 +31,8 @@ struct BricksDispatchApp: App {
     @StateObject private var auth = BricksAuth.shared
     @StateObject private var jobStore = JobStore.shared
     @StateObject private var watchBridge = WatchConnectivityManager.shared
-    @AppStorage("welcome_seen") private var welcomeSeen = false
 
     init() {
-        BricksFont.registerFonts()
         BricksConfig.apiBaseURL = "https://dispatch-api.brxs.ca"
         BricksAuthConfig.supabaseAnonKey = Bundle.main.infoPlistValue(for: "SUPABASE_ANON_KEY")
         PushNotificationService.shared.configure()
@@ -45,8 +43,6 @@ struct BricksDispatchApp: App {
             Group {
                 if auth.isLoading {
                     SplashView()
-                } else if !welcomeSeen {
-                    WelcomeView()
                 } else if auth.isAuthenticated {
                     MainTabView()
                         .task { await jobStore.loadTodayJobs() }
@@ -54,11 +50,7 @@ struct BricksDispatchApp: App {
                             if auth.isAuthenticated { Task { await jobStore.loadTodayJobs() } }
                         }
                 } else {
-                    #if DEBUG
-                    MainTabView()
-                    #else
                     LoginView()
-                    #endif
                 }
             }
             .task { await auth.restoreSession() }
@@ -77,31 +69,25 @@ struct SplashView: View {
 }
 
 struct MainTabView: View {
-    @State private var selectedTab = 0
-
-    private let tabs: [BricksTabItem] = [
-        BricksTabItem("house", "Today"),
-        BricksTabItem("calendar", "Week"),
-        BricksTabItem("arrow.up.circle", "Upload"),
-        BricksTabItem("dollarsign", "Pay"),
-        BricksTabItem("person.circle", "Me"),
-    ]
-
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                TodayJobsView() .opacity(selectedTab == 0 ? 1 : 0)
-                ScheduleView()  .opacity(selectedTab == 1 ? 1 : 0)
-                UploadsView()   .opacity(selectedTab == 2 ? 1 : 0)
-                EarningsView()  .opacity(selectedTab == 3 ? 1 : 0)
-                ProfileView()   .opacity(selectedTab == 4 ? 1 : 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        TabView {
+            TodayJobsView()
+                .tabItem { Label("Today", systemImage: "calendar") }
 
-            BricksTabBar(tabs: tabs, selected: $selectedTab, dark: true)
+            EarningsView()
+                .tabItem { Label("Earnings", systemImage: "banknote") }
+
+            ProfileView()
+                .tabItem { Label("Profile", systemImage: "person.circle") }
         }
-        .ignoresSafeArea(edges: .bottom)
+        .tint(BricksColors.brick)
     }
+}
+
+// MARK: — Brand colours + mark (mirrors Expo TOKENS)
+enum BricksColors {
+    static let brick = Color(red: 0.82, green: 0.33, blue: 0.17)   // #D2542B
+    static let moon  = Color(red: 0.98, green: 0.96, blue: 0.93)   // #FAF4ED
 }
 
 struct BricksLogoMark: View {

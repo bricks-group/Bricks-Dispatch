@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DispatchJob: Codable, Identifiable, Hashable, Sendable {
+public struct DispatchJob: Codable, Identifiable, Sendable {
     public let id: String
     public let bookingId: String
     public let address: String
@@ -46,54 +46,6 @@ public struct DispatchJob: Codable, Identifiable, Hashable, Sendable {
 
     public var isActive: Bool { status == .inProgress }
     public var isUpcoming: Bool { status == .assigned }
-
-    // View-layer display helpers
-
-    public var arriveLabel: String {
-        let parts = timeWindowStart.split(separator: ":")
-        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return timeWindowStart }
-        let suffix = h >= 12 ? "PM" : "AM"
-        let h12 = h == 0 ? 12 : (h > 12 ? h - 12 : h)
-        return "\(h12):\(String(format: "%02d", m)) \(suffix)"
-    }
-
-    public var timeUntil: String {
-        guard let m = minutesUntilStart, m > 0 else { return "now" }
-        if m < 60 { return "\(m)m" }
-        let h = m / 60; let rem = m % 60
-        return rem == 0 ? "\(h)h" : "\(h)h \(rem)m"
-    }
-
-    public var driveLabel: String? { nil }
-    public var propertyType: String? { nil }
-    public var sqft: Int? { nil }
-    public var accessCode: String? { nil }
-    public var droneApproved: Bool? { nil }
-    public var payout: Double? { vendorPayout }
-
-    public init(
-        id: String, bookingId: String, address: String, city: String,
-        state: String, zipCode: String, lat: Double, lng: Double,
-        timeWindowStart: String, timeWindowEnd: String, scheduledDate: String,
-        jobType: String, status: JobStatus, packageName: String? = nil,
-        packagePrice: Int? = nil, vendorPayout: Double? = nil,
-        agentName: String? = nil, agentPhone: String? = nil,
-        agentEmail: String? = nil, clientInstructions: String? = nil,
-        checklist: [ChecklistItem] = [], complexityScore: Int? = nil,
-        createdAt: String, updatedAt: String
-    ) {
-        self.id = id; self.bookingId = bookingId; self.address = address
-        self.city = city; self.state = state; self.zipCode = zipCode
-        self.lat = lat; self.lng = lng
-        self.timeWindowStart = timeWindowStart; self.timeWindowEnd = timeWindowEnd
-        self.scheduledDate = scheduledDate; self.jobType = jobType
-        self.status = status; self.packageName = packageName
-        self.packagePrice = packagePrice; self.vendorPayout = vendorPayout
-        self.agentName = agentName; self.agentPhone = agentPhone
-        self.agentEmail = agentEmail; self.clientInstructions = clientInstructions
-        self.checklist = checklist; self.complexityScore = complexityScore
-        self.createdAt = createdAt; self.updatedAt = updatedAt
-    }
 }
 
 public enum JobStatus: String, Codable, Sendable {
@@ -104,7 +56,7 @@ public enum JobStatus: String, Codable, Sendable {
     case dispatchFailed = "dispatch_failed"
 }
 
-public struct ChecklistItem: Codable, Identifiable, Hashable, Sendable {
+public struct ChecklistItem: Codable, Identifiable, Sendable {
     public let id: String
     public let label: String
     public var completed: Bool

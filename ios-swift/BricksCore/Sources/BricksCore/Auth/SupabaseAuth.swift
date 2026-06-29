@@ -4,7 +4,7 @@ import Foundation
 // The backend uses supabase.auth.get_user(token) — never decode JWT client-side.
 // We store the session in the Keychain and restore it on launch.
 
-public struct SupabaseSession: Codable, Equatable, Sendable {
+public struct SupabaseSession: Codable, Sendable {
     public let accessToken: String
     public let refreshToken: String
     public let expiresAt: Date
@@ -72,7 +72,7 @@ public final class BricksAuth: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: req)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw BricksAPIError.loginFailed
+            throw BricksAPIError.unauthorized
         }
 
         let decoder = JSONDecoder()

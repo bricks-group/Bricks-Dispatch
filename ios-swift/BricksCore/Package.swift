@@ -13,9 +13,11 @@ let package = Package(
             path: "Sources/BricksCore",
             resources: [
                 .process("Splat/GaussianSplat.metal"),
-                .process("Resources/Fonts"),
-                .process("Resources/Photography"),
             ]
+        ),
+        .testTarget(
+            name: "BricksCoreTests",
+            dependencies: ["BricksCore"]
         ),
     ]
 )

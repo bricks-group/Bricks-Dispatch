@@ -10,10 +10,9 @@ final class JobStore: ObservableObject {
     @Published private(set) var todayJobs: [DispatchJob] = []
     @Published private(set) var isLoading = false
     @Published private(set) var error: String?
+    /// Non-nil when a newly-assigned job is waiting for the photographer to accept or decline.
+    /// Set by push notification handler or poll. Cleared by acceptOffer/declineOffer.
     @Published var pendingOffer: DispatchJob?
-
-    var nextJob: DispatchJob? { todayJobs.first { $0.isUpcoming || $0.isActive } }
-    var vendorInitials: String = "ME"
 
     private let api = BricksAPIClient.shared
     private let watch = WatchConnectivityManager.shared
@@ -90,11 +89,11 @@ final class JobStore: ObservableObject {
     func handleWatchAction(_ action: String, jobId: String) async {
         guard let job = todayJobs.first(where: { $0.id == jobId }) else { return }
         switch action {
-        case WatchAction.accept.rawValue:    await markInProgress(job)
-        case WatchAction.decline.rawValue:   await markDeclined(job)
-        case WatchAction.onWay.rawValue:     await updateStatus(job, to: .inProgress)
-        case WatchAction.arrived.rawValue:   break  // no status change — just GPS confirmation
-        default:                             break
+        case WatchAction.accept:    await markInProgress(job)
+        case WatchAction.decline:   await markDeclined(job)
+        case WatchAction.onWay:     await updateStatus(job, to: .inProgress)
+        case WatchAction.arrived:   break  // no status change — just GPS confirmation
+        default:                    break
         }
     }
 
@@ -119,7 +118,7 @@ final class JobStore: ObservableObject {
     // MARK: — Widget sync
 
     private func syncToWidget() {
-        let d = UserDefaults(suiteName: "group.com.bricks.go")
+        let d = UserDefaults(suiteName: "group.com.bricks.dispatch")
         let next = todayJobs.first { $0.isUpcoming || $0.isActive }
         d?.set(next != nil, forKey: "dispatch.widget.nextJob.exists")
         if let n = next {
