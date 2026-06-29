@@ -35,7 +35,7 @@ struct EarningsProvider: TimelineProvider {
     }
 
     private func entry() -> EarningsEntry {
-        let d = UserDefaults(suiteName: "group.com.bricks.go")
+        let d = UserDefaults(suiteName: "group.com.bricks.dispatch")
         return EarningsEntry(
             date: Date(),
             todayEarnings:   d?.double(forKey: "dispatch.widget.todayEarnings")   ?? 0,
