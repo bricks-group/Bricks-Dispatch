@@ -23,7 +23,7 @@ const SLIDES = [
   {
     eye: 'Tiered payouts',
     head: 'Tier C to Tier A — move up.',
-    body: 'Start at 40%. Every delivered job builds your score. Tier A specialists earn 60% of each shoot.',
+    body: 'Start at 35%. Every delivered job builds your score. Tier A specialists earn 55% of each shoot.',
     img: 'EARNINGS STRIPE CHART',
   },
 ];
