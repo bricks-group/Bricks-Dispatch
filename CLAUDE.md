@@ -3,14 +3,14 @@
 You are working on **Bricks GO**, the vendor-facing job orchestration layer of the BRICKS ecosystem.
 
 ## Ecosystem Context
-- **Bricks-Brokerage** — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors. **Also hosts the photographer Dispatch web shell** — photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by role.
+- **Bricks-OS** — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors. **Also hosts the photographer Dispatch web shell** — photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by role.
 - **Bricks-Booking** — agent mobile app (iOS + Android). Sends confirmed shoot jobs to this service via `POST /api/v1/dispatch/jobs`
 - **Bricks GO** (this repo) — vendor mobile app (iOS + Android) + Dispatch backend API. Assigns jobs to vendors, tracks status, processes payouts.
 
 All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
 
 ## Two-Sided App Note (2026-06-10)
-The Dispatch photographer web experience is now built into the Brokerage React app (`ruletheworld/bricks-brokerage`), NOT as a separate `dispatch.brxs.ca` site. Photographers use `brokerage.brxs.ca` — after login, role-based routing sends them to the dark Dispatch shell at `/dispatch/*`. The Expo `frontend/` in THIS repo remains the primary Android + iOS (Swift) experience for photographers on mobile. The web shell is for desktop/browser access.
+The Dispatch photographer web experience is now built into the Bricks OS React app (`ruletheworld/bricks-os`), NOT as a separate `dispatch.brxs.ca` site. Photographers use `brokerage.brxs.ca` — after login, role-based routing sends them to the dark Dispatch shell at `/dispatch/*`. The Expo `frontend/` in THIS repo remains the primary Android + iOS (Swift) experience for photographers on mobile. The web shell is for desktop/browser access.
 
 ## Stack
 - Backend: FastAPI (Python 3.14), Supabase, Stripe Connect, Gemini 1.5 Flash (explainability only)
@@ -20,7 +20,7 @@ The Dispatch photographer web experience is now built into the Brokerage React a
 
 ## Database Ownership
 
-All schema migrations live in `ruletheworld/bricks-brokerage/supabase/migrations/` — **never in this repo**. Bricks OS is the DDL authority. The `backend/migrations/` file here was a legacy exception — all future DDL goes to Bricks OS. The live ownership registry is queryable: `SELECT * FROM public.v_service_boundaries;`
+All schema migrations live in `ruletheworld/bricks-os/supabase/migrations/` — **never in this repo**. Bricks OS is the DDL authority. The `backend/migrations/` file here was a legacy exception — all future DDL goes to Bricks OS. The live ownership registry is queryable: `SELECT * FROM public.v_service_boundaries;`
 
 **Tables owned by Bricks GO (write here freely):**
 - `dispatch_jobs` — create, assign, all status transitions

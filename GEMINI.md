@@ -3,7 +3,7 @@
 You are working on **Bricks GO**, the job orchestration layer of the BRICKS ecosystem.
 
 ## Ecosystem context
-- **Bricks-Brokerage** (JS) — listings source, upstream of Booking.
+- **Bricks-OS** (JS) — listings source, upstream of Booking.
 - **Bricks-Booking** (TS) — sends confirmed shoot jobs to this service.
 - **Bricks GO** (this repo, Python) — assigns jobs to crews, runs automations, tracks status, reports back to Booking.
 
