@@ -302,7 +302,7 @@ class VendorApplicationCreate(BaseModel):
     # Ontario Regions: GTA, York, Peel, Halton, Durham, Hamilton, Waterloo, Ottawa, etc.
     preferred_regions: List[str] = []
     accepted_terms: bool
-    ic_agreement_version: str = "1.1"
+    ic_agreement_version: str = "1.2"
     hst_number: Optional[str] = None
     drone_certified: bool = False
     rpas_certificate_number: Optional[str] = None

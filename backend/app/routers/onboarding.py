@@ -11,10 +11,10 @@ from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, Vend
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 # Version tracks the text revision so we can re-prompt if terms materially change.
-_IC_AGREEMENT_VERSION = "1.1"
+_IC_AGREEMENT_VERSION = "1.2"
 _IC_AGREEMENT_TEXT = """
-BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.1
-Effective: June 1, 2026
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.2
+Effective: July 12, 2026
 
 By submitting this application you ("Contractor") agree to the following terms with Bricks Technologies Inc. ("Bricks"). This characterization of the relationship as independent contractor reflects the parties' genuine intent. Nothing in this agreement waives any statutory rights that may apply under the Employment Standards Act, 2000 (Ontario) or any other applicable legislation. If a court or tribunal of competent jurisdiction determines that this agreement creates an employment or dependent contractor relationship, applicable statutory rights will apply notwithstanding the parties' characterization.
 
@@ -40,7 +40,7 @@ By submitting this application you ("Contractor") agree to the following terms w
    If you operate a drone, you represent that you hold a valid Transport Canada RPAS certificate at the level required for each operation (Basic for uncontrolled airspace; Advanced for controlled airspace, including proximity to Pearson CYYZ and Billy Bishop CYTZ). All operations must comply with the Aeronautics Act and Transport Canada regulations. You accept sole regulatory and legal responsibility for all drone operations.
 
 8. PLATFORM FEES AND PAYOUTS
-   Bricks retains a platform fee from each job value based on your tier (Tier A: 60%; Tier B: 50%; Tier C: 40%). Your payout is the remainder of the job price (excluding HST), paid via Stripe Connect Express on the standard weekly settlement schedule. Bricks may adjust the fee schedule on 30 days' written notice to you.
+   Your payout is a percentage of the job value (excluding HST) based on your tier: Tier C (entry): 35%; Tier B (core): 45%; Tier A (elite): 55%. Bricks retains the remainder as a platform fee. Payouts are made via Stripe Connect Express on the standard weekly settlement schedule. Bricks may adjust the fee schedule on 30 days' written notice to you.
 
 9. INTELLECTUAL PROPERTY
    You assign to Bricks all copyright and intellectual property rights in the specific photos, videos, and other deliverables produced for each individual booking accepted through this platform. This assignment is limited to those deliverables and does not extend to your pre-existing portfolio, equipment, editing presets, or other works created outside of Bricks bookings. Bricks licenses the assigned deliverables to the booking agent for real estate marketing use of the specific listed property only. You retain the right to display the deliverables in your portfolio with appropriate attribution, unless the booking agent requests confidentiality.

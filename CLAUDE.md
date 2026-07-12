@@ -3,14 +3,14 @@
 You are working on **Bricks GO**, the vendor-facing job orchestration layer of the BRICKS ecosystem.
 
 ## Ecosystem Context
-- **Bricks-Brokerage** — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors. **Also hosts the photographer Dispatch web shell** — photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by role.
+- **Bricks-OS** (`ruletheworld/Bricks-OS`, formerly `Bricks-Brokerage`) — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors. **Also hosts the photographer Dispatch web shell** — photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by role.
 - **Bricks-Booking** — agent mobile app (iOS + Android). Sends confirmed shoot jobs to this service via `POST /api/v1/dispatch/jobs`
-- **Bricks GO** (this repo) — vendor mobile app (iOS + Android) + Dispatch backend API. Assigns jobs to vendors, tracks status, processes payouts.
+- **Bricks GO** (this repo, `ruletheworld/Bricks-Dispatch`) — vendor mobile app (iOS + Android) + Dispatch backend API. Assigns jobs to vendors, tracks status, processes payouts.
 
 All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
 
 ## Two-Sided App Note (2026-06-10)
-The Dispatch photographer web experience is now built into the Brokerage React app (`ruletheworld/bricks-brokerage`), NOT as a separate `dispatch.brxs.ca` site. Photographers use `brokerage.brxs.ca` — after login, role-based routing sends them to the dark Dispatch shell at `/dispatch/*`. The Expo `frontend/` in THIS repo remains the primary Android + iOS (Swift) experience for photographers on mobile. The web shell is for desktop/browser access.
+The Dispatch photographer web experience is now built into the Bricks-OS React app (`ruletheworld/Bricks-OS`), NOT as a separate `dispatch.brxs.ca` site. Photographers use `brokerage.brxs.ca` — after login, role-based routing sends them to the dark Dispatch shell at `/dispatch/*`. The Expo `frontend/` in THIS repo remains the primary Android + iOS (Swift) experience for photographers on mobile. The web shell is for desktop/browser access.
 
 ## Stack
 - Backend: FastAPI (Python 3.14), Supabase, Stripe Connect, Gemini 1.5 Flash (explainability only)
@@ -20,7 +20,7 @@ The Dispatch photographer web experience is now built into the Brokerage React a
 
 ## Database Ownership
 
-All schema migrations live in `ruletheworld/bricks-brokerage/supabase/migrations/` — **never in this repo**. Bricks OS is the DDL authority. The `backend/migrations/` file here was a legacy exception — all future DDL goes to Bricks OS. The live ownership registry is queryable: `SELECT * FROM public.v_service_boundaries;`
+All schema migrations live in `ruletheworld/Bricks-OS/supabase/migrations/` — **never in this repo**. Bricks OS is the DDL authority. The `backend/migrations/` file here was a legacy exception — all future DDL goes to Bricks OS. The live ownership registry is queryable: `SELECT * FROM public.v_service_boundaries;`
 
 **Tables owned by Bricks GO (write here freely):**
 - `dispatch_jobs` — create, assign, all status transitions
@@ -138,7 +138,7 @@ pick_vendor_rule_based(job, vendors)
 ## Vendor Model: Snappr/Homejab IC Model
 - No insurance/WSIB blocking at dispatch — contractors self-certify at onboarding
 - `REQUIRE_VENDOR_COMPLIANCE` **removed entirely** from dispatch code
-- IC agreement **v1.1** (effective 2026-06-01) — 15 clauses covering Ontario law:
+- IC agreement **v1.2** (effective 2026-07-12) — 16 clauses covering Ontario law:
   - Independent contractor status (ESA 2000 exclusion explicit)
   - Right to refuse work (no penalty for declines within 40% rolling-30d threshold)
   - Right to engage others / no exclusivity / no non-compete
@@ -147,11 +147,12 @@ pick_vendor_rule_based(job, vendors)
   - Transport Canada drone compliance
   - IP assignment to Bricks
   - Ontario arbitration governing law; Heller compliance
-  - Clause 8 payout rates: "Bricks retains platform fee (Tier A: 60%; Tier B: 50%; Tier C: 40%); your payout is the remainder" — these are Bricks' FEES, the inverse of vendor payout (40%/50%/60% → vendor gets 60%/50%/40%). **Do not "fix" these numbers** — they are correct.
+  - Clause 8 payout rates: vendor receives **35% (Tier C) / 45% (Tier B) / 55% (Tier A)** of job value; Bricks retains the remainder. (v1.1 had this backwards — stated Bricks' fee at 60/50/40%, implying vendor got 40/50/60%. v1.2 leads with vendor payout to eliminate ambiguity.)
 - `GET /api/onboarding/ic-agreement` — returns versioned agreement text
 - Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`
-- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.1"`
-- `ic_agreement_version='0.0'` = pre-dates new agreement; re-prompt on next login
+- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.2"`
+- `ic_agreement_version='0.0'` or `'1.1'` = stale rates; re-prompt on next login
+- **Pre-launch note:** no re-prompt guard exists in code yet; add a middleware or login check that compares `vendor_members.ic_agreement_version` against `_IC_AGREEMENT_VERSION` and redirects to `/onboarding/accept-terms` when they differ
 
 ## Drone Certification (Transport Canada RPAS)
 - `drone_certified: bool` on `vendor_members` — hard gate for `job_type="drone"` jobs
@@ -190,7 +191,7 @@ pick_vendor_rule_based(job, vendors)
 - `time_window_start` is stored as `"HH:MM"` string — **always combine with `scheduled_date` before datetime math**. `datetime.fromisoformat("HH:MM")` raises ValueError. Gate 4 is fail-closed.
 - Trip fees flow: `pending` → `reserved` (before Stripe) → `paid_out` (after Stripe). Never go pending→paid_out directly.
 - `assign_vendor_for_job(job_id)` has an internal 3-attempt retry loop — callers do not need to retry
-- IC Clause 8 lists Bricks' platform FEE (60%/50%/40%), not vendor payout — the numbers are correct and intentionally inverse of TIER_PERCENTAGES
+- IC Clause 8 (v1.2+) states vendor payout directly: 35% (Tier C), 45% (Tier B), 55% (Tier A). Do not revert to the v1.1 phrasing that listed Bricks' fee (60/50/40%) — that was confusing and disagreed with `payout_service.py` after the rate change.
 
 ## No-Show Policy (Snappr model)
 
