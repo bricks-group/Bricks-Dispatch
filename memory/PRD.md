@@ -17,7 +17,7 @@ Vendor/photographer-facing job orchestration app. Photographers use this to rece
 
 ## Web Shell Note
 
-The Dispatch photographer web experience is built into the Brokerage React app (`ruletheworld/bricks-brokerage`), not as a separate site. Photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by their `role === 'photographer'` metadata. The Expo `frontend/` remains the primary mobile experience.
+The Dispatch photographer web experience is built into the Bricks OS React app (`ruletheworld/bricks-os`), not as a separate site. Photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by their `role === 'photographer'` metadata. The Expo `frontend/` remains the primary mobile experience.
 
 ## Vendor Network Model
 
