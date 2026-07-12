@@ -46,6 +46,7 @@ class Job(BaseModel):
     package_id: Optional[str] = None
     package_name: Optional[str] = None
     package_price: Optional[int] = None
+    rack_price: Optional[int] = None  # undiscounted rate; vendor payout must always be computed off this, never package_price once discounted billing ships
     add_ons: list = []
     add_on_total: Optional[int] = None
     billing_type: Optional[str] = None
@@ -93,6 +94,7 @@ class JobIntakeRequest(BaseModel):
     package_id: Optional[str] = None
     package_name: Optional[str] = None
     package_price: Optional[int] = None
+    rack_price: Optional[int] = None  # undiscounted rate; vendor payout must always be computed off this, never package_price once discounted billing ships
     add_ons: list = []
     add_on_total: Optional[int] = None
     billing_type: Optional[str] = None
@@ -383,6 +385,7 @@ class JobCreate(BaseModel):
     package_id: Optional[str] = None
     package_name: Optional[str] = None
     package_price: Optional[int] = None
+    rack_price: Optional[int] = None  # undiscounted rate; vendor payout must always be computed off this, never package_price once discounted billing ships
 
 
 class BlockedWindow(BaseModel):

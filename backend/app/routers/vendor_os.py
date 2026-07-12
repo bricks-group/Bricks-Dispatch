@@ -268,6 +268,7 @@ async def create_job(
         "package_id": payload.package_id,
         "package_name": payload.package_name,
         "package_price": payload.package_price,
+        "rack_price": payload.rack_price if payload.rack_price is not None else payload.package_price,
         "created_at": now_iso,
         "updated_at": now_iso,
     }

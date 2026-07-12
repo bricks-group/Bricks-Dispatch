@@ -38,6 +38,11 @@ async def create_dispatch_job(
     job_data["status"] = "pending_assignment"
     job_data["created_at"] = now
     job_data["updated_at"] = now
+    # rack_price must always be the undiscounted rate vendor payout is computed off --
+    # default to package_price if Booking didn't send it explicitly (should always send it
+    # going forward, this is a defensive fallback, not the primary path).
+    if "rack_price" not in job_data:
+        job_data["rack_price"] = job_data.get("package_price")
     
     # Ensure checklist items have IDs
     for item in job_data.get("checklist", []):

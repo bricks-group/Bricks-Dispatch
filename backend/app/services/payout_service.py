@@ -35,16 +35,19 @@ TIER_PERCENTAGES = {
 DEFAULT_TIER_PERCENTAGE = 0.35  # fallback to Tier C (entry)
 
 
-def calculate_payout_amount(package_price: int | None, vendor_tier: int | None) -> int:
+def calculate_payout_amount(rack_price: int | None, vendor_tier: int | None) -> int:
     """
     Calculate payout amount in cents.
-    package_price is stored as dollars (e.g. 299). Stripe expects cents.
+    rack_price is the undiscounted rate, stored as dollars (e.g. 299). Stripe expects cents.
     Tier A (55%) on Standard condo ($299): int(299 * 100 * 0.55) = 16445 cents = $164.45.
+
+    Must always be called with rack_price, never a customer-charged/discounted price --
+    a member discount or brokerage credit consumption must never shrink a vendor's payout.
     """
-    if not package_price:
+    if not rack_price:
         return 0
     pct = TIER_PERCENTAGES.get(vendor_tier, DEFAULT_TIER_PERCENTAGE)
-    return int(package_price * 100 * pct)
+    return int(rack_price * 100 * pct)
 
 
 async def trigger_payout_for_job(db, job_id: str) -> dict:
@@ -63,7 +66,11 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
 
     job = res.data
     vendor_id = job.get("vendor_id", "default_vendor")
-    package_price = job.get("package_price")
+    # Always pay off rack_price, never package_price -- package_price may reflect a
+    # member discount or brokerage credit consumption once that billing logic ships,
+    # and a customer-side discount must never shrink what the vendor is paid.
+    # Falls back to package_price only for rows created before rack_price existed.
+    rack_price = job.get("rack_price") if job.get("rack_price") is not None else job.get("package_price")
     vendor_tier = job.get("vendor_tier")
     assignee_id = job.get("assignee_id", "")
 
@@ -85,7 +92,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             logger.warning(f"Member lookup failed for assignee {assignee_id}: {e}")
 
     # Calculate payout amount after vendor_tier is finalised from vendor_members
-    payout_amount = calculate_payout_amount(package_price, vendor_tier)
+    payout_amount = calculate_payout_amount(rack_price, vendor_tier)
     if payout_amount <= 0:
         # Don't bail if there are pending trip fees — a photographer who only earned a
         # no-show trip fee on a zero-price job still needs to be paid out.
@@ -96,7 +103,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             if not (_fee_check.data):
                 logger.warning(
                     f"Payout amount is 0 for job {job_id} and no pending trip fees "
-                    f"(package_price={package_price}, vendor_tier={vendor_tier})"
+                    f"(rack_price={rack_price}, vendor_tier={vendor_tier})"
                 )
                 return {"error": "zero_payout_amount", "job_id": job_id}
             logger.info(
@@ -106,7 +113,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         else:
             logger.warning(
                 f"Payout amount is 0 for job {job_id} "
-                f"(package_price={package_price}, vendor_tier={vendor_tier})"
+                f"(rack_price={rack_price}, vendor_tier={vendor_tier})"
             )
             return {"error": "zero_payout_amount", "job_id": job_id}
 
