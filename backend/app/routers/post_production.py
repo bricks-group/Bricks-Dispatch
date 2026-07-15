@@ -10,20 +10,20 @@ BoxBrownie handles: photo editing, retouching, day-to-dusk, item removal, and vi
 BoxBrownie uses polling (not webhooks) — this endpoint handles any push
 notifications they may send for completed orders.
 
-Gaussian splat / 3D scene processing (Luma Labs):
-  POST /api/v1/post-production/splat-upload/{job_id}
+Gaussian splat / 3D tours are handled entirely by Polycam (embed URL or a
+manually uploaded .ply/.splat file) — no backend processing needed; see
+_finalize_job_if_complete()'s splat_url resolution below.
 
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
 """
 import logging
 import os
-import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, File, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from ..services.qc_agent import run_qc_for_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
@@ -377,207 +377,6 @@ async def boxbrownie_callback(
     background_tasks.add_task(_finalize_job_if_complete, job_id)
 
     return {"received": True, "upload_id": upload_id}
-
-
-# ---------------------------------------------------------------------------
-# Gaussian splat upload + Luma Labs processing
-# POST /api/v1/post-production/splat-upload/{job_id}
-#
-# Photographers upload a source video or image-sequence zip from the Bricks GO
-# app.  The file is stored to Supabase Storage, then Luma Labs processes it
-# into a .ply scene.  The resulting signed URL is written to the job's
-# media_delivery row as splat_url.
-#
-# Requires: Authorization: Bearer <supabase_jwt>  (authenticated photographer)
-# ---------------------------------------------------------------------------
-
-@router.post("/splat-upload/{job_id}")
-async def splat_upload(
-    job_id: str,
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-):
-    """
-    Accept a multipart upload of a Gaussian splat source file (video or zip)
-    from the Bricks GO app, store it in Supabase Storage, and trigger async
-    Luma Labs processing.
-
-    The Luma processing job runs in the background.  When it completes the
-    splat_url column on the media_delivery row for this job is updated.
-
-    Returns immediately with the raw storage path and a job confirmation.
-    """
-    db = await get_db()
-
-    # Verify job exists and belongs to a valid state
-    res_job = await db.table("jobs").select("id, status, booking_id").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-    job_status = res_job.data.get("status", "")
-    _TERMINAL_STATES = {"cancelled", "agent_no_show", "dispatch_failed"}
-    if job_status in _TERMINAL_STATES:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Job {job_id} is in terminal state '{job_status}' — cannot accept splat upload",
-        )
-
-    # Validate file type
-    filename = file.filename or "scene"
-    content_type = file.content_type or "application/octet-stream"
-    _ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".zip", ".tar", ".tar.gz"}
-    _ext = ""
-    if "." in filename:
-        _ext = "." + filename.rsplit(".", 1)[-1].lower()
-        if _ext == ".gz" and filename.lower().endswith(".tar.gz"):
-            _ext = ".tar.gz"
-    if _ext not in _ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unsupported file type '{_ext}'. Allowed: video (.mp4, .mov, .avi) or archive (.zip, .tar, .tar.gz)",
-        )
-
-    # Read file content
-    try:
-        file_bytes = await file.read()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {e}")
-
-    if len(file_bytes) == 0:
-        raise HTTPException(status_code=422, detail="Uploaded file is empty")
-
-    # Build storage path and upload to Supabase
-    from ..services.storage import STORAGE_BUCKET
-    upload_id = str(uuid.uuid4())
-    storage_path = f"splat-sources/{job_id}/{upload_id}{_ext}"
-
-    try:
-        bucket = db.storage.from_(STORAGE_BUCKET)
-        await bucket.upload(
-            path=storage_path,
-            file=file_bytes,
-            file_options={"content-type": content_type},
-        )
-        logger.info(
-            f"Splat upload job {job_id}: stored {len(file_bytes):,} bytes at "
-            f"{STORAGE_BUCKET}/{storage_path}"
-        )
-    except Exception as e:
-        logger.error(f"Splat upload job {job_id}: Supabase storage failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to store splat source file")
-
-    # Record the upload in the uploads table so reconcile can track it
-    upload_record = {
-        "id": upload_id,
-        "job_id": job_id,
-        "filename": filename,
-        "file_url": storage_path,
-        "processing_status": "processing",
-        "provider": "luma",
-        "uploaded_at": datetime.now(timezone.utc).isoformat(),
-    }
-    try:
-        await db.table("uploads").insert(upload_record).execute()
-    except Exception as e:
-        logger.warning(f"Splat upload job {job_id}: could not insert uploads row: {e}")
-
-    # Generate a short-lived signed URL for Luma to fetch the source
-    try:
-        signed_source = await get_signed_download_url(storage_path, expiry=7200)
-    except Exception as e:
-        logger.error(f"Splat upload job {job_id}: could not sign source URL: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate signed source URL for processing")
-
-    if not signed_source:
-        raise HTTPException(status_code=500, detail="Failed to generate signed source URL for processing")
-
-    # Kick off Luma processing in the background
-    background_tasks.add_task(_process_splat_background, job_id, upload_id, signed_source)
-
-    return {
-        "job_id": job_id,
-        "upload_id": upload_id,
-        "storage_path": storage_path,
-        "status": "processing",
-        "message": "Splat source uploaded. Luma Labs 3D processing started in background.",
-    }
-
-
-async def _process_splat_background(job_id: str, upload_id: str, source_url: str) -> None:
-    """
-    Background task: submit source to Luma Labs, poll until done, store the
-    .ply output, and update the media_delivery row with splat_url.
-
-    On failure: sets splat_status="processing_failed" and marks the upload row
-    as failed so that _finalize_job_if_complete can proceed with photo delivery
-    unblocked.  Photo delivery is always independent of splat outcome.
-    """
-    from ..services.splat_service import process_splat_with_luma
-
-    logger.info(f"Splat background job {job_id}: starting Luma Labs processing")
-
-    # Mark splat as processing in media_delivery so the agent can be notified
-    # that a 3D tour is incoming, even if photos arrive first.
-    db = await get_db()
-    await db.table("media_delivery").upsert({
-        "job_id": job_id,
-        "splat_status": "processing",
-        "delivery_urls": [],
-        "notification_status": "pending",
-    }, on_conflict="job_id").execute()
-
-    try:
-        signed_ply_url = await process_splat_with_luma(source_url=source_url, job_id=job_id)
-    except Exception as e:
-        logger.error(f"Splat background job {job_id}: process_splat_with_luma raised: {e}")
-        signed_ply_url = None
-
-    if signed_ply_url:
-        # Mark the upload as done
-        await db.table("uploads").update({
-            "processing_status": "done",
-            "processed_url": f"splats/{job_id}/scene.ply",
-            "processed_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", upload_id).execute()
-
-        # Update or create media_delivery row with the splat_url and splat_status=completed.
-        # Photo delivery may have already written delivery_urls — use update if row exists.
-        existing = await db.table("media_delivery").select("id").eq("job_id", job_id).maybe_single().execute()
-        if existing.data:
-            await db.table("media_delivery").update({
-                "splat_url": signed_ply_url,
-                "splat_status": "completed",
-            }).eq("job_id", job_id).execute()
-            logger.info(f"Splat background job {job_id}: media_delivery.splat_url updated, splat_status=completed")
-        else:
-            # media_delivery doesn't exist yet — create a partial row; photo delivery
-            # will upsert on top of this later via _finalize_job_if_complete.
-            await db.table("media_delivery").upsert({
-                "job_id": job_id,
-                "splat_url": signed_ply_url,
-                "splat_status": "completed",
-                "delivery_urls": [],
-                "delivered_at": datetime.now(timezone.utc).isoformat(),
-                "notification_status": "pending",
-            }, on_conflict="job_id").execute()
-            logger.info(f"Splat background job {job_id}: media_delivery row created with splat_url, splat_status=completed")
-    else:
-        # Luma processing failed.  Mark upload as failed (unblocks _finalize_job_if_complete
-        # for photos) and record the failure in media_delivery independently of photos.
-        await db.table("uploads").update({
-            "processing_status": "failed",
-            "processed_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", upload_id).execute()
-        await db.table("media_delivery").upsert({
-            "job_id": job_id,
-            "splat_status": "processing_failed",
-            "delivery_urls": [],
-            "notification_status": "pending",
-        }, on_conflict="job_id").execute()
-        logger.error(
-            f"Splat background job {job_id}: Luma processing failed — "
-            f"upload marked failed, splat_status=processing_failed; photo delivery unaffected"
-        )
 
 
 # ---------------------------------------------------------------------------

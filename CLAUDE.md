@@ -76,14 +76,13 @@ API base: `https://dispatch-api.brxs.ca`
 - `backend/app/routers/vendors.py` — Vendor management (`/dispatch/vendors/*`)
 - `backend/app/routers/vendor_os.py` — Vendor OS dashboard: overview, team, jobs, earnings, performance
 - `backend/app/routers/onboarding.py` — Contractor application, IC agreement, document upload (photographer-facing)
-- `backend/app/routers/post_production.py` — Provider callbacks (Fotello/Autoenhance/BoxBrownie), Luma splat upload, reconcile
+- `backend/app/routers/post_production.py` — Provider callbacks (Fotello/Autoenhance/BoxBrownie), reconcile
 - `backend/app/routers/admin_ops.py` — **Bricks HR tool**: applicant vetting + approval, no-show review, reconciliation
 - `backend/app/services/vendor_selection.py` — Primary + fallback vendor assignment
 - `backend/app/integrations/bricks_ai_dispatch.py` — **Deterministic weighted scorer** (primary dispatch)
 - `backend/app/services/client_comms.py` — Resend emails: booking confirmed + photographer en route
 - `backend/app/services/qc_agent.py` — Gemini vision QC agent (scores uploaded photos 0-100)
-- `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration + Luma splat orchestration
-- `backend/app/services/splat_service.py` — **Luma Labs Gaussian splat service**: submit, poll, download .ply, upload to Supabase
+- `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration
 - `backend/app/services/payout_service.py` — Stripe Connect transfers, tier percentages
 - `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (T+15 before claim)
 - `backend/app/shared/schemas.py` — Pydantic models
@@ -176,7 +175,7 @@ pick_vendor_rule_based(job, vendors)
 1. Fotello — primary AI photo edits (webhook callback)
 2. Autoenhance — fallback if Fotello key missing (webhook callback)
 3. BoxBrownie — photo editing, retouching, day-to-dusk, item removal, and virtual staging. Polling only (no webhooks).
-4. **Luma Labs** — Gaussian splat / 3D scene processing. Photographer uploads source video or zip via `POST /api/v1/post-production/splat-upload/{job_id}`; backend submits to Luma API, polls until complete (max 20 min), downloads .ply, stores at `splats/{job_id}/scene.ply` in `brxs-deliverables`, writes signed URL to `media_delivery.splat_url`.
+4. 3D tours — **Polycam only** (2026-07-14 — Luma Labs pipeline removed, see below). Either a Polycam share URL pasted into `PropertyDetailPage.js` (embed, zero backend processing) or a manually uploaded `.ply`/`.splat` file signed via `_finalize_job_if_complete`'s generic splat_url resolution. No automated video→splat backend pipeline exists.
 5. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
 6. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
 7. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
@@ -264,7 +263,7 @@ pick_vendor_rule_based(job, vendors)
 - **Stripe Connect E2E test suite (2026-06-03)** ✅ — `tests/conftest.py` stubs external deps; all 11 tests pass
 - **Dispatch web shell in Brokerage (2026-06-10)** ✅ — photographer Dispatch experience lives at `brokerage.brxs.ca/dispatch/*`; role-based routing after login; no separate dispatch.brxs.ca web needed
 - **Dispatch failure manual queue (2026-06-11)** ✅ — `GET /api/admin/dispatch-failures` + `POST /api/admin/dispatch-failures/{job_id}/reassign`; ops escalation closed on retry; new escalation written on second failure
-- **Gaussian splat processing via Luma Labs (2026-06-13)** ✅ — `POST /api/v1/post-production/splat-upload/{job_id}` accepts multipart video/zip from Bricks GO app; stores source to `brxs-deliverables/splat-sources/{job_id}/`; submits to Luma Labs Dream Machine API; polls every 10s (max 20 min); downloads .ply; uploads to `splats/{job_id}/scene.ply`; writes signed URL to `media_delivery.splat_url`. Also auto-triggered from `process_job_assets()` when splat source files are detected alongside photos. Service: `backend/app/services/splat_service.py`
+- ~~Gaussian splat processing via Luma Labs (2026-06-13)~~ — **REMOVED 2026-07-14**. Never functional: the endpoint called Luma's Dream Machine `generation_type` field, which only ever accepted `"video"` — structurally incapable of producing a splat. No live job had gone through it. `splat_service.py` deleted; `/splat-upload/{job_id}` and `_process_splat_background` removed from `routers/post_production.py`; the Luma routing block removed from `process_job_assets()` in `services/post_production.py`. 3D tours are Polycam-only now (embed URL or manual `.ply`/`.splat` upload) — see Post-Production Pipeline above.
 
 ## Remaining Before Live Traffic
 
@@ -274,7 +273,6 @@ pick_vendor_rule_based(job, vendors)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)
 - `GEMINI_API_KEY` ✅ (set)
 - `FOTELLO_API_KEY` ✅ (set)
-- `LUMA_API_KEY` — Luma Labs API key for Gaussian splat / NeRF processing. Required for `POST /api/v1/post-production/splat-upload/{job_id}`. Get at https://lumalabs.ai/dream-machine/api
 - `INTERNAL_API_KEYS` — rotated; current value stored in app_secrets table ✅ (set)
 - `TWILIO_ACCOUNT_SID` ✅ (set)
 - `TWILIO_AUTH_TOKEN` ✅ (set)
