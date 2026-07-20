@@ -146,7 +146,7 @@ pick_vendor_rule_based(job, vendors)
   - Transport Canada drone compliance
   - IP assignment to Bricks
   - Ontario arbitration governing law; Heller compliance
-  - Clause 8 payout rates: "Bricks retains platform fee (Tier A: 60%; Tier B: 50%; Tier C: 40%); your payout is the remainder" — these are Bricks' FEES, the inverse of vendor payout (40%/50%/60% → vendor gets 60%/50%/40%). **Do not "fix" these numbers** — they are correct.
+  - Clause 8 payout rates: "Bricks retains platform fee (Tier A: 45%; Tier B: 55%; Tier C: 65%); your payout is the remainder" — these are Bricks' FEES, the inverse of vendor payout. **CORRECTED 2026-07-20** — this clause previously said 60%/50%/40%, which the note here wrongly claimed was "correct" (the inverse of 60/50/40 is 40/50/60, which does not match TIER_PERCENTAGES' 35/45/55 above — that mismatch was the actual bug, caught by a DB/schema audit and confirmed directly by Kam: top-tier (A) vendors are meant to earn more, matching TIER_PERCENTAGES exactly). Fee is now the correct inverse of 35%/45%/55%.
 - `GET /api/onboarding/ic-agreement` — returns versioned agreement text
 - Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`
 - `VendorApplicationCreate.ic_agreement_version` defaults to `"1.1"`
@@ -189,7 +189,7 @@ pick_vendor_rule_based(job, vendors)
 - `time_window_start` is stored as `"HH:MM"` string — **always combine with `scheduled_date` before datetime math**. `datetime.fromisoformat("HH:MM")` raises ValueError. Gate 4 is fail-closed.
 - Trip fees flow: `pending` → `reserved` (before Stripe) → `paid_out` (after Stripe). Never go pending→paid_out directly.
 - `assign_vendor_for_job(job_id)` has an internal 3-attempt retry loop — callers do not need to retry
-- IC Clause 8 lists Bricks' platform FEE (60%/50%/40%), not vendor payout — the numbers are correct and intentionally inverse of TIER_PERCENTAGES
+- IC Clause 8 lists Bricks' platform FEE (45%/55%/65% for A/B/C, corrected 2026-07-20), not vendor payout — intentionally inverse of TIER_PERCENTAGES (35%/45%/55% for C/B/A)
 
 ## No-Show Policy (Snappr model)
 
