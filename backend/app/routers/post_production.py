@@ -429,16 +429,19 @@ async def reconcile_stuck_uploads(
 
     stuck = res_stuck.data or []
 
-    # --- PIL Tier-3 fallback: apply local enhancement to photo assets that are stuck
-    # and whose provider keys are unavailable.  Only activated as last resort — never
-    # when Fotello or Autoenhance are configured and healthy.
+    # --- In-house enhancement fallback (photo_enhance_service): apply local
+    # enhancement to photo assets that are stuck and whose provider keys are
+    # unavailable. Still gated the same way as before (last resort, only when
+    # neither vendor is configured) -- promoting this to a real Tier-2 ahead
+    # of Autoenhance is a separate routing decision (see
+    # project_bricks_inhouse_post_production memory / Phase 3), not made here.
     fotello_available = bool(os.environ.get("FOTELLO_API_KEY", ""))
     autoenhance_available = bool(os.environ.get("AUTOENHANCE_API_KEY", ""))
     pil_tier3_count = 0
 
     if not fotello_available and not autoenhance_available:
         try:
-            from ..services.local_enhance import enhance_image_pil, upload_enhanced
+            from ..services.photo_enhance_service import enhance_image, upload_enhanced
             from ..services.storage import get_signed_download_url as _sign_url
 
             _SPLAT_EXTS = (".mp4", ".mov", ".avi", ".zip", ".tar", ".ply", ".splat")
@@ -469,27 +472,27 @@ async def reconcile_stuck_uploads(
                         img_resp.raise_for_status()
                         original_bytes = img_resp.content
 
-                    enhanced_bytes = enhance_image_pil(original_bytes)
+                    enhanced_bytes = enhance_image(original_bytes)
                     storage_path = await upload_enhanced(db.storage, upload["job_id"], upload["id"], enhanced_bytes)
 
                     await db.table("uploads").update({
                         "processing_status": "done",
                         "processed_url": storage_path,
-                        "provider": "local_pil",
+                        "provider": "bricks_inhouse",
                         "processed_at": datetime.now(timezone.utc).isoformat(),
                     }).eq("id", upload["id"]).execute()
 
                     pil_tier3_count += 1
                     logger.info(
-                        f"PIL Tier-3: enhanced upload {upload['id']} for job {upload['job_id']} "
+                        f"In-house enhance: processed upload {upload['id']} for job {upload['job_id']} "
                         f"→ {storage_path}"
                     )
                 except Exception as pil_err:
-                    logger.error(f"PIL Tier-3: failed for upload {upload['id']}: {pil_err}")
+                    logger.error(f"In-house enhance: failed for upload {upload['id']}: {pil_err}")
                     # Fall through — will be marked failed below with the rest
 
         except ImportError as ie:
-            logger.warning(f"PIL Tier-3 fallback unavailable (Pillow/numpy not installed): {ie}")
+            logger.warning(f"In-house enhance fallback unavailable (Pillow/numpy/cv2 not installed): {ie}")
 
     # Re-fetch stuck list after PIL pass — any uploads now "done" should be excluded
     # from the bulk failure sweep so they can proceed to finalization.
