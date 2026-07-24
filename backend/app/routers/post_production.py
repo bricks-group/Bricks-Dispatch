@@ -206,7 +206,7 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
         return
 
     _internal_api_key = os.environ.get("INTERNAL_API_KEY", "")
-    _booking_api_url = os.environ.get("BOOKING_API_URL", "https://bricks-booking-api.vercel.app")
+    _booking_api_url = os.environ.get("BOOKING_API_URL", "https://bricks-companion-api.vercel.app")
 
     if not _internal_api_key:
         logger.info(f"Job {job_id}: INTERNAL_API_KEY not set — skipping delivery notification")
