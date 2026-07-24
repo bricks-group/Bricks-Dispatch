@@ -4,7 +4,7 @@ You are working on **Bricks GO**, the vendor-facing job orchestration layer of t
 
 ## Ecosystem Context
 - **Bricks-OS** — brokerage admin web dashboard (`brokerage.brxs.ca`) + Mac PWA + iOS companion app. Manages vendors. **Also hosts the photographer Dispatch web shell** — photographers log in at `brokerage.brxs.ca` and are routed to `/dispatch/*` by role.
-- **Bricks-Booking** — agent mobile app (iOS + Android). Sends confirmed shoot jobs to this service via `POST /api/v1/dispatch/jobs`
+- **Bricks-Companion** — agent mobile app (iOS + Android). Sends confirmed shoot jobs to this service via `POST /api/v1/dispatch/jobs`
 - **Bricks GO** (this repo) — vendor mobile app (iOS + Android) + Dispatch backend API. Assigns jobs to vendors, tracks status, processes payouts.
 
 All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
@@ -290,4 +290,4 @@ pick_vendor_rule_based(job, vendors)
 - [ ] Play Store internal track (Kam)
 - [ ] Verify Transport Canada Advanced RPAS for GTA drone photographers
 - [x] **Ops escalation for dispatch failures** ✅ — `GET /api/admin/dispatch-failures` lists failed jobs + escalation record; `POST /api/admin/dispatch-failures/{job_id}/reassign` resets to pending and reruns `assign_vendor_for_job`
-- [x] **Agent in-app dispute flow** ✅ — UI lives in Booking app (`frontend/app/job/[id].tsx`); dispute form + 72hr window + backend handler all complete in Bricks-Booking
+- [x] **Agent in-app dispute flow** ✅ — UI lives in Booking app (`frontend/app/job/[id].tsx`); dispute form + 72hr window + backend handler all complete in Bricks-Companion
