@@ -1,8 +1,10 @@
 """
-Standalone sky-replacement service. Runs on its own host (Oracle Cloud
-Always Free -- see sky-service/README.md), not on Vercel, because the
-model + torch + transformers stack is too large for Vercel's serverless
-function size limit. Called over HTTP by Bricks-Dispatch's backend.
+Standalone sky-replacement service. Runs on its own host, not on Vercel,
+because even this lightweight ONNX model needs more headroom than
+Vercel's serverless function size limit allows. Called over HTTP by
+Bricks-Dispatch's backend. See sky-service/README.md for deploy targets
+and sky_segmentation.py for why replace_sky() shells out to two
+subprocesses instead of running inline.
 """
 
 import logging

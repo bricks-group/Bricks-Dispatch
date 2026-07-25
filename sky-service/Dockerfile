@@ -6,12 +6,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r requirements.txt
 
-# Pre-download model weights at build time (not on first request) so the
-# container starts ready to serve and doesn't hit HF on every cold start.
-RUN python -c "from transformers import OneFormerProcessor, OneFormerForUniversalSegmentation; \
-    OneFormerProcessor.from_pretrained('shi-labs/oneformer_ade20k_swin_tiny'); \
-    OneFormerForUniversalSegmentation.from_pretrained('shi-labs/oneformer_ade20k_swin_tiny')"
-
+# model/skyseg_int8.onnx (44MB) is committed directly to this repo --
+# no runtime download, no HF dependency at build or start time.
 COPY . .
 
 RUN useradd -m -u 1000 -s /bin/bash bricks && chown -R bricks:bricks /app
