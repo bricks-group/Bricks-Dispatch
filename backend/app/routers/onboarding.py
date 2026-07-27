@@ -104,7 +104,7 @@ async def apply_to_bricks(application: VendorApplicationCreate):
 
 async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     res_existing = await (await get_db()).table("vendor_members").select("*").eq("email", application.email.lower().strip()).maybe_single().execute()
-    if res_existing.data:
+    if res_existing and res_existing.data:
         raise HTTPException(status_code=400, detail="An application with this email already exists.")
 
     now_iso = datetime.now(timezone.utc).isoformat()
