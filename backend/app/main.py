@@ -9,7 +9,7 @@ from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 
 # Import routers
-from app.routers import dispatch, jobs, vendors, notifications, payouts, post_production, vendor_os, onboarding, admin_ops
+from app.routers import dispatch, notifications, payouts, post_production, vendor_os, onboarding, admin_ops, uploads, auth
 
 limiter = Limiter(key_func=get_remote_address, default_limits=['100/minute'])
 
@@ -54,13 +54,17 @@ async def ready(db: Client = Depends(get_db)):
 # dispatch.router and payouts.router carry their own /api/v1/* prefix internally.
 app.include_router(dispatch.router, tags=["dispatch"])
 app.include_router(payouts.router, tags=["payouts"])
-app.include_router(jobs.router, prefix="/dispatch/jobs", tags=["jobs"])
-app.include_router(vendors.router, prefix="/dispatch/vendors", tags=["vendors"])
 app.include_router(notifications.router, prefix="/dispatch/notifications", tags=["notifications"])
 app.include_router(post_production.router, tags=["post-production"])
 app.include_router(vendor_os.router, tags=["vendor-os"])
 app.include_router(onboarding.router, tags=["onboarding"])
 app.include_router(admin_ops.router, tags=["admin"])
+# Mounted 2026-07-27: both carry their own /api/* prefix internally, real
+# working code that was built but never wired in. uploads.py is a dependency
+# of vendor_os.py's post-production trigger comment; auth.py is the only path
+# for the documented IC-agreement re-prompt-on-login behavior.
+app.include_router(uploads.router, tags=["uploads"])
+app.include_router(auth.router, tags=["auth"])
 
 # --- Rate Limited Endpoints (Placeholders) ---
 # These would typically be defined within their respective routers
