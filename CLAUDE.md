@@ -23,9 +23,9 @@ The Dispatch photographer web experience is now built into the Bricks OS React a
 All schema migrations live in `ruletheworld/bricks-os/supabase/migrations/` — **never in this repo**. Bricks OS is the DDL authority. The `backend/migrations/` file here was a legacy exception — all future DDL goes to Bricks OS. The live ownership registry is queryable: `SELECT * FROM public.v_service_boundaries;`
 
 **Tables owned by Bricks GO (write here freely):**
-- `dispatch_jobs` — create, assign, all status transitions
-- `vendor_assignments` — written on assignment
-- `payout_records` — Stripe Connect transfer records
+- `jobs` — create, assign, all status transitions. **Corrected 2026-07-27**: this table is called `jobs` in code, not `dispatch_jobs` as written here for who knows how long — 49 of 50 `.table(...)` calls across this repo use `jobs`; the one exception (`services/qc_agent.py:198`) actually queries `dispatch_jobs`, which doesn't exist, and silently gets nothing back, breaking package-based QC checks. Fix `qc_agent.py:198` to use `jobs`.
+- Assignment is **not** a separate table — it's an `assignee_id` update directly on the `jobs` row (`services/vendor_selection.py:127-131`). No `vendor_assignments` table exists or is ever queried; corrected 2026-07-27.
+- Payout records live on the `jobs`/`payouts` tables (`services/payout_service.py` writes to a table literally called `payouts`, not `payout_records`); corrected 2026-07-27.
 - `agent_noshow_trip_fees` — $60 trip fee per validated claim
 - `agent_noshow_escalations` — Twilio SMS attempt log
 - `reconciliation_events` — fee vs booking mismatch log
@@ -72,8 +72,10 @@ API base: `https://dispatch-api.brxs.ca`
 - `backend/app/main.py` — router registration (no outer prefix; routers carry their own `/api/v1/*`)
 - `backend/app/routers/dispatch.py` — `POST /api/v1/dispatch/jobs` intake, status updates
 - `backend/app/routers/payouts.py` — `POST /api/v1/payouts/trigger`, list, summary
-- `backend/app/routers/jobs.py` — Job CRUD (`/dispatch/jobs/*`)
-- `backend/app/routers/vendors.py` — Vendor management (`/dispatch/vendors/*`)
+- `backend/app/routers/jobs.py` — **corrected 2026-07-27: hardcoded stub, not real CRUD.** `GET /` returns `[]`, `GET /{job_id}` returns `{"job_id": job_id}`, no DB access. Its own docstrings say "implemented in dispatch.router" — real job CRUD lives in `dispatch.py`/`vendor_os.py`. Mounted at `/dispatch/jobs/*` but does nothing.
+- `backend/app/routers/vendors.py` — **corrected 2026-07-27: same stub pattern.** `GET /` returns `[]`, `GET /{vendor_id}` returns `{"vendor_id": vendor_id}`. Docstring says "implemented in vendor_os.router" — real vendor management is in `vendor_os.py`.
+- `backend/app/routers/uploads.py` — **not documented anywhere before, and not mounted in `main.py`.** `vendor_os.py:635` has a comment assuming this endpoint (photo upload → post-production trigger) is reachable. It isn't. Needs either mounting or removing.
+- `backend/app/routers/auth.py` — **not documented anywhere before, and not mounted in `main.py`.** It's the only code that would support the IC-agreement re-prompt-on-login behavior described elsewhere in this file — that behavior has no live path today as a result.
 - `backend/app/routers/vendor_os.py` — Vendor OS dashboard: overview, team, jobs, earnings, performance
 - `backend/app/routers/onboarding.py` — Contractor application, IC agreement, document upload (photographer-facing)
 - `backend/app/routers/post_production.py` — Provider callbacks (Fotello/Autoenhance/BoxBrownie), reconcile
@@ -114,7 +116,7 @@ Score = 100-point system:
 - Load balance (5): 1 - active_assignments / 4
 
 Repeat-agent bonus: +5 points if vendor completed prior job for this agent.
-Brokerage favourite bonus: +15 points if the booking's brokerage has favourited this photographer (reads `brokerage_vendor_favorites` table).
+Brokerage favourite bonus: +15 points if the booking's brokerage has favourited this photographer (reads `brokerage_vendor_favorites` table). **⚠️ Cannot fire, as of 2026-07-27**: `Job`/`JobIntakeRequest` (`app/shared/schemas.py`) don't declare `brokerage_id`, so `getattr(job, "brokerage_id", None)` in `integrations/bricks_ai_dispatch.py:344` always returns `None` regardless of what's sent or stored. This is dead code, not a working bonus — the ✅ below is wrong. Fix: add `brokerage_id: Optional[str] = None` to both models.
 Drone gate: `vendor.drone_certified=True` required for `job_type="drone"`.
 
 **Gemini 1.5 Flash** used ONLY for explainability string — called async after routing, shown in admin dashboard. Never on the hot dispatch path.
@@ -222,7 +224,7 @@ pick_vendor_rule_based(job, vendors)
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - **Deterministic weighted dispatch scorer (specialty/proximity/on_time/quality/reliability/load)** ✅
 - **Repeat-agent bonus (+5pts if vendor has shot for this agent before)** ✅
-- **Brokerage favourite bonus (+15pts if brokerage has favourited the photographer)** ✅
+- ~~**Brokerage favourite bonus (+15pts if brokerage has favourited the photographer)** ✅~~ — **❌ corrected 2026-07-27: does not work, see line 117 above. Structurally dead code, not done.**
 - **Drone certification hard gate (drone_certified required for drone jobs)** ✅
 - **Gemini 1.5 Flash: explainability only (async, non-blocking, dashboard display)** ✅
 - Rule-based fallback with tier gate ✅
@@ -273,7 +275,7 @@ pick_vendor_rule_based(job, vendors)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)
 - `GEMINI_API_KEY` ✅ (set)
 - `FOTELLO_API_KEY` ✅ (set)
-- `INTERNAL_API_KEYS` — rotated; current value stored in app_secrets table ✅ (set)
+- `INTERNAL_API_KEYS` — rotated; current value read via `os.environ.get(...)` at every call site (`vendor_os.py`, `onboarding.py`, `dispatch.py`, `post_production.py`, `payouts.py`, `shared/auth.py`) ✅ (set). **Corrected 2026-07-27**: there is no `app_secrets` table — nothing in this codebase reads Supabase for this value, it's a plain env var.
 - `TWILIO_ACCOUNT_SID` ✅ (set)
 - `TWILIO_AUTH_TOKEN` ✅ (set)
 - `TWILIO_FROM_NUMBER` ✅ (set)
