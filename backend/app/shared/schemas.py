@@ -63,6 +63,17 @@ class Job(BaseModel):
     min_tier_required: Optional[int] = None
     preferred_tier: Optional[int] = None
     ai_flags: Optional[list] = None
+    # brokerage_id (jobs.brokerage_id, uuid): read by bricks_ai_dispatch.py's scorer for the
+    # +15pt brokerage-favourite bonus. Was missing here until 2026-07-27 -- pydantic v2's
+    # default extra='ignore' silently dropped it on every Job(**job_doc) reconstruction,
+    # so getattr(job, "brokerage_id", None) always returned None and the bonus never fired,
+    # unconditionally, regardless of what Booking/Companion sent. See BRICKS_STATUS.md.
+    brokerage_id: Optional[str] = None
+    # payout_amount / dispatch_explanation: written directly via jobs.update() elsewhere
+    # (payout_service.py, bricks_ai_dispatch.py) -- also missing here until 2026-07-27, same
+    # silent-drop pattern, just not yet known to be read back anywhere.
+    payout_amount: Optional[int] = None
+    dispatch_explanation: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -110,6 +121,10 @@ class JobIntakeRequest(BaseModel):
     min_tier_required: Optional[int] = None
     preferred_tier: Optional[int] = None
     ai_flags: Optional[list] = None
+    # jobs.brokerage_id (uuid) already exists in the live DB; this field was missing from
+    # intake until 2026-07-27, so Companion's brokerage_id was silently dropped before it
+    # ever reached the insert. See Job's comment above for the downstream consequence.
+    brokerage_id: Optional[str] = None
 
 
 class JobStatusUpdate(BaseModel):
