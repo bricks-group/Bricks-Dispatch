@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
+import logging
 import os
+import traceback
 import uuid
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Form, Request
+
+logger = logging.getLogger(__name__)
 
 from ..services.storage import upload_file
 from ..shared.database import get_db
@@ -89,6 +93,16 @@ async def apply_to_bricks(application: VendorApplicationCreate):
     if not application.accepted_terms:
         raise HTTPException(status_code=400, detail="You must accept the Bricks Contractor Agreement to apply.")
 
+    try:
+        return await _apply_to_bricks_inner(application)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("apply_to_bricks_failed:\n" + traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Could not process application. Please try again.")
+
+
+async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     res_existing = await (await get_db()).table("vendor_members").select("*").eq("email", application.email.lower().strip()).maybe_single().execute()
     if res_existing.data:
         raise HTTPException(status_code=400, detail="An application with this email already exists.")
