@@ -170,7 +170,7 @@ app.include_router(payouts_router)
 app.include_router(post_production_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
-_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca").split(",") if o.strip()]
+_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca,https://www.brxs.ca,https://brxs.ca").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=_ALLOWED_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allow_headers=["*"])
 app.add_middleware(RateLimitMiddleware)
 
