@@ -29,6 +29,7 @@ pipeline.
 import io
 import logging
 import os
+from typing import Optional
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -135,5 +136,30 @@ async def upload_enhanced(storage_client, job_id: str, asset_id: str, enhanced_b
     logger.info(
         f"In-house enhance: uploaded to {STORAGE_BUCKET}/{storage_path} "
         f"({len(enhanced_bytes):,} bytes)"
+    )
+    return storage_path
+
+
+async def upload_qc_variant(storage_client, job_id: str, asset_id: str, enhanced_bytes: bytes) -> Optional[str]:
+    """
+    Downscale the already-enhanced image to QC review size and upload it.
+    Reuses make_qc_variant_bytes from storage.py so QC never has to fetch the
+    full-res enhanced original for a review pass.
+    Returns the storage path, or None if the downscale fails.
+    """
+    from .storage import make_qc_variant_bytes
+
+    try:
+        qc_bytes = make_qc_variant_bytes(enhanced_bytes)
+    except Exception:
+        logger.warning(f"In-house enhance: QC variant downscale failed for upload {asset_id}")
+        return None
+
+    storage_path = f"enhanced/{job_id}/qc_{asset_id}.jpg"
+    bucket = storage_client.from_(STORAGE_BUCKET)
+    await bucket.upload(
+        path=storage_path,
+        file=qc_bytes,
+        file_options={"content-type": "image/jpeg", "upsert": "true"},
     )
     return storage_path

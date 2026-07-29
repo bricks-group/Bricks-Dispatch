@@ -441,7 +441,7 @@ async def reconcile_stuck_uploads(
 
     if not fotello_available and not autoenhance_available:
         try:
-            from ..services.photo_enhance_service import enhance_image, upload_enhanced
+            from ..services.photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
             from ..services.storage import get_signed_download_url as _sign_url
 
             _SPLAT_EXTS = (".mp4", ".mov", ".avi", ".zip", ".tar", ".ply", ".splat")
@@ -474,10 +474,12 @@ async def reconcile_stuck_uploads(
 
                     enhanced_bytes = enhance_image(original_bytes)
                     storage_path = await upload_enhanced(db.storage, upload["job_id"], upload["id"], enhanced_bytes)
+                    qc_variant_path = await upload_qc_variant(db.storage, upload["job_id"], upload["id"], enhanced_bytes)
 
                     await db.table("uploads").update({
                         "processing_status": "done",
                         "processed_url": storage_path,
+                        "qc_variant_url": qc_variant_path,
                         "provider": "bricks_inhouse",
                         "processed_at": datetime.now(timezone.utc).isoformat(),
                     }).eq("id", upload["id"]).execute()

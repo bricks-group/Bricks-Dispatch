@@ -221,6 +221,7 @@ class UploadRecord(BaseModel):
     thumbnail: str = ""          # 200-char base64 preview (backward compat)
     file_url: Optional[str] = None     # S3 object key for original file
     thumbnail_url: Optional[str] = None  # S3 object key for thumbnail
+    qc_variant_url: Optional[str] = None  # S3 object key for QC-review-sized JPEG
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

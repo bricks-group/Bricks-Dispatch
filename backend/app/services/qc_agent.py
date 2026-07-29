@@ -1,5 +1,5 @@
 """
-QC Vision Agent — automated photo quality review using Gemini 1.5 Flash.
+QC Vision Agent — automated photo quality review.
 
 Runs after post-production processing, before delivery to the agent.
 Flags or rejects photos that fail quality standards.
@@ -13,8 +13,11 @@ Scoring (0–100):
   90–100: passed
   70–89:  flagged
   0–69:   rejected
+
+The vision-model call itself lives behind qc_vision_provider.py — this
+module only owns the QC decision flow (OpenCV pre-pass routing, fail-open
+handling), not any particular provider's API shape.
 """
-import base64
 import logging
 import os
 from datetime import datetime, timezone
@@ -22,15 +25,11 @@ from typing import Optional
 
 import httpx
 
+from .qc_vision_provider import is_configured as _vision_qc_configured, run_vision_qc
+
 logger = logging.getLogger(__name__)
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 QC_ENABLED = os.environ.get("USE_QC_AGENT", "true").lower() == "true"
-
-_GEMINI_VISION_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash:generateContent"
-)
 
 _QC_PROMPT = """You are a professional real-estate photography quality inspector.
 Evaluate this photo on the following criteria:
@@ -76,22 +75,22 @@ async def run_qc_on_upload(
     is_exterior: bool = False,
 ) -> dict:
     """
-    Runs QC on a single upload: OpenCV coded pre-pass first, Gemini only when needed.
+    Runs QC on a single upload: OpenCV coded pre-pass first, vision QC only when needed.
     Returns dict with: qc_status, qc_score, qc_notes, qc_source.
     Falls through to 'passed' if both are unavailable (fail open — never block delivery due to QC outage).
     """
     if not QC_ENABLED:
         return {"qc_status": "passed", "qc_score": 100, "qc_notes": "QC agent disabled", "qc_source": "disabled"}
 
-    if not GEMINI_API_KEY:
-        logger.warning(f"QC: GEMINI_API_KEY not set — skipping QC for upload {upload_id}")
-        return {"qc_status": "passed", "qc_score": 100, "qc_notes": "QC skipped (no API key)", "qc_source": "skipped"}
+    if not _vision_qc_configured():
+        logger.warning(f"QC: no vision QC provider configured — skipping QC for upload {upload_id}")
+        return {"qc_status": "passed", "qc_score": 100, "qc_notes": "QC skipped (no provider configured)", "qc_source": "skipped"}
 
     image_bytes = await _fetch_image_bytes(image_url)
     if not image_bytes:
         return {"qc_status": "passed", "qc_score": 100, "qc_notes": "QC skipped (image unavailable)", "qc_source": "skipped"}
 
-    # OpenCV pre-pass: fast coded checks before expensive Gemini call
+    # OpenCV pre-pass: fast coded checks before the (paid, external) vision QC call
     _high_value = package in ("luxury", "estate")
     try:
         from .qc_opencv import analyze_image_cv
@@ -99,12 +98,12 @@ async def run_qc_on_upload(
         cv_source = cv_result.get("source", "opencv")
         cv_status = cv_result.get("status", "passed")
 
-        # Skip Gemini if OpenCV is confident AND this isn't a high-value package
+        # Skip vision QC if OpenCV is confident AND this isn't a high-value package
         if cv_source == "opencv" and cv_status == "passed" and not _high_value:
             notes = "OpenCV pre-pass: passed"
             if cv_result.get("issues"):
                 notes += " Issues: " + "; ".join(cv_result["issues"])
-            logger.info(f"QC upload {upload_id}: OpenCV passed — Gemini skipped (package={package or 'unknown'})")
+            logger.info(f"QC upload {upload_id}: OpenCV passed — vision QC skipped (package={package or 'unknown'})")
             return {
                 "qc_status": "passed",
                 "qc_score": cv_result.get("score", 100),
@@ -112,62 +111,17 @@ async def run_qc_on_upload(
                 "qc_source": "opencv",
             }
 
-        # OpenCV flagged/rejected or high-value package: fall through to Gemini
+        # OpenCV flagged/rejected or high-value package: fall through to vision QC
         if cv_source == "opencv":
             logger.info(
                 f"QC upload {upload_id}: OpenCV {cv_status} "
-                f"(score={cv_result.get('score')}, high_value={_high_value}) — running Gemini"
+                f"(score={cv_result.get('score')}, high_value={_high_value}) — running vision QC"
             )
     except ImportError:
         pass
 
-    b64 = base64.b64encode(image_bytes).decode()
-
-    # Detect MIME type from first bytes
-    if image_bytes[:3] == b"\xff\xd8\xff":
-        mime = "image/jpeg"
-    elif image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
-        mime = "image/png"
-    else:
-        mime = "image/jpeg"
-
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": _QC_PROMPT},
-                {"inline_data": {"mime_type": mime, "data": b64}},
-            ]
-        }],
-        "generationConfig": {
-            "temperature": 0.1,
-            "maxOutputTokens": 256,
-        },
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{_GEMINI_VISION_URL}?key={GEMINI_API_KEY}",
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        text = (
-            data.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "{}")
-        ).strip()
-
-        # Strip markdown fences if model wraps in ```json ... ```
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-
-        import json
-        result = json.loads(text)
+        result = await run_vision_qc(image_bytes, _QC_PROMPT)
         score = int(result.get("score", 100))
         status = result.get("status", "passed")
         notes = result.get("notes", "")
@@ -175,11 +129,11 @@ async def run_qc_on_upload(
         if issues:
             notes = notes + " Issues: " + "; ".join(issues)
 
-        logger.info(f"QC upload {upload_id}: score={score} status={status} source=gemini")
-        return {"qc_status": status, "qc_score": score, "qc_notes": notes[:500], "qc_source": "gemini"}
+        logger.info(f"QC upload {upload_id}: score={score} status={status} source=vision")
+        return {"qc_status": status, "qc_score": score, "qc_notes": notes[:500], "qc_source": "vision"}
 
     except Exception as e:
-        logger.error(f"QC: Gemini call failed for upload {upload_id}: {e}")
+        logger.error(f"QC: vision provider call failed for upload {upload_id}: {e}")
         # Fail open — QC outage must never block delivery
         return {"qc_status": "passed", "qc_score": 100, "qc_notes": f"QC skipped (error: {type(e).__name__})", "qc_source": "skipped"}
 
@@ -199,7 +153,7 @@ async def run_qc_for_job(job_id: str) -> dict:
     package_name = (job_res.data or {}).get("package_name", "") or ""
 
     res = await db.table("uploads").select(
-        "id, file_url, processed_url, qc_status, processing_status, filename"
+        "id, file_url, processed_url, qc_variant_url, qc_status, processing_status, filename"
     ).eq("job_id", job_id).execute()
     uploads = [u for u in (res.data or []) if u.get("processing_status") in ("done", "skipped", None, "pending")]
 
@@ -220,8 +174,10 @@ async def run_qc_for_job(job_id: str) -> dict:
             counts["total"] += 1
             continue
 
-        # Get a signed URL for the processed or original file
-        path = u.get("processed_url") or u.get("file_url")
+        # Prefer the small QC-review variant over the full-res file — cuts
+        # Supabase Storage egress per review since QC only needs enough
+        # resolution to judge sharpness/exposure/composition, not the original.
+        path = u.get("qc_variant_url") or u.get("processed_url") or u.get("file_url")
         if not path:
             continue
 

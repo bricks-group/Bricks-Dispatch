@@ -269,7 +269,7 @@ async def upload_compliance_document(
     except Exception:
         raw_bytes = file_data.encode()
 
-    file_key, _, _ = await upload_file(
+    file_key, _, _, _ = await upload_file(
         raw_bytes, "onboarding", member_id, filename, "application/pdf"
     )
 

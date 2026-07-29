@@ -89,7 +89,7 @@ async def create_upload(
     upload_id = str(uuid.uuid4())
 
     # Upload to storage; fail fast if storage is unavailable rather than inserting a bad record.
-    file_url, thumbnail_url, thumbnail_b64 = await upload_file(
+    file_url, thumbnail_url, thumbnail_b64, qc_variant_url = await upload_file(
         file_bytes=file_bytes,
         job_id=job_id,
         upload_id=upload_id,
@@ -110,6 +110,7 @@ async def create_upload(
         thumbnail=thumbnail_b64,
         file_url=file_url,
         thumbnail_url=thumbnail_url,
+        qc_variant_url=qc_variant_url,
     )
 
     await db.table("uploads").insert(record.dict()).execute()

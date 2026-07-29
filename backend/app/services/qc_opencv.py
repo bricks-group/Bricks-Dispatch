@@ -11,6 +11,17 @@ EXPECTED_DELIVERABLE_COUNT = {
 }
 
 
+# Laplacian variance (the blur metric below) is resolution-dependent — the
+# same photo scores lower after downsampling, since decimation removes the
+# high-frequency content the metric measures. qc_agent.py can hand this
+# function either a full-res original or a downscaled QC-review variant
+# (see storage.py QC_VARIANT_SIZE), so the check canonicalizes to a fixed
+# size first. That keeps the threshold below meaningful regardless of the
+# input resolution, instead of drifting with whatever upstream happens to
+# pass in.
+_CANONICAL_BLUR_CHECK_SIZE = 1024
+
+
 def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False) -> dict:
     try:
         import cv2
@@ -33,7 +44,16 @@ def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False) -> dict:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape
 
-    laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    longest_edge = max(height, width)
+    if longest_edge > _CANONICAL_BLUR_CHECK_SIZE:
+        scale = _CANONICAL_BLUR_CHECK_SIZE / longest_edge
+        blur_check_gray = cv2.resize(
+            gray, (max(1, int(width * scale)), max(1, int(height * scale))), interpolation=cv2.INTER_AREA
+        )
+    else:
+        blur_check_gray = gray
+
+    laplacian_var = float(cv2.Laplacian(blur_check_gray, cv2.CV_64F).var())
     if laplacian_var < 100:
         issues.append("soft_focus")
         score -= 25
