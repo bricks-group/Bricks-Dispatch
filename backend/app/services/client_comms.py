@@ -41,6 +41,35 @@ async def _call_booking_comms(path: str, payload: dict) -> bool:
         logger.error(f"Booking comms call to {path} failed: {e}")
         return False
 
+async def register_property_tour(property_id: str, storage_path: str, title: str = "3D Tour") -> bool:
+    """POST a finished splat to Bricks-OS's property_tours table via
+    POST /internal/tour-ready. Replaces the dead media_delivery.splat_url write
+    (that column was never actually added to the live DB -- see BRICKS_STATUS.md).
+    Same INTERNAL_API_KEY / X-Internal-Api-Key convention as _call_booking_comms
+    above, just a different target service. Whatever value INTERNAL_API_KEY holds
+    here must match Bricks-OS's own INTERNAL_API_KEYS env var -- that's a deploy/ops
+    step, not something verifiable from this repo."""
+    api_key = os.environ.get("INTERNAL_API_KEY")
+    os_url = os.environ.get("BRICKS_OS_API_URL")
+    if not api_key:
+        logger.warning("INTERNAL_API_KEY not set — skipping tour-ready call")
+        return False
+    if not os_url:
+        logger.warning("BRICKS_OS_API_URL not set — skipping tour-ready call")
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{os_url}/internal/tour-ready",
+                headers={"X-Internal-Api-Key": api_key},
+                json={"property_id": property_id, "storage_path": storage_path, "title": title},
+            )
+            resp.raise_for_status()
+            return True
+    except Exception as e:
+        logger.error(f"tour-ready call for property {property_id} failed: {e}")
+        return False
+
 
 async def notify_booking_confirmed(job_id: str) -> None:
     """
