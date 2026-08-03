@@ -182,7 +182,7 @@ async def process_job_assets(job_id: str):
 
     # Video/archive uploads aren't photo assets — Fotello/Autoenhance/BoxBrownie only
     # edit images, so these are skipped from provider routing below and delivered as-is.
-    # 3D tours are Polycam-only (embed URL or a manually uploaded .ply/.splat file,
+    # 3D visits are Polycam-only (embed URL or a manually uploaded .ply/.splat file,
     # handled generically by _finalize_job_if_complete's splat_url resolution) — no
     # automated processing pipeline exists for raw video/zip captures.
     _SPLAT_SOURCE_EXTENSIONS = (".mp4", ".mov", ".avi", ".zip", ".tar")

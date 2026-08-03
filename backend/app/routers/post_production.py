@@ -10,7 +10,7 @@ BoxBrownie handles: photo editing, retouching, day-to-dusk, item removal, and vi
 BoxBrownie uses polling (not webhooks) — this endpoint handles any push
 notifications they may send for completed orders.
 
-Gaussian splat / 3D tours are handled entirely by Polycam (embed URL or a
+Gaussian splat / 3D visits are handled entirely by Polycam (embed URL or a
 manually uploaded .ply/.splat file) — no backend processing needed; see
 _finalize_job_if_complete()'s splat_url resolution below.
 
@@ -148,7 +148,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         return
 
     # Find the first .splat upload for this job (if any) to register as a property
-    # tour after delivery -- see the post-upsert block below. NOTE: this used to sign
+    # visit after delivery -- see the post-upsert block below. NOTE: this used to sign
     # a splat_url and write it into media_delivery below; media_delivery has no
     # splat_url column on the live DB (confirmed via BRICKS_STATUS.md, 2026-08-02)
     # and that upsert would raise on every job with a splat upload, aborting the rest
@@ -179,20 +179,20 @@ async def _finalize_job_if_complete(job_id: str) -> None:
 
     logger.info(f"Job {job_id}: all {len(uploads)} uploads processed → status=delivered, {len(delivery_urls)} URLs generated")
 
-    # Register the property tour on Bricks-OS now that the job is delivered (best-effort —
-    # property_tours rows aren't load-bearing for this job's own status/payout/notification).
+    # Register the property visit on Bricks-OS now that the job is delivered (best-effort —
+    # property_visits rows aren't load-bearing for this job's own status/payout/notification).
     if splat_upload:
         splat_path = splat_upload.get("processed_url") or splat_upload.get("file_url")
-        # register_property_tour expects an internal storage path (Bricks-OS re-signs it
+        # register_property_visit expects an internal storage path (Bricks-OS re-signs it
         # at read time) -- an already-external https:// URL isn't one; same discriminator
         # used above for delivery_urls. Not handling the external-URL case here (no
         # evidence a raw .splat/.ply upload ever produces one, unlike processed photos).
         if splat_path and not splat_path.startswith("https://"):
             try:
-                from ..services.client_comms import register_property_tour
-                await register_property_tour(job_id, splat_path)
+                from ..services.client_comms import register_property_visit
+                await register_property_visit(job_id, splat_path)
             except Exception as e:
-                logger.error(f"Job {job_id}: register_property_tour failed: {e}")
+                logger.error(f"Job {job_id}: register_property_visit failed: {e}")
 
     # Trigger vendor payout now that job is delivered (best-effort — payout_service is idempotent)
     try:
@@ -225,7 +225,7 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
         return
 
     # Determine splat_pending: True when splat is still processing or has failed,
-    # so Booking can append "Your 3D tour is processing — it will arrive separately
+    # so Booking can append "Your Virtual Visit is processing — it will arrive separately
     # within 24h" to the agent delivery email.
     splat_pending = False
     try:

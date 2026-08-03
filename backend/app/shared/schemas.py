@@ -284,7 +284,7 @@ class VendorMember(BaseModel):
     drone_certified: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced"
-    # Gaussian splat 3D tour is included on every package tier (Standard and up,
+    # Gaussian splat Virtual Visit is included on every package tier (Standard and up,
     # SERVICE_CATALOG_V2.md) -- unlike drone_certified, this has no job-type
     # conditional gate, since there's no package tier that skips it. No automated
     # verification path exists (unlike drone certs against Transport Canada's

@@ -329,7 +329,7 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
             and v.onboarding_status == "approved"
             and v.tier >= min_tier
             and (not is_drone_job or v.drone_certified)
-            # Gaussian splat 3D tour is included on every package tier -- unconditional
+            # Gaussian splat Virtual Visit is included on every package tier -- unconditional
             # gate, unlike drone (see vendor_selection.py's identical addition).
             and v.polycam_equipped
         )

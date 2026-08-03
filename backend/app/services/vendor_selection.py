@@ -75,7 +75,7 @@ def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[st
             and v.onboarding_status == "approved"
             and v.tier >= min_tier
             and (not is_drone_job or v.drone_certified)
-            # Gaussian splat 3D tour is included on every package tier (Standard and
+            # Gaussian splat Virtual Visit is included on every package tier (Standard and
             # up) -- unconditional, unlike the drone gate, since no tier skips it.
             and v.polycam_equipped
         )

@@ -127,7 +127,7 @@ async def seed_data():
     sample_notifs = [
         NotificationRecord(id=str(uuid4()), title="New Job Assigned", body="22 Rosehill Ave — Photo shoot at 09:00", type="new_job", data={"job_id": j1_id}),
         NotificationRecord(id=str(uuid4()), title="New Job Assigned", body="88 Harbour Square — URGENT video shoot at 11:00", type="new_job", data={"job_id": j2_id}),
-        NotificationRecord(id=str(uuid4()), title="Job Started", body="312 King St W — 3D tour in progress", type="status_change", data={"job_id": j3_id}),
+        NotificationRecord(id=str(uuid4()), title="Job Started", body="312 King St W — Virtual Visit in progress", type="status_change", data={"job_id": j3_id}),
         NotificationRecord(id=str(uuid4()), title="Approaching Time Window", body="22 Rosehill Ave — starts in 30 min", type="reminder", data={"job_id": j1_id}),
     ]
     for n in sample_notifs:

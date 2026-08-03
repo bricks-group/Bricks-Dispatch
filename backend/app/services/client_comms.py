@@ -41,10 +41,13 @@ async def _call_booking_comms(path: str, payload: dict) -> bool:
         logger.error(f"Booking comms call to {path} failed: {e}")
         return False
 
-async def register_property_tour(property_id: str, storage_path: str, title: str = "3D Tour") -> bool:
-    """POST a finished splat to Bricks-OS's property_tours table via
-    POST /api/internal/tour-ready. Replaces the dead media_delivery.splat_url write
+async def register_property_visit(property_id: str, storage_path: str, title: str = "Virtual Visit") -> bool:
+    """POST a finished splat to Bricks-OS's property_visits table via
+    POST /api/internal/visit-ready. Replaces the dead media_delivery.splat_url write
     (that column was never actually added to the live DB -- see BRICKS_STATUS.md).
+    "Visit" not "tour" (renamed 2026-08-03, Kam): a tour implies a fixed, guided
+    path; a visit is self-directed exploration, which is what the viewer actually
+    lets someone do.
     Same INTERNAL_API_KEY / X-Internal-Api-Key convention as _call_booking_comms
     above, just a different target service. Whatever value INTERNAL_API_KEY holds
     here must match Bricks-OS's own INTERNAL_API_KEYS env var -- that's a deploy/ops
@@ -52,22 +55,22 @@ async def register_property_tour(property_id: str, storage_path: str, title: str
     api_key = os.environ.get("INTERNAL_API_KEY")
     os_url = os.environ.get("BRICKS_OS_API_URL")
     if not api_key:
-        logger.warning("INTERNAL_API_KEY not set — skipping tour-ready call")
+        logger.warning("INTERNAL_API_KEY not set — skipping visit-ready call")
         return False
     if not os_url:
-        logger.warning("BRICKS_OS_API_URL not set — skipping tour-ready call")
+        logger.warning("BRICKS_OS_API_URL not set — skipping visit-ready call")
         return False
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"{os_url}/api/internal/tour-ready",
+                f"{os_url}/api/internal/visit-ready",
                 headers={"X-Internal-Api-Key": api_key},
                 json={"property_id": property_id, "storage_path": storage_path, "title": title},
             )
             resp.raise_for_status()
             return True
     except Exception as e:
-        logger.error(f"tour-ready call for property {property_id} failed: {e}")
+        logger.error(f"visit-ready call for property {property_id} failed: {e}")
         return False
 
 
