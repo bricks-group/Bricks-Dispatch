@@ -329,12 +329,15 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
             and v.onboarding_status == "approved"
             and v.tier >= min_tier
             and (not is_drone_job or v.drone_certified)
+            # Gaussian splat 3D tour is included on every package tier -- unconditional
+            # gate, unlike drone (see vendor_selection.py's identical addition).
+            and v.polycam_equipped
         )
     ]
     candidates = [v for v in eligible if v.status == "available"] or eligible
 
     if not eligible:
-        reason = "drone_certified filter" if is_drone_job else f"min_tier={min_tier}"
+        reason = "drone_certified filter" if is_drone_job else f"min_tier={min_tier} / polycam_equipped"
         logger.warning(f"Job {job.id}: no eligible vendors after {reason}")
         return None
 

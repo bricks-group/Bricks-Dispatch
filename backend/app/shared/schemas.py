@@ -284,6 +284,15 @@ class VendorMember(BaseModel):
     drone_certified: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced"
+    # Gaussian splat 3D tour is included on every package tier (Standard and up,
+    # SERVICE_CATALOG_V2.md) -- unlike drone_certified, this has no job-type
+    # conditional gate, since there's no package tier that skips it. No automated
+    # verification path exists (unlike drone certs against Transport Canada's
+    # registry) -- admin-set via VendorMemberUpdate. Defaults False for new
+    # applicants; existing active vendors backfilled True in the same migration
+    # that adds this column, per 2026-08-02 decision to equip every tier rather
+    # than gate splat-capable dispatch to Tier A/B only.
+    polycam_equipped: bool = False
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     insurance_policy_number: Optional[str] = None
@@ -367,6 +376,7 @@ class VendorMemberUpdate(BaseModel):
     status: Optional[str] = None
     is_active: Optional[bool] = None
     onboarding_status: Optional[str] = None
+    polycam_equipped: Optional[bool] = None
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     internal_notes: Optional[str] = None

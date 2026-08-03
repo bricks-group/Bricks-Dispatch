@@ -147,20 +147,18 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         }).eq("id", job_id).execute()
         return
 
-    # Resolve splat_url — sign the first .splat upload for this job (if any)
+    # Find the first .splat upload for this job (if any) to register as a property
+    # tour after delivery -- see the post-upsert block below. NOTE: this used to sign
+    # a splat_url and write it into media_delivery below; media_delivery has no
+    # splat_url column on the live DB (confirmed via BRICKS_STATUS.md, 2026-08-02)
+    # and that upsert would raise on every job with a splat upload, aborting the rest
+    # of this function (job never reaches "delivered", payout never triggers, agent
+    # never notified) -- a real, currently-live bug for any such job, now fixed by
+    # removing the dead field rather than by working around it.
     splat_upload = next(
         (u for u in uploads if (u.get("filename") or "").lower().endswith(".splat")),
         None,
     )
-    splat_url: Optional[str] = None
-    if splat_upload:
-        splat_path = splat_upload.get("processed_url") or splat_upload.get("file_url")
-        if splat_path:
-            if splat_path.startswith("https://"):
-                splat_url = splat_path
-            else:
-                splat_url = await get_signed_download_url(splat_path)
-        logger.info(f"Job {job_id}: splat_url {'resolved' if splat_url else 'failed to sign'}")
 
     # Upsert media_delivery row (idempotent)
     delivery_row = {
@@ -168,7 +166,6 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         "delivery_urls": delivery_urls,
         "delivered_at": datetime.now(timezone.utc).isoformat(),
         "notification_status": "pending",
-        "splat_url": splat_url,
     }
     await db.table("media_delivery").upsert(
         delivery_row, on_conflict="job_id"
@@ -181,6 +178,21 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     }).eq("id", job_id).execute()
 
     logger.info(f"Job {job_id}: all {len(uploads)} uploads processed → status=delivered, {len(delivery_urls)} URLs generated")
+
+    # Register the property tour on Bricks-OS now that the job is delivered (best-effort —
+    # property_tours rows aren't load-bearing for this job's own status/payout/notification).
+    if splat_upload:
+        splat_path = splat_upload.get("processed_url") or splat_upload.get("file_url")
+        # register_property_tour expects an internal storage path (Bricks-OS re-signs it
+        # at read time) -- an already-external https:// URL isn't one; same discriminator
+        # used above for delivery_urls. Not handling the external-URL case here (no
+        # evidence a raw .splat/.ply upload ever produces one, unlike processed photos).
+        if splat_path and not splat_path.startswith("https://"):
+            try:
+                from ..services.client_comms import register_property_tour
+                await register_property_tour(job_id, splat_path)
+            except Exception as e:
+                logger.error(f"Job {job_id}: register_property_tour failed: {e}")
 
     # Trigger vendor payout now that job is delivered (best-effort — payout_service is idempotent)
     try:
