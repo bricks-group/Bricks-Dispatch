@@ -75,6 +75,9 @@ def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[st
             and v.onboarding_status == "approved"
             and v.tier >= min_tier
             and (not is_drone_job or v.drone_certified)
+            # Gaussian splat 3D tour is included on every package tier (Standard and
+            # up) -- unconditional, unlike the drone gate, since no tier skips it.
+            and v.polycam_equipped
         )
     ]
 
@@ -82,7 +85,7 @@ def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[st
 
     if not candidates:
         logger.warning(
-            f"No vendor meets min_tier={min_tier} for job {job.id} "
+            f"No vendor meets min_tier={min_tier} + polycam_equipped for job {job.id} "
             f"(job_type={job.job_type}). Returning None."
         )
         return None
