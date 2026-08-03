@@ -43,7 +43,7 @@ async def _call_booking_comms(path: str, payload: dict) -> bool:
 
 async def register_property_tour(property_id: str, storage_path: str, title: str = "3D Tour") -> bool:
     """POST a finished splat to Bricks-OS's property_tours table via
-    POST /internal/tour-ready. Replaces the dead media_delivery.splat_url write
+    POST /api/internal/tour-ready. Replaces the dead media_delivery.splat_url write
     (that column was never actually added to the live DB -- see BRICKS_STATUS.md).
     Same INTERNAL_API_KEY / X-Internal-Api-Key convention as _call_booking_comms
     above, just a different target service. Whatever value INTERNAL_API_KEY holds
