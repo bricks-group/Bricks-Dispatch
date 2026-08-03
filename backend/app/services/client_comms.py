@@ -60,7 +60,7 @@ async def register_property_tour(property_id: str, storage_path: str, title: str
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"{os_url}/internal/tour-ready",
+                f"{os_url}/api/internal/tour-ready",
                 headers={"X-Internal-Api-Key": api_key},
                 json={"property_id": property_id, "storage_path": storage_path, "title": title},
             )

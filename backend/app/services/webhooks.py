@@ -27,9 +27,14 @@ async def send_dispatch_status_update_webhook(
 ):
     """
     Sends a status update callback to the Booking service.
-    Endpoint: PUT /api/v1/dispatch-jobs/{booking_id}/status
+    Endpoint: PUT /api/dispatch-jobs/{booking_id}/status -- NOT /api/v1/. Companion's
+    api_router has prefix="/api" with no version segment (Bricks-Companion/server.py:529,
+    route at line 2435); this call was still posting to a /v1/ path that Companion never
+    served, 404ing on every real call. Companion's own CLAUDE.md already noted the route
+    had no /v1/ (corrected 2026-07-27) but this caller was never updated to match --
+    found and fixed 2026-08-03.
     """
-    webhook_url = f"{BOOKING_API_URL}/api/v1/dispatch-jobs/{booking_id}/status"
+    webhook_url = f"{BOOKING_API_URL}/api/dispatch-jobs/{booking_id}/status"
 
     payload = {
         "job_id": job_id,
