@@ -6,10 +6,13 @@ from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
 from ..shared.schemas import JobIntakeRequest, Job, JobStatusUpdate
 from ..shared.database import get_db
 from ..services.vendor_selection import assign_vendor_for_job
+from ..services.notifications import create_notification
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/dispatch", tags=["dispatch"])
+
+ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "akashorter@gmail.com")
 
 @router.get("/", summary="Dispatch service root")
 async def dispatch_root():
@@ -56,7 +59,23 @@ async def create_dispatch_job(
         
         # Trigger AI assignment in background
         background_tasks.add_task(assign_vendor_for_job, job_id)
-        
+
+        background_tasks.add_task(
+            create_notification,
+            title="New paid booking",
+            body=(
+                f"New job from Booking.\n"
+                f"Address: {job_data.get('address', 'n/a')}\n"
+                f"Package: {job_data.get('package_name', 'n/a')} (${job_data.get('package_price', 'n/a')})\n"
+                f"Scheduled: {job_data.get('scheduled_date', 'n/a')}\n"
+                f"Booking ID: {job_data.get('booking_id', 'n/a')}"
+            ),
+            ntype="new_booking",
+            data={"job_id": job_id},
+            email_to=ADMIN_NOTIFICATION_EMAIL,
+            email_subject=f"New paid booking: {job_data.get('address', job_id)}",
+        )
+
         return {
             "job_id": job_id,
             "status": "pending_assignment",

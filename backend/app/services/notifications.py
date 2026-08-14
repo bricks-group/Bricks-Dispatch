@@ -37,7 +37,7 @@ async def send_email_via_resend(to: str, subject: str, html: str) -> bool:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "from": "BRICKS <notifications@bricks.io>",
+                    "from": "BRICKS <notifications@brxs.ca>",
                     "to": [to],
                     "subject": subject,
                     "html": html,

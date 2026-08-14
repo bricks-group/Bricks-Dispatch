@@ -4,13 +4,16 @@ import os
 import traceback
 import uuid
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Form, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Form, Request
 
 logger = logging.getLogger(__name__)
 
 from ..services.storage import upload_file
+from ..services.notifications import create_notification
 from ..shared.database import get_db
 from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, VendorMember, VendorDocument
+
+ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "akashorter@gmail.com")
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
@@ -85,16 +88,33 @@ async def get_ic_agreement():
 
 
 @router.post("/apply")
-async def apply_to_bricks(application: VendorApplicationCreate):
+async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
-    Low-friction Snappr-style application. 
+    Low-friction Snappr-style application.
     Burden of insurance/tax is shifted to the contractor via accepted_terms.
     """
     if not application.accepted_terms:
         raise HTTPException(status_code=400, detail="You must accept the Bricks Contractor Agreement to apply.")
 
     try:
-        return await _apply_to_bricks_inner(application)
+        result = await _apply_to_bricks_inner(application)
+        background_tasks.add_task(
+            create_notification,
+            title="New photographer application",
+            body=(
+                f"{application.name} applied via brxs.ca/photographers.\n"
+                f"Email: {application.email}\n"
+                f"Phone: {application.phone}\n"
+                f"City: {application.city}\n"
+                f"Specialties: {', '.join(application.specialties) if application.specialties else 'n/a'}\n"
+                f"Drone certified: {application.drone_certified}"
+            ),
+            ntype="vendor_application",
+            data={"member_id": result["member_id"]},
+            email_to=ADMIN_NOTIFICATION_EMAIL,
+            email_subject=f"New photographer application: {application.name}",
+        )
+        return result
     except HTTPException:
         raise
     except Exception:
