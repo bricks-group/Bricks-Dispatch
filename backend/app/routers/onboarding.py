@@ -272,14 +272,14 @@ async def upload_compliance_document(
     expiry_date: Optional[str] = Form(None)
 ):
     """
-    Upload Ontario compliance documents (COI, WSIB, etc).
+    Upload Ontario compliance documents (COI, WSIB, etc) or a resume.
     """
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
     member = res_member.data
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
-        
-    valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate"]
+
+    valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume"]
     if doc_type not in valid_docs:
         raise HTTPException(status_code=400, detail=f"Invalid doc_type. Must be one of {valid_docs}")
 
@@ -289,8 +289,18 @@ async def upload_compliance_document(
     except Exception:
         raw_bytes = file_data.encode()
 
+    _ext_mime = {
+        "pdf": "application/pdf",
+        "doc": "application/msword",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+    }
+    mime_type = _ext_mime.get(filename.rsplit(".", 1)[-1].lower(), "application/pdf") if "." in filename else "application/pdf"
+
     file_key, _, _, _ = await upload_file(
-        raw_bytes, "onboarding", member_id, filename, "application/pdf"
+        raw_bytes, "onboarding", member_id, filename, mime_type
     )
 
     doc = VendorDocument(

@@ -340,7 +340,7 @@ class VendorDocument(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     vendor_id: str
     member_id: str
-    doc_type: str  # coi, wsib, hst_registry, id_verification
+    doc_type: str  # coi, wsib, hst_registry, id_verification, rpas_certificate, resume
     file_url: str
     status: str = "pending"  # pending, verified, rejected
     expiry_date: Optional[str] = None
