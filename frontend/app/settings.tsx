@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Bell, Moon, Sun, Vibrate } from 'lucide-react-native';
+import { ArrowLeft, Bell, Vibrate } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
 import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { theme, isDark, toggleTheme } = useTheme();
+  const { theme } = useTheme();
   const c = theme;
   const [jobAlerts, setJobAlerts] = useState(true);
   const [chatNotifs, setChatNotifs] = useState(true);
@@ -54,26 +54,6 @@ export default function SettingsScreen() {
                 onValueChange={setVibrate}
                 trackColor={{ false: c.surfaceDeep, true: '#4A6B3C66' }}
                 thumbColor={vibrate ? '#4A6B3C' : c.textFaint}
-                ios_backgroundColor={c.surfaceDeep}
-              />
-            </View>
-          </View>
-        </View>
-
-        <View style={s.section}>
-          <Text style={[s.sectionLabel, { color: c.textFaint }]}>APPEARANCE</Text>
-          <View style={[s.menuCard, { backgroundColor: c.surface, borderColor: c.border }]}>
-            <View style={s.row}>
-              {isDark ? <Moon size={15} color={c.textMuted} strokeWidth={1.5} /> : <Sun size={15} color={c.textMuted} strokeWidth={1.5} />}
-              <View style={{ flex: 1 }}>
-                <Text style={[s.rowLabel, { color: c.text }]}>Dark mode</Text>
-                <Text style={[s.rowSub, { color: c.textFaint }]}>{isDark ? 'On' : 'Off'}</Text>
-              </View>
-              <Switch
-                value={isDark}
-                onValueChange={toggleTheme}
-                trackColor={{ false: c.surfaceDeep, true: '#4A6B3C66' }}
-                thumbColor={isDark ? '#4A6B3C' : c.textFaint}
                 ios_backgroundColor={c.surfaceDeep}
               />
             </View>
