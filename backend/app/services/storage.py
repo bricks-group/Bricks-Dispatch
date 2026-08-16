@@ -52,10 +52,17 @@ async def upload_file(
     thumbnail_b64_200 is a 200-char base64 preview for in-line display.
     qc_variant_path is None for non-image uploads (e.g. onboarding PDFs).
     """
+    # filename is client-supplied (multipart Form field) -- strip any path
+    # components before it goes into a storage object key. Supabase Storage
+    # keys aren't a real filesystem, but an unsanitized "../other_job/x.jpg"
+    # or embedded "/" still produces a key outside this upload's own
+    # job_id/upload_id prefix, letting one upload collide with or shadow
+    # another job's files in the same bucket.
+    safe_filename = os.path.basename(filename).lstrip(".") or "file"
     prefix = f"{_KEY_PREFIX}/jobs/{job_id}/{upload_id}"
-    file_path = f"{prefix}/{filename}"
-    thumb_path = f"{prefix}/thumb_{filename.rsplit('.', 1)[0]}.jpg"
-    qc_path = f"{prefix}/qc_{filename.rsplit('.', 1)[0]}.jpg"
+    file_path = f"{prefix}/{safe_filename}"
+    thumb_path = f"{prefix}/thumb_{safe_filename.rsplit('.', 1)[0]}.jpg"
+    qc_path = f"{prefix}/qc_{safe_filename.rsplit('.', 1)[0]}.jpg"
 
     try:
         db = await get_db()
