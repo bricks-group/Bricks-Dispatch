@@ -37,6 +37,12 @@
           "resizeMode": "contain",
           "backgroundColor": "#141210"
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Bricks GO uses your location to verify you're on-site when checking in to a job."
+        }
       ]
     ],
     "experiments": {
