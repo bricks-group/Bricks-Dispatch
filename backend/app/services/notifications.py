@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 # <p>-only emails), but was missing the font reference and the actual
 # wordmark -- added both without touching the working layout.
 _EMAIL_FONT_STACK = "'General Sans','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+# Real hosted image, not a CSS square -- Outlook has no inline-SVG support and a
+# flat colored block can't approximate BrickMark's actual 3-rect "b" shape.
+# www.brxs.ca is served by bricks-prelaunch's Vercel project (confirmed live).
+_EMAIL_LOGO_URL = "https://www.brxs.ca/bricks-mark.png"
 
 
 def _build_html_email(title: str, body: str) -> str:
@@ -23,7 +27,7 @@ def _build_html_email(title: str, body: str) -> str:
 <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
 <tr>
-<td width="16" height="16" style="width:16px;height:16px;background-color:#D2542B;border-radius:3px;font-size:0;line-height:0">&nbsp;</td>
+<td width="16" height="16" style="width:16px;height:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
 <td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
 <td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
 </tr>
