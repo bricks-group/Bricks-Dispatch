@@ -27,6 +27,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from ..services.qc_agent import run_qc_for_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
+from ..shared.auth import get_own_internal_api_key
 from ..shared.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -217,11 +218,11 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
         logger.warning(f"Job {job_id}: no booking_id — skipping delivery notification")
         return
 
-    _internal_api_key = os.environ.get("INTERNAL_API_KEY", "")
+    _internal_api_key = get_own_internal_api_key()
     _booking_api_url = os.environ.get("BOOKING_API_URL", "https://bricks-companion-api.vercel.app")
 
     if not _internal_api_key:
-        logger.info(f"Job {job_id}: INTERNAL_API_KEY not set — skipping delivery notification")
+        logger.info(f"Job {job_id}: INTERNAL_API_KEYS not set — skipping delivery notification")
         return
 
     # Determine splat_pending: True when splat is still processing or has failed,

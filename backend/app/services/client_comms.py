@@ -16,14 +16,16 @@ import os
 
 import httpx
 
+from ..shared.auth import get_own_internal_api_key
+
 logger = logging.getLogger(__name__)
 
 async def _call_booking_comms(path: str, payload: dict) -> bool:
     """POST an internal comms event to the Booking service."""
-    api_key = os.environ.get("INTERNAL_API_KEY")
+    api_key = get_own_internal_api_key()
     booking_url = os.environ.get("BOOKING_API_URL") or os.environ.get("BOOKING_CALLBACK_URL")
     if not api_key:
-        logger.warning(f"INTERNAL_API_KEY not set — skipping comms call to {path}")
+        logger.warning(f"INTERNAL_API_KEYS not set — skipping comms call to {path}")
         return False
     if not booking_url:
         logger.warning(f"BOOKING_API_URL not set — skipping comms call to {path}")
@@ -48,14 +50,16 @@ async def register_property_visit(property_id: str, storage_path: str, title: st
     "Visit" not "tour" (renamed 2026-08-03, Kam): a tour implies a fixed, guided
     path; a visit is self-directed exploration, which is what the viewer actually
     lets someone do.
-    Same INTERNAL_API_KEY / X-Internal-Api-Key convention as _call_booking_comms
-    above, just a different target service. Whatever value INTERNAL_API_KEY holds
-    here must match Bricks-OS's own INTERNAL_API_KEYS env var -- that's a deploy/ops
-    step, not something verifiable from this repo."""
-    api_key = os.environ.get("INTERNAL_API_KEY")
+    Same INTERNAL_API_KEYS / X-Internal-Api-Key convention as _call_booking_comms
+    above, just a different target service -- this repo's own INTERNAL_API_KEYS
+    value, which must be one Bricks-OS also accepts (that's a deploy/ops step,
+    not verifiable from this repo). Previously read a separate INTERNAL_API_KEY
+    (singular) var that was never configured, so this call always no-op'd --
+    fixed 2026-08-15, see get_own_internal_api_key()'s docstring."""
+    api_key = get_own_internal_api_key()
     os_url = os.environ.get("BRICKS_OS_API_URL")
     if not api_key:
-        logger.warning("INTERNAL_API_KEY not set — skipping visit-ready call")
+        logger.warning("INTERNAL_API_KEYS not set — skipping visit-ready call")
         return False
     if not os_url:
         logger.warning("BRICKS_OS_API_URL not set — skipping visit-ready call")

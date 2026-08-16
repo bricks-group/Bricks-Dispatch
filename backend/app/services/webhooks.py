@@ -4,9 +4,11 @@ from uuid import uuid4
 import httpx
 import os
 from pydantic import BaseModel, Field
+from ..shared.auth import get_own_internal_api_key
 
-# Internal service-to-service auth
-INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
+# Internal service-to-service auth -- reads INTERNAL_API_KEYS (see get_own_internal_api_key),
+# not a separate INTERNAL_API_KEY var that was never actually configured.
+INTERNAL_API_KEY = get_own_internal_api_key()
 BOOKING_API_URL = os.environ.get("BOOKING_API_URL", "https://bricks-companion-api.vercel.app")
 
 class DispatchWebhookEventData(BaseModel):

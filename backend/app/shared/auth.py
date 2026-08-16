@@ -38,6 +38,17 @@ def verify_internal_api_key(key: Optional[str]) -> bool:
         return False
     return key in allowed
 
+def get_own_internal_api_key() -> str:
+    """The key this service presents when calling ANOTHER service's internal
+    endpoints -- the first entry of our own INTERNAL_API_KEYS. Three call
+    sites (webhooks.py, client_comms.py, post_production.py's delivery
+    notification) used to read a separate INTERNAL_API_KEY (singular) env
+    var that was never actually configured, so those outbound calls always
+    sent an empty header and silently no-op'd (found via a systematic auth
+    audit, 2026-08-15). Standardized on the one var every receiving
+    endpoint in this repo already validates against."""
+    return (os.environ.get("INTERNAL_API_KEYS", "").split(",")[0] or "").strip()
+
 async def require_vendor_admin(
     authorization: Optional[str],
     x_user_id: Optional[str],
