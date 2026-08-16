@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
-from ..shared.auth import get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
+from ..shared.auth import ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.database import get_db
 from ..services.webhooks import send_dispatch_status_update_webhook
 from ..shared.errors import api_error
@@ -613,12 +613,21 @@ async def update_vendor_job_status(
     res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
     if not res_job.data:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     job = res_job.data
+    # FIXED 2026-08-16: this endpoint (the one the mobile app actually calls,
+    # confirmed via app/job/[id].tsx) never checked the caller was the
+    # assigned photographer -- only vendor_id scope. Any active member of the
+    # same vendor org could mark ANY other member's job in_progress/
+    # completed/declined, corrupting that member's decline_rate/on_time_rate
+    # and prematurely triggering post-production/payout on a job they never
+    # touched. The sibling watch-action endpoint below already enforces this
+    # correctly; ensure_assigned_to_actor existed in shared/auth.py unused.
+    ensure_assigned_to_actor(job, actor_id)
     old_status = job.get("status")
     new_status = payload.status
     booking_id = job.get("booking_id")
-    
+
     _IMMUTABLE_STATUSES = {"cancelled", "delivered", "agent_no_show", "dispatch_failed", "qc_failed"}
     if old_status in _IMMUTABLE_STATUSES:
         raise HTTPException(status_code=409, detail=f"Job is in terminal state '{old_status}' — status cannot be changed")
