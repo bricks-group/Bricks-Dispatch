@@ -234,14 +234,20 @@ async def get_vendor_os_jobs(
 async def create_job(
     payload: JobCreate,
     x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    from ..shared.auth import resolve_actor_id
-    internal_keys = [k.strip() for k in (os.environ.get("INTERNAL_API_KEYS") or "").split(",") if k.strip()]
-    if x_internal_api_key and x_internal_api_key in internal_keys:
-        actor_id = "booking_system"
-    else:
-        actor_id = resolve_actor_id(x_user_id)
+    """Internal-only: creates a job with caller-supplied pricing (rack_price/
+    package_price) and vendor/assignee assignment. Previously accepted any
+    non-empty X-User-Id as an alternative to a valid internal key -- that
+    identity was computed but never actually used anywhere in job_row, so the
+    real effect was letting anyone insert an arbitrary job (including its
+    payout-driving price fields) with zero real verification. Found via the
+    same 2026-08-15 auth audit that fixed resolve_vendor_actor_id; this
+    endpoint needed its own fix since it never routed through that function.
+    Booking (Companion) is the only legitimate caller -- same requirement
+    dispatch.py's own job-intake endpoint already correctly enforces."""
+    from ..shared.auth import verify_internal_api_key
+    if not verify_internal_api_key(x_internal_api_key):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
 
     job_id = payload.id or str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()

@@ -73,7 +73,25 @@ async def require_vendor_admin(
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     return actor_id, actor_member
 
-async def resolve_vendor_actor_id(authorization: Optional[str], x_user_id: Optional[str] = None) -> str:
+async def resolve_vendor_actor_id(
+    authorization: Optional[str],
+    x_user_id: Optional[str] = None,
+    x_internal_api_key: Optional[str] = None,
+) -> str:
+    """Resolve the caller's vendor identity.
+
+    SECURITY (fixed 2026-08-15): the X-User-Id fallback below used to be
+    trusted with ZERO verification whenever no Authorization header was
+    sent -- any caller could impersonate any vendor by simply omitting
+    Authorization and setting X-User-Id to a guessed/known vendor_members
+    id. Confirmed via a real client-code audit that no production caller,
+    client or server, has ever actually relied on X-User-Id-only auth
+    (only test files did) -- so this is now gated on a valid
+    X-Internal-Api-Key, same convention as require_vendor_admin/
+    verify_internal_api_key. A real end-user always has a genuine Supabase
+    session and goes through the Authorization branch below, completely
+    unaffected by this change.
+    """
     if authorization:
         token = authorization.replace("Bearer ", "").strip()
         if token:
@@ -84,10 +102,10 @@ async def resolve_vendor_actor_id(authorization: Optional[str], x_user_id: Optio
                     return user_resp.user.id
             except Exception as e:
                 api_error(401, f"Invalid session: {str(e)}", "invalid_session_token")
-    
-    if x_user_id:
+
+    if x_user_id and verify_internal_api_key(x_internal_api_key):
         return resolve_actor_id(x_user_id)
-    
+
     api_error(401, "Authentication required", "auth_required")
 
 async def get_vendor_member_ids(vendor_id: str = "default_vendor") -> list[str]:
