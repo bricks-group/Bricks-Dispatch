@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import logging
 import os
+import secrets
 import traceback
 import uuid
 from typing import Optional
@@ -128,8 +129,10 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         raise HTTPException(status_code=400, detail="An application with this email already exists.")
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    application_token = secrets.token_urlsafe(32)
     member = VendorMember(
         id=str(uuid.uuid4()),
+        application_token=application_token,
         name=application.name,
         email=application.email.lower().strip(),
         phone=application.phone,
@@ -167,7 +170,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     return {
         "success": True,
         "message": "Welcome to Bricks! Our team will review your portfolio. You'll hear from us soon.",
-        "member_id": member.id
+        "member_id": member.id,
+        "application_token": application_token,
     }
 
 
@@ -242,8 +246,26 @@ async def validate_rpas_certificate(member_id: str, request: Request):
     }
 
 
+def _check_application_token(member: dict, token: Optional[str]) -> None:
+    """FIXED 2026-08-16: member_id alone (a UUID) was treated as an implicit
+    bearer credential with zero further verification on both of these
+    endpoints -- unguessable via brute force, but a leaked member_id (logs,
+    a forwarded email, a screenshot) would have let anyone view or add to
+    an applicant's compliance documents. application_token is generated
+    once at /apply and returned only in that response.
+
+    Rows created before this fix have no token on file (application_token
+    IS NULL) -- grandfathered through without one rather than locking out
+    an applicant already mid-flow; every new application gets a real token
+    and is fully enforced. 404 (not 403) on mismatch so this doesn't become
+    an oracle for whether a given member_id exists."""
+    stored_token = member.get("application_token")
+    if stored_token and stored_token != token:
+        raise HTTPException(status_code=404, detail="Application not found.")
+
+
 @router.get("/status/{member_id}")
-async def get_application_status(member_id: str):
+async def get_application_status(member_id: str, token: Optional[str] = None):
     """
     Check the status of an onboarding application.
     """
@@ -251,7 +273,8 @@ async def get_application_status(member_id: str):
     member = res_member.data
     if not member:
         raise HTTPException(status_code=404, detail="Application not found.")
-        
+    _check_application_token(member, token)
+
     res_docs = await (await get_db()).table("vendor_documents").select("*").eq("member_id", member_id).execute()
     docs = res_docs.data
 
@@ -269,7 +292,8 @@ async def upload_compliance_document(
     doc_type: str = Form(...),
     filename: str = Form(...),
     file_data: str = Form(...),
-    expiry_date: Optional[str] = Form(None)
+    expiry_date: Optional[str] = Form(None),
+    token: Optional[str] = Form(None),
 ):
     """
     Upload Ontario compliance documents (COI, WSIB, etc) or a resume.
@@ -278,6 +302,7 @@ async def upload_compliance_document(
     member = res_member.data
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
+    _check_application_token(member, token)
 
     valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume"]
     if doc_type not in valid_docs:

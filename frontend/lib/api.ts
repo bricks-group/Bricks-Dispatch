@@ -23,8 +23,9 @@ export const api = {
       });
       return resp.json();
     },
-    getStatus: async (memberId: string) => {
-      const resp = await fetch(`${API_BASE}/api/onboarding/status/${memberId}`);
+    getStatus: async (memberId: string, applicationToken?: string) => {
+      const query = applicationToken ? `?token=${encodeURIComponent(applicationToken)}` : '';
+      const resp = await fetch(`${API_BASE}/api/onboarding/status/${memberId}${query}`);
       return resp.json();
     }
   },

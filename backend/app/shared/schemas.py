@@ -310,6 +310,11 @@ class VendorMember(BaseModel):
     home_lng: Optional[float] = None
     ic_agreement_version: Optional[str] = None
     terms_accepted_at: Optional[str] = None
+    # Separate bearer credential for the pre-approval onboarding endpoints
+    # (GET /status/{member_id}, POST /documents), which have no real login
+    # session to check against yet. Only set for applicants created via
+    # /apply -- None for members created directly by an admin (create_vendor_member).
+    application_token: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
