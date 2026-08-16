@@ -20,14 +20,28 @@ jobs:
           deno-version: v1.x
 
       - name: Install Supabase CLI
+        # FIXED 2026-08-16: `| sh` fails outright on ubuntu-latest -- install.sh
+        # uses bash-specific syntax, and /bin/sh there is dash, which doesn't
+        # support it ("Syntax error: redirection unexpected"). This has failed
+        # every single run since at least 2026-07-30 (confirmed via `gh run
+        # list`); nothing has ever auto-deployed through this workflow --
+        # every edge function push this session was deployed manually instead.
         run: |
-          curl -sL https://supabase.com/install.sh | sh
+          curl -sL https://supabase.com/install.sh | bash
           echo "$HOME/.supabase/bin" >> $GITHUB_PATH
 
       - name: Run Deno type checks
         run: deno check supabase/functions/  # Assuming functions are directly under supabase/functions
 
       - name: Deploy Supabase Functions
-        run: supabase functions deploy # Deploy all, or specify if needed. Need to check if there is a way to deploy only changed ones easily.
+        # FIXED 2026-08-16: this repo has never been `supabase link`-ed (no
+        # supabase/config.toml existed), so even with a valid token the CLI
+        # had no project ref to deploy to. Linking explicitly here instead of
+        # relying on a committed config.toml, since the project ref itself
+        # isn't secret but keeping it out of a tracked file avoids drift if
+        # it's ever needed elsewhere.
+        run: |
+          supabase link --project-ref ctqwxwrcxwruaqojohpf
+          supabase functions deploy
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
