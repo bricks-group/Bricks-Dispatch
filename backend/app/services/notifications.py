@@ -6,18 +6,34 @@ from ..shared.schemas import NotificationRecord
 logger = logging.getLogger(__name__)
 
 
+# Brand values pulled directly from BricksWordmark.tsx (frontend/components/
+# BricksWordmark.tsx) -- lowercase "bricks" in General Sans 500, terracotta
+# accent #D2542B, ink #14110E. This template already had the right accent
+# color and a real card layout (better than the other two repos' plain
+# <p>-only emails), but was missing the font reference and the actual
+# wordmark -- added both without touching the working layout.
+_EMAIL_FONT_STACK = "'General Sans','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+
 def _build_html_email(title: str, body: str) -> str:
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f4f1eb;padding:24px">
+<body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px">
 <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
-<div style="background:#d2542b;padding:16px 24px">
-<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600">{title}</h1>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
+<tr>
+<td width="16" height="16" style="width:16px;height:16px;background-color:#D2542B;border-radius:3px;font-size:0;line-height:0">&nbsp;</td>
+<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
+<td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
+</tr>
+</table>
+<div style="background:#d2542b;padding:16px 24px;margin-top:12px">
+<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">{title}</h1>
 </div>
-<div style="padding:24px"><p style="color:#333;font-size:15px;line-height:1.5;margin:0">{body}</p></div>
-<div style="padding:12px 24px;border-top:1px solid #eee;font-size:12px;color:#888">
-<p style="margin:0">BRICKS — Real Estate Media Platform</p></div>
+<div style="padding:24px"><p style="color:#333;font-size:15px;line-height:1.5;margin:0;font-family:{_EMAIL_FONT_STACK}">{body}</p></div>
+<div style="padding:12px 24px;border-top:1px solid #eee;font-size:12px;color:#888;font-family:{_EMAIL_FONT_STACK}">
+<p style="margin:0">Bricks &middot; brxs.ca</p></div>
 </div></body></html>"""
 
 

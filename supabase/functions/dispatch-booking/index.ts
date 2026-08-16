@@ -75,14 +75,14 @@ function buildOfferHtml(opts: {
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+<body style="margin:0;padding:0;background:#0a0a0a;font-family:'General Sans','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;padding:40px 20px;">
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
-        <tr><td style="padding:0 0 24px 0;"><div style="font-size:20px;font-weight:400;letter-spacing:0.2em;color:#F0F0F0;">Bricks</div></td></tr>
+        <tr><td style="padding:0 0 24px 0;"><div style="font-size:20px;font-weight:500;letter-spacing:-0.5px;color:#F0F0F0;">bricks</div></td></tr>
         <tr>
           <td style="background:#161616;border:1px solid #2a2a2a;border-radius:12px;padding:36px;">
-            <p style="margin:0 0 6px 0;font-size:13px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#888;">New Shoot Offer</p>
+            <p style="margin:0 0 6px 0;font-size:13px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#D2542B;">New Shoot Offer</p>
             <h1 style="margin:0 0 24px 0;font-size:26px;font-weight:300;color:#F0F0F0;line-height:1.3;">
               ${escapeHtml(opts.contractorName.split(/\s+/)[0] || 'there')}, a booking matches your tier and region.
             </h1>
@@ -91,11 +91,11 @@ function buildOfferHtml(opts: {
               <tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;">Package</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(opts.packageType)}</td></tr>
               <tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;">Date</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(fmtDate(opts.preferredDate))}</td></tr>
               <tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;">Time</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(opts.preferredTime)}</td></tr>
-              <tr><td style="padding:12px 0;color:#888;font-size:13px;">Booked total</td><td style="padding:12px 0;color:#c8a96e;font-size:13px;font-weight:600;">$${opts.totalPrice.toLocaleString('en-CA')}</td></tr>
+              <tr><td style="padding:12px 0;color:#888;font-size:13px;">Booked total</td><td style="padding:12px 0;color:#D2542B;font-size:13px;font-weight:600;">$${opts.totalPrice.toLocaleString('en-CA')}</td></tr>
             </table>
             <p style="margin:0 0 20px 0;font-size:14px;color:#999;line-height:1.6;">This offer expires at ${escapeHtml(opts.expiresAt)}. First contractor to accept gets the booking automatically.</p>
             <div style="display:flex;gap:12px;flex-wrap:wrap;">
-              <a href="${opts.acceptUrl}" style="display:inline-block;background:#c8a96e;color:#0a0a0a;font-size:13px;font-weight:600;padding:14px 28px;border-radius:6px;text-decoration:none;letter-spacing:0.04em;">Accept Booking</a>
+              <a href="${opts.acceptUrl}" style="display:inline-block;background:#D2542B;color:#ffffff;font-size:13px;font-weight:600;padding:14px 28px;border-radius:6px;text-decoration:none;letter-spacing:0.04em;">Accept Booking</a>
               <a href="${opts.declineUrl}" style="display:inline-block;background:#242424;color:#f0f0f0;font-size:13px;font-weight:600;padding:14px 28px;border-radius:6px;text-decoration:none;letter-spacing:0.04em;border:1px solid #3a3a3a;">Decline</a>
             </div>
           </td>
@@ -277,7 +277,7 @@ Deno.serve(async (req: Request) => {
           starts_at: slot.start,
           ends_at: slot.end,
           event_uid: `dispatch-${booking_id}`,
-          summary: booking.property_address ?? 'BRXS booking',
+          summary: booking.property_address ?? 'Bricks booking',
           source: 'dispatch',
         });
       }
@@ -292,14 +292,14 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify({
             from: 'Bricks Ops <bookings@brxs.ca>',
             to: [contractor.email],
-            subject: `Assigned BRXS shoot — ${booking.property_address}`,
-            html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"><table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;padding:40px 20px;"><tr><td align="center"><table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;"><tr><td style="padding:0 0 24px 0;"><div style="font-size:20px;font-weight:400;letter-spacing:0.2em;color:#F0F0F0;">Bricks</div></td></tr><tr><td style="background:#161616;border:1px solid #2a2a2a;border-radius:12px;padding:36px;"><p style="margin:0 0 6px 0;font-size:13px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#888;">Shoot Assigned</p><h1 style="margin:0 0 24px 0;font-size:26px;font-weight:300;color:#F0F0F0;line-height:1.3;">${escapeHtml(contractor.full_name.split(/\s+/)[0] || 'there')}, this booking has been assigned to you.</h1><table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #2a2a2a;margin-bottom:24px;"><tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;width:140px;">Property</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(booking.property_address ?? '')}</td></tr><tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;">Package</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(booking.package_type ?? '')}</td></tr><tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;">Date</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(fmtDate(booking.preferred_date ?? ''))}</td></tr><tr><td style="padding:12px 0;color:#888;font-size:13px;">Time</td><td style="padding:12px 0;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(booking.preferred_time ?? '')}</td></tr></table><p style="margin:0;font-size:14px;color:#999;line-height:1.6;">You can see this booking in your contractor dashboard now.</p></td></tr></table></td></tr></table></body></html>`,
+            subject: `Assigned Bricks shoot — ${booking.property_address}`,
+            html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#0a0a0a;font-family:'General Sans','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;"><table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;padding:40px 20px;"><tr><td align="center"><table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;"><tr><td style="padding:0 0 24px 0;"><div style="font-size:20px;font-weight:500;letter-spacing:-0.5px;color:#F0F0F0;">bricks</div></td></tr><tr><td style="background:#161616;border:1px solid #2a2a2a;border-radius:12px;padding:36px;"><p style="margin:0 0 6px 0;font-size:13px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#D2542B;">Shoot Assigned</p><h1 style="margin:0 0 24px 0;font-size:26px;font-weight:300;color:#F0F0F0;line-height:1.3;">${escapeHtml(contractor.full_name.split(/\s+/)[0] || 'there')}, this booking has been assigned to you.</h1><table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #2a2a2a;margin-bottom:24px;"><tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;width:140px;">Property</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(booking.property_address ?? '')}</td></tr><tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;">Package</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(booking.package_type ?? '')}</td></tr><tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#888;font-size:13px;">Date</td><td style="padding:12px 0;border-bottom:1px solid #2a2a2a;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(fmtDate(booking.preferred_date ?? ''))}</td></tr><tr><td style="padding:12px 0;color:#888;font-size:13px;">Time</td><td style="padding:12px 0;color:#F0F0F0;font-size:13px;font-weight:500;">${escapeHtml(booking.preferred_time ?? '')}</td></tr></table><p style="margin:0;font-size:14px;color:#999;line-height:1.6;">You can see this booking in your contractor dashboard now.</p></td></tr></table></td></tr></table></body></html>`,
           }),
         }).catch((error) => console.error('dispatch-booking direct-assign email failed:', error));
       }
 
       if (contractor.phone) {
-        const smsBody = `Assigned BRXS shoot: ${booking.package_type} at ${booking.property_address} on ${fmtDate(booking.preferred_date ?? '')} (${booking.preferred_time}). Check your contractor dashboard for details.`;
+        const smsBody = `Assigned Bricks shoot: ${booking.package_type} at ${booking.property_address} on ${fmtDate(booking.preferred_date ?? '')} (${booking.preferred_time}). Check your contractor dashboard for details.`;
         fetch(`${supabaseUrl}/functions/v1/send-sms`, {
           method: 'POST',
           headers: {
@@ -374,7 +374,7 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify({
             from: 'Bricks Ops <bookings@brxs.ca>',
             to: [contractor.email],
-            subject: `New BRXS shoot offer — ${booking.property_address}`,
+            subject: `New Bricks shoot offer — ${booking.property_address}`,
             html: buildOfferHtml({
               contractorName: contractor.full_name ?? 'there',
               propertyAddress: booking.property_address ?? '',
@@ -391,7 +391,7 @@ Deno.serve(async (req: Request) => {
       }
 
       if (contractor.phone) {
-        const smsBody = `BRXS shoot offer: ${booking.package_type} at ${booking.property_address} on ${fmtDate(booking.preferred_date ?? '')} (${booking.preferred_time}). First to accept gets it. Accept: ${acceptUrl}`;
+        const smsBody = `Bricks shoot offer: ${booking.package_type} at ${booking.property_address} on ${fmtDate(booking.preferred_date ?? '')} (${booking.preferred_time}). First to accept gets it. Accept: ${acceptUrl}`;
         fetch(`${supabaseUrl}/functions/v1/send-sms`, {
           method: 'POST',
           headers: {
