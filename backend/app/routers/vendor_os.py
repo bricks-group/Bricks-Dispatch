@@ -476,6 +476,75 @@ async def update_vendor_settings(
     return res.data
 
 
+# ---------------------------------------------------------------------------
+# Stripe Connect payout onboarding
+#
+# ADDED 2026-08-16: create_connect_account_and_link existed in
+# stripe_connect_service.py but was never reachable from any route or UI --
+# no vendor beyond whoever was manually set up via the Supabase dashboard
+# had any way to connect a Stripe payout account, meaning
+# handle_payout_to_vendor would fail for every new vendor's first payout.
+# ---------------------------------------------------------------------------
+
+@router.get("/stripe-connect/status")
+async def get_stripe_connect_status(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Whether this vendor org has a working payout account -- same readiness
+    check handle_payout_to_vendor itself uses (contractors.stripe_account_id)."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    res = await (await get_db()).table("contractors").select("stripe_account_id, connect_status").eq("vendor_id", vendor_id).maybe_single().execute()
+    row = res.data or {}
+    return {
+        "connected": bool(row.get("stripe_account_id")),
+        "connect_status": row.get("connect_status", "not_connected"),
+    }
+
+
+class StripeConnectOnboardRequest(BaseModel):
+    return_url: str
+
+
+@router.post("/stripe-connect/onboard")
+async def start_stripe_connect_onboarding(
+    payload: StripeConnectOnboardRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Generate a Stripe Connect Express onboarding link for this vendor org.
+    Caller (the web dashboard) supplies return_url = its own current page,
+    since it's the only side that reliably knows its own deployed origin."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    if not os.environ.get("STRIPE_SECRET_KEY"):
+        api_error(503, "Payouts are not configured yet", "stripe_not_configured")
+
+    from ..services.stripe_connect_service import create_connect_account_and_link
+    try:
+        url = await create_connect_account_and_link(
+            vendor_id=vendor_id,
+            refresh_url=payload.return_url,
+            return_url=payload.return_url,
+            full_name=actor_member.get("name", ""),
+            email=actor_member.get("email", ""),
+        )
+    except ValueError as e:
+        api_error(502, str(e), "stripe_connect_failed")
+
+    await write_audit_event(actor_id, "stripe_connect", vendor_id, "onboard_started", vendor_id=vendor_id)
+    return {"url": url}
+
+
 @router.get("/earnings")
 async def get_vendor_os_earnings(
     authorization: str | None = Header(default=None, alias="Authorization"),
