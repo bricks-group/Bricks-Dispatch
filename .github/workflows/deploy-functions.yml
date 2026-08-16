@@ -13,23 +13,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Setup Deno
         uses: denoland/setup-deno@v1
         with:
           deno-version: v1.x
 
-      - name: Install Supabase CLI
-        # FIXED 2026-08-16: `| sh` fails outright on ubuntu-latest -- install.sh
-        # uses bash-specific syntax, and /bin/sh there is dash, which doesn't
-        # support it ("Syntax error: redirection unexpected"). This has failed
-        # every single run since at least 2026-07-30 (confirmed via `gh run
-        # list`); nothing has ever auto-deployed through this workflow --
-        # every edge function push this session was deployed manually instead.
-        run: |
-          curl -sL https://supabase.com/install.sh | bash
-          echo "$HOME/.supabase/bin" >> $GITHUB_PATH
+      - name: Setup Supabase CLI
+        # FIXED 2026-08-16: the `curl .../install.sh | sh` approach this used
+        # to have was doubly broken -- first the sh/bash mismatch ("Syntax
+        # error: redirection unexpected"), and after fixing that, a second,
+        # deeper problem: supabase.com/install.sh no longer exists at all.
+        # It 404s and returns the marketing site's own HTML 404 page, which
+        # then gets piped into bash and fails trying to execute HTML as shell
+        # commands. Checked current docs (supabase.com/docs/guides/functions/
+        # deploy#github-actions) -- curl-based install isn't a documented
+        # method anymore; the official, current approach is this action.
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
 
       - name: Run Deno type checks
         run: deno check supabase/functions/  # Assuming functions are directly under supabase/functions
