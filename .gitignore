@@ -88,3 +88,4 @@ agenthub/agents/youtube/db
 
 memory/test_credentials.md
 .claude-flow/
+supabase/.temp/
