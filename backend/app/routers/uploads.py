@@ -32,17 +32,34 @@ async def list_uploads(
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
     """
-    Return all upload records. Optionally filter by job_id.
-    The actor is resolved so we can scope queries to the caller's vendor if needed.
+    Return upload records scoped to the caller's own vendor.
+
+    FIXED 2026-08-15: this used to resolve the actor but never actually use it to
+    scope the query -- any authenticated vendor could list uploads for ANY job_id,
+    or every upload on the platform with no filter at all (up to 500 rows).
+    `uploads.thumbnail` stores real base64 image data directly on the row, so this
+    wasn't just metadata exposure -- it leaked actual (thumbnail-resolution) photo
+    content across vendors. `uploads` has no vendor_id column, only job_id, so
+    scoping goes through jobs.vendor_id, same as create_upload/delete_upload below
+    already correctly do for writes.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
 
     sb = await get_db()
-    query = sb.table("uploads").select("*")
 
     if job_id:
-        query = query.eq("job_id", job_id)
+        res_job = await sb.table("jobs").select("id").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+        if not res_job.data:
+            api_error(404, "Job not found", "job_not_found")
+        query = sb.table("uploads").select("*").eq("job_id", job_id)
+    else:
+        res_jobs = await sb.table("jobs").select("id").eq("vendor_id", vendor_id).execute()
+        job_ids = [j["id"] for j in (res_jobs.data or [])]
+        if not job_ids:
+            return []
+        query = sb.table("uploads").select("*").in_("job_id", job_ids)
 
     res = await query.order("created_at", desc=True).limit(500).execute()
     return res.data
@@ -146,13 +163,26 @@ async def get_upload(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """Fetch a single upload record by ID."""
-    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    await get_vendor_member(actor_id)   # verify actor is valid
+    """Fetch a single upload record by ID, scoped to the caller's own vendor.
 
-    res = await (await get_db()).table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
+    FIXED 2026-08-15: this used to verify the caller was *some* valid vendor
+    but never that they owned this specific upload -- any authenticated vendor
+    could fetch any other vendor's upload (including its embedded base64
+    thumbnail) just by guessing/incrementing an id. Same fix pattern as
+    delete_upload below, which already scopes correctly."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+
+    db = await get_db()
+    res = await db.table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
     if not res.data:
         api_error(404, "Upload not found", "upload_not_found")
+
+    res_job = await db.table("jobs").select("id").eq("id", res.data["job_id"]).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not res_job.data:
+        api_error(404, "Upload not found", "upload_not_found")
+
     return res.data
 
 
