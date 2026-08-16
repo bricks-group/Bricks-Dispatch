@@ -107,6 +107,16 @@ async def update_applicant_status(
         
     return res.data[0]
 
+async def _require_applicant_in_own_vendor(db, member_id: str, vendor_id: str):
+    """IDOR guard (fixed 2026-08-15): list_applicants/update_applicant_status both
+    scope by vendor_id, but this pair of document endpoints only matched on
+    member_id/doc_id -- a vendor admin could view or verify ANY vendor's
+    applicant documents by guessing/observing a member_id, not just their own
+    vendor's. Fail closed if the applicant isn't in the caller's vendor org."""
+    res = await db.table("vendor_members").select("vendor_id").eq("id", member_id).maybe_single().execute()
+    if not res.data or res.data.get("vendor_id") != vendor_id:
+        api_error(404, "Applicant not found", "applicant_not_found")
+
 @router.get("/applicants/{member_id}/documents")
 async def get_applicant_documents(
     member_id: str,
@@ -115,11 +125,14 @@ async def get_applicant_documents(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    
+
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
-        
-    res = await (await get_db()).table("vendor_documents").select("*").eq("member_id", member_id).limit(50).execute()
+
+    db = await get_db()
+    await _require_applicant_in_own_vendor(db, member_id, actor_member.get("vendor_id", "default_vendor"))
+
+    res = await db.table("vendor_documents").select("*").eq("member_id", member_id).limit(50).execute()
     return res.data
 
 @router.put("/applicants/{member_id}/documents/{doc_id}/verify")
@@ -132,15 +145,18 @@ async def verify_document(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    
+
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
-        
-    res = await (await get_db()).table("vendor_documents").update({
-        "status": status, 
+
+    db = await get_db()
+    await _require_applicant_in_own_vendor(db, member_id, actor_member.get("vendor_id", "default_vendor"))
+
+    res = await db.table("vendor_documents").update({
+        "status": status,
         "updated_at": datetime.now(timezone.utc).isoformat()
     }).eq("id", doc_id).eq("member_id", member_id).execute()
-    
+
     if not res.data:
         api_error(404, "Document not found", "document_not_found")
 
