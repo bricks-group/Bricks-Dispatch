@@ -3,6 +3,7 @@ import Foundation
 public enum BricksAPIError: LocalizedError {
     case unauthorized
     case invalidCredentials
+    case invalidCode
     case notFound
     case serverError(Int, String)
     case networkError(Error)
@@ -12,6 +13,7 @@ public enum BricksAPIError: LocalizedError {
         switch self {
         case .unauthorized: return "Session expired. Please sign in again."
         case .invalidCredentials: return "Incorrect email or password."
+        case .invalidCode: return "That code is incorrect or has expired."
         case .notFound: return "Resource not found."
         case .serverError(let code, let msg): return "Server error \(code): \(msg)"
         case .networkError(let e): return e.localizedDescription

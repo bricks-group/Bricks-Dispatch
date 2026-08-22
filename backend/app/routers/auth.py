@@ -50,7 +50,8 @@ async def vendor_os_verify(payload: dict):
             return {
                 "access_token": res.session.access_token,
                 "refresh_token": res.session.refresh_token,
-                "user": res.user
+                "expires_in": res.session.expires_in,
+                "user": {"id": user.id, "email": user.email},
             }
         else:
             api_error(401, "Invalid OTP", "invalid_otp")

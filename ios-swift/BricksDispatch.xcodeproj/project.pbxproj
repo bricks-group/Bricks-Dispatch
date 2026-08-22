@@ -17,6 +17,7 @@
 		48A429D7AEE685C027D5E6B9 /* EarningsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FD23183F261D2F7DBF8AD0 /* EarningsWidget.swift */; };
 		4AA00B0A70A82FB68EE5AA97 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D4EE203A1CACB51F3836FB4 /* SwiftUI.framework */; };
 		54ACEA85F19A663C9BFEF31B /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42C5F0F36E0839252575953 /* App.swift */; };
+		5E71D1E96EABA41AA76CC995 /* ApplyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5756A858A2690FF1EC287DF3 /* ApplyView.swift */; };
 		5E8837A203CA719A12CDE92C /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B991FC4A5BDFBE5490A79D85 /* WelcomeView.swift */; };
 		63CDC83D3918CD9626AF51C0 /* JobDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EB18ED7956CB789E3678B0 /* JobDetailView.swift */; };
 		6D8181D99AAF6411AF6896C4 /* UploadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9C48C138C6634DC01495BC /* UploadsView.swift */; };
@@ -86,6 +87,7 @@
 		4BAF2E779A2F84F6153F97ED /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		51BD9916DA924EC008C1F2BF /* WatchJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchJobStore.swift; sourceTree = "<group>"; };
 		540BB0D9B9075BD6417CED4C /* NotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsView.swift; sourceTree = "<group>"; };
+		5756A858A2690FF1EC287DF3 /* ApplyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplyView.swift; sourceTree = "<group>"; };
 		59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobNavigationView.swift; sourceTree = "<group>"; };
 		5BEE98051C5D737183EA17AB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		70491078620FF0A104D59DE0 /* BricksDispatchWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BricksDispatchWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -214,6 +216,7 @@
 		41DC7035BD1DD695DCEB6E1E /* Auth */ = {
 			isa = PBXGroup;
 			children = (
+				5756A858A2690FF1EC287DF3 /* ApplyView.swift */,
 				A782C0065FB3CB68D5E8EFA0 /* LoginView.swift */,
 				B991FC4A5BDFBE5490A79D85 /* WelcomeView.swift */,
 			);
@@ -496,6 +499,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E5E3725644115A091AF73DBC /* App.swift in Sources */,
+				5E71D1E96EABA41AA76CC995 /* ApplyView.swift in Sources */,
 				BF65E3AD972A43F8F5D84FC1 /* DeliveryRevealView.swift in Sources */,
 				414919BE406979CC67E19F48 /* EarningsView.swift in Sources */,
 				63CDC83D3918CD9626AF51C0 /* JobDetailView.swift in Sources */,

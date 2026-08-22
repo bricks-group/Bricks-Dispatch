@@ -26,6 +26,10 @@ public struct AuthUser: Decodable {
     public let email: String
 }
 
+public struct MessageResponse: Decodable {
+    public let message: String
+}
+
 @MainActor
 public final class BricksAuth: ObservableObject {
     public static let shared = BricksAuth()
@@ -60,24 +64,28 @@ public final class BricksAuth: ObservableObject {
         }
     }
 
-    public func signIn(email: String, password: String) async throws {
-        let url = URL(string: "\(supabaseURL)/auth/v1/token?grant_type=password")!
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+    // Dispatch has no password-based auth anywhere in the backend -- vendors
+    // sign in via a one-time email code. The backend's own /api/vendor-os/auth
+    // endpoints (not raw Supabase) are the right call site: verify auto-creates
+    // the vendor_members row on first successful code entry.
 
-        let body = ["email": email, "password": password]
-        req.httpBody = try JSONEncoder().encode(body)
+    public func requestOTP(email: String) async throws {
+        let _: MessageResponse = try await BricksAPIClient.shared.post(
+            "/api/vendor-os/auth/login",
+            body: ["email": email]
+        )
+    }
 
-        let (data, response) = try await URLSession.shared.data(for: req)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw BricksAPIError.invalidCredentials
+    public func verifyOTP(email: String, code: String) async throws {
+        let auth: AuthResponse
+        do {
+            auth = try await BricksAPIClient.shared.post(
+                "/api/vendor-os/auth/verify",
+                body: ["email": email, "token": code]
+            )
+        } catch BricksAPIError.unauthorized {
+            throw BricksAPIError.invalidCode
         }
-
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let auth = try decoder.decode(AuthResponse.self, from: data)
         let s = SupabaseSession(
             accessToken: auth.accessToken,
             refreshToken: auth.refreshToken,

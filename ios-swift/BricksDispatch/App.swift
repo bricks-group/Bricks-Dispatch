@@ -50,7 +50,7 @@ struct BricksDispatchApp: App {
                             if auth.isAuthenticated { Task { await jobStore.loadTodayJobs() } }
                         }
                 } else {
-                    LoginView()
+                    NavigationStack { LoginView() }
                 }
             }
             .task { await auth.restoreSession() }

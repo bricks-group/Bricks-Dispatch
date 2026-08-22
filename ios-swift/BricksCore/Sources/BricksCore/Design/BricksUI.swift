@@ -240,12 +240,13 @@ public struct BBtn: View {
     let sfSymbol: String?
     let variant: BtnVariant
     let dark: Bool
+    let full: Bool
     let action: () -> Void
 
     public enum BtnVariant { case primary, accent, ghost, secondary }
 
-    public init(_ label: String, symbol: String? = nil, variant: BtnVariant = .primary, dark: Bool = false, action: @escaping () -> Void) {
-        self.label = label; self.sfSymbol = symbol; self.variant = variant; self.dark = dark; self.action = action
+    public init(_ label: String, symbol: String? = nil, variant: BtnVariant = .primary, dark: Bool = false, full: Bool = false, action: @escaping () -> Void) {
+        self.label = label; self.sfSymbol = symbol; self.variant = variant; self.dark = dark; self.full = full; self.action = action
     }
 
     var th: BricksTheme { BricksTheme(dark: dark) }
@@ -276,20 +277,85 @@ public struct BBtn: View {
     public var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
+                if full { Spacer(minLength: 0) }
                 Text(label)
                     .font(.system(size: 14, weight: .medium))
                 if let sym = sfSymbol {
                     Image(systemName: sym)
                         .font(.system(size: 13))
                 }
+                if full { Spacer(minLength: 0) }
             }
             .foregroundStyle(fg)
             .padding(.horizontal, 20)
             .padding(.vertical, 13)
+            .frame(maxWidth: full ? .infinity : nil)
             .background(bg)
             .overlay(
                 RoundedRectangle(cornerRadius: 2)
                     .strokeBorder(border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 2))
+        }
+    }
+}
+
+// MARK: — Labelled text field (mirrors components/core/Field.jsx)
+
+public struct BField: View {
+    let label: String?
+    let placeholder: String
+    @Binding var text: String
+    let isSecure: Bool
+    let keyboardType: UIKeyboardType
+    let textContentType: UITextContentType?
+    let dark: Bool
+
+    @FocusState private var focused: Bool
+
+    public init(
+        _ label: String? = nil,
+        placeholder: String,
+        text: Binding<String>,
+        isSecure: Bool = false,
+        keyboardType: UIKeyboardType = .default,
+        textContentType: UITextContentType? = nil,
+        dark: Bool = false
+    ) {
+        self.label = label
+        self.placeholder = placeholder
+        self._text = text
+        self.isSecure = isSecure
+        self.keyboardType = keyboardType
+        self.textContentType = textContentType
+        self.dark = dark
+    }
+
+    var th: BricksTheme { BricksTheme(dark: dark) }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let label {
+                BOver(label, color: th.ink4)
+            }
+            Group {
+                if isSecure {
+                    SecureField(placeholder, text: $text)
+                } else {
+                    TextField(placeholder, text: $text)
+                }
+            }
+            .focused($focused)
+            .keyboardType(keyboardType)
+            .textContentType(textContentType)
+            .autocapitalization(.none)
+            .font(.system(size: 15))
+            .foregroundStyle(th.ink)
+            .padding(14)
+            .background(th.surf)
+            .overlay(
+                RoundedRectangle(cornerRadius: 2)
+                    .strokeBorder(focused ? BricksColors.brick : th.hairS, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 2))
         }
