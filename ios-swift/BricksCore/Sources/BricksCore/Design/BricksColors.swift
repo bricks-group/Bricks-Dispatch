@@ -1,6 +1,6 @@
 import SwiftUI
 
-extension Color {
+public extension Color {
     /// Parses a "#RRGGBB" or "#RRGGBBAA" hex string (web design-token format).
     init(hex: String) {
         var s = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
