@@ -201,6 +201,7 @@ struct ScheduleView: View {
 private struct TimelineRow: View {
     let job: DispatchJob
     let isLast: Bool
+    private let th = BricksTheme(dark: true)
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {

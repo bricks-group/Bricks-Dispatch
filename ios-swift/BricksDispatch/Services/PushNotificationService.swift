@@ -1,5 +1,6 @@
 import UIKit
 import UserNotifications
+import BricksCore
 
 final class PushNotificationService: NSObject {
     static let shared = PushNotificationService()

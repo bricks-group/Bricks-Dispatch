@@ -35,7 +35,7 @@ struct ProfileView: View {
                 .frame(width: 54, height: 54)
                 .overlay(Text("HR").font(.system(size: 20, weight: .semibold)).foregroundStyle(BricksColors.gold))
             VStack(alignment: .leading, spacing: 3) {
-                Text(auth.session?.email.map { String($0.prefix(while: { $0 != "@" })) } ?? "Hassan Reyes")
+                Text((auth.session?.email).map { String($0.prefix(while: { $0 != "@" })) } ?? "Hassan Reyes")
                     .font(.system(size: 19, weight: .semibold)).tracking(-0.3).foregroundStyle(Color(hex: 0xF4F1EB))
                 Text("Photographer · RPAS Advanced")
                     .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Color(hex: 0x8F8678))

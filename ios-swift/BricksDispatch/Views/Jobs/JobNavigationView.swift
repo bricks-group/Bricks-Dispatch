@@ -16,9 +16,9 @@ final class NavigationController: NSObject, ObservableObject {
     @Published var lookAroundScene: MKLookAroundScene?
     @Published var state: NavState = .locating
 
-    enum NavState { case locating, routing, navigating, arrived, error(String) }
+    enum NavState: Equatable { case locating, routing, navigating, arrived, error(String) }
 
-    private let locationManager = CLLocationManager()
+    let locationManager = CLLocationManager()
     private let destination: CLLocationCoordinate2D
 
     init(destination: CLLocationCoordinate2D) {
@@ -434,7 +434,7 @@ struct JobNavigationView: View {
             try? await Task.sleep(for: .seconds(1.8))
             withAnimation(.easeInOut(duration: 1.2)) {
                 cameraPosition = .userLocation(
-                    heading: .constant(0),
+                    followsHeading: true,
                     fallback: .automatic
                 )
             }

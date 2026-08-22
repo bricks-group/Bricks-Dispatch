@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DispatchJob: Codable, Identifiable, Sendable {
+public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     public let id: String
     public let bookingId: String
     public let address: String
@@ -27,6 +27,23 @@ public struct DispatchJob: Codable, Identifiable, Sendable {
     public let createdAt: String
     public let updatedAt: String
 
+    public init(
+        id: String, bookingId: String, address: String, city: String, state: String, zipCode: String,
+        lat: Double, lng: Double, timeWindowStart: String, timeWindowEnd: String, scheduledDate: String,
+        jobType: String, status: JobStatus, packageName: String?, packagePrice: Int?, vendorPayout: Double?,
+        agentName: String?, agentPhone: String?, agentEmail: String?, clientInstructions: String?,
+        checklist: [ChecklistItem], complexityScore: Int?, createdAt: String, updatedAt: String
+    ) {
+        self.id = id; self.bookingId = bookingId; self.address = address; self.city = city
+        self.state = state; self.zipCode = zipCode; self.lat = lat; self.lng = lng
+        self.timeWindowStart = timeWindowStart; self.timeWindowEnd = timeWindowEnd
+        self.scheduledDate = scheduledDate; self.jobType = jobType; self.status = status
+        self.packageName = packageName; self.packagePrice = packagePrice; self.vendorPayout = vendorPayout
+        self.agentName = agentName; self.agentPhone = agentPhone; self.agentEmail = agentEmail
+        self.clientInstructions = clientInstructions; self.checklist = checklist
+        self.complexityScore = complexityScore; self.createdAt = createdAt; self.updatedAt = updatedAt
+    }
+
     // Derived helpers
 
     public var scheduledDateTime: Date? {
@@ -48,7 +65,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable {
     public var isUpcoming: Bool { status == .assigned }
 }
 
-public enum JobStatus: String, Codable, Sendable {
+public enum JobStatus: String, Codable, Sendable, Hashable {
     case pending, assigned
     case inProgress = "in_progress"
     case completed, delivered
@@ -56,10 +73,16 @@ public enum JobStatus: String, Codable, Sendable {
     case dispatchFailed = "dispatch_failed"
 }
 
-public struct ChecklistItem: Codable, Identifiable, Sendable {
+public struct ChecklistItem: Codable, Identifiable, Sendable, Hashable {
     public let id: String
     public let label: String
     public var completed: Bool
+
+    public init(id: String, label: String, completed: Bool) {
+        self.id = id
+        self.label = label
+        self.completed = completed
+    }
 }
 
 public struct JobStatusUpdate: Encodable {

@@ -36,6 +36,7 @@
 		D26FB0671DFD288ED40649B8 /* BricksCore in Frameworks */ = {isa = PBXBuildFile; productRef = A70A37641E8D07EBF65833F9 /* BricksCore */; };
 		E33F56138EC1F2554A98B812 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7086552611CE6C400B458839 /* WidgetKit.framework */; };
 		E5E3725644115A091AF73DBC /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C94E2CAE2EE3695A25DD31 /* App.swift */; };
+		EDB06915A268EB96FA534C30 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 94530968D9C521A79F89765A /* Assets.xcassets */; };
 		F3048F3F96E2354076689666 /* NextJobWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E27BA42AA2616FC551268EF /* NextJobWidget.swift */; };
 		F5A98EB40F6A092AAF4F58EA /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0090A352F28A63ACCE1FBA26 /* ProfileEditView.swift */; };
 		FDD22D9FA211EED49BF331AD /* JobNavigationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */; };
@@ -93,6 +94,7 @@
 		8075E4A956E7B8217927ABF7 /* BricksDispatch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BricksDispatch.entitlements; sourceTree = "<group>"; };
 		80BCC8C13F50BC7486102230 /* JobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobStore.swift; sourceTree = "<group>"; };
 		8B8512DFEAD3EF1891036D7F /* ScheduleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleView.swift; sourceTree = "<group>"; };
+		94530968D9C521A79F89765A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		9942965733485FEDB22EBBDB /* TodayJobsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayJobsView.swift; sourceTree = "<group>"; };
 		A5A1F5826324B71E56BD1F52 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A60E57219897D6CFAA8C30D0 /* EarningsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarningsView.swift; sourceTree = "<group>"; };
@@ -245,6 +247,7 @@
 			isa = PBXGroup;
 			children = (
 				D5BE09339135F6D6205B96AB /* .gitkeep */,
+				94530968D9C521A79F89765A /* Assets.xcassets */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -386,6 +389,7 @@
 			buildConfigurationList = 9A96D654187A486F18C50389 /* Build configuration list for PBXNativeTarget "BricksDispatch" */;
 			buildPhases = (
 				E3A88D6308AF27D9B3F96B86 /* Sources */,
+				F187D149AF329FBDE1609106 /* Resources */,
 				FF83E0A16FF9E5A9FD9F35E0 /* Frameworks */,
 				6EA1F242BD7B38596D6F6AB9 /* Embed Foundation Extensions */,
 			);
@@ -452,6 +456,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				8FE830CB359BCB60CA05C127 /* BricksDispatch.app in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F187D149AF329FBDE1609106 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EDB06915A268EB96FA534C30 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -84,11 +84,7 @@ struct MainTabView: View {
     }
 }
 
-// MARK: — Brand colours + mark (mirrors Expo TOKENS)
-enum BricksColors {
-    static let brick = Color(red: 0.82, green: 0.33, blue: 0.17)   // #D2542B
-    static let moon  = Color(red: 0.98, green: 0.96, blue: 0.93)   // #FAF4ED
-}
+// MARK: — Brand mark
 
 struct BricksLogoMark: View {
     let size: CGFloat
