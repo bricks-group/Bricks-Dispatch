@@ -21,6 +21,22 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: ""   # Fill in: Apple Developer Team ID
 
+schemes:
+  BricksDispatch:
+    build:
+      targets:
+        BricksDispatch: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+
 targets:
 
   BricksDispatch:
