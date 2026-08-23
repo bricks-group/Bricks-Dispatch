@@ -5,9 +5,8 @@ public struct BricksUser: Codable, Sendable {
     public let email: String
     public let name: String
     public let role: String          // "agent" | "vendor" | "admin"
-    public let plan: String?         // "clay" | "gold" | "platinum" | "diamond"
+    public let plan: String?         // "clay" | "keystone" | "marble" | "diamond"
     public let subscriptionType: String?  // "solo" | "team" | "brokerage"
-    public let subscriptionCredits: Int?
     public let cardLast4: String?
     public let cardBrand: String?
 }

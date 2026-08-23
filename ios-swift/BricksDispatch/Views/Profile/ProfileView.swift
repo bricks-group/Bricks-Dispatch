@@ -52,7 +52,11 @@ struct ProfileView: View {
             Circle().fill(BricksColors.gold).opacity(0.16).blur(radius: 34)
                 .frame(width: 180).offset(x: 120, y: -85)
             HStack(spacing: 20) {
-                TierBrick(tier: .gold, fill: onTimeRate)
+                // Reuses BricksTier purely for its glass-material visual (gold-ish
+                // gradient), not its agent-subscription semantics -- this gauge is
+                // the vendor's own payout tier ("Tier A" below), unrelated to
+                // Clay/Keystone/Marble/Diamond. .keystone just picks that gradient.
+                TierBrick(tier: .keystone, fill: onTimeRate)
                     .frame(width: 104, height: 104)
                     .shadow(color: BricksColors.gold.opacity(0.4), radius: 14, y: 6)
                 VStack(alignment: .leading, spacing: 0) {

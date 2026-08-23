@@ -3,34 +3,37 @@ import SwiftUI
 // MARK: — Tier model
 
 /// The Bricks subscription ladder. Each tier has a *material* that fills the
-/// glass brick gauge. clay → gold → platinum → diamond.
+/// glass brick gauge. clay → keystone → marble → diamond.
 ///
 /// The brick is the brand: an empty glass "b" that fills, bottom-up, with the
-/// material of the member's tier. Fill level = credits remaining this cycle.
+/// material of the member's tier. Software is unbundled from media under the
+/// current pricing model -- there's no per-booking allowance to deplete, so
+/// fill level represents whether a paid plan is active, not usage remaining.
 public enum BricksTier: String, CaseIterable, Sendable {
-    case clay, gold, platinum, diamond
+    case clay, keystone, marble, diamond
 
     public var displayName: String {
         switch self {
-        case .clay: "Clay"; case .gold: "Gold"
-        case .platinum: "Platinum"; case .diamond: "Diamond"
+        case .clay: "Clay"; case .keystone: "Keystone"
+        case .marble: "Marble"; case .diamond: "Diamond"
         }
     }
 
-    /// Monthly credit allotment (resets monthly, no rollover).
-    public var monthlyCredits: Int {
-        switch self { case .clay: 0; case .gold: 1; case .platinum: 2; case .diamond: 4 }
-    }
-
-    /// Monthly price in CAD, billed annually.
+    /// Monthly software price in CAD, billed monthly (Clay is free, no commitment).
     public var monthlyPrice: Int {
-        switch self { case .clay: 0; case .gold: 179; case .platinum: 329; case .diamond: 599 }
+        switch self { case .clay: 0; case .keystone: 49; case .marble: 99; case .diamond: 149 }
     }
 
+    /// What this tier unlocks beyond the one below it. Media pricing is NOT part
+    /// of this ladder -- every booking on every tier gets the same volume-based
+    /// discount off rack rate (Bricks-OS discountForMonthlySpend), so plan tier
+    /// has zero effect on shoot pricing. This is a pure feature ladder.
     public var tagline: String {
         switch self {
         case .clay: "Pay as you go"
-        case .gold, .platinum, .diamond: "\(monthlyCredits) credit\(monthlyCredits == 1 ? "" : "s") / mo"
+        case .keystone: "CRM included"
+        case .marble: "+ E-Sign & Forms"
+        case .diamond: "+ MLS"
         }
     }
 
@@ -38,8 +41,8 @@ public enum BricksTier: String, CaseIterable, Sendable {
     public var material: [Color] {
         switch self {
         case .clay:     [Color(hex: 0xD69163), Color(hex: 0xB5663B), Color(hex: 0x8A4724)]
-        case .gold:     [Color(hex: 0xF2D687), Color(hex: 0xD6A94A), Color(hex: 0x9A7022)]
-        case .platinum: [Color(hex: 0xF1F3F6), Color(hex: 0xC6CCD5), Color(hex: 0x8B93A1)]
+        case .keystone: [Color(hex: 0xF2D687), Color(hex: 0xD6A94A), Color(hex: 0x9A7022)]
+        case .marble:   [Color(hex: 0xF1F3F6), Color(hex: 0xC6CCD5), Color(hex: 0x8B93A1)]
         case .diamond:  [Color(hex: 0xEAF4FC), Color(hex: 0xAAD3EF), Color(hex: 0x6BA6D8)]
         }
     }
@@ -47,14 +50,14 @@ public enum BricksTier: String, CaseIterable, Sendable {
     /// Bright edge / glow colour for the tier.
     public var edge: Color {
         switch self {
-        case .clay: Color(hex: 0xC8744A); case .gold: Color(hex: 0xE7C572)
-        case .platinum: Color(hex: 0xD8DDE4); case .diamond: Color(hex: 0xBFE0F5)
+        case .clay: Color(hex: 0xC8744A); case .keystone: Color(hex: 0xE7C572)
+        case .marble: Color(hex: 0xD8DDE4); case .diamond: Color(hex: 0xBFE0F5)
         }
     }
 
     /// Specular strength of the material's sheen.
     public var shine: Double {
-        switch self { case .clay: 0.16; case .gold: 0.5; case .platinum: 0.62; case .diamond: 0.82 }
+        switch self { case .clay: 0.16; case .keystone: 0.5; case .marble: 0.62; case .diamond: 0.82 }
     }
 }
 
@@ -62,11 +65,13 @@ public enum BricksTier: String, CaseIterable, Sendable {
 
 /// The canonical Bricks "b" — three rounded bricks — rendered as glass and
 /// filled, bottom-up, with the member's tier material. An ambient specular
-/// sweep gives it a living, glassy quality. Diamond gets facets; platinum a
+/// sweep gives it a living, glassy quality. Diamond gets facets; marble a
 /// brushed grain.
 public struct TierBrick: View {
     public let tier: BricksTier
-    /// 0…1 — how full the brick is (credits remaining ÷ allotment).
+    /// 0…1 — how full the brick is. There's no usage allowance to deplete under
+    /// the current model, so this represents plan status: 0 for Clay (no plan),
+    /// 1 for any active paid tier.
     public var fill: Double
     public var animated: Bool
 
@@ -93,7 +98,7 @@ public struct TierBrick: View {
         .aspectRatio(1, contentMode: .fit)
         .accessibilityElement()
         .accessibilityLabel("\(tier.displayName) tier")
-        .accessibilityValue("\(Int((fill * Double(tier.monthlyCredits)).rounded())) of \(tier.monthlyCredits) credits remaining")
+        .accessibilityValue(tier == .clay ? "No active plan" : tier.tagline)
     }
 
     private func brickPaths(_ size: CGSize) -> [Path] {
@@ -146,7 +151,7 @@ public struct TierBrick: View {
                 if tier == .diamond {
                     lc.fill(facet(s, oy, [(4,14),(9,11),(7,16)]), with: .color(.white.opacity(0.22)))
                     lc.fill(facet(s, oy, [(12,15),(17,13),(15,19)]), with: .color(.white.opacity(0.16)))
-                } else if tier == .platinum {
+                } else if tier == .marble {
                     func g(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x / 24 * s, y: oy + y / 24 * s) }
                     var grain = Path()
                     grain.move(to: g(3, 15)); grain.addLine(to: g(20, 14.4))
