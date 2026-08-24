@@ -1,65 +1,122 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
+import { getCaptureSession, submitCaptureSession } from '../../lib/capture-api';
+import type { CaptureSession } from '../../lib/capture-api';
 
-// Static placeholder data — no real submit-to-pipeline endpoint exists yet.
-// See README "Capture flow — what's not built."
-const ROOMS = [
-  { name: 'Living', tone: 'ok', n: 212 }, { name: 'Kitchen', tone: 'ok', n: 188 },
-  { name: 'Dining', tone: 'ok', n: 96 }, { name: 'Primary', tone: 'ok', n: 174 },
-  { name: 'Bath 1', tone: 'warn', n: 54 }, { name: 'Bath 2', tone: 'warn', n: 41 },
-  { name: 'Bed 2', tone: 'ok', n: 120 }, { name: 'Exterior', tone: 'bad', n: 28 },
-];
-const PIPELINE = [
-  { title: 'Captured', detail: '1,204 frames · 8 rooms', status: 'done' },
-  { title: 'Splatting', detail: 'Gaussian reconstruction · ~14 min', status: 'active' },
-  { title: 'QC pass', detail: 'Auto + human review', status: 'todo' },
-  { title: 'Delivered', detail: 'Tour + stills to agent', status: 'todo' },
-];
+// Tone -> color mapping (mirrors the static TONE_COLOR refs).
 const TONE_COLOR: Record<string, string> = { ok: COLORS.ok, warn: COLORS.warn, bad: COLORS.bad };
 
 export default function ReviewScreen() {
   const router = useRouter();
+  const { jobId } = useLocalSearchParams<{ jobId: string }>();
+
+  const [session, setSession] = useState<CaptureSession | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Load session data when jobId is available.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!jobId) { setLoading(false); return; }
+      const s = await getCaptureSession(jobId);
+      if (!cancelled) {
+        setSession(s);
+        setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [jobId]);
+
+  const handleSubmit = async () => {
+    if (!jobId) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    const result = await submitCaptureSession(jobId);
+    setSubmitting(false);
+    if (!result.ok) {
+      setSubmitError(result.error ?? 'Submit failed');
+      return;
+    }
+    router.back();
+  };
+
+  // Static fallback shape when session hasn't loaded yet.
+  const rooms = session?.rooms ?? [];
+  const pipeline = session?.pipeline ?? [];
+  const totalFrames = session?.frameCount ?? 1204;
+  const address = session?.address ?? '214 Linden St';
+  const meta = session?.meta ?? 'HOUSE · 2,140 SQFT';
+  const coveredCount = rooms.filter(r => r.n > 0).length;
+  const totalCount = rooms.length || 8;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color={COLORS.brick} />
+          <Text style={styles.loadingText}>Loading capture…</Text>
+        </View>
+      )}
+
       <ScrollView>
         <View style={styles.hero}>
           <TouchableOpacity style={styles.backChip} onPress={() => router.back()}>
             <Text style={styles.backChipText}>‹</Text>
           </TouchableOpacity>
-          <Text style={styles.heroAddress}>214 Linden St</Text>
-          <Text style={styles.heroMeta}>HOUSE · 2,140 SQFT · 1,204 FRAMES</Text>
+          <Text style={styles.heroAddress}>{address}</Text>
+          <Text style={styles.heroMeta}>{meta} · {totalFrames.toLocaleString()} FRAMES</Text>
         </View>
 
         <View style={styles.body}>
           <View style={styles.sectionHead}>
             <Text style={styles.sectionLabel}>Coverage by room</Text>
-            <Text style={styles.sectionNote}>6 / 8 strong</Text>
+            <Text style={styles.sectionNote}>{coveredCount} / {totalCount} strong</Text>
           </View>
           <View style={styles.roomGrid}>
-            {ROOMS.map(r => (
-              <View key={r.name} style={styles.roomCell}>
-                <View style={[styles.dot, { backgroundColor: TONE_COLOR[r.tone] }]} />
-                <Text style={styles.roomName}>{r.name}</Text>
-                <Text style={styles.roomCount}>{r.n}</Text>
-              </View>
-            ))}
+            {rooms.length === 0 && !loading ? (
+              <Text style={styles.emptyText}>No rooms recorded yet.</Text>
+            ) : (
+              rooms.map(r => (
+                <View key={r.name} style={styles.roomCell}>
+                  <View style={[styles.dot, { backgroundColor: TONE_COLOR[r.tone] ?? COLORS.bad }]} />
+                  <Text style={styles.roomName}>{r.name}</Text>
+                  <Text style={styles.roomCount}>{r.n}</Text>
+                </View>
+              ))
+            )}
           </View>
-          <View style={styles.warnBanner}>
-            <Text style={styles.warnText}>Exterior coverage is thin — add 20+ frames before submitting.</Text>
-          </View>
+
+          {/* Weakest coverage warning — derived from session data */}
+          {!loading && rooms.length > 0 && (
+            (() => {
+              const weakest = rooms.slice().sort((a, b) => a.n - b.n)[0];
+              if (weakest && weakest.n < 80) {
+                return (
+                  <View style={styles.warnBanner}>
+                    <Text style={styles.warnText}>
+                      {weakest.name} coverage is thin — add a few more frames before submitting.
+                    </Text>
+                  </View>
+                );
+              }
+              return null;
+            })()
+          )}
 
           <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Pipeline</Text>
           <View style={{ marginTop: 12 }}>
-            {PIPELINE.map((p, i) => {
+            {pipeline.map((p, i) => {
               const done = p.status === 'done', active = p.status === 'active';
               return (
                 <View key={p.title} style={styles.pipeRow}>
                   <View style={{ alignItems: 'center', width: 22 }}>
                     <View style={[styles.pipeDot, done && { backgroundColor: COLORS.ok }, active && { backgroundColor: COLORS.brick }]} />
-                    {i !== PIPELINE.length - 1 && <View style={[styles.pipeLine, done && { backgroundColor: COLORS.ok }]} />}
+                    {i !== pipeline.length - 1 && <View style={[styles.pipeLine, done && { backgroundColor: COLORS.ok }]} />}
                   </View>
                   <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={[styles.pipeTitle, p.status === 'todo' && { color: COLORS.ink3 }]}>{p.title}</Text>
@@ -76,18 +133,42 @@ export default function ReviewScreen() {
       <View style={styles.submitBar}>
         <View>
           <Text style={styles.submitLabel}>Est. delivery</Text>
-          <Text style={styles.submitEta}>~ 22 hrs</Text>
+          <Text style={styles.submitEta}>
+            {session?.estimatedDeliveryHours != null
+              ? `~${session.estimatedDeliveryHours} hrs`
+              : '~ 22 hrs'}
+          </Text>
         </View>
-        <TouchableOpacity style={styles.submitBtn} onPress={() => router.back()}>
-          <Text style={styles.submitBtnText}>Submit to pipeline →</Text>
+        <TouchableOpacity
+          style={[styles.submitBtn, submitting && { opacity: 0.5 }]}
+          onPress={handleSubmit}
+          disabled={submitting || loading}
+        >
+          <Text style={styles.submitBtnText}>
+            {submitting ? 'Submitting…' : 'Submit to pipeline →'}
+          </Text>
         </TouchableOpacity>
       </View>
+
+      {submitError && (
+        <View style={styles.errorBar}>
+          <Text style={styles.errorText}>{submitError}</Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: COLORS.paper },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(12,11,9,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  loadingText: { fontFamily: FONTS.mono, fontSize: 12, color: COLORS.ink, marginTop: 12, letterSpacing: 1 },
   hero: { height: 200, backgroundColor: '#0C0B09', justifyContent: 'flex-end', padding: 18 },
   backChip: { position: 'absolute', top: 14, left: 18, width: 32, height: 32, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
   backChipText: { color: '#F4F1EB', fontSize: 18 },
@@ -102,6 +183,7 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4, marginBottom: 7 },
   roomName: { fontFamily: FONTS.bodySemibold, fontSize: 11.5, textAlign: 'center' },
   roomCount: { fontFamily: FONTS.mono, fontSize: 10, color: COLORS.ink3, marginTop: 3 },
+  emptyText: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.ink3, width: '100%', textAlign: 'center', paddingVertical: 20 },
   warnBanner: { marginTop: 10, flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#8C2F2418', borderRadius: 2 },
   warnText: { fontFamily: FONTS.body, fontSize: 11.5, color: COLORS.ink2, flex: 1 },
   pipeRow: { flexDirection: 'row', paddingBottom: 16 },
@@ -115,4 +197,6 @@ const styles = StyleSheet.create({
   submitEta: { fontFamily: FONTS.mono, fontSize: 17, color: COLORS.ink, marginTop: 2 },
   submitBtn: { marginLeft: 'auto', backgroundColor: COLORS.brick, borderRadius: 2, paddingHorizontal: 20, paddingVertical: 13 },
   submitBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 14, color: '#fff' },
+  errorBar: { position: 'absolute', bottom: 100, left: 20, right: 20, backgroundColor: COLORS.bad, padding: 12, borderRadius: 2 },
+  errorText: { fontFamily: FONTS.body, fontSize: 12, color: '#fff', textAlign: 'center' },
 });

@@ -1,16 +1,18 @@
 import { Tabs } from 'expo-router';
-import { Home, CalendarDays, Upload, DollarSign, User } from 'lucide-react-native';
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { Home, CalendarDays, Camera, CheckCircle, Upload, DollarSign, User } from 'lucide-react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const TABS = [
-  { name: 'index',          label: 'Today',  Icon: Home },
-  { name: 'schedule',       label: 'Week',   Icon: CalendarDays },
-  { name: 'uploads',        label: 'Upload', Icon: Upload },
-  { name: 'payouts/index',  label: 'Pay',    Icon: DollarSign },
-  { name: 'account',        label: 'Me',     Icon: User },
+  { name: 'index',          label: 'Today',    Icon: Home },
+  { name: 'schedule',       label: 'Week',     Icon: CalendarDays },
+  { name: 'capture',        label: 'Capture',  Icon: Camera },
+  { name: 'review',         label: 'Review',   Icon: CheckCircle },
+  { name: 'uploads',        label: 'Upload',   Icon: Upload },
+  { name: 'payouts/index',  label: 'Pay',      Icon: DollarSign },
+  { name: 'account',        label: 'Me',       Icon: User },
 ];
 
 function BricksTabBar({ state, descriptors, navigation }: any) {
@@ -62,6 +64,8 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" />
       <Tabs.Screen name="schedule" />
+      <Tabs.Screen name="capture" />
+      <Tabs.Screen name="review" />
       <Tabs.Screen name="uploads" />
       <Tabs.Screen name="payouts/index" />
       <Tabs.Screen name="account" />
@@ -75,7 +79,6 @@ const s = StyleSheet.create({
     left: 20,
     right: 20,
     alignItems: 'stretch',
-    // Shadow for floating effect
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.4,
