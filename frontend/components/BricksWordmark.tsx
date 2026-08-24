@@ -9,6 +9,7 @@ import Animated, {
   withRepeat,
   cancelAnimation,
   Easing,
+  SharedValue,
 } from 'react-native-reanimated';
 import { TOKENS } from '../constants/Theme';
 
@@ -22,9 +23,9 @@ interface Props {
 // Proportions match the dispatch layout (viewBox-equivalent 27×16 with 2px gaps)
 function AnimatedLogoMark({ size, color, b1, b2, b3 }: {
   size: number; color: string;
-  b1: Animated.SharedValue<number>;
-  b2: Animated.SharedValue<number>;
-  b3: Animated.SharedValue<number>;
+  b1: SharedValue<number>;
+  b2: SharedValue<number>;
+  b3: SharedValue<number>;
 }) {
   const h     = Math.round(7 * size);
   const wTop  = Math.round(11 * size);
@@ -98,7 +99,7 @@ export default function BricksWordmark({ size = 1, color = TOKENS.brick, showWor
   const b2 = useSharedValue(0);
   const b3 = useSharedValue(0);
 
-  const brickPop = (sv: Animated.SharedValue<number>, delay: number) => {
+  const brickPop = (sv: SharedValue<number>, delay: number) => {
     sv.value = withDelay(delay, withSequence(
       withTiming(-3 * size, { duration: 200, easing: Easing.out(Easing.ease) }),
       withTiming(0, { duration: 300, easing: Easing.out(Easing.ease) }),

@@ -105,6 +105,8 @@ export default function AccountScreen() {
     );
   }
 
+  if (!profile) return null;
+
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
