@@ -56,7 +56,6 @@ export async function getCaptureSession(
         supabase
           .from('capture_pipeline')
           .select('title, detail, status')
-          .eq('job_id', jobId)
           .order('position', { ascending: true }),
       ]);
 
