@@ -184,6 +184,10 @@ export default function RootLayout() {
         />
         <Stack.Screen name="profile-edit" options={{ headerShown: false, presentation: 'card' }} />
         <Stack.Screen name="settings" options={{ headerShown: false, presentation: 'card' }} />
+        <Stack.Screen
+          name="(capture)"
+          options={{ headerShown: false, presentation: 'fullScreenModal' }}
+        />
       </Stack>
     </ThemeProvider>
   );

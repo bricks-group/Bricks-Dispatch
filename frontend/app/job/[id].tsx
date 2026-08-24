@@ -361,16 +361,28 @@ export default function JobDetailScreen() {
           </TouchableOpacity>
         ) : null}
         {!isComplete ? (
-          <TouchableOpacity
-            style={[s.primaryBtn, actioning && { opacity: 0.5 }]}
-            onPress={markComplete}
-            disabled={actioning}
-          >
-            {actioning
-              ? <ActivityIndicator size="small" color={TOKENS.moon} />
-              : <Text style={s.primaryBtnText}>Mark Complete</Text>
-            }
-          </TouchableOpacity>
+          <>
+            <TouchableOpacity
+              style={[s.primaryBtn, actioning && { opacity: 0.5 }]}
+              onPress={markComplete}
+              disabled={actioning}
+            >
+              {actioning
+                ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                : <Text style={s.primaryBtnText}>Mark Complete</Text>
+              }
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.captureBtn, actioning && { opacity: 0.5 }]}
+              onPress={() => router.push('/(capture)' as any)}
+              disabled={actioning}
+            >
+              {actioning
+                ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                : <Text style={s.captureBtnText}>Start Capture</Text>
+              }
+            </TouchableOpacity>
+          </>
         ) : null}
       </View>
 
@@ -555,4 +567,12 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   submitBtnText: { fontSize: 15, color: TOKENS.moon, fontWeight: '600' as const },
+
+  // Capture flow — Start Capture button shown on active jobs
+  captureBtn: {
+    flex: 1, height: 48, borderRadius: TOKENS.radius,
+    backgroundColor: TOKENS.moon, justifyContent: 'center', alignItems: 'center',
+    marginLeft: 10,
+  },
+  captureBtnText: { fontSize: 15, color: TOKENS.ink, fontWeight: '600' as const },
 });
