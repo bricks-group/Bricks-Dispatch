@@ -9,6 +9,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Form, Request
 
 logger = logging.getLogger(__name__)
 
+import re
+
 from ..services.storage import upload_file
 from ..services.notifications import create_notification
 from ..shared.database import get_db
@@ -88,6 +90,75 @@ async def get_ic_agreement():
     }
 
 
+# Throwaway / disposable email domains we will not accept applications from.
+# Deliberately NOT gmail/yahoo/outlook/etc — real photographers use those.
+_DISPOSABLE_DOMAINS = {
+    "t@t.com", "tt.com",
+    "temp-mail.org", "tempmail.com", "temp-mail.com", "tempmailo.com",
+    "guerrillamail.com", "guerrillamail.info", "guerrillamailblock.com",
+    "mailinator.com", "mailinator.net", "mailinator.org",
+    "10minutemail.com", "10minutemail.net", "tempmail.co",
+    "trashmail.com", "trashmail.net", "getnada.com", "nada.email",
+    "yopmail.com", "yopmail.net", "yopmail.org",
+    "throwawaymail.com", "sharklasers.com", "dispostable.com",
+    "maildrop.cc", "fakeinbox.com", "mailnesia.com", "spam4.me",
+    "guerrillamail.com", "mintemail.com", "mohmal.com", "emailondeck.com",
+}
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# At least 2 chars, letters / spaces / apostrophes / hyphens / dots only.
+_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z'’.\- ]{1,}$")
+
+
+async def _validate_application(application: "VendorApplicationCreate") -> None:
+    """Server-side gate. Rejects junk + bots even if they skip the form entirely.
+
+    Raises HTTPException(400) with a single joined message on the first problems
+    found. The honeypot (company_website) is a silent trap: any value => reject.
+    """
+    errs: list[str] = []
+
+    # Honeypot — bots that autofill every field trip this; humans never see it.
+    if getattr(application, "company_website", None):
+        raise HTTPException(status_code=400, detail="Submission rejected.")
+
+    name = (application.name or "").strip()
+    if len(name) < 2 or not _NAME_RE.match(name):
+        errs.append("Please enter your full name.")
+
+    email = (application.email or "").strip().lower()
+    if not _EMAIL_RE.match(email):
+        errs.append("Please enter a valid email address.")
+    else:
+        domain = email.split("@")[-1]
+        if domain in _DISPOSABLE_DOMAINS:
+            errs.append("Please use a permanent email address, not a disposable one.")
+
+    phone = (application.phone or "").strip()
+    phone_digits = re.sub(r"\D", "", phone)
+    if len(phone_digits) < 7:
+        errs.append("Please enter a valid phone number (at least 7 digits).")
+
+    city = (application.city or "").strip()
+    if len(city) < 2:
+        errs.append("Please enter your home city.")
+
+    equipment = [e.strip() for e in (application.equipment_list or []) if e and e.strip()]
+    if len(equipment) == 0:
+        errs.append("Please list your equipment.")
+    elif len(" ".join(equipment)) < 8:
+        errs.append("Please describe your equipment in a little more detail.")
+
+    for link in (application.portfolio_links or []):
+        s = str(link).strip().lower()
+        if s and not s.startswith(("http://", "https://")):
+            errs.append("Portfolio links must be full URLs (starting with https://).")
+            break
+
+    if errs:
+        raise HTTPException(status_code=400, detail=" ".join(errs))
+
+
 @router.post("/apply")
 async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
@@ -97,7 +168,11 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     if not application.accepted_terms:
         raise HTTPException(status_code=400, detail="You must accept the Bricks Contractor Agreement to apply.")
 
+    # Gate junk/bot submissions before any DB write or notification.
+    await _validate_application(application)
+
     try:
+
         result = await _apply_to_bricks_inner(application)
         background_tasks.add_task(
             create_notification,

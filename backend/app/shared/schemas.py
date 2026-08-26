@@ -339,6 +339,9 @@ class VendorApplicationCreate(BaseModel):
     drone_certified: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced" (Transport Canada)
+    # Honeypot: real users never see/fill this (off-screen). Bots that autofill
+    # every field will, and we reject silently-ish on the server.
+    company_website: Optional[str] = None
 
 
 class VendorDocument(BaseModel):
