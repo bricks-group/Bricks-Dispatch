@@ -149,11 +149,18 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     elif len(" ".join(equipment)) < 8:
         errs.append("Please describe your equipment in a little more detail.")
 
-    for link in (application.portfolio_links or []):
-        s = str(link).strip().lower()
-        if s and not s.startswith(("http://", "https://")):
-            errs.append("Portfolio links must be full URLs (starting with https://).")
-            break
+    links = [str(l).strip() for l in (application.portfolio_links or []) if l and str(l).strip()]
+    if not links:
+        errs.append("At least one portfolio link is required.")
+    else:
+        for link in links:
+            if not link.lower().startswith(("http://", "https://")):
+                errs.append("Portfolio links must be full URLs (starting with https://).")
+                break
+
+    hst = (application.hst_number or "").strip()
+    if not hst:
+        errs.append("HST / GST number is required.")
 
     if errs:
         raise HTTPException(status_code=400, detail=" ".join(errs))
