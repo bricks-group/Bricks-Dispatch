@@ -23,6 +23,13 @@ export const api = {
       });
       return resp.json();
     },
+    getAgreement: async () => {
+      const resp = await fetch(`${API_BASE}/api/onboarding/ic-agreement`);
+      if (!resp.ok) {
+        throw new Error('Could not load the contractor agreement.');
+      }
+      return resp.json() as Promise<{ version: string; effective_date: string; text: string }>;
+    },
     getStatus: async (memberId: string, applicationToken?: string) => {
       const query = applicationToken ? `?token=${encodeURIComponent(applicationToken)}` : '';
       const resp = await fetch(`${API_BASE}/api/onboarding/status/${memberId}${query}`);

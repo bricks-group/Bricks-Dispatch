@@ -136,22 +136,16 @@ pick_vendor_rule_based(job, vendors)
 - `min_tier_required` on job is a hard gate — never assigned below it
 
 ## Vendor Model: Snappr/Homejab IC Model
-- No insurance/WSIB blocking at dispatch — contractors self-certify at onboarding
-- `REQUIRE_VENDOR_COMPLIANCE` **removed entirely** from dispatch code
-- IC agreement **v1.1** (effective 2026-06-01) — 15 clauses covering Ontario law:
-  - Independent contractor status (ESA 2000 exclusion explicit)
-  - Right to refuse work (no penalty for declines within 40% rolling-30d threshold)
-  - Right to engage others / no exclusivity / no non-compete
-  - HST registration responsibility (>$30K threshold)
-  - Insurance/liability disclaimer + contractor indemnity
-  - Transport Canada drone compliance
-  - IP assignment to Bricks
-  - Ontario arbitration governing law; Heller compliance
-  - Clause 8 payout rates: "Bricks retains platform fee (Tier A: 45%; Tier B: 55%; Tier C: 65%); your payout is the remainder" — these are Bricks' FEES, the inverse of vendor payout. **CORRECTED 2026-07-20** — this clause previously said 60%/50%/40%, which the note here wrongly claimed was "correct" (the inverse of 60/50/40 is 40/50/60, which does not match TIER_PERCENTAGES' 35/45/55 above — that mismatch was the actual bug, caught by a DB/schema audit and confirmed directly by Kam: top-tier (A) vendors are meant to earn more, matching TIER_PERCENTAGES exactly). Fee is now the correct inverse of 35%/45%/55%.
-- `GET /api/onboarding/ic-agreement` — returns versioned agreement text
-- Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`
-- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.1"`
+- IC agreement **v1.3** (effective 2026-08-27) — source of truth is `_IC_AGREEMENT_TEXT` in `backend/app/routers/onboarding.py`. Do not restore v1.1 clauses.
+- Contracting party: **Bricks Group**. Contact: `booking@brxs.ca` (no legal@ mailbox).
+- Insurance/WSIB **required before first dispatched job** (CGL $2M naming Bricks Group additional insured, drone aviation $1M if drone jobs, auto liability, WSIB clearance or exemption declaration). Lapsed coverage = automatic dispatch suspension.
+- Payouts are a **fixed vendor rate card** by package / sqft band / tier, not a % of what the client was charged. Add-on payouts: Tier C 35% / B 45% / A 55% of add-on rack.
+- No binding arbitration; Ontario courts. Either party may terminate on written notice (email is enough).
+- `GET /api/onboarding/ic-agreement` — `{ version: "1.3", effective_date: "2026-08-27", text }` — live photographer apply form on www.brxs.ca binds applicants to this JSON.
+- Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`. `/apply` stamps the live server version (`1.3`), not a stale client default.
+- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.3"`
 - `ic_agreement_version='0.0'` = pre-dates new agreement; re-prompt on next login
+- `REQUIRE_VENDOR_COMPLIANCE` remains absent from dispatch scoring code; the contract itself now requires proof before first job.
 
 ## Drone Certification (Transport Canada RPAS)
 - `drone_certified: bool` on `vendor_members` — hard gate for `job_type="drone"` jobs
@@ -236,7 +230,7 @@ pick_vendor_rule_based(job, vendors)
 - Rate limiting + Sentry ✅
 - Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
 - Vendor tier payouts: Tier C=35% (entry), B=45% (core), A=55% (elite) ✅
-- **Snappr/Homejab IC model: no compliance gate, IC agreement v1.0 (15 clauses, Ontario law)** ✅
+- **Snappr/Homejab IC model: IC agreement v1.3 (Bricks Group, Ontario; insurance/WSIB required before first job)** ✅
 - **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅
 - **Agent no-show: claim validation gates + admin review queue + Booking penalty callback** ✅
 - **Payout service: trip fees added to photographer payout (not deducted); correct table name** ✅

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { ArrowRight, Check } from 'lucide-react-native';
@@ -21,6 +21,12 @@ const TOKENS = {
 export default function OnboardingRegister() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [agreement, setAgreement] = useState<{
+    version: string;
+    effective_date: string;
+    text: string;
+  } | null>(null);
+  const [agreementError, setAgreementError] = useState('');
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -35,9 +41,25 @@ export default function OnboardingRegister() {
     accepted_terms: false
   });
 
+  const loadAgreement = async () => {
+    setAgreementError('');
+    try {
+      const data = await api.onboarding.getAgreement();
+      setAgreement(data);
+    } catch (e) {
+      setAgreement(null);
+      setForm((prev) => ({ ...prev, accepted_terms: false }));
+      setAgreementError('Could not load the contractor agreement. Tap to retry.');
+    }
+  };
+
+  useEffect(() => {
+    loadAgreement();
+  }, []);
+
   const handleApply = async () => {
-    if (!form.name || !form.email || !form.accepted_terms) {
-      Alert.alert('REQUIRED FIELDS', 'Please complete all required fields and accept the terms.');
+    if (!form.name || !form.email || !form.accepted_terms || !agreement) {
+      Alert.alert('REQUIRED FIELDS', 'Please complete all required fields and accept the contractor agreement.');
       return;
     }
 
@@ -46,7 +68,8 @@ export default function OnboardingRegister() {
       const result = await api.onboarding.apply({
         ...form,
         max_travel_km: parseInt(form.max_travel_km, 10),
-        operation_polygon: form.operation_polygon
+        operation_polygon: form.operation_polygon,
+        ic_agreement_version: agreement.version,
       });
       if (result.success) {
         Alert.alert('SUCCESS', 'Application received. We will review your portfolio shortly.', [
@@ -63,7 +86,7 @@ export default function OnboardingRegister() {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} nestedScrollEnabled>
       <View style={styles.headerBox}>
         <Text style={styles.header}>join the crew</Text>
         <Text style={styles.subhead}>ONTARIO FIELD OPERATIONS</Text>
@@ -137,22 +160,52 @@ export default function OnboardingRegister() {
         />
       </View>
 
+      <View style={styles.section}>
+        <Text style={styles.label}>CONTRACTOR AGREEMENT</Text>
+        {agreement ? (
+          <>
+            <Text style={styles.agreementMeta}>V{agreement.version} · EFFECTIVE {agreement.effective_date}</Text>
+            <ScrollView
+              style={styles.agreementBox}
+              nestedScrollEnabled
+              data-testid="onboarding-agreement-text"
+            >
+              <Text style={styles.agreementText} selectable>{agreement.text}</Text>
+            </ScrollView>
+          </>
+        ) : agreementError ? (
+          <TouchableOpacity onPress={loadAgreement} activeOpacity={0.8}>
+            <Text style={styles.agreementError}>{agreementError}</Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={styles.agreementMeta}>LOADING AGREEMENT…</Text>
+        )}
+      </View>
+
       <TouchableOpacity 
         style={styles.termsRow} 
-        onPress={() => setForm({...form, accepted_terms: !form.accepted_terms})}
+        onPress={() => {
+          if (!agreement) return;
+          setForm({...form, accepted_terms: !form.accepted_terms});
+        }}
         activeOpacity={0.8}
+        disabled={!agreement}
         data-testid="onboarding-terms"
       >
         <View style={[styles.checkbox, form.accepted_terms && styles.checkboxChecked]}>
           {form.accepted_terms && <Check size={14} color="#FFF" strokeWidth={3} />}
         </View>
-        <Text style={styles.termsText}>I ACCEPT THE BRICKS CONTRACTOR AGREEMENT (ONTARIO)</Text>
+        <Text style={styles.termsText}>
+          {agreement
+            ? `I ACCEPT THE BRICKS CONTRACTOR AGREEMENT V${agreement.version} (ONTARIO)`
+            : 'I ACCEPT THE BRICKS CONTRACTOR AGREEMENT (ONTARIO)'}
+        </Text>
       </TouchableOpacity>
 
       <TouchableOpacity 
         style={styles.button} 
         onPress={handleApply}
-        disabled={loading}
+        disabled={loading || !agreement}
         activeOpacity={0.9}
         data-testid="onboarding-submit"
       >
@@ -266,5 +319,32 @@ const styles = StyleSheet.create({
     fontFamily: 'IoskeleyMono-Medium',
     lineHeight: 16,
     flex: 1,
-  }
+  },
+  agreementMeta: {
+    fontSize: 10,
+    fontFamily: 'IoskeleyMono-Medium',
+    color: TOKENS.moonFaint,
+    letterSpacing: 1.2,
+    marginBottom: 10,
+  },
+  agreementBox: {
+    maxHeight: 280,
+    backgroundColor: TOKENS.nightSoft,
+    borderWidth: 1,
+    borderColor: TOKENS.nightHair,
+    borderRadius: 2,
+    padding: 12,
+  },
+  agreementText: {
+    color: TOKENS.moonSoft,
+    fontSize: 11,
+    fontFamily: 'IoskeleyMono-Regular',
+    lineHeight: 16,
+  },
+  agreementError: {
+    color: TOKENS.brick,
+    fontSize: 11,
+    fontFamily: 'IoskeleyMono-Medium',
+    lineHeight: 16,
+  },
 });

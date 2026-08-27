@@ -105,7 +105,7 @@ struct ProfileView: View {
         VStack(spacing: 0) {
             row("banknote", "Payout · Stripe", "Weekly")
             Divider().overlay(Color.white.opacity(0.08))
-            row("checkmark.shield", "IC agreement", "v1.1")
+            row("checkmark.shield", "IC agreement", "v1.3")
             Divider().overlay(Color.white.opacity(0.08))
             row("airplane", "RPAS certificate", "Advanced")
             Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
