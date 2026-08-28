@@ -57,17 +57,35 @@ function AnimatedLogoMark({ size, color, b1, b2, b3 }: {
   );
 }
 
-// Brick mark spinning on Y axis — used as loading indicator
+// Brick mark bounce — same hop as the wordmark, looping, for loading
 export function BrickLoader({ size = 2.5, color = TOKENS.brick }: { size?: number; color?: string }) {
-  const rot = useSharedValue(0);
+  const b1 = useSharedValue(0);
+  const b2 = useSharedValue(0);
+  const b3 = useSharedValue(0);
 
   useEffect(() => {
-    rot.value = withRepeat(
-      withTiming(1, { duration: 1600, easing: Easing.linear }),
-      -1,
-    );
-    return () => cancelAnimation(rot);
-  }, []);
+    const hop = (sv: SharedValue<number>, delay: number) => {
+      sv.value = withDelay(
+        delay,
+        withRepeat(
+          withSequence(
+            withTiming(-6 * (size / 2.5), { duration: 200, easing: Easing.out(Easing.ease) }),
+            withTiming(0, { duration: 300, easing: Easing.out(Easing.ease) }),
+            withTiming(0, { duration: 220 }),
+          ),
+          -1,
+        ),
+      );
+    };
+    hop(b1, 0);
+    hop(b2, 70);
+    hop(b3, 140);
+    return () => {
+      cancelAnimation(b1);
+      cancelAnimation(b2);
+      cancelAnimation(b3);
+    };
+  }, [size]);
 
   const h     = Math.round(7 * size);
   const wTop  = Math.round(11 * size);
@@ -77,18 +95,16 @@ export function BrickLoader({ size = 2.5, color = TOKENS.brick }: { size?: numbe
   const cGap  = Math.max(1, Math.round(size));
   const r     = 1.2 * size;
 
-  const spinStyle = useAnimatedStyle(() => ({
-    transform: [{ perspective: 400 }, { rotateY: `${rot.value * 360}deg` }],
-  }));
+  const s1 = useAnimatedStyle(() => ({ transform: [{ translateY: b1.value }] }));
+  const s2 = useAnimatedStyle(() => ({ transform: [{ translateY: b2.value }] }));
+  const s3 = useAnimatedStyle(() => ({ transform: [{ translateY: b3.value }] }));
 
   return (
-    <Animated.View style={spinStyle}>
-      <View style={{ width: wBotL + cGap + wBotR, height: h + rGap + h, position: 'relative' }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color }} />
-        <View style={{ position: 'absolute', left: 0, top: h + rGap, width: wBotL, height: h, borderRadius: r, backgroundColor: color }} />
-        <View style={{ position: 'absolute', left: wBotL + cGap, top: h + rGap, width: wBotR, height: h, borderRadius: r, backgroundColor: color }} />
-      </View>
-    </Animated.View>
+    <View style={{ width: wBotL + cGap + wBotR, height: h + rGap + h + 8, position: 'relative' }}>
+      <Animated.View style={[{ position: 'absolute', left: 0, top: 8, width: wTop, height: h, borderRadius: r, backgroundColor: color }, s1]} />
+      <Animated.View style={[{ position: 'absolute', left: 0, top: 8 + h + rGap, width: wBotL, height: h, borderRadius: r, backgroundColor: color }, s2]} />
+      <Animated.View style={[{ position: 'absolute', left: wBotL + cGap, top: 8 + h + rGap, width: wBotR, height: h, borderRadius: r, backgroundColor: color }, s3]} />
+    </View>
   );
 }
 
