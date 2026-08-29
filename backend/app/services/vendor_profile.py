@@ -70,6 +70,8 @@ def has_advanced_rpas(member: Any) -> bool:
 
 def vendor_skills(member: Any) -> set[str]:
     m = _as_dict(member)
+    if is_platform_owner(m):
+        return set(SKILL_KEYS)
     skills: set[str] = set()
     for item in m.get("skills") or []:
         key = str(item).strip().lower()
