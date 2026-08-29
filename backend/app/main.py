@@ -48,7 +48,13 @@ async def ready(db: Client = Depends(get_db)):
         db.table("jobs").select("id").limit(1).execute() # Example check
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"DB unreachable: {e}")
-    return {"status": "ready", "db": "ok"}
+    from app.services.vendor_profile import ensure_owner_profile
+    from app.shared.database import get_db as get_async_db
+    try:
+        seed = await ensure_owner_profile(await get_async_db())
+    except Exception as e:
+        seed = {"ok": False, "error": str(e)[:200]}
+    return {"status": "ready", "db": "ok", "owner_profile": seed}
 
 # --- Register Routers ---
 # dispatch.router and payouts.router carry their own /api/v1/* prefix internally.

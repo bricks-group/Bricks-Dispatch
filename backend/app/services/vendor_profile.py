@@ -252,3 +252,68 @@ def display_title(member: Any) -> str:
     if is_platform_owner(member):
         return "Owner"
     return str(_as_dict(member).get("role") or "Photographer") or "Photographer"
+
+
+async def ensure_owner_profile(db) -> dict:
+    """Idempotent: Kam is Owner, top tier, GTA, photo+drone+reel, Advanced RPAS flag, Aman pending."""
+    now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+    kam = {
+        "id": KAM_MEMBER_ID,
+        "vendor_id": ORG_VENDOR_ID,
+        "name": "Ajani Kamali Akio",
+        "email": "akashorter@icloud.com",
+        "role": "Owner",
+        "specialty": "photo",
+        "status": "available",
+        "is_active": True,
+        "onboarding_status": "approved",
+        "tier": TOP_TIER,
+        "drone_certified": True,
+        "rpas_certificate_level": "advanced",
+        "polycam_equipped": True,
+        "service_areas": ["Mississauga", "GTA", "Toronto", "Peel", "Halton", "York", "Durham"],
+        "home_city": "Mississauga",
+        "home_lat": 43.5890,
+        "home_lng": -79.6441,
+        "max_travel_km": 80,
+        "updated_at": now,
+    }
+    extra = {
+        "rpas_advanced": True,
+        "skills": ["photo", "drone", "reel", "tour", "twilight"],
+    }
+    out = {"ok": False}
+    try:
+        existing = await db.table("vendor_members").select("id").or_(
+            f"id.eq.{KAM_MEMBER_ID},email.eq.akashorter@icloud.com,email.eq.akashorter@gmail.com"
+        ).limit(1).execute()
+        rows = existing.data or []
+        payload = {**kam, **extra}
+        if rows:
+            kid = rows[0]["id"]
+            try:
+                await db.table("vendor_members").update(payload).eq("id", kid).execute()
+            except Exception:
+                await db.table("vendor_members").update(kam).eq("id", kid).execute()
+            out = {"ok": True, "id": kid, "action": "updated"}
+        else:
+            payload["created_at"] = now
+            try:
+                await db.table("vendor_members").insert(payload).execute()
+            except Exception:
+                kam["created_at"] = now
+                await db.table("vendor_members").insert(kam).execute()
+            out = {"ok": True, "id": KAM_MEMBER_ID, "action": "inserted"}
+        try:
+            await db.table("jobs").update({"vendor_id": ORG_VENDOR_ID}).eq("vendor_id", KAM_MEMBER_ID).execute()
+        except Exception:
+            pass
+        try:
+            await db.table("vendor_members").update({
+                "is_active": False, "onboarding_status": "pending", "updated_at": now,
+            }).ilike("name", "%aman%sammy%").execute()
+        except Exception:
+            pass
+    except Exception as e:
+        out = {"ok": False, "error": str(e)[:200]}
+    return out
