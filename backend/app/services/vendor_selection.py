@@ -10,16 +10,6 @@ from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.schemas import Job, VendorMember
 from .webhooks import send_dispatch_status_update_webhook
 from ..integrations.bricks_ai_dispatch import bricks_smart_assign, _get_weather_context
-from .vendor_profile import (
-    has_advanced_rpas,
-    is_drone_job as _is_drone_job,
-    is_platform_owner,
-    member_eligible_for_job,
-    min_tier_for_job,
-    ORG_VENDOR_ID,
-    preferred_tier_for_job,
-    vendor_skills,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -70,33 +60,39 @@ async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: s
 
 def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[str]:
     """
-    Deterministic vendor selection for paid /book and Dispatch.
-    Hard gates: approved+active (Aman/pending never), location, package min-tier,
-    skills, Advanced RPAS for drone. No match → None (job stays unassigned).
-    Owner (Kam) ranks first among eligible so he wins matching GTA jobs.
+    Deterministic rule-based vendor selection.
+    Hard gates: min_tier, is_active, approved, and drone_certified for drone jobs.
+    Ranks by: (specialty_match, tier_match, on_time_rate, quality_rating, -active_assignments, proximity)
     """
-    min_tier = min_tier_for_job(job)
-    preferred_tier = preferred_tier_for_job(job)
-    drone_job = _is_drone_job(job)
+    min_tier = job.min_tier_required or 1
+    preferred_tier = job.preferred_tier or min_tier
+    is_drone_job = job.job_type == "drone"
 
-    eligible = [v for v in vendors if member_eligible_for_job(v, job)]
+    from ..shared.vendor_identity import is_assignable as _is_assignable
+    eligible = [
+        v for v in vendors
+        if (
+            _is_assignable(v.dict() if hasattr(v, "dict") else v.model_dump())
+            and v.tier >= min_tier
+            and (not is_drone_job or v.drone_certified)
+            # Gaussian splat Virtual Visit is included on every package tier (Standard and
+            # up) -- unconditional, unlike the drone gate, since no tier skips it.
+            and v.polycam_equipped
+        )
+    ]
 
     candidates = [v for v in eligible if v.status == "available"] or eligible
 
     if not candidates:
         logger.warning(
-            f"No vendor meets location/package/tier/skills/RPAS min_tier={min_tier} for job {job.id} "
-            f"(job_type={job.job_type} drone={drone_job}). Returning None."
+            f"No vendor meets min_tier={min_tier} + polycam_equipped for job {job.id} "
+            f"(job_type={job.job_type}). Returning None."
         )
         return None
 
     def selection_score(v: VendorMember):
-        owner_bonus = 1 if is_platform_owner(v) else 0
-        have = vendor_skills(v)
-        specialty_match = 1 if v.specialty == job.job_type or job.job_type in have else 0
+        specialty_match = 1 if v.specialty == job.job_type else 0
         tier_match = 1 if v.tier == preferred_tier else 0
-        # Higher tier wins premium/luxury packages when preferred_tier is top.
-        tier_rank = v.tier or 1
 
         # Travel proximity bonus — prefer vendors closer to the job
         proximity_score = 0.0
@@ -111,9 +107,7 @@ def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[st
         _reliability = max(0.0, 1.0 - (v.cancel_rate or 0.0) - _decline_penalty)
 
         return (
-            owner_bonus,
             specialty_match,
-            tier_rank,
             tier_match,
             round(v.on_time_rate, 2),
             round(v.quality_rating, 2),
@@ -165,19 +159,9 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
 
     job = Job(**job_doc)
 
-    vendor_id = job_doc.get("vendor_id", ORG_VENDOR_ID)
-    # Pool is the photography org (default_vendor) plus any members tagged with
-    # this job's vendor_id. Paid /book previously stored Kam's member UUID as
-    # jobs.vendor_id; those rows must still see every approved photographer.
-    org_ids = list({ORG_VENDOR_ID, vendor_id}) if vendor_id else [ORG_VENDOR_ID]
-    res_members = await db.table("vendor_members").select("*").in_("vendor_id", org_ids).execute()
-    rows = res_members.data or []
-    vendors = []
-    for m in rows:
-        try:
-            vendors.append(VendorMember(**m))
-        except Exception as e:
-            logger.warning(f"Skipping vendor_members row {m.get('id')}: {e}")
+    vendor_id = job_doc.get("vendor_id", "default_vendor")
+    res_members = await db.table("vendor_members").select("*").eq("vendor_id", vendor_id).execute()
+    vendors = [VendorMember(**m) for m in (res_members.data or [])]
 
     # Exclude the specified member (e.g. contractor who no-showed — must not be re-selected)
     if exclude_member_id:
@@ -190,7 +174,7 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
 
     # Drone weather gate: if unsafe, block dispatch entirely — the rule-based fallback
     # has no weather awareness, so we must short-circuit before the retry loop.
-    if _is_drone_job(job) and job.lat and job.lng and job.scheduled_date:
+    if job.job_type == "drone" and job.lat and job.lng and job.scheduled_date:
         try:
             _weather = await _get_weather_context(job.lat, job.lng, job.scheduled_date)
             if _weather and _weather.get("drone_unsafe"):
@@ -205,8 +189,8 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             await _escalate_no_vendor(job, 0, f"drone weather check failed — dispatch blocked: {_we}")
             return None
 
-    min_tier = min_tier_for_job(job)
-    eligible_ids = {v.id for v in vendors if member_eligible_for_job(v, job)}
+    min_tier = job.min_tier_required or 1
+    eligible_ids = {v.id for v in vendors if v.tier >= min_tier}
 
     actual_attempts = 0
     for attempt in range(1, _MAX_ASSIGNMENT_ATTEMPTS + 1):
@@ -239,6 +223,6 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             # Only loop again if a transient exception occurred in bricks_smart_assign.
             break
 
-    await db.table("jobs").update({"status": "unassigned", "assignee_id": "", "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).execute()
+    await db.table("jobs").update({"status": "dispatch_failed"}).eq("id", job_id).execute()
     await _escalate_no_vendor(job, actual_attempts)
     return None

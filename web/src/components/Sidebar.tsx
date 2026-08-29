@@ -3,11 +3,12 @@ import { NavLink } from 'react-router-dom';
 const items = [
   { path: '/',              label: 'Overview',    end: true },
   { path: '/jobs',         label: 'Jobs' },
+  { path: '/profile',      label: 'Profile' },
   { path: '/team',         label: 'Team' },
   { path: '/earnings',     label: 'Earnings' },
   { path: '/availability', label: 'Availability' },
   { path: '/performance',  label: 'Performance' },
-  { path: '/settings',     label: 'Profile' },
+  { path: '/settings',     label: 'Settings' },
 ];
 
 function BrickMark({ size = 18 }: { size?: number }) {
@@ -27,7 +28,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="brand">
         <BrickMark size={20} />
-        <span className="brand-sub">Vendor OS</span>
+        <span className="brand-sub">GO</span>
       </div>
       <nav className="nav">
         {items.map((item) => (

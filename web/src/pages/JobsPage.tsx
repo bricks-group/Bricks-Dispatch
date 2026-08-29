@@ -5,8 +5,6 @@ const STATUS_BADGE: Record<string, string> = {
   assigned:    'badge-yellow',
   in_progress: 'badge-blue',
   completed:   'badge-green',
-  unassigned:  'badge-gray',
-  pending_assignment: 'badge-gray',
 };
 
 export function JobsPage() {
@@ -14,7 +12,6 @@ export function JobsPage() {
   const [assigneeNames, setAssigneeNames] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
-  const [todayOnly, setTodayOnly] = useState(true);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -49,8 +46,8 @@ export function JobsPage() {
     <div className="page-content">
       <div className="page-header">
         <div>
-          <h1>Today</h1>
-          <p>Office shoots — check in, upload, attach the listing</p>
+          <h1>Jobs</h1>
+          <p>Assigned jobs. Attach a shoot to an Office listing here.</p>
         </div>
       </div>
 
@@ -68,12 +65,7 @@ export function JobsPage() {
             <option value="assigned">Assigned</option>
             <option value="in_progress">In Progress</option>
             <option value="completed">Completed</option>
-            <option value="unassigned">Unassigned</option>
           </select>
-          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input type="checkbox" checked={todayOnly} onChange={(e) => setTodayOnly(e.target.checked)} />
-            Today
-          </label>
         </div>
         <table className="table">
           <thead>
@@ -83,14 +75,12 @@ export function JobsPage() {
               <th>Date</th>
               <th>Time window</th>
               <th>Assigned to</th>
+              <th>Payout</th>
               <th>Status</th>
             </tr>
           </thead>
           <tbody>
-            {(todayOnly
-              ? jobs.filter((j) => (j.scheduled_date || '').slice(0, 10) === new Date().toLocaleDateString('en-CA'))
-              : jobs
-            ).map((job) => (
+            {jobs.map((job) => (
               <tr
                 key={job.id}
                 className={selected?.id === job.id ? 'row-selected' : 'row-click'}
@@ -101,6 +91,10 @@ export function JobsPage() {
                 <td className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
                 <td className="muted">{job.time_window_start} – {job.time_window_end}</td>
                 <td>{assigneeNames[job.assignee_id] ?? job.assignee_name ?? '—'}</td>
+                <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
+                  {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
+                  {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : null}
+                </td>
                 <td>
                   <span className={`badge ${STATUS_BADGE[job.status] ?? 'badge-gray'}`}>
                     {job.status.replace('_', ' ')}
@@ -186,47 +180,6 @@ function JobListingPanel({
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>ADDRESS</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{job.address}</p>
-          <p className="muted" style={{ padding: 0 }}>{job.package_name || job.job_type || ''} · {job.scheduled_date?.slice(0, 10)}</p>
-        </div>
-        <div className="row" style={{ padding: 0, gap: 8 }}>
-          {job.status !== 'in_progress' && job.status !== 'completed' && (
-            <button type="button" disabled={busy} onClick={async () => {
-              setBusy(true); setErr('');
-              try {
-                const updated = await api.post<Job>(`/api/vendor-os/jobs/${job.id}/check-in`);
-                onPatched({ ...job, ...updated, status: 'in_progress' });
-              } catch (e) { setErr((e as Error).message); }
-              finally { setBusy(false); }
-            }}>Check in</button>
-          )}
-          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            Upload
-            <input type="file" accept="image/*,application/pdf" disabled={busy} onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              setBusy(true); setErr('');
-              try {
-                const b64 = await new Promise<string>((resolve, reject) => {
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    const text = String(reader.result || '');
-                    resolve(text.includes(',') ? text.split(',')[1] : text);
-                  };
-                  reader.onerror = () => reject(reader.error);
-                  reader.readAsDataURL(file);
-                });
-                const form = new FormData();
-                form.append('job_id', job.id);
-                form.append('filename', file.name);
-                form.append('file_size', String(file.size));
-                form.append('mime_type', file.type || 'application/octet-stream');
-                form.append('file_data', b64);
-                await api.postForm('/api/uploads', form);
-                onPatched({ ...job, uploaded_count: (job.uploaded_count || 0) + 1 });
-              } catch (err) { setErr((err as Error).message); }
-              finally { setBusy(false); e.target.value = ''; }
-            }} />
-          </label>
         </div>
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>LISTING</p>

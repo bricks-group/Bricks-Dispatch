@@ -65,6 +65,9 @@ app.include_router(admin_ops.router, tags=["admin"])
 # for the documented IC-agreement re-prompt-on-login behavior.
 app.include_router(uploads.router, tags=["uploads"])
 app.include_router(auth.router, tags=["auth"])
+from .routers.vendor_profile import router as vendor_profile_router, os_router as vendor_profile_os_router
+app.include_router(vendor_profile_router)
+app.include_router(vendor_profile_os_router)
 
 # --- Rate Limited Endpoints (Placeholders) ---
 # These would typically be defined within their respective routers

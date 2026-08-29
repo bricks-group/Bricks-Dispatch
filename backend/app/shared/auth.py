@@ -3,6 +3,7 @@ from typing import Optional
 from .database import get_db
 from .errors import api_error
 from .schemas import VendorMember
+from .vendor_identity import is_owner_member
 
 def resolve_actor_id(x_user_id: Optional[str]) -> str:
     actor_id = (x_user_id or "").strip()
@@ -24,8 +25,11 @@ async def get_vendor_member(actor_id: str) -> dict:
     return response.data
 
 def is_vendor_admin(member: dict) -> bool:
+    if is_owner_member(member):
+        return True
     role = (member.get("role") or "").lower()
-    return any(k in role for k in ["owner", "admin", "manager"])
+    title = (member.get("title") or "").lower()
+    return any(k in role or k in title for k in ["owner", "admin", "manager"])
 
 def verify_internal_api_key(key: Optional[str]) -> bool:
     """Validate a service-to-service X-Internal-Api-Key value.

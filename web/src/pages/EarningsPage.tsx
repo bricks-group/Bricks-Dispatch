@@ -8,7 +8,6 @@ type EarningJob = {
   status: string;
   payout_amount: number;
   payout_status: 'paid' | 'pending';
-  payout_kind?: 'owner_full' | 'rate_card';
 };
 
 type Earnings = {
@@ -18,6 +17,11 @@ type Earnings = {
   payout_day: string;
   week_job_count: number;
   recent_jobs: EarningJob[];
+  title?: string;
+  payout_model?: 'owner_full' | 'ic_rate_card';
+  payout_label?: string;
+  deduction?: number | null;
+  show_platform_cut?: boolean;
 };
 
 const PAYOUT_BADGE: Record<string, string> = {
@@ -40,7 +44,7 @@ export function EarningsPage() {
       <div className="page-header">
         <div>
           <h1>Earnings</h1>
-          <p>Payouts — Owner sees the full package, ICs the rate card. No fake cut.</p>
+          <p>Payouts for assigned jobs</p>
         </div>
       </div>
 
@@ -48,6 +52,21 @@ export function EarningsPage() {
 
       {data && (
         <>
+          {data.payout_model === 'owner_full' && (
+            <section className="card full">
+              <h3>Owner payout</h3>
+              <div className="stack">
+                <p className="metric" style={{ fontSize: 22, padding: '14px 20px 0' }}>Full package · $0 deduction</p>
+                <p className="muted">You receive the full package. No platform cut is applied or shown.</p>
+              </div>
+            </section>
+          )}
+          {data.payout_model === 'ic_rate_card' && (
+            <section className="card full">
+              <h3>Rate card</h3>
+              <p className="muted">Fixed photographer rate by package and size — not a percent of rack.</p>
+            </section>
+          )}
           <div className="page-grid">
             <section className="card">
               <h3>This week</h3>
@@ -92,7 +111,6 @@ export function EarningsPage() {
                       </td>
                       <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
                         ${job.payout_amount.toLocaleString()}
-                        {job.payout_kind === 'owner_full' ? <span className="muted"> full package</span> : null}
                       </td>
                     </tr>
                   ))}

@@ -231,19 +231,30 @@ class Profile(BaseModel):
     id: str = "default_user"
     name: str = "Alex Rivera"
     email: str = "alex.rivera@bricksdispatch.com"
-    role: str = "Lead Photographer"
+    role: str = "Photographer IC"
+    title: str = "Photographer IC"
     phone: str = "+1 (555) 867-5309"
     availability: bool = True
     avatar_url: str = ""
     total_jobs_completed: int = 147
     rating: float = 4.9
     member_since: str = "2024-03-15"
+    skills: List[str] = []
+    service_areas: List[str] = []
+    rpas_certificate_url: Optional[str] = None
+    rpas_certificate_level: Optional[str] = None
+    payout_model: str = "ic_rate_card"
+    assignable: bool = False
 
 
 class ProfileUpdate(BaseModel):
     availability: Optional[bool] = None
     name: Optional[str] = None
     phone: Optional[str] = None
+    skills: Optional[List[str]] = None
+    service_areas: Optional[List[str]] = None
+    home_city: Optional[str] = None
+    bio: Optional[str] = None
 
 
 class PushTokenRegister(BaseModel):
@@ -271,8 +282,12 @@ class VendorMember(BaseModel):
     name: str
     email: str
     phone: str = ""
-    role: str = "Photographer"
+    role: str = "Photographer IC"
+    title: str = "Photographer IC"
     specialty: str = "photo"
+    skills: List[str] = []
+    payout_mode: Optional[str] = None  # owner_full | ic_rate_card
+    rpas_certificate_url: Optional[str] = None
     status: str = "available"
     is_active: bool = False
     onboarding_status: str = "pending"
@@ -286,10 +301,6 @@ class VendorMember(BaseModel):
     drone_certified: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced"
-    rpas_advanced: Optional[bool] = False
-    rpas_certificate_url: Optional[str] = None
-    skills: Optional[List[str]] = None
-    avatar_url: Optional[str] = None
     # Gaussian splat Virtual Visit is included on every package tier (Standard and up,
     # SERVICE_CATALOG_V2.md) -- unlike drone_certified, this has no job-type
     # conditional gate, since there's no package tier that skips it. No automated
@@ -384,21 +395,16 @@ class VendorMemberUpdate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     role: Optional[str] = None
+    title: Optional[str] = None
+    skills: Optional[List[str]] = None
+    service_areas: Optional[List[str]] = None
+    payout_mode: Optional[str] = None
+    rpas_certificate_url: Optional[str] = None
+    rpas_certificate_level: Optional[str] = None
     status: Optional[str] = None
     is_active: Optional[bool] = None
     onboarding_status: Optional[str] = None
     polycam_equipped: Optional[bool] = None
-    specialty: Optional[str] = None
-    skills: Optional[List[str]] = None
-    service_areas: Optional[List[str]] = None
-    home_city: Optional[str] = None
-    max_travel_km: Optional[int] = None
-    drone_certified: Optional[bool] = None
-    rpas_advanced: Optional[bool] = None
-    rpas_certificate_level: Optional[str] = None
-    rpas_certificate_url: Optional[str] = None
-    avatar_url: Optional[str] = None
-    tier: Optional[int] = None
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     internal_notes: Optional[str] = None

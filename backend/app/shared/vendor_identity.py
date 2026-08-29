@@ -1,0 +1,179 @@
+"""Vendor identity: Owner vs photographer IC, assignability, payout display.
+
+Kam/Ajani (vendor_members.id starting 0c3fa7c2) is Owner: highest tier,
+full package, zero deductions. Everyone else is a photographer IC on the
+fixed rate card. Pending members (e.g. Aman) are not assignable.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+OWNER_ID_PREFIX = "0c3fa7c2"
+OWNER_TITLE = "Owner"
+IC_TITLE = "Photographer IC"
+VENDOR_SKILLS = ("photo", "drone", "reel", "tour", "twilight")
+TIER_LABELS = {1: "C", 2: "B", 3: "A"}
+
+
+def is_owner_member(member: Optional[dict]) -> bool:
+    if not member:
+        return False
+    mid = str(member.get("id") or "").lower()
+    if mid.startswith(OWNER_ID_PREFIX):
+        return True
+    if (member.get("payout_mode") or "") == "owner_full":
+        return True
+    title = (member.get("title") or "").strip().lower()
+    role = (member.get("role") or "").strip().lower()
+    return title == "owner" or role == "owner"
+
+
+def member_title(member: Optional[dict]) -> str:
+    if is_owner_member(member):
+        return OWNER_TITLE
+    stored = (member or {}).get("title") or (member or {}).get("role") or ""
+    if stored.strip().lower() in ("owner", "admin", "manager"):
+        return stored
+    return IC_TITLE
+
+
+def is_assignable(member: Optional[dict]) -> bool:
+    """Hard gate used by auto-assign. Pending (Aman) is never assignable."""
+    if not member:
+        return False
+    if not member.get("is_active"):
+        return False
+    return (member.get("onboarding_status") or "") == "approved"
+
+
+def member_skills(member: Optional[dict]) -> list[str]:
+    raw = (member or {}).get("skills")
+    if isinstance(raw, list) and raw:
+        return [s for s in raw if s in VENDOR_SKILLS]
+    if is_owner_member(member):
+        return list(VENDOR_SKILLS)
+    specialty = ((member or {}).get("specialty") or "").strip()
+    if specialty in VENDOR_SKILLS:
+        return [specialty]
+    equipment = (member or {}).get("equipment_list") or []
+    found = [s for s in VENDOR_SKILLS if s in equipment]
+    return found or ["photo"]
+
+
+def owner_seed_fields(member: dict) -> dict:
+    """Fields to persist on Kam so hiring/assigner reads Owner + highest tier."""
+    if not is_owner_member(member):
+        return {}
+    patch: dict[str, Any] = {}
+    if member.get("title") != OWNER_TITLE:
+        patch["title"] = OWNER_TITLE
+    if (member.get("role") or "") != OWNER_TITLE:
+        patch["role"] = OWNER_TITLE
+    if member.get("tier") != 3:
+        patch["tier"] = 3
+    if member.get("payout_mode") != "owner_full":
+        patch["payout_mode"] = "owner_full"
+    if member.get("onboarding_status") != "approved":
+        patch["onboarding_status"] = "approved"
+    if not member.get("is_active"):
+        patch["is_active"] = True
+    skills = member_skills(member)
+    if set(skills) != set(VENDOR_SKILLS):
+        patch["skills"] = list(VENDOR_SKILLS)
+    if not member.get("drone_certified"):
+        patch["drone_certified"] = True
+    if (member.get("rpas_certificate_level") or "").lower() != "advanced":
+        patch["rpas_certificate_level"] = "advanced"
+    return patch
+
+
+def payout_model(member: Optional[dict]) -> str:
+    return "owner_full" if is_owner_member(member) else "ic_rate_card"
+
+
+def rack_dollars(job: dict) -> float:
+    raw = job.get("rack_price")
+    if raw is None:
+        raw = job.get("package_price") or 0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def photographer_payout_cents(db, job: dict, member: Optional[dict]) -> int:
+    """Owner: full package, $0 deduction. IC: fixed rate card, never % of rack."""
+    from ..services.payout_service import (
+        calculate_payout_amount,
+        get_fixed_payout_amount,
+    )
+
+    if is_owner_member(member):
+        return int(round(rack_dollars(job) * 100))
+
+    package_id = job.get("package_id")
+    sqft = job.get("sqft")
+    tier = (member or {}).get("tier") or job.get("vendor_tier") or 1
+    amount = await get_fixed_payout_amount(db, package_id, sqft, tier)
+    if amount is None:
+        amount = calculate_payout_amount(
+            job.get("rack_price") if job.get("rack_price") is not None else job.get("package_price"),
+            tier,
+        )
+    return int(amount or 0)
+
+
+def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
+    owner = is_owner_member(member)
+    title = member_title(member)
+    tier = 3 if owner else (member.get("tier") or 1)
+    rpas_url = member.get("rpas_certificate_url") or ""
+    rpas_level = member.get("rpas_certificate_level") or ("advanced" if owner else None)
+    assignable = is_assignable(member)
+    out = {
+        "id": member.get("id"),
+        "name": member.get("name") or "",
+        "email": member.get("email") or "",
+        "phone": member.get("phone") or "",
+        "role": title,
+        "title": title,
+        "availability": (member.get("status") or "") == "available",
+        "status": member.get("status") or "offline",
+        "skills": member_skills(member),
+        "service_areas": member.get("service_areas") or [],
+        "home_city": member.get("home_city") or "",
+        "max_travel_km": member.get("max_travel_km") or 50,
+        "tier": tier,
+        "tier_label": TIER_LABELS.get(tier, "C"),
+        "drone_certified": bool(member.get("drone_certified")),
+        "rpas_certificate_url": rpas_url,
+        "rpas_certificate_level": rpas_level,
+        "rpas_certificate_number": member.get("rpas_certificate_number"),
+        "onboarding_status": member.get("onboarding_status") or "pending",
+        "is_active": bool(member.get("is_active")),
+        "assignable": assignable,
+        "assignable_reason": (
+            None if assignable
+            else "Pending — not assignable" if (member.get("onboarding_status") or "") == "pending"
+            else "Not approved"
+        ),
+        "payout_model": payout_model(member),
+        "payout_label": (
+            "Full package · $0 deduction" if owner else "Fixed rate card"
+        ),
+        "deduction_cad": 0 if owner else None,
+        "show_platform_cut": False,
+        "on_time_rate": member.get("on_time_rate") or 0,
+        "quality_rating": member.get("quality_rating") or 0,
+        "total_assignments": member.get("total_assignments") or 0,
+        "active_assignments": member.get("active_assignments") or 0,
+        "member_since": member.get("created_at") or "",
+        "avatar_url": member.get("avatar_url") or "",
+        "total_jobs_completed": member.get("total_assignments") or 0,
+        "rating": float(member.get("quality_rating") or 0),
+        "ic_agreement_version": member.get("ic_agreement_version"),
+    }
+    if extra:
+        out.update(extra)
+    return out

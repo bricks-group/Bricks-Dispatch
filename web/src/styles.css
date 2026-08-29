@@ -485,3 +485,21 @@ label {
   text-align: left;
 }
 .listing-hit:hover { border-color: var(--c-hair-s); }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0 8px; }
+.chip {
+  background: var(--c-bg);
+  color: var(--c-ink-mute);
+  border: 1px solid var(--c-hair);
+  padding: 7px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chip.chip-on {
+  background: rgba(210, 84, 43, 0.16);
+  color: var(--c-ink);
+  border-color: var(--c-brick);
+}
+input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }

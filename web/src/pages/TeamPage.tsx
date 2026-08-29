@@ -44,7 +44,7 @@ export function TeamPage() {
       <div className="page-header">
         <div>
           <h1>Team</h1>
-          <p>Manage photographers and status</p>
+          <p>Identity, title, skills, RPAS, assignable — same fields the Office assigner reads</p>
         </div>
       </div>
 
@@ -64,7 +64,10 @@ export function TeamPage() {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Role</th>
+              <th>Title</th>
+              <th>Skills</th>
+              <th>RPAS</th>
+              <th>Assignable</th>
               <th>Active jobs</th>
               <th>Availability</th>
             </tr>
@@ -73,7 +76,14 @@ export function TeamPage() {
             {members.map((m) => (
               <tr key={m.id}>
                 <td style={{ fontWeight: 500 }}>{m.name}</td>
-                <td className="muted">{m.role === 'Owner' ? 'Owner' : m.role || 'Photographer'}</td>
+                <td className="muted">{m.title || m.role}</td>
+                <td className="muted">{(m.skills || []).join(', ') || '—'}</td>
+                <td className="muted">{m.rpas_certificate_level || '—'}</td>
+                <td>
+                  <span className={`badge ${m.assignable ? 'badge-green' : 'badge-yellow'}`}>
+                    {m.assignable ? 'Yes' : (m.assignable_reason || 'No')}
+                  </span>
+                </td>
                 <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>{m.assigned_jobs}</td>
                 <td>
                   <div className="status-toggle">

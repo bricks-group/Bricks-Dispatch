@@ -27,7 +27,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  if (!headers.has('Content-Type') && options.body && !(options.body instanceof FormData)) {
+  if (options.body instanceof FormData) {
+    headers.delete('Content-Type');
+  } else if (!headers.has('Content-Type') && options.body) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -57,7 +59,32 @@ export type AuthMember = {
   name: string;
   email: string;
   role: string;
+  title?: string;
   status: 'available' | 'busy' | 'offline';
+};
+
+export type VendorProfile = {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: string;
+  title: string;
+  availability: boolean;
+  skills: string[];
+  service_areas: string[];
+  home_city?: string;
+  tier: number;
+  tier_label: string;
+  drone_certified: boolean;
+  rpas_certificate_url?: string | null;
+  rpas_certificate_level?: string | null;
+  onboarding_status: string;
+  assignable: boolean;
+  assignable_reason?: string | null;
+  payout_model: 'owner_full' | 'ic_rate_card';
+  payout_label: string;
+  show_platform_cut: boolean;
 };
 
 export async function login(email: string): Promise<void> {
@@ -94,9 +121,15 @@ export type TeamMember = {
   email: string;
   phone: string;
   role: string;
+  title?: string;
+  skills?: string[];
   status: 'available' | 'busy' | 'offline';
   is_active: boolean;
   assigned_jobs: number;
+  assignable?: boolean;
+  assignable_reason?: string | null;
+  rpas_certificate_level?: string | null;
+  payout_label?: string;
 };
 
 export type PaginatedTeamResponse = {
@@ -116,20 +149,18 @@ export type ListingHit = {
 export type Job = {
   id: string;
   address: string;
-  city?: string;
   time_window_start: string;
   time_window_end: string;
-  status: 'assigned' | 'in_progress' | 'completed' | 'unassigned' | 'pending_assignment';
+  status: 'assigned' | 'in_progress' | 'completed';
   assignee_id: string;
   assignee_name?: string;
   scheduled_date: string;
-  package_name?: string | null;
-  job_type?: string;
-  uploaded_count?: number;
-  deliverables_count?: number;
   transaction_id?: string | null;
   listing_address?: string | null;
   listing?: ListingHit | null;
+  payout_display_cad?: number;
+  payout_model?: string;
+  deduction?: number;
 };
 
 export type PaginatedJobsResponse = {

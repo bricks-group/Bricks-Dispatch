@@ -9,6 +9,7 @@ import { JobsPage } from './pages/JobsPage';
 import { LoginPage } from './pages/LoginPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PerformancePage } from './pages/PerformancePage';
+import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TeamPage } from './pages/TeamPage';
 
@@ -58,6 +59,7 @@ function ProtectedLayout() {
         <Routes>
           <Route path="/"             element={<OverviewPage />} />
           <Route path="/jobs"         element={<JobsPage />} />
+          <Route path="/profile"      element={<ProfilePage />} />
           <Route path="/team"         element={<TeamPage />} />
           <Route path="/earnings"     element={<EarningsPage />} />
           <Route path="/availability" element={<AvailabilityPage />} />

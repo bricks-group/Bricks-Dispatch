@@ -43,7 +43,7 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip internal auth for health, seed, docs, root, and job intake endpoints
         exempt_paths = ("/health", "/docs", "/openapi.json", "/redoc")
-        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts")
+        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts")
         if request.url.path in exempt_paths or any(request.url.path.startswith(p) for p in exempt_prefixes):
             return await call_next(request)
 
@@ -70,6 +70,7 @@ from app.routers.admin_ops import router as admin_ops_router
 from app.routers.uploads import router as uploads_router
 from app.routers.payouts import router as payouts_router
 from app.routers.post_production import router as post_production_router
+from app.routers.vendor_profile import router as vendor_profile_router, os_router as vendor_profile_os_router
 from app.shared.database import get_db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -168,9 +169,11 @@ app.include_router(admin_ops_router)
 app.include_router(uploads_router)
 app.include_router(payouts_router)
 app.include_router(post_production_router)
+app.include_router(vendor_profile_router)
+app.include_router(vendor_profile_os_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
-_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca,https://www.brxs.ca,https://brxs.ca").split(",") if o.strip()]
+_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca,https://www.brxs.ca,https://brxs.ca,https://bricks-dispatch-web.vercel.app,https://app.brxs.ca").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=_ALLOWED_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allow_headers=["*"])
 app.add_middleware(RateLimitMiddleware)
 
