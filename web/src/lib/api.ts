@@ -152,8 +152,8 @@ export type Job = {
   address: string;
   time_window_start: string;
   time_window_end: string;
-  status: 'assigned' | 'in_progress' | 'completed';
-  assignee_id: string;
+  status: string;
+  assignee_id?: string | null;
   assignee_name?: string;
   scheduled_date: string;
   transaction_id?: string | null;

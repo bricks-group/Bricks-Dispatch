@@ -22,7 +22,9 @@ from ..shared.job_scope import (
     jobs_or_filter,
     parse_scheduled_date,
     photographer_assignee_ids,
+    resolve_manual_assignment,
     toronto_today,
+    unassigned_assignee_or_filter,
     vendor_scope_ids,
 )
 from ..routers.vendor_profile import earnings_impl
@@ -201,9 +203,10 @@ async def get_vendor_team(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
-    
-    sb = await get_db(); query = sb.table("vendor_members").select("*", count="exact").eq("vendor_id", vendor_id)
+    vendor_id = actor_member.get("vendor_id") or ORG_VENDOR_ID
+    vendors = vendor_scope_ids(actor_id, actor_member)
+
+    sb = await get_db(); query = sb.table("vendor_members").select("*", count="exact").in_("vendor_id", vendors)
     if status:
         query = query.eq("status", status)
     if search:
@@ -215,7 +218,7 @@ async def get_vendor_team(
     total = res.count or 0
     
     for member in members:
-        res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member["id"]).in_("status", ["pending_assignment", "assigned", "in_progress", "processing"]).execute()
+        res_count = await (await get_db()).table("jobs").select("*", count="exact").in_("vendor_id", vendors).eq("assignee_id", member["id"]).in_("status", ["pending_assignment", "assigned", "in_progress", "processing"]).execute()
         member["assigned_jobs"] = res_count.count or 0
         pub = public_profile(member)
         member["title"] = pub["title"]
@@ -326,10 +329,12 @@ async def get_vendor_os_jobs(
     if status:
         query = query.eq("status", status)
     # Default: assigned jobs for this photographer (aliases include Kam 0c3fa7c2).
-    # Team-wide list is admin-only and still includes default_vendor.
-    if assignee_id == "all" and is_vendor_admin(actor_member):
+    # Owner Jobs page passes assignee_id=all so unassigned default_vendor jobs list.
+    if is_vendor_admin(actor_member) and assignee_id == "all":
         query = query.or_(jobs_or_filter(vendors, aliases))
-    elif assignee_id:
+    elif is_vendor_admin(actor_member) and assignee_id == "unassigned":
+        query = query.or_(jobs_or_filter(vendors, [])).or_(unassigned_assignee_or_filter())
+    elif assignee_id and assignee_id not in ("all", "unassigned"):
         query = query.eq("assignee_id", assignee_id)
     else:
         query = query.in_("assignee_id", aliases or [actor_id])
@@ -342,10 +347,10 @@ async def get_vendor_os_jobs(
     total = res.count or 0
     
     db = await get_db()
-    res_members = await db.table("vendor_members").select("id, name").eq("vendor_id", vendor_id).limit(500).execute()
-    member_map = {m["id"]: m.get("name", "Unknown") for m in res_members.data}
+    res_members = await db.table("vendor_members").select("id, name").in_("vendor_id", vendors).limit(500).execute()
+    member_map = {m["id"]: m.get("name", "Unknown") for m in (res_members.data or [])}
     listings = await _listings_by_ids(db, [j.get("transaction_id") for j in jobs])
-    res_full = await db.table("vendor_members").select("*").eq("vendor_id", vendor_id).limit(500).execute()
+    res_full = await db.table("vendor_members").select("*").in_("vendor_id", vendors).limit(500).execute()
     member_full = {m["id"]: m for m in (res_full.data or [])}
     for job in jobs:
         job["assignee_name"] = member_map.get(job.get("assignee_id"), "Unassigned")
@@ -535,46 +540,62 @@ async def assign_job_to_member(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    if not is_vendor_admin(actor_member):
-        api_error(403, "Insufficient permissions", "insufficient_permissions")
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    db = await get_db()
+    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    existing_job = res_job.data or {}
+    member_id = (payload.member_id or "").strip() if payload.member_id is not None else ""
+    target = None
+    if member_id and member_id.lower() not in ("auto", "unassign", "none", "null"):
+        res_member = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
+        target = res_member.data
+    status_code, err, patch = resolve_manual_assignment(
+        actor_id=actor_id,
+        actor_member=actor_member,
+        job=existing_job if existing_job.get("id") else None,
+        member_id=member_id or None,
+        target_member=target,
+    )
+    if status_code == 403:
+        api_error(403, "Insufficient permissions", err)
+    if status_code == 404:
+        api_error(404, "Job not found" if err == "job_not_found" else "Member not found", err)
+    vendor_id = str(existing_job.get("vendor_id") or actor_member.get("vendor_id") or ORG_VENDOR_ID)
 
-    res_job = await (await get_db()).table("jobs").select("assignee_id").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    existing_job = res_job.data
-    if not existing_job:
-        api_error(404, "Job not found", "job_not_found")
-
-    if payload.member_id == "auto":
+    if err == "auto":
         new_assignee_id = await assign_vendor_for_job(job_id)
     else:
-        res_member = await (await get_db()).table("vendor_members").select("*").eq("id", payload.member_id).eq("vendor_id", vendor_id).eq("is_active", True).maybe_single().execute()
-        if not res_member.data:
-            api_error(404, "Member not found", "member_not_found")
-        new_assignee_id = payload.member_id
-        await (await get_db()).table("jobs").update({"assignee_id": new_assignee_id, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).eq("vendor_id", vendor_id).execute()
+        await db.table("jobs").update(patch).eq("id", job_id).execute()
+        new_assignee_id = patch.get("assignee_id")
 
-    await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if payload.member_id == "auto" else "manual"})
-    res_final = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if member_id == "auto" else "manual"})
+    res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
 
     # Send booking confirmed email for manual assignments only.
     # Auto-assign path calls notify_booking_confirmed inside assign_vendor_for_job already;
     # duplicating it here would fire a second email. Skip entirely if auto-assign returned None.
-    if payload.member_id != "auto" and new_assignee_id:
+    if member_id != "auto" and new_assignee_id:
         try:
             from ..services.client_comms import notify_booking_confirmed
             await notify_booking_confirmed(job_id)
         except Exception as _e:
             logger.error(f"Booking confirmed notification failed for job {job_id}: {_e}")
 
+    final = res_final.data or {}
+    if new_assignee_id:
+        named = await db.table("vendor_members").select("id, name").eq("id", new_assignee_id).maybe_single().execute()
+        final["assignee_name"] = (named.data or {}).get("name") or "Unassigned"
+    else:
+        final["assignee_name"] = "Unassigned"
+
     booking_callback_url = os.environ.get("BOOKING_CALLBACK_URL")
     if not booking_callback_url:
         logger.warning("BOOKING_CALLBACK_URL not set — skipping assignment callback")
-        return res_final.data
+        return final
     callback_payload = {
-        "booking_id": res_final.data.get("booking_id"),
+        "booking_id": final.get("booking_id"),
         "job_id": job_id,
-        "status": res_final.data.get("status", "assigned"),
-        "completed_at": res_final.data.get("completed_at"),
+        "status": final.get("status", "assigned"),
+        "completed_at": final.get("completed_at"),
     }
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -586,7 +607,7 @@ async def assign_job_to_member(
     except Exception:
         pass
 
-    return res_final.data
+    return final
 
 
 @router.get("/availability")

@@ -7,11 +7,11 @@ Filter assigned jobs by photographer aliases, not a single vendor_id.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from .vendor_identity import is_owner_member
+from .vendor_identity import is_assignable, is_owner_member
 
 KAM_MEMBER_ID = "0c3fa7c2-d23b-4e44-90ad-ab2d19af2580"
 KAM_EMAILS = {"akashorter@icloud.com", "akashorter@gmail.com"}
@@ -111,3 +111,86 @@ def parse_scheduled_date(raw: Any) -> Optional[date]:
 
 def toronto_today() -> date:
     return datetime.now(_TORONTO).date()
+
+UNASSIGN_TOKENS = {"", "unassign", "none", "null"}
+UNASSIGNED_JOB_STATUSES = {"pending_assignment", "unassigned", ""}
+EMPTY_ASSIGNEE_VALUES = {"", "default_user", "null", "none"}
+
+
+def is_unassigned_assignee(assignee_id: Any) -> bool:
+    return str(assignee_id or "").strip().lower() in EMPTY_ASSIGNEE_VALUES
+
+
+def actor_can_assign(member: Optional[dict]) -> bool:
+    """Owner / admin / manager may assign. Same gate as is_vendor_admin."""
+    if is_owner_member(member):
+        return True
+    blob = f"{(member or {}).get('role') or ''} {(member or {}).get('title') or ''}".lower()
+    return any(k in blob for k in ("owner", "admin", "manager"))
+
+
+def is_manual_assignable(member: Optional[dict]) -> bool:
+    """Active photographers only. Owner is always included; pending Aman is not."""
+    if not member:
+        return False
+    if not member.get("is_active"):
+        return False
+    if is_owner_member(member):
+        return True
+    return is_assignable(member)
+
+
+def member_in_vendor_scope(member: Optional[dict], actor_id: str, actor_member: Optional[dict]) -> bool:
+    if not member:
+        return False
+    vendors = vendor_scope_ids(actor_id, actor_member)
+    vid = str(member.get("vendor_id") or "").strip()
+    if vid in vendors:
+        return True
+    mid = str(member.get("id") or "").strip()
+    return mid == KAM_MEMBER_ID or mid in vendors
+
+
+def unassigned_assignee_or_filter() -> str:
+    """paid /book writes assignee_id='' (not always SQL NULL)."""
+    return "assignee_id.is.null,assignee_id.eq.,assignee_id.eq.default_user"
+
+
+def assignment_fields(job: dict, new_assignee_id: Optional[str], now: Optional[str] = None) -> dict:
+    ts = now or datetime.now(timezone.utc).isoformat()
+    if not new_assignee_id:
+        return {"assignee_id": None, "status": "pending_assignment", "updated_at": ts}
+    status = str(job.get("status") or "").strip()
+    if status in UNASSIGNED_JOB_STATUSES or is_unassigned_assignee(job.get("assignee_id")):
+        status = "assigned"
+    return {"assignee_id": new_assignee_id, "status": status, "updated_at": ts}
+
+
+def resolve_manual_assignment(
+    *,
+    actor_id: str,
+    actor_member: Optional[dict],
+    job: Optional[dict],
+    member_id: Optional[str],
+    target_member: Optional[dict],
+) -> tuple[int, str, dict]:
+    """Decide assign / reassign / unassign. Returns (http_status, code, patch)."""
+    if not actor_can_assign(actor_member):
+        return 403, "insufficient_permissions", {}
+    if not job or not job.get("id"):
+        return 404, "job_not_found", {}
+    if not job_visible_to(job, actor_id, actor_member, assigned_only=False, admin_all=True):
+        return 404, "job_not_found", {}
+    mid = str(member_id or "").strip()
+    if mid.lower() == "auto":
+        return 200, "auto", {}
+    if mid.lower() in UNASSIGN_TOKENS:
+        return 200, "ok", assignment_fields(job, None)
+    if not target_member or str(target_member.get("id") or "") != mid:
+        return 404, "member_not_found", {}
+    if not is_manual_assignable(target_member):
+        return 404, "member_not_found", {}
+    if not member_in_vendor_scope(target_member, actor_id, actor_member):
+        return 404, "member_not_found", {}
+    return 200, "ok", assignment_fields(job, mid)
+

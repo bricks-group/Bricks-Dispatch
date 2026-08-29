@@ -414,7 +414,7 @@ class VendorMemberUpdate(BaseModel):
 
 
 class JobAssignmentUpdate(BaseModel):
-    member_id: str
+    member_id: Optional[str] = None
 
 
 class JobCreate(BaseModel):

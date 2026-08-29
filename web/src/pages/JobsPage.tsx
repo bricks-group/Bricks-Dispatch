@@ -1,29 +1,63 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamResponse } from '../lib/api';
+import { api, AuthMember, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamResponse, TeamMember, me } from '../lib/api';
 
 const STATUS_BADGE: Record<string, string> = {
+  pending_assignment: 'badge-gray',
+  unassigned: 'badge-gray',
   assigned:    'badge-yellow',
   in_progress: 'badge-blue',
   completed:   'badge-green',
 };
 
+function isOwnerAdmin(m: { role?: string; title?: string; id?: string } | null) {
+  if (!m) return false;
+  const blob = `${m.role || ''} ${m.title || ''}`.toLowerCase();
+  if (blob.includes('owner') || blob.includes('admin') || blob.includes('manager')) return true;
+  return (m.id || '').toLowerCase().startsWith('0c3fa7c2');
+}
+
+function isPickerMember(m: TeamMember) {
+  if (!m.is_active) return false;
+  if ((m.id || '').toLowerCase().startsWith('0c3fa7c2')) return true;
+  const t = `${m.title || ''} ${m.role || ''}`.toLowerCase();
+  if (t.includes('owner')) return true;
+  if (m.assignable === false) return false;
+  return true;
+}
+
 export function JobsPage() {
   const [params] = useSearchParams();
   const deepLinkId = params.get('id') || '';
+  const [meMember, setMeMember] = useState<AuthMember | null | undefined>(undefined);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [assigneeNames, setAssigneeNames] = useState<Record<string, string>>({});
+  const [photographers, setPhotographers] = useState<TeamMember[]>([]);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
+  const [assigneeFilter, setAssigneeFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<Job | null>(null);
   const pageSize = 10;
 
   useEffect(() => {
+    me().then(setMeMember).catch(() => setMeMember(null));
+  }, []);
+
+  const admin = isOwnerAdmin(meMember || null);
+
+  useEffect(() => {
+    if (meMember === undefined) return;
+    const query: Record<string, string | number | undefined> = { status, search, page, page_size: pageSize };
+    if (admin) {
+      if (assigneeFilter === 'all') query.assignee_id = 'all';
+      else if (assigneeFilter === 'unassigned') query.assignee_id = 'unassigned';
+      else if (assigneeFilter !== 'me') query.assignee_id = assigneeFilter;
+    }
     Promise.all([
-      api.get<PaginatedJobsResponse>('/api/vendor-os/jobs', { status, search, page, page_size: pageSize }),
+      api.get<PaginatedJobsResponse>('/api/vendor-os/jobs', query),
       api.get<PaginatedTeamResponse>('/api/vendor-os/team', { page: 1, page_size: 200 }),
     ])
       .then(([jobData, teamData]) => {
@@ -32,6 +66,7 @@ export function JobsPage() {
         const map: Record<string, string> = {};
         teamData.items.forEach((m) => { map[m.id] = m.name; });
         setAssigneeNames(map);
+        setPhotographers(teamData.items.filter(isPickerMember));
         setSelected((prev) => {
           const fromList = jobData.items.find((j) => j.id === (deepLinkId || prev?.id));
           if (fromList) return fromList;
@@ -46,7 +81,7 @@ export function JobsPage() {
         }
       })
       .catch((e) => setError((e as Error).message));
-  }, [status, search, page, deepLinkId]);
+  }, [status, search, page, deepLinkId, assigneeFilter, admin, meMember]);
 
   const onJobPatched = (updated: Job) => {
     setJobs((list) => list.map((j) => (j.id === updated.id ? { ...j, ...updated } : j)));
@@ -58,7 +93,7 @@ export function JobsPage() {
       <div className="page-header">
         <div>
           <h1>Jobs</h1>
-          <p>Assigned jobs. Attach a shoot to an Office listing here.</p>
+          <p>{admin ? 'All jobs including unassigned. Attach a shoot to an Office listing here.' : 'Assigned jobs. Attach a shoot to an Office listing here.'}</p>
         </div>
       </div>
 
@@ -73,10 +108,21 @@ export function JobsPage() {
           />
           <select value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
             <option value="">All statuses</option>
+            <option value="pending_assignment">Unassigned</option>
             <option value="assigned">Assigned</option>
             <option value="in_progress">In Progress</option>
             <option value="completed">Completed</option>
           </select>
+          {admin ? (
+            <select value={assigneeFilter} onChange={(e) => { setPage(1); setAssigneeFilter(e.target.value); }}>
+              <option value="all">All</option>
+              <option value="unassigned">Unassigned</option>
+              <option value="me">Assigned to me</option>
+              {photographers.map((p) => (
+                <option key={p.id} value={p.id}>Assigned to {p.name}</option>
+              ))}
+            </select>
+          ) : null}
         </div>
         <table className="table">
           <thead>
@@ -101,14 +147,14 @@ export function JobsPage() {
                 <td className="muted">{job.listing_address || '—'}</td>
                 <td className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
                 <td className="muted">{job.time_window_start} – {job.time_window_end}</td>
-                <td>{assigneeNames[job.assignee_id] ?? job.assignee_name ?? '—'}</td>
+                <td>{(job.assignee_id && (assigneeNames[job.assignee_id] ?? job.assignee_name)) || 'Unassigned'}</td>
                 <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
                   {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
                   {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : null}
                 </td>
                 <td>
                   <span className={`badge ${STATUS_BADGE[job.status] ?? 'badge-gray'}`}>
-                    {job.status.replace('_', ' ')}
+                    {(job.status || '').replace('_', ' ')}
                   </span>
                 </td>
               </tr>
@@ -125,6 +171,8 @@ export function JobsPage() {
       {selected && (
         <JobListingPanel
           job={selected}
+          isAdmin={admin}
+          photographers={photographers}
           onClose={() => setSelected(null)}
           onPatched={onJobPatched}
         />
@@ -135,10 +183,14 @@ export function JobsPage() {
 
 function JobListingPanel({
   job,
+  isAdmin,
+  photographers,
   onClose,
   onPatched,
 }: {
   job: Job;
+  isAdmin: boolean;
+  photographers: TeamMember[];
   onClose: () => void;
   onPatched: (job: Job) => void;
 }) {
@@ -148,6 +200,11 @@ function JobListingPanel({
   const [err, setErr] = useState('');
   const [uploads, setUploads] = useState<{ id: string; filename: string }[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [pick, setPick] = useState(job.assignee_id || '');
+
+  useEffect(() => {
+    setPick(job.assignee_id || '');
+  }, [job.id, job.assignee_id]);
 
   useEffect(() => {
     api.get<{ items?: { id: string; filename: string }[]; data?: { id: string; filename: string }[] } | { id: string; filename: string }[]>(
@@ -199,7 +256,6 @@ function JobListingPanel({
     }
   };
 
-
   const search = async (event?: FormEvent) => {
     event?.preventDefault();
     const query = q.trim();
@@ -237,6 +293,24 @@ function JobListingPanel({
     }
   };
 
+  const assign = async (event?: FormEvent) => {
+    event?.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      const updated = await api.put<Job>(`/api/vendor-os/jobs/${job.id}/assign`, {
+        member_id: pick || 'unassign',
+      });
+      onPatched(updated);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const assignedLabel = job.assignee_name || (job.assignee_id ? job.assignee_id : 'Unassigned');
+
   return (
     <section className="card full">
       <h3>Job detail</h3>
@@ -255,6 +329,21 @@ function JobListingPanel({
           ) : (
             <p className="muted" style={{ padding: 0, margin: '4px 0 0' }}>Not attached</p>
           )}
+        </div>
+        <div>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>ASSIGNED TO</p>
+          <p style={{ margin: '4px 0 8px', fontWeight: 500 }}>{assignedLabel}</p>
+          {isAdmin ? (
+            <form className="row" onSubmit={assign}>
+              <select value={pick} onChange={(e) => setPick(e.target.value)} style={{ flex: 1, minWidth: 180 }}>
+                <option value="">Unassigned</option>
+                {photographers.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <button type="submit" disabled={busy}>{job.assignee_id ? 'Reassign' : 'Assign'}</button>
+            </form>
+          ) : null}
         </div>
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>PAYOUT</p>
