@@ -36,9 +36,22 @@ async def vendor_os_verify(payload: dict):
         if res.session:
             # We might want to ensure the member exists in our table too
             user = res.user
-            member_res = await (await get_db()).table("vendor_members").select("*").eq("id", user.id).maybe_single().execute()
-            if not member_res.data:
-                await (await get_db()).table("vendor_members").insert({
+            from ..shared.job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
+            db = await get_db()
+            member_res = await db.table("vendor_members").select("*").eq("id", user.id).maybe_single().execute()
+            rows = [member_res.data] if member_res.data else []
+            if user.email:
+                by_email = await db.table("vendor_members").select("*").ilike("email", user.email).limit(10).execute()
+                for row in by_email.data or []:
+                    if row and row.get("id") not in {r.get("id") for r in rows}:
+                        rows.append(row)
+            if (user.email or "").lower() in KAM_EMAILS or str(user.id).lower().startswith("0c3fa7c2"):
+                kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
+                if kam.data and kam.data.get("id") not in {r.get("id") for r in rows}:
+                    rows.append(kam.data)
+            picked = pick_canonical_member(rows, user.id, user.email or "")
+            if not picked:
+                await db.table("vendor_members").insert({
                     "id": user.id,
                     "email": user.email,
                     "name": user.user_metadata.get("name", email.split("@")[0]),

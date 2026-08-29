@@ -22,7 +22,7 @@ type Job = {
 };
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
 }
 
 function fmtTime(iso: string) {
@@ -64,10 +64,11 @@ export default function TodayScreen() {
       ]);
       if (!jobsRes.ok) throw new Error(`Jobs API error: ${jobsRes.status}`);
       if (!notifRes.ok) throw new Error(`Notifications API error: ${notifRes.status}`);
-      const allJobs: Job[] = await jobsRes.json();
+      const payload = await jobsRes.json();
+      const allJobs: Job[] = Array.isArray(payload) ? payload : (payload.items || []);
       const notifData = await notifRes.json();
       const todayJobs = allJobs
-        .filter(j => j.scheduled_date === today)
+        .filter(j => (j.scheduled_date || '').slice(0, 10) === today)
         .sort((a, b) => a.time_window_start.localeCompare(b.time_window_start));
       setJobs(todayJobs);
       setUnread(notifData.count || 0);

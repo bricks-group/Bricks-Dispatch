@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamResponse } from '../lib/api';
 
 const STATUS_BADGE: Record<string, string> = {
@@ -8,6 +9,8 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 export function JobsPage() {
+  const [params] = useSearchParams();
+  const deepLinkId = params.get('id') || '';
   const [jobs, setJobs] = useState<Job[]>([]);
   const [assigneeNames, setAssigneeNames] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -30,12 +33,20 @@ export function JobsPage() {
         teamData.items.forEach((m) => { map[m.id] = m.name; });
         setAssigneeNames(map);
         setSelected((prev) => {
-          if (!prev) return prev;
-          return jobData.items.find((j) => j.id === prev.id) ?? prev;
+          const fromList = jobData.items.find((j) => j.id === (deepLinkId || prev?.id));
+          if (fromList) return fromList;
+          if (deepLinkId && prev?.id === deepLinkId) return prev;
+          return prev;
         });
+        if (deepLinkId && !jobData.items.some((j) => j.id === deepLinkId)) {
+          api.get<Job>(`/api/vendor-os/jobs/${deepLinkId}`).then((job) => {
+            setSelected(job);
+            setJobs((list) => (list.some((j) => j.id === job.id) ? list : [job, ...list]));
+          }).catch(() => {});
+        }
       })
       .catch((e) => setError((e as Error).message));
-  }, [status, search, page]);
+  }, [status, search, page, deepLinkId]);
 
   const onJobPatched = (updated: Job) => {
     setJobs((list) => list.map((j) => (j.id === updated.id ? { ...j, ...updated } : j)));

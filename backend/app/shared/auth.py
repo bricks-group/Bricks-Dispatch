@@ -11,18 +11,49 @@ def resolve_actor_id(x_user_id: Optional[str]) -> str:
         api_error(401, "Missing X-User-Id header", "missing_actor_header")
     return actor_id
 
-def ensure_assigned_to_actor(job: dict, actor_id: str):
-    assignee_id = job.get("assignee_id", "default_user")
-    if assignee_id != actor_id:
+def ensure_assigned_to_actor(job: dict, actor_id: str, member: Optional[dict] = None):
+    from .job_scope import photographer_assignee_ids
+    assignee_id = str(job.get("assignee_id") or "")
+    if assignee_id not in photographer_assignee_ids(actor_id, member):
         api_error(403, "You are not assigned to this job", "job_not_assigned_to_actor")
 
-async def get_vendor_member(actor_id: str) -> dict:
+async def lookup_vendor_member(actor_id: str, email: Optional[str] = None) -> Optional[dict]:
+    """Map auth user → vendor_members row. Prefer Kam Owner 0c3fa7c2 over a duplicate IC."""
+    from .job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
+
+    db = await get_db()
+    rows: list[dict] = []
+    seen: set[str] = set()
+
+    def add(row):
+        if not row:
+            return
+        rid = str(row.get("id") or "")
+        if rid and rid not in seen:
+            seen.add(rid)
+            rows.append(row)
+
+    by_id = await db.table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
+    add(by_id.data)
+    email_l = (email or "").strip().lower()
+    if str(actor_id or "").lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
+        kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
+        add(kam.data)
+    if email_l:
+        by_email = await db.table("vendor_members").select("*").ilike("email", email_l).limit(10).execute()
+        for row in by_email.data or []:
+            add(row)
+    return pick_canonical_member(rows, actor_id, email_l)
+
+
+async def get_vendor_member(actor_id: str, email: Optional[str] = None) -> dict:
     # Query supabase for vendor member. No hardcoded fallback — the member
-    # must actually exist in the DB (fail-closed).
-    response = await (await get_db()).table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
-    if not response.data:
+    # must actually exist in the DB (fail-closed). Lookup by id OR email so
+    # Kam's Owner session maps to 0c3fa7c2 even if OTP created a second row.
+    member = await lookup_vendor_member(actor_id, email)
+    if not member:
         api_error(403, "Vendor member not found", "vendor_member_not_found")
-    return response.data
+    return member
 
 def is_vendor_admin(member: dict) -> bool:
     if is_owner_member(member):
@@ -103,12 +134,18 @@ async def resolve_vendor_actor_id(
                 # Verify with Supabase
                 user_resp = await (await get_db()).auth.get_user(token)
                 if user_resp and user_resp.user:
-                    return user_resp.user.id
+                    user = user_resp.user
+                    member = await lookup_vendor_member(user.id, getattr(user, "email", None))
+                    if not member:
+                        api_error(403, "Vendor member not found", "vendor_member_not_found")
+                    return member["id"]
             except Exception as e:
                 api_error(401, f"Invalid session: {str(e)}", "invalid_session_token")
 
     if x_user_id and verify_internal_api_key(x_internal_api_key):
-        return resolve_actor_id(x_user_id)
+        raw = resolve_actor_id(x_user_id)
+        member = await lookup_vendor_member(raw)
+        return (member or {}).get("id") or raw
 
     api_error(401, "Authentication required", "auth_required")
 

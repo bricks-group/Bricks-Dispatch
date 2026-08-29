@@ -16,6 +16,15 @@ from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.auth import ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.vendor_identity import is_owner_member, photographer_payout_cents, public_profile
+from ..shared.job_scope import (
+    ORG_VENDOR_ID,
+    job_visible_to,
+    jobs_or_filter,
+    parse_scheduled_date,
+    photographer_assignee_ids,
+    toronto_today,
+    vendor_scope_ids,
+)
 from ..routers.vendor_profile import earnings_impl
 from ..shared.database import get_db
 from ..services.webhooks import send_dispatch_status_update_webhook
@@ -99,6 +108,16 @@ async def _listings_by_ids(db, ids) -> dict:
     return out
 
 
+
+async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, *, admin_all: bool = False) -> dict:
+    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    job = res.data or {}
+    allow_all = admin_all and is_vendor_admin(actor_member)
+    if not job_visible_to(job, actor_id, actor_member, assigned_only=not allow_all, admin_all=allow_all):
+        api_error(404, "Job not found", "job_not_found")
+    return job
+
+
 @router.post("/jobs/{job_id}/check-in")
 async def check_in_job(
     job_id: str,
@@ -116,28 +135,37 @@ async def get_vendor_os_overview(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    vendor_id = actor_member.get("vendor_id") or ORG_VENDOR_ID
+    assignees = photographer_assignee_ids(actor_id, actor_member)
+    vendors = vendor_scope_ids(actor_id, actor_member)
     member_ids = await get_vendor_member_ids(vendor_id)
-    
-    db = await get_db()
-    res_jobs = await db.table("jobs").select("*").or_(
-        f"vendor_id.eq.{vendor_id},vendor_id.eq.{actor_id},assignee_id.eq.{actor_id}"
-    ).limit(500).execute()
-    jobs = res_jobs.data or []
 
-    today = datetime.now(_TORONTO_TZ).date()
+    db = await get_db()
+    # Assigned jobs for this photographer, including default_vendor rows even
+    # when vendor_members.vendor_id is the member UUID (Kam Owner session).
+    query = db.table("jobs").select("*")
+    if assignees:
+        query = query.in_("assignee_id", assignees)
+    else:
+        query = query.or_(jobs_or_filter(vendors, assignees))
+    res_jobs = await query.limit(500).execute()
+    jobs = [j for j in (res_jobs.data or []) if job_visible_to(j, actor_id, actor_member, assigned_only=True)]
+
+    today = toronto_today()
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
     assigned_today = assigned_week = completed_week = scheduled_this_week = 0
     upcoming = []
+    today_jobs = []
     total_capacity = max(len(member_ids) * 4, 1)
     for job in jobs:
-        try:
-            scheduled = datetime.strptime(job.get("scheduled_date", ""), "%Y-%m-%d").date()
-        except ValueError:
+        scheduled = parse_scheduled_date(job.get("scheduled_date"))
+        if scheduled is None:
             continue
         if scheduled == today:
             assigned_today += 1
+            if job.get("status") not in ("completed", "delivered", "cancelled"):
+                today_jobs.append(job)
         if week_start <= scheduled <= week_end:
             assigned_week += 1
             scheduled_this_week += 1
@@ -145,12 +173,20 @@ async def get_vendor_os_overview(
                 completed_week += 1
         if scheduled >= today and job.get("status") not in ("completed", "delivered"):
             upcoming.append(job)
+    today_jobs = sorted(today_jobs, key=lambda j: (j.get("scheduled_date", ""), j.get("time_window_start", "")))
     return {
         "jobs_assigned_today": assigned_today,
         "jobs_assigned_week": assigned_week,
         "jobs_completed_week": completed_week,
         "capacity_utilization_pct": round(min((scheduled_this_week / (total_capacity * 7)) * 100, 100), 1),
-        "upcoming_jobs": sorted(upcoming, key=lambda j: (j.get("scheduled_date", ""), j.get("time_window_start", "")))[:5],
+        "today_jobs": today_jobs,
+        "upcoming_jobs": sorted(upcoming, key=lambda j: (j.get("scheduled_date", ""), j.get("time_window_start", "")))[:20],
+        "filter": {
+            "table": "jobs",
+            "assignee_ids": assignees,
+            "vendor_ids": vendors,
+            "actor_id": actor_id,
+        },
     }
 
 
@@ -281,21 +317,22 @@ async def get_vendor_os_jobs(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
-    
+    vendor_id = actor_member.get("vendor_id") or ORG_VENDOR_ID
+    aliases = photographer_assignee_ids(actor_id, actor_member)
+    vendors = vendor_scope_ids(actor_id, actor_member)
+
     sb = await get_db()
-    query = sb.table("jobs").select("*", count="exact").or_(
-        f"vendor_id.eq.{vendor_id},vendor_id.eq.{actor_id},assignee_id.eq.{actor_id}"
-    )
+    query = sb.table("jobs").select("*", count="exact")
     if status:
         query = query.eq("status", status)
-    # Default: assigned jobs for this photographer. Team-wide list is admin-only.
+    # Default: assigned jobs for this photographer (aliases include Kam 0c3fa7c2).
+    # Team-wide list is admin-only and still includes default_vendor.
     if assignee_id == "all" and is_vendor_admin(actor_member):
-        pass
+        query = query.or_(jobs_or_filter(vendors, aliases))
     elif assignee_id:
         query = query.eq("assignee_id", assignee_id)
     else:
-        query = query.eq("assignee_id", actor_id)
+        query = query.in_("assignee_id", aliases or [actor_id])
     if search:
         query = query.or_(f"address.ilike.%{search}%,city.ilike.%{search}%")
         
@@ -331,15 +368,8 @@ async def get_vendor_os_job(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
     db = await get_db()
-    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    job = res.data or {}
-    if not job or (
-        job.get("vendor_id") not in (vendor_id, actor_id)
-        and job.get("assignee_id") != actor_id
-    ):
-        api_error(404, "Job not found", "job_not_found")
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
     listings = await _listings_by_ids(db, [job.get("transaction_id")])
     res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
     job["assignee_name"] = (res_member.data or {}).get("name") if res_member.data else "Unassigned"
@@ -371,10 +401,8 @@ async def search_office_listings(
     db = await get_db()
     office_id = None
     if job_id:
-        job_res = await db.table("jobs").select("id, brokerage_id").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-        if not job_res.data:
-            api_error(404, "Job not found", "job_not_found")
-        office_id = job_res.data.get("brokerage_id")
+        job_row = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
+        office_id = job_row.get("brokerage_id")
 
     if _is_uuid(query):
         lookup = db.table("transactions").select("id, property_address, city, deal_type, brokerage_id").eq("id", query)
@@ -405,14 +433,11 @@ async def attach_job_listing(
     """Attach or detach this shoot to an Office listing via jobs.transaction_id."""
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    vendor_id = actor_member.get("vendor_id") or ORG_VENDOR_ID
     db = await get_db()
-    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
-        api_error(404, "Job not found", "job_not_found")
-    job = res_job.data
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
     if not is_vendor_admin(actor_member):
-        ensure_assigned_to_actor(job, actor_id)
+        ensure_assigned_to_actor(job, actor_id, actor_member)
 
     raw = payload.transaction_id
     txn_id = None if raw is None or str(raw).strip() == "" else str(raw).strip()
@@ -433,7 +458,7 @@ async def attach_job_listing(
     await db.table("jobs").update({
         "transaction_id": txn_id,
         "updated_at": now,
-    }).eq("id", job_id).eq("vendor_id", vendor_id).execute()
+    }).eq("id", job_id).execute()
     job["transaction_id"] = txn_id
     job["updated_at"] = now
     listings = {listing["id"]: listing} if listing else {}
@@ -807,16 +832,7 @@ async def update_vendor_job_status(
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
     db = await get_db()
-    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    job_row = res_job.data or {}
-    if not job_row or (
-        job_row.get("vendor_id") not in (vendor_id, actor_id)
-        and job_row.get("assignee_id") != actor_id
-    ):
-        raise HTTPException(status_code=404, detail="Job not found")
-    res_job.data = job_row
-
-    job = res_job.data
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
     # FIXED 2026-08-16: this endpoint (the one the mobile app actually calls,
     # confirmed via app/job/[id].tsx) never checked the caller was the
     # assigned photographer -- only vendor_id scope. Any active member of the
@@ -825,7 +841,7 @@ async def update_vendor_job_status(
     # and prematurely triggering post-production/payout on a job they never
     # touched. The sibling watch-action endpoint below already enforces this
     # correctly; ensure_assigned_to_actor existed in shared/auth.py unused.
-    ensure_assigned_to_actor(job, actor_id)
+    ensure_assigned_to_actor(job, actor_id, actor_member)
     old_status = job.get("status")
     new_status = payload.status
     booking_id = job.get("booking_id")
