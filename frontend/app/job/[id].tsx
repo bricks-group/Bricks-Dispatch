@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X } from 'lucide-react-native';
+import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
@@ -15,6 +15,7 @@ const NOSHOW_GEOFENCE_METERS = 150;
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 type ChecklistItem = { id: string; label: string; completed: boolean };
+type ListingHit = { id: string; address: string; city?: string; deal_type?: string | null };
 type Job = {
   id: string; address: string; city: string; state: string;
   time_window_start: string; job_type: string; status: string;
@@ -25,6 +26,9 @@ type Job = {
   vendor_payout?: number | null;
   lat?: number | null;
   lng?: number | null;
+  transaction_id?: string | null;
+  listing_address?: string | null;
+  listing?: ListingHit | null;
 };
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -74,6 +78,11 @@ export default function JobDetailScreen() {
   const [noShowNotes, setNoShowNotes] = useState('');
   const [submittingNoShow, setSubmittingNoShow] = useState(false);
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
+  const [listingQuery, setListingQuery] = useState('');
+  const [listingHits, setListingHits] = useState<ListingHit[]>([]);
+  const [listingSearching, setListingSearching] = useState(false);
+  const [listingSaving, setListingSaving] = useState(false);
+  const [listingError, setListingError] = useState('');
 
   useEffect(() => {
     if (!id) return;
@@ -113,6 +122,63 @@ export default function JobDetailScreen() {
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [escalationSentAt]);
+
+  const searchListings = async (text?: string) => {
+    if (!job) return;
+    const q = (text ?? listingQuery).trim();
+    setListingError('');
+    if (!q) {
+      setListingHits([]);
+      return;
+    }
+    setListingSearching(true);
+    try {
+      const headers = await actorHeaders();
+      const res = await fetch(
+        `${API}/api/vendor-os/listings?q=${encodeURIComponent(q)}&job_id=${encodeURIComponent(job.id)}`,
+        { headers },
+      );
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = await res.json();
+      setListingHits(Array.isArray(data.items) ? data.items : []);
+    } catch {
+      setListingError('Could not search listings.');
+      setListingHits([]);
+    } finally {
+      setListingSearching(false);
+    }
+  };
+
+  const attachListing = async (transactionId: string | null) => {
+    if (!job) return;
+    setListingSaving(true);
+    setListingError('');
+    try {
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/listing`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ transaction_id: transactionId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail?.message || err.detail || `HTTP ${res.status}`);
+      }
+      const updated = await res.json();
+      setJob(prev => prev ? {
+        ...prev,
+        transaction_id: updated.transaction_id ?? null,
+        listing_address: updated.listing_address ?? null,
+        listing: updated.listing ?? null,
+      } : prev);
+      setListingHits([]);
+      setListingQuery('');
+    } catch (e: any) {
+      setListingError(e.message || 'Could not attach listing.');
+    } finally {
+      setListingSaving(false);
+    }
+  };
 
   const markComplete = async () => {
     if (!job) return;
@@ -287,6 +353,67 @@ export default function JobDetailScreen() {
               </InfoRow>
             </>
           )}
+        </View>
+
+
+        <View style={s.card}>
+          <InfoRow icon={<Home size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="LISTING">
+            {job.listing_address ? (
+              <>
+                <Text style={s.infoValue}>{job.listing_address}</Text>
+                {job.listing?.city ? <Text style={s.infoSub}>{job.listing.city}</Text> : null}
+              </>
+            ) : (
+              <Text style={s.infoSub}>Not attached</Text>
+            )}
+          </InfoRow>
+          <View style={s.divider} />
+          <TextInput
+            style={s.listingInput}
+            placeholder="Search office listings or paste id"
+            placeholderTextColor={TOKENS.moonFaint}
+            value={listingQuery}
+            onChangeText={setListingQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="search"
+            onSubmitEditing={() => searchListings()}
+          />
+          <View style={s.listingActions}>
+            <TouchableOpacity
+              style={s.listingBtn}
+              onPress={() => searchListings()}
+              disabled={listingSearching || listingSaving}
+              activeOpacity={0.7}
+            >
+              {listingSearching
+                ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                : <Text style={s.listingBtnText}>Search</Text>}
+            </TouchableOpacity>
+            {job.transaction_id ? (
+              <TouchableOpacity
+                style={s.listingBtnGhost}
+                onPress={() => attachListing(null)}
+                disabled={listingSaving}
+                activeOpacity={0.7}
+              >
+                <Text style={s.listingBtnGhostText}>Detach</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          {listingError ? <Text style={s.listingErr}>{listingError}</Text> : null}
+          {listingHits.map((hit) => (
+            <TouchableOpacity
+              key={hit.id}
+              style={s.listingHit}
+              onPress={() => attachListing(hit.id)}
+              disabled={listingSaving}
+              activeOpacity={0.7}
+            >
+              <Text style={s.infoValue}>{hit.address || 'Listing'}</Text>
+              <Text style={s.infoSub}>{[hit.city, hit.deal_type].filter(Boolean).join(' · ') || 'Office listing'}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
         {job.client_instructions ? (
@@ -568,6 +695,28 @@ const s = StyleSheet.create({
   },
   submitBtnText: { fontSize: 15, color: TOKENS.moon, fontWeight: '600' as const },
 
+
+  listingInput: {
+    borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: TOKENS.radius,
+    backgroundColor: TOKENS.night, color: TOKENS.moon,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginTop: 8,
+  },
+  listingActions: { flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 4 },
+  listingBtn: {
+    height: 40, paddingHorizontal: 14, borderRadius: TOKENS.radius,
+    backgroundColor: TOKENS.brick, justifyContent: 'center', alignItems: 'center',
+  },
+  listingBtnText: { fontSize: 13, color: TOKENS.moon, fontWeight: '600' as const },
+  listingBtnGhost: {
+    height: 40, paddingHorizontal: 14, borderRadius: TOKENS.radius,
+    borderWidth: 1, borderColor: TOKENS.nightHairS, justifyContent: 'center',
+  },
+  listingBtnGhostText: { fontSize: 13, color: TOKENS.moonMute, fontWeight: '500' as const },
+  listingErr: { fontSize: 13, color: TOKENS.bad, marginTop: 8 },
+  listingHit: {
+    marginTop: 8, paddingVertical: 10, paddingHorizontal: 4,
+    borderTopWidth: 1, borderTopColor: TOKENS.nightHair,
+  },
   // Capture flow — Start Capture button shown on active jobs
   captureBtn: {
     flex: 1, height: 48, borderRadius: TOKENS.radius,

@@ -47,6 +47,7 @@ export const api = {
   get: <T>(path: string, query?: RequestOptions['query']) => request<T>(path, { method: 'GET', query }),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }),
+  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
 
@@ -104,6 +105,13 @@ export type PaginatedTeamResponse = {
   page_size: number;
 };
 
+export type ListingHit = {
+  id: string;
+  address: string;
+  city?: string;
+  deal_type?: string | null;
+};
+
 export type Job = {
   id: string;
   address: string;
@@ -113,6 +121,9 @@ export type Job = {
   assignee_id: string;
   assignee_name?: string;
   scheduled_date: string;
+  transaction_id?: string | null;
+  listing_address?: string | null;
+  listing?: ListingHit | null;
 };
 
 export type PaginatedJobsResponse = {

@@ -69,6 +69,8 @@ class Job(BaseModel):
     # so getattr(job, "brokerage_id", None) always returned None and the bonus never fired,
     # unconditionally, regardless of what Booking/Companion sent. See BRICKS_STATUS.md.
     brokerage_id: Optional[str] = None
+    # Office listing this shoot belongs to (jobs.transaction_id -> transactions.id).
+    transaction_id: Optional[str] = None
     # payout_amount / dispatch_explanation: written directly via jobs.update() elsewhere
     # (payout_service.py, bricks_ai_dispatch.py) -- also missing here until 2026-07-27, same
     # silent-drop pattern, just not yet known to be read back anywhere.

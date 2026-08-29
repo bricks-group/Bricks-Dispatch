@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import httpx
 import os
+import re
 import uuid
 from typing import Optional
 
@@ -46,6 +47,54 @@ class AgentNoShowReport(BaseModel):
     notes: Optional[str] = None
     photographer_lat: Optional[float] = None
     photographer_lng: Optional[float] = None
+
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+class JobListingUpdate(BaseModel):
+    transaction_id: Optional[str] = None
+
+
+def _is_uuid(value: Optional[str]) -> bool:
+    return bool(value and _UUID_RE.match(str(value).strip()))
+
+
+def _listing_public(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    deal = row.get("deal_type")
+    return {
+        "id": row.get("id"),
+        "address": row.get("property_address") or "",
+        "city": row.get("city") or "",
+        "deal_type": str(deal).capitalize() if deal else None,
+    }
+
+
+def _apply_listing(job: dict, listings: dict) -> dict:
+    tid = job.get("transaction_id") or None
+    listing = listings.get(tid) if tid else None
+    job["transaction_id"] = tid
+    job["listing_address"] = (listing or {}).get("address") if listing else None
+    job["listing"] = listing
+    return job
+
+
+async def _listings_by_ids(db, ids) -> dict:
+    clean = [i for i in ids if i]
+    if not clean:
+        return {}
+    res = await db.table("transactions").select(
+        "id, property_address, city, deal_type"
+    ).in_("id", clean).execute()
+    out = {}
+    for row in res.data or []:
+        pub = _listing_public(row)
+        if pub and pub.get("id"):
+            out[pub["id"]] = pub
+    return out
 
 
 @router.get("/overview")
@@ -223,11 +272,134 @@ async def get_vendor_os_jobs(
     jobs = res.data
     total = res.count or 0
     
-    res_members = await (await get_db()).table("vendor_members").select("id, name").eq("vendor_id", vendor_id).limit(500).execute()
+    db = await get_db()
+    res_members = await db.table("vendor_members").select("id, name").eq("vendor_id", vendor_id).limit(500).execute()
     member_map = {m["id"]: m.get("name", "Unknown") for m in res_members.data}
+    listings = await _listings_by_ids(db, [j.get("transaction_id") for j in jobs])
     for job in jobs:
         job["assignee_name"] = member_map.get(job.get("assignee_id"), "Unassigned")
+        _apply_listing(job, listings)
     return paginated_response(jobs, total, page, page_size)
+
+
+
+@router.get("/jobs/{job_id}")
+async def get_vendor_os_job(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    db = await get_db()
+    res = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not res.data:
+        api_error(404, "Job not found", "job_not_found")
+    job = res.data
+    listings = await _listings_by_ids(db, [job.get("transaction_id")])
+    res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
+    job["assignee_name"] = (res_member.data or {}).get("name") if res_member.data else "Unassigned"
+    return _apply_listing(job, listings)
+
+
+@router.get("/listings")
+async def search_office_listings(
+    q: Optional[str] = None,
+    job_id: Optional[str] = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Search Office listings (transactions) so a photographer can attach a shoot.
+
+    Empty query returns []. Honest empty — not a fake Connected state.
+    Scoped to the job's office when job_id is provided and jobs.brokerage_id is set.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    query = (q or "").strip()
+    if not query:
+        return {"items": []}
+    if len(query) > 80:
+        query = query[:80]
+    query = query.replace("%", "").replace("_", "")
+
+    db = await get_db()
+    office_id = None
+    if job_id:
+        job_res = await db.table("jobs").select("id, brokerage_id").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+        if not job_res.data:
+            api_error(404, "Job not found", "job_not_found")
+        office_id = job_res.data.get("brokerage_id")
+
+    if _is_uuid(query):
+        lookup = db.table("transactions").select("id, property_address, city, deal_type, brokerage_id").eq("id", query)
+        if office_id:
+            lookup = lookup.eq("brokerage_id", office_id)
+        res = await lookup.maybe_single().execute()
+        pub = _listing_public(res.data if res else None)
+        return {"items": [pub] if pub else []}
+
+    if len(query) < 2:
+        return {"items": []}
+
+    search = db.table("transactions").select("id, property_address, city, deal_type").ilike("property_address", f"%{query}%")
+    if office_id:
+        search = search.eq("brokerage_id", office_id)
+    res = await search.order("created_at", desc=True).limit(20).execute()
+    items = [_listing_public(row) for row in (res.data or [])]
+    return {"items": [i for i in items if i]}
+
+
+@router.patch("/jobs/{job_id}/listing")
+async def attach_job_listing(
+    job_id: str,
+    payload: JobListingUpdate,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Attach or detach this shoot to an Office listing via jobs.transaction_id."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    db = await get_db()
+    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not res_job.data:
+        api_error(404, "Job not found", "job_not_found")
+    job = res_job.data
+    if not is_vendor_admin(actor_member):
+        ensure_assigned_to_actor(job, actor_id)
+
+    raw = payload.transaction_id
+    txn_id = None if raw is None or str(raw).strip() == "" else str(raw).strip()
+    listing = None
+    if txn_id:
+        if not _is_uuid(txn_id):
+            api_error(400, "Invalid listing id", "invalid_listing_id")
+        tq = db.table("transactions").select("id, property_address, city, deal_type, brokerage_id").eq("id", txn_id)
+        office_id = job.get("brokerage_id")
+        if office_id:
+            tq = tq.eq("brokerage_id", office_id)
+        t_res = await tq.maybe_single().execute()
+        if not t_res.data:
+            api_error(404, "Listing not found", "listing_not_found")
+        listing = _listing_public(t_res.data)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.table("jobs").update({
+        "transaction_id": txn_id,
+        "updated_at": now,
+    }).eq("id", job_id).eq("vendor_id", vendor_id).execute()
+    job["transaction_id"] = txn_id
+    job["updated_at"] = now
+    listings = {listing["id"]: listing} if listing else {}
+    await write_audit_event(
+        actor_id, "job", job_id, "attach_listing",
+        vendor_id=vendor_id,
+        details={"transaction_id": txn_id},
+    )
+    return _apply_listing(job, listings)
 
 
 @router.post("/jobs")

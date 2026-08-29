@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { api, Job, PaginatedJobsResponse, PaginatedTeamResponse } from '../lib/api';
+import { FormEvent, useEffect, useState } from 'react';
+import { api, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamResponse } from '../lib/api';
 
 const STATUS_BADGE: Record<string, string> = {
   assigned:    'badge-yellow',
@@ -15,6 +15,7 @@ export function JobsPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [selected, setSelected] = useState<Job | null>(null);
   const pageSize = 10;
 
   useEffect(() => {
@@ -28,16 +29,25 @@ export function JobsPage() {
         const map: Record<string, string> = {};
         teamData.items.forEach((m) => { map[m.id] = m.name; });
         setAssigneeNames(map);
+        setSelected((prev) => {
+          if (!prev) return prev;
+          return jobData.items.find((j) => j.id === prev.id) ?? prev;
+        });
       })
       .catch((e) => setError((e as Error).message));
   }, [status, search, page]);
+
+  const onJobPatched = (updated: Job) => {
+    setJobs((list) => list.map((j) => (j.id === updated.id ? { ...j, ...updated } : j)));
+    setSelected((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+  };
 
   return (
     <div className="page-content">
       <div className="page-header">
         <div>
           <h1>Jobs</h1>
-          <p>Auto-allocated by Patchy — monitor team workload here</p>
+          <p>Auto-allocated by Patchy — attach a shoot to an Office listing here</p>
         </div>
       </div>
 
@@ -61,6 +71,7 @@ export function JobsPage() {
           <thead>
             <tr>
               <th>Address</th>
+              <th>Listing</th>
               <th>Date</th>
               <th>Time window</th>
               <th>Assigned to</th>
@@ -69,8 +80,13 @@ export function JobsPage() {
           </thead>
           <tbody>
             {jobs.map((job) => (
-              <tr key={job.id}>
+              <tr
+                key={job.id}
+                className={selected?.id === job.id ? 'row-selected' : 'row-click'}
+                onClick={() => setSelected(job)}
+              >
                 <td style={{ fontWeight: 500 }}>{job.address}</td>
+                <td className="muted">{job.listing_address || '—'}</td>
                 <td className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
                 <td className="muted">{job.time_window_start} – {job.time_window_end}</td>
                 <td>{assigneeNames[job.assignee_id] ?? job.assignee_name ?? '—'}</td>
@@ -89,6 +105,115 @@ export function JobsPage() {
           <button disabled={page >= Math.ceil(total / pageSize)} onClick={() => setPage((p) => p + 1)}>Next</button>
         </div>
       </section>
+
+      {selected && (
+        <JobListingPanel
+          job={selected}
+          onClose={() => setSelected(null)}
+          onPatched={onJobPatched}
+        />
+      )}
     </div>
+  );
+}
+
+function JobListingPanel({
+  job,
+  onClose,
+  onPatched,
+}: {
+  job: Job;
+  onClose: () => void;
+  onPatched: (job: Job) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [hits, setHits] = useState<ListingHit[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const search = async (event?: FormEvent) => {
+    event?.preventDefault();
+    const query = q.trim();
+    setErr('');
+    if (!query) {
+      setHits([]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api.get<{ items: ListingHit[] }>('/api/vendor-os/listings', { q: query, job_id: job.id });
+      setHits(data.items || []);
+    } catch (e) {
+      setErr((e as Error).message);
+      setHits([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const attach = async (transactionId: string | null) => {
+    setBusy(true);
+    setErr('');
+    try {
+      const updated = await api.patch<Job>(`/api/vendor-os/jobs/${job.id}/listing`, {
+        transaction_id: transactionId,
+      });
+      onPatched(updated);
+      setHits([]);
+      setQ('');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card full">
+      <h3>Job detail</h3>
+      <div className="stack" style={{ padding: 20, maxWidth: 720 }}>
+        <div>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>ADDRESS</p>
+          <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{job.address}</p>
+        </div>
+        <div>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>LISTING</p>
+          {job.listing_address ? (
+            <p style={{ margin: '4px 0 0', fontWeight: 500 }}>
+              {job.listing_address}
+              {job.listing?.city ? <span className="muted"> · {job.listing.city}</span> : null}
+            </p>
+          ) : (
+            <p className="muted" style={{ padding: 0, margin: '4px 0 0' }}>Not attached</p>
+          )}
+        </div>
+        <form className="row" onSubmit={search}>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search office listings or paste id"
+            style={{ flex: 1, minWidth: 220 }}
+          />
+          <button type="submit" disabled={busy}>{busy ? '…' : 'Search'}</button>
+          {job.transaction_id ? (
+            <button type="button" disabled={busy} onClick={() => attach(null)}>Detach</button>
+          ) : null}
+          <button type="button" onClick={onClose}>Close</button>
+        </form>
+        {err && <p className="error" style={{ padding: 0 }}>{err}</p>}
+        {hits.length > 0 && (
+          <ul className="listing-hits">
+            {hits.map((hit) => (
+              <li key={hit.id}>
+                <button type="button" className="listing-hit" disabled={busy} onClick={() => attach(hit.id)}>
+                  <span>{hit.address || 'Listing'}</span>
+                  <span className="muted">{[hit.city, hit.deal_type].filter(Boolean).join(' · ') || 'Office listing'}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
