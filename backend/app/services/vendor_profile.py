@@ -254,6 +254,35 @@ def display_title(member: Any) -> str:
     return "Photographer IC"
 
 
+def _missing_column(err: str, keys: list[str]) -> str | None:
+    msg = str(err)
+    for k in keys:
+        if f"'{k}'" in msg or f'"{k}"' in msg or f" {k} " in msg:
+            return k
+    return None
+
+
+async def _write_member(db, payload: dict, member_id: str | None) -> None:
+    """Update/insert dropping columns PostgREST says are missing."""
+    data = dict(payload)
+    last = None
+    for _ in range(12):
+        try:
+            if member_id:
+                await db.table("vendor_members").update(data).eq("id", member_id).execute()
+            else:
+                await db.table("vendor_members").insert(data).execute()
+            return
+        except Exception as e:
+            last = e
+            miss = _missing_column(str(e), list(data.keys()))
+            if not miss:
+                raise
+            data.pop(miss, None)
+    if last:
+        raise last
+
+
 async def ensure_owner_profile(db) -> dict:
     """Idempotent: Kam is Owner, top tier, GTA, photo+drone+reel, Advanced RPAS flag, Aman pending."""
     now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
@@ -278,11 +307,9 @@ async def ensure_owner_profile(db) -> dict:
         "home_lat": 43.5890,
         "home_lng": -79.6441,
         "max_travel_km": 80,
-        "updated_at": now,
-    }
-    extra = {
         "rpas_advanced": True,
         "skills": ["photo", "drone", "reel", "tour", "twilight"],
+        "updated_at": now,
     }
     out = {"ok": False}
     try:
@@ -290,21 +317,13 @@ async def ensure_owner_profile(db) -> dict:
             f"id.eq.{KAM_MEMBER_ID},email.eq.akashorter@icloud.com,email.eq.akashorter@gmail.com"
         ).limit(1).execute()
         rows = existing.data or []
-        payload = {**kam, **extra}
         if rows:
             kid = rows[0]["id"]
-            try:
-                await db.table("vendor_members").update(payload).eq("id", kid).execute()
-            except Exception:
-                await db.table("vendor_members").update(kam).eq("id", kid).execute()
+            await _write_member(db, kam, kid)
             out = {"ok": True, "id": kid, "action": "updated"}
         else:
-            payload["created_at"] = now
-            try:
-                await db.table("vendor_members").insert(payload).execute()
-            except Exception:
-                kam["created_at"] = now
-                await db.table("vendor_members").insert(kam).execute()
+            kam["created_at"] = now
+            await _write_member(db, kam, None)
             out = {"ok": True, "id": KAM_MEMBER_ID, "action": "inserted"}
         try:
             await db.table("jobs").update({"vendor_id": ORG_VENDOR_ID}).eq("vendor_id", KAM_MEMBER_ID).execute()
@@ -317,5 +336,5 @@ async def ensure_owner_profile(db) -> dict:
         except Exception:
             pass
     except Exception as e:
-        out = {"ok": False, "error": str(e)[:200]}
+        out = {"ok": False, "error": str(e)[:240]}
     return out
