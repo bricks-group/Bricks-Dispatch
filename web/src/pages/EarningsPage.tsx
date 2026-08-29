@@ -8,6 +8,7 @@ type EarningJob = {
   status: string;
   payout_amount: number;
   payout_status: 'paid' | 'pending';
+  payout_kind?: 'owner_full' | 'rate_card';
 };
 
 type Earnings = {
@@ -39,7 +40,7 @@ export function EarningsPage() {
       <div className="page-header">
         <div>
           <h1>Earnings</h1>
-          <p>Payouts and job-level breakdown</p>
+          <p>Payouts — Owner sees the full package, ICs the rate card. No fake cut.</p>
         </div>
       </div>
 
@@ -91,6 +92,7 @@ export function EarningsPage() {
                       </td>
                       <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
                         ${job.payout_amount.toLocaleString()}
+                        {job.payout_kind === 'owner_full' ? <span className="muted"> full package</span> : null}
                       </td>
                     </tr>
                   ))}

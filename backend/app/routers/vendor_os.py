@@ -8,10 +8,14 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Form, Header, HTTPException
 from pydantic import BaseModel
 
 from ..services.vendor_selection import assign_vendor_for_job
+from ..services.vendor_profile import (
+    display_title, has_advanced_rpas, is_platform_owner, owner_payout_cents,
+    rack_to_cents, TIER_LABELS, TOP_TIER, vendor_skills,
+)
 from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.auth import ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
@@ -97,6 +101,155 @@ async def _listings_by_ids(db, ids) -> dict:
     return out
 
 
+
+class VendorProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    home_city: Optional[str] = None
+    max_travel_km: Optional[int] = None
+    service_areas: Optional[list] = None
+    skills: Optional[list] = None
+    avatar_url: Optional[str] = None
+    specialty: Optional[str] = None
+
+
+def _public_profile(member: dict) -> dict:
+    owner = is_platform_owner(member)
+    skills = sorted(vendor_skills(member))
+    return {
+        "id": member.get("id"),
+        "name": member.get("name"),
+        "email": member.get("email"),
+        "phone": member.get("phone") or "",
+        "avatar_url": member.get("avatar_url") or "",
+        "title": display_title(member),
+        "role": "Owner" if owner else (member.get("role") or "Photographer"),
+        "is_owner": owner,
+        "tier": member.get("tier") or 1,
+        "tier_label": TIER_LABELS.get(member.get("tier") or 1, "C"),
+        "skills": skills,
+        "drone_certified": bool(member.get("drone_certified")),
+        "rpas_advanced": has_advanced_rpas(member),
+        "rpas_certificate_level": member.get("rpas_certificate_level"),
+        "rpas_certificate_number": member.get("rpas_certificate_number"),
+        "rpas_certificate_url": member.get("rpas_certificate_url"),
+        "service_areas": member.get("service_areas") or [],
+        "home_city": member.get("home_city") or "",
+        "max_travel_km": member.get("max_travel_km") or 50,
+        "status": member.get("status") or "available",
+        "is_active": bool(member.get("is_active")),
+        "onboarding_status": member.get("onboarding_status"),
+        "specialty": member.get("specialty") or "photo",
+        "polycam_equipped": bool(member.get("polycam_equipped")),
+        "payout_mode": "owner_full" if owner else "rate_card",
+        "payout_note": (
+            "Full package amount. No platform fee or rate-card deduction."
+            if owner else
+            "Fixed vendor rate card by package, size band, and tier. Not a percent of rack."
+        ),
+    }
+
+
+@router.get("/profile")
+async def get_vendor_profile(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    return _public_profile(member)
+
+
+@router.patch("/profile")
+async def patch_vendor_profile(
+    payload: VendorProfileUpdate,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    patch = payload.dict(exclude_none=True)
+    # Title/role: only the seeded owner stays Owner. ICs cannot self-promote.
+    if "role" in patch and not is_platform_owner(member):
+        patch.pop("role", None)
+    if not patch:
+        return _public_profile(member)
+    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+    db = await get_db()
+    try:
+        await db.table("vendor_members").update(patch).eq("id", actor_id).execute()
+    except Exception:
+        # New columns (skills, avatar_url, rpas_*) may not exist yet — retry without them.
+        safe = {k: v for k, v in patch.items() if k not in ("skills", "avatar_url", "rpas_advanced", "rpas_certificate_url")}
+        await db.table("vendor_members").update(safe).eq("id", actor_id).execute()
+    member = await get_vendor_member(actor_id)
+    return _public_profile(member)
+
+
+@router.post("/profile/rpas")
+async def upload_rpas_certificate(
+    filename: str = Form(...),
+    file_data: str = Form(...),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Honest RPAS cert upload. Stores the file, writes vendor_documents, and
+    saves the storage URL on the member. Does not mint a fake Connected cert."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    import base64
+    try:
+        raw_bytes = base64.b64decode(file_data)
+    except Exception:
+        raw_bytes = file_data.encode()
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "pdf"
+    mime = {
+        "pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg",
+        "jpeg": "image/jpeg", "webp": "image/webp",
+    }.get(ext, "application/pdf")
+    from ..services.storage import upload_file
+    file_key, *_rest = await upload_file(raw_bytes, "onboarding", actor_id, filename, mime)
+    doc_id = str(uuid.uuid4())
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    await db.table("vendor_documents").insert({
+        "id": doc_id,
+        "vendor_id": member.get("vendor_id", "default_vendor"),
+        "member_id": actor_id,
+        "doc_type": "rpas_certificate",
+        "file_url": file_key,
+        "status": "pending",
+        "created_at": now,
+    }).execute()
+    member_patch = {
+        "rpas_certificate_url": file_key,
+        "updated_at": now,
+    }
+    if is_platform_owner(member):
+        member_patch["rpas_advanced"] = True
+        member_patch["rpas_certificate_level"] = member.get("rpas_certificate_level") or "advanced"
+        member_patch["drone_certified"] = True
+    try:
+        await db.table("vendor_members").update(member_patch).eq("id", actor_id).execute()
+    except Exception:
+        await db.table("vendor_members").update({"updated_at": now}).eq("id", actor_id).execute()
+    member = await get_vendor_member(actor_id)
+    profile = _public_profile(member)
+    profile["rpas_upload"] = {"document_id": doc_id, "file_url": file_key, "status": "pending"}
+    return profile
+
+
+@router.post("/jobs/{job_id}/check-in")
+async def check_in_job(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    payload = JobStatusUpdate(status="in_progress")
+    return await update_vendor_job_status(job_id, payload, authorization, x_user_id)
+
+
 @router.get("/overview")
 async def get_vendor_os_overview(
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -107,7 +260,10 @@ async def get_vendor_os_overview(
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     member_ids = await get_vendor_member_ids(vendor_id)
     
-    res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).limit(500).execute()
+    db = await get_db()
+    res_jobs = await db.table("jobs").select("*").or_(
+        f"vendor_id.eq.{vendor_id},vendor_id.eq.{actor_id},assignee_id.eq.{actor_id}"
+    ).limit(500).execute()
     jobs = res_jobs.data
     
     today = datetime.now(timezone.utc).date()
@@ -259,7 +415,9 @@ async def get_vendor_os_jobs(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     
-    sb = await get_db(); query = sb.table("jobs").select("*", count="exact").eq("vendor_id", vendor_id)
+    sb = await get_db(); query = sb.table("jobs").select("*", count="exact").or_(
+        f"vendor_id.eq.{vendor_id},vendor_id.eq.{actor_id},assignee_id.eq.{actor_id}"
+    )
     if status:
         query = query.eq("status", status)
     if assignee_id:
@@ -293,8 +451,12 @@ async def get_vendor_os_job(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     db = await get_db()
-    res = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res.data:
+    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    if not res.data or (
+        res.data.get("vendor_id") not in (vendor_id, actor_id)
+        and res.data.get("assignee_id") != actor_id
+        and not is_platform_owner(actor_member)
+    ):
         api_error(404, "Job not found", "job_not_found")
     job = res.data
     listings = await _listings_by_ids(db, [job.get("transaction_id")])
@@ -730,10 +892,10 @@ async def get_vendor_os_earnings(
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     week_end = week_start + timedelta(days=7)
 
-    from ..services.payout_service import TIER_PERCENTAGES, DEFAULT_TIER_PERCENTAGE
-    res_members = await (await get_db()).table("vendor_members").select("id, tier").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
-    member_rate_map = {m["id"]: TIER_PERCENTAGES.get(m.get("tier"), DEFAULT_TIER_PERCENTAGE) for m in res_members.data}
-    member_ids = list(member_rate_map.keys()) or ["__none__"]
+    from ..services.payout_service import get_fixed_payout_amount, calculate_payout_amount
+    res_members = await (await get_db()).table("vendor_members").select("id, tier, role, email").eq("vendor_id", vendor_id).eq("is_active", True).limit(500).execute()
+    member_map = {m["id"]: m for m in (res_members.data or [])}
+    member_ids = list(member_map.keys()) or ["__none__"]
 
     res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).order("scheduled_date", desc=True).limit(50).execute()
     jobs = res_jobs.data
@@ -751,10 +913,20 @@ async def get_vendor_os_earnings(
     pending_total = 0
     recent = []
 
+    db = await get_db()
     for j in jobs:
-        raw_price = j.get("package_price") or 0
-        rate = member_rate_map.get(j.get("assignee_id", ""), DEFAULT_TIER_PERCENTAGE)
-        payout = round(raw_price * rate, 2)  # CAD dollars for display
+        member = member_map.get(j.get("assignee_id", ""), {})
+        if is_platform_owner(member):
+            payout = round(owner_payout_cents(j) / 100, 2)
+            payout_kind = "owner_full"
+        else:
+            tier = member.get("tier")
+            cents = await get_fixed_payout_amount(db, j.get("package_id"), j.get("sqft"), tier)
+            if cents is None:
+                rack = j.get("rack_price") if j.get("rack_price") is not None else j.get("package_price")
+                cents = calculate_payout_amount(rack, tier)
+            payout = round((cents or 0) / 100, 2)
+            payout_kind = "rate_card"
         sched = j.get("scheduled_date", "")
         is_this_week = False
         try:
@@ -780,6 +952,8 @@ async def get_vendor_os_earnings(
                 "status": j.get("status", "assigned"),
                 "payout_amount": payout,
                 "payout_status": actual_payout_status,
+                "payout_kind": payout_kind,
+                "platform_fee": 0 if payout_kind == "owner_full" else None,
             })
 
     member_id = actor_member.get("id")
@@ -851,11 +1025,17 @@ async def update_vendor_job_status(
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
     db = await get_db()
-    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
+    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
     if not res_job.data:
         raise HTTPException(status_code=404, detail="Job not found")
-
     job = res_job.data
+    if (
+        job.get("vendor_id") not in (vendor_id, actor_id)
+        and job.get("assignee_id") != actor_id
+        and not is_platform_owner(actor_member)
+    ):
+        raise HTTPException(status_code=404, detail="Job not found")
+
     # FIXED 2026-08-16: this endpoint (the one the mobile app actually calls,
     # confirmed via app/job/[id].tsx) never checked the caller was the
     # assigned photographer -- only vendor_id scope. Any active member of the

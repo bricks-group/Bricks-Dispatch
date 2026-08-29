@@ -7,7 +7,7 @@ const items = [
   { path: '/earnings',     label: 'Earnings' },
   { path: '/availability', label: 'Availability' },
   { path: '/performance',  label: 'Performance' },
-  { path: '/settings',     label: 'Settings' },
+  { path: '/settings',     label: 'Profile' },
 ];
 
 function BrickMark({ size = 18 }: { size?: number }) {

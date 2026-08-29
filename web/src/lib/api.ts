@@ -46,6 +46,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 export const api = {
   get: <T>(path: string, query?: RequestOptions['query']) => request<T>(path, { method: 'GET', query }),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
+  postForm: <T>(path: string, body: FormData) => request<T>(path, { method: 'POST', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
@@ -115,12 +116,17 @@ export type ListingHit = {
 export type Job = {
   id: string;
   address: string;
+  city?: string;
   time_window_start: string;
   time_window_end: string;
-  status: 'assigned' | 'in_progress' | 'completed';
+  status: 'assigned' | 'in_progress' | 'completed' | 'unassigned' | 'pending_assignment';
   assignee_id: string;
   assignee_name?: string;
   scheduled_date: string;
+  package_name?: string | null;
+  job_type?: string;
+  uploaded_count?: number;
+  deliverables_count?: number;
   transaction_id?: string | null;
   listing_address?: string | null;
   listing?: ListingHit | null;

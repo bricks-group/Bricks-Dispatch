@@ -57,6 +57,22 @@ export function OverviewPage() {
           </div>
 
           <section className="card full">
+            <h3>Today</h3>
+            {data.upcoming_jobs.filter((j) => (j.scheduled_date || '').slice(0, 10) === new Date().toLocaleDateString('en-CA')).length === 0
+              ? <p className="muted" style={{ padding: '20px' }}>No jobs today</p>
+              : (
+                <ul className="list">
+                  {data.upcoming_jobs.filter((j) => (j.scheduled_date || '').slice(0, 10) === new Date().toLocaleDateString('en-CA')).map((job) => (
+                    <li key={job.id} className="list-row">
+                      <span>{job.address}</span>
+                      <span className="muted">{job.time_window_start} – {job.time_window_end} · {job.status?.replace('_', ' ')}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+          </section>
+
+          <section className="card full">
             <h3>Upcoming Schedule</h3>
             {data.upcoming_jobs.length === 0
               ? <p className="muted" style={{ padding: '20px' }}>No upcoming jobs</p>

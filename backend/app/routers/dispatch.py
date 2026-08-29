@@ -46,6 +46,10 @@ async def create_dispatch_job(
     # going forward, this is a defensive fallback, not the primary path).
     if "rack_price" not in job_data:
         job_data["rack_price"] = job_data.get("package_price")
+    if job_data.get("assignee_id") in (None, "", "default_user"):
+        job_data["assignee_id"] = ""
+    if not job_data.get("vendor_id") or job_data.get("vendor_id") == job_data.get("assignee_id"):
+        job_data["vendor_id"] = "default_vendor"
     
     # Ensure checklist items have IDs
     for item in job_data.get("checklist", []):

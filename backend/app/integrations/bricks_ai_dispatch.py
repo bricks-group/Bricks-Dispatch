@@ -23,6 +23,7 @@ from typing import List, Optional
 import httpx
 from ..shared.schemas import Job, VendorMember
 from ..shared.geospatial import haversine_km as _haversine_km
+from ..services.vendor_profile import member_eligible_for_job
 
 logger = logging.getLogger(__name__)
 
@@ -322,22 +323,11 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
     # Filter eligible candidates — prefer available but fall back to all active/approved
     # so the scorer behaves consistently with pick_vendor_rule_based rather than hard-blocking
     # on status and forcing every unavailable-pool job through the rule-based path.
-    eligible = [
-        v for v in vendors
-        if (
-            v.is_active
-            and v.onboarding_status == "approved"
-            and v.tier >= min_tier
-            and (not is_drone_job or v.drone_certified)
-            # Gaussian splat Virtual Visit is included on every package tier -- unconditional
-            # gate, unlike drone (see vendor_selection.py's identical addition).
-            and v.polycam_equipped
-        )
-    ]
+    eligible = [v for v in vendors if member_eligible_for_job(v, job)]
     candidates = [v for v in eligible if v.status == "available"] or eligible
 
     if not eligible:
-        reason = "drone_certified filter" if is_drone_job else f"min_tier={min_tier} / polycam_equipped"
+        reason = "location/package/tier/skills/RPAS"
         logger.warning(f"Job {job.id}: no eligible vendors after {reason}")
         return None
 

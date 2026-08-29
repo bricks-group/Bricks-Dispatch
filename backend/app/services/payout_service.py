@@ -17,6 +17,8 @@ HST on contractor payouts (ETA principal model):
 import logging
 from datetime import datetime, timezone
 
+from .vendor_profile import is_platform_owner, owner_payout_cents
+
 logger = logging.getLogger(__name__)
 
 # HST rate applied when photographer has an HST number.
@@ -133,24 +135,30 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # after reassignment (e.g. contractor no-show → new photographer of a different tier).
     _member_hst_number = None
     contractor_id = assignee_id
+    _payout_member = {"id": assignee_id} if assignee_id else {}
     if assignee_id and assignee_id != "default_user":
         try:
-            res_m = await db.table("vendor_members").select("id, tier, hst_number").eq(
+            res_m = await db.table("vendor_members").select("id, tier, hst_number, role, email").eq(
                 "id", assignee_id
             ).maybe_single().execute()
             member = res_m.data or {}
             if member.get("tier"):
                 vendor_tier = member["tier"]
             _member_hst_number = member.get("hst_number")
+            _payout_member = member
         except Exception as e:
             logger.warning(f"Member lookup failed for assignee {assignee_id}: {e}")
 
-    # Calculate payout amount after vendor_tier is finalised from vendor_members.
-    # Fixed rate card first (immune to any customer-side discount); falls back to
-    # the legacy tier_pct * rack_price calc for jobs predating the rate card.
-    payout_amount = await get_fixed_payout_amount(db, job.get("package_id"), job.get("sqft"), vendor_tier)
-    if payout_amount is None:
-        payout_amount = calculate_payout_amount(rack_price, vendor_tier)
+    # Owner (Kam) is paid the full package/rack — no rate-card cut, no platform fee.
+    # Independent contractors still use the fixed vendor_payout_rates card.
+    owner_job = is_platform_owner(_payout_member)
+    if owner_job:
+        payout_amount = owner_payout_cents(job)
+        logger.info(f"Owner payout for job {job_id}: full rack {payout_amount} cents, no deduction")
+    else:
+        payout_amount = await get_fixed_payout_amount(db, job.get("package_id"), job.get("sqft"), vendor_tier)
+        if payout_amount is None:
+            payout_amount = calculate_payout_amount(rack_price, vendor_tier)
     if payout_amount <= 0:
         # Don't bail if there are pending trip fees — a photographer who only earned a
         # no-show trip fee on a zero-price job still needs to be paid out.
@@ -178,7 +186,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # HST on contractor fee (ETA principal model — paid on top of base fee)
     hst_paid_cents = 0
     contractor_hst_rate = 0.0
-    if _member_hst_number and assignee_id and assignee_id != "default_user":
+    if (not owner_job) and _member_hst_number and assignee_id and assignee_id != "default_user":
         contractor_hst_rate = _PHOTOGRAPHER_HST_RATE
         hst_paid_cents = round(payout_amount * contractor_hst_rate)
         logger.info(

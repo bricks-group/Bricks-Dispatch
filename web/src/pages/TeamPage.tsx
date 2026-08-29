@@ -73,7 +73,7 @@ export function TeamPage() {
             {members.map((m) => (
               <tr key={m.id}>
                 <td style={{ fontWeight: 500 }}>{m.name}</td>
-                <td className="muted">{m.role}</td>
+                <td className="muted">{m.role === 'Owner' ? 'Owner' : m.role || 'Photographer'}</td>
                 <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>{m.assigned_jobs}</td>
                 <td>
                   <div className="status-toggle">

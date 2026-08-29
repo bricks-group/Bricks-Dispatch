@@ -41,8 +41,8 @@ def test_pick_vendor_onboarding_guard():
     ]
     
     chosen_id = pick_vendor_rule_based(job, vendors)
-    # Should fall back to default_user because no approved vendors exist
-    assert chosen_id == "default_user"
+    # No match → unassigned (never default_user, never pending applicants)
+    assert chosen_id is None
 
 @pytest.mark.asyncio
 async def test_assign_vendor_for_job_fallback(monkeypatch):
@@ -101,3 +101,56 @@ async def test_assign_vendor_for_job_ai_success(monkeypatch):
             chosen_id = await assign_vendor_for_job("job_123")
             assert chosen_id == "v_ai"
             assert mock_db.jobs.update_one.called
+
+
+from app.services.vendor_profile import KAM_MEMBER_ID
+from app.shared.schemas import Job as _Job
+
+
+def _approved(**kwargs):
+    base = dict(is_active=True, status="available", onboarding_status="approved", specialty="photo", tier=1)
+    base.update(kwargs)
+    return VendorMember(**base)
+
+
+def test_aman_pending_never_assigned():
+    job = Job(address="10 King St Mississauga", city="Mississauga", job_type="photo", time_window_start="09:00")
+    vendors = [
+        _approved(id="aman", name="Aman Sammy", email="aman@test.com", onboarding_status="pending", tier=3),
+        _approved(id=KAM_MEMBER_ID, name="Ajani Kamali Akio", email="akashorter@icloud.com", role="Owner", tier=3,
+                  service_areas=["Mississauga", "GTA"], skills=["photo", "drone", "reel", "tour", "twilight"],
+                  rpas_certificate_level="advanced", drone_certified=True),
+    ]
+    assert pick_vendor_rule_based(job, vendors) == KAM_MEMBER_ID
+
+
+def test_drone_requires_advanced_rpas():
+    job = Job(address="10 King St Mississauga", city="Mississauga", job_type="drone", time_window_start="09:00",
+              add_ons=[{"key": "drone", "included": True}])
+    basic = _approved(id="basic", name="Basic Pilot", email="b@test.com", drone_certified=True,
+                      rpas_certificate_level="basic", specialty="drone", skills=["photo", "drone"],
+                      service_areas=["GTA"])
+    none = _approved(id="none", name="No Ticket", email="n@test.com", specialty="photo", skills=["photo"],
+                     service_areas=["GTA"])
+    assert pick_vendor_rule_based(job, [basic, none]) is None
+    kam = _approved(id=KAM_MEMBER_ID, name="Kam", email="akashorter@icloud.com", role="Owner", tier=3,
+                    skills=["photo", "drone"], rpas_advanced=True, rpas_certificate_level="advanced",
+                    drone_certified=True, service_areas=["Mississauga", "GTA"])
+    assert pick_vendor_rule_based(job, [basic, none, kam]) == KAM_MEMBER_ID
+
+
+def test_owner_wins_matching_premium():
+    job = Job(address="88 Harbour St Toronto", city="Toronto", job_type="photo", time_window_start="09:00",
+              package_id="luxury", package_name="Luxury")
+    ic = _approved(id="ic1", name="IC Photog", email="ic@test.com", tier=3, skills=["photo"], service_areas=["GTA"])
+    kam = _approved(id=KAM_MEMBER_ID, name="Ajani Kamali Akio", email="akashorter@icloud.com", role="Owner",
+                    tier=3, skills=["photo", "drone", "reel"], service_areas=["Mississauga", "GTA"])
+    assert pick_vendor_rule_based(job, [ic, kam]) == KAM_MEMBER_ID
+
+
+def test_no_match_unassigned():
+    job = Job(address="Calgary AB", city="Calgary", job_type="drone", time_window_start="09:00",
+              add_ons=[{"key": "drone"}])
+    gta_ic = _approved(id="ic1", name="GTA only", email="g@test.com", tier=1, skills=["photo"],
+                       service_areas=["Mississauga", "GTA"], home_city="Mississauga")
+    assert pick_vendor_rule_based(job, [gta_ic]) is None

@@ -286,6 +286,10 @@ class VendorMember(BaseModel):
     drone_certified: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced"
+    rpas_advanced: Optional[bool] = False
+    rpas_certificate_url: Optional[str] = None
+    skills: Optional[List[str]] = None
+    avatar_url: Optional[str] = None
     # Gaussian splat Virtual Visit is included on every package tier (Standard and up,
     # SERVICE_CATALOG_V2.md) -- unlike drone_certified, this has no job-type
     # conditional gate, since there's no package tier that skips it. No automated
@@ -384,6 +388,17 @@ class VendorMemberUpdate(BaseModel):
     is_active: Optional[bool] = None
     onboarding_status: Optional[str] = None
     polycam_equipped: Optional[bool] = None
+    specialty: Optional[str] = None
+    skills: Optional[List[str]] = None
+    service_areas: Optional[List[str]] = None
+    home_city: Optional[str] = None
+    max_travel_km: Optional[int] = None
+    drone_certified: Optional[bool] = None
+    rpas_advanced: Optional[bool] = None
+    rpas_certificate_level: Optional[str] = None
+    rpas_certificate_url: Optional[str] = None
+    avatar_url: Optional[str] = None
+    tier: Optional[int] = None
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     internal_notes: Optional[str] = None
