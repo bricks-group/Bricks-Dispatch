@@ -136,7 +136,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     member = {}
     if assignee_id and assignee_id != "default_user":
         try:
-            res_m = await db.table("vendor_members").select("id, tier, hst_number, role, title, payout_mode").eq(
+            res_m = await db.table("vendor_members").select("id, tier, hst_number, role, title, payout_mode, email").eq(
                 "id", assignee_id
             ).maybe_single().execute()
             member = res_m.data or {}
@@ -146,12 +146,13 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         except Exception as e:
             logger.warning(f"Member lookup failed for assignee {assignee_id}: {e}")
 
-    # Calculate payout amount after vendor_tier is finalised from vendor_members.
-    # Owner (Kam/Ajani 0c3fa7c2): full package, ZERO deductions — never a platform cut.
-    # ICs: fixed rate card (never % of rack); fallback to legacy calc for old jobs.
+    # Owner: full package/rack, $0 deduction, no IC HST add-on.
+    # ICs: fixed vendor_payout_rates card (never % of rack).
     from ..shared.vendor_identity import is_owner_member as _is_owner_member
-    if _is_owner_member(member):
-        payout_amount = int(round((rack_price or 0) * 100))
+    from .vendor_profile import owner_payout_cents
+    owner_job = _is_owner_member(member)
+    if owner_job:
+        payout_amount = owner_payout_cents(job)
         logger.info(f"Owner payout for job {job_id}: full package {payout_amount} cents, $0 deduction")
     else:
         payout_amount = await get_fixed_payout_amount(db, job.get("package_id"), job.get("sqft"), vendor_tier)
@@ -184,7 +185,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # HST on contractor fee (ETA principal model — paid on top of base fee)
     hst_paid_cents = 0
     contractor_hst_rate = 0.0
-    if _member_hst_number and assignee_id and assignee_id != "default_user":
+    if (not owner_job) and _member_hst_number and assignee_id and assignee_id != "default_user":
         contractor_hst_rate = _PHOTOGRAPHER_HST_RATE
         hst_paid_cents = round(payout_amount * contractor_hst_rate)
         logger.info(

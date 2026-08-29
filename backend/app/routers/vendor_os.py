@@ -99,6 +99,16 @@ async def _listings_by_ids(db, ids) -> dict:
     return out
 
 
+@router.post("/jobs/{job_id}/check-in")
+async def check_in_job(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    payload = JobStatusUpdate(status="in_progress")
+    return await update_vendor_job_status(job_id, payload, authorization, x_user_id)
+
+
 @router.get("/overview")
 async def get_vendor_os_overview(
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -109,10 +119,13 @@ async def get_vendor_os_overview(
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     member_ids = await get_vendor_member_ids(vendor_id)
     
-    res_jobs = await (await get_db()).table("jobs").select("*").eq("vendor_id", vendor_id).in_("assignee_id", member_ids).limit(500).execute()
-    jobs = res_jobs.data
-    
-    today = datetime.now(timezone.utc).date()
+    db = await get_db()
+    res_jobs = await db.table("jobs").select("*").or_(
+        f"vendor_id.eq.{vendor_id},vendor_id.eq.{actor_id},assignee_id.eq.{actor_id}"
+    ).limit(500).execute()
+    jobs = res_jobs.data or []
+
+    today = datetime.now(_TORONTO_TZ).date()
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
     assigned_today = assigned_week = completed_week = scheduled_this_week = 0
@@ -270,7 +283,10 @@ async def get_vendor_os_jobs(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     
-    sb = await get_db(); query = sb.table("jobs").select("*", count="exact").eq("vendor_id", vendor_id)
+    sb = await get_db()
+    query = sb.table("jobs").select("*", count="exact").or_(
+        f"vendor_id.eq.{vendor_id},vendor_id.eq.{actor_id},assignee_id.eq.{actor_id}"
+    )
     if status:
         query = query.eq("status", status)
     # Default: assigned jobs for this photographer. Team-wide list is admin-only.
@@ -317,10 +333,13 @@ async def get_vendor_os_job(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     db = await get_db()
-    res = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res.data:
+    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    job = res.data or {}
+    if not job or (
+        job.get("vendor_id") not in (vendor_id, actor_id)
+        and job.get("assignee_id") != actor_id
+    ):
         api_error(404, "Job not found", "job_not_found")
-    job = res.data
     listings = await _listings_by_ids(db, [job.get("transaction_id")])
     res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
     job["assignee_name"] = (res_member.data or {}).get("name") if res_member.data else "Unassigned"
@@ -788,9 +807,14 @@ async def update_vendor_job_status(
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
     db = await get_db()
-    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
+    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    job_row = res_job.data or {}
+    if not job_row or (
+        job_row.get("vendor_id") not in (vendor_id, actor_id)
+        and job_row.get("assignee_id") != actor_id
+    ):
         raise HTTPException(status_code=404, detail="Job not found")
+    res_job.data = job_row
 
     job = res_job.data
     # FIXED 2026-08-16: this endpoint (the one the mobile app actually calls,

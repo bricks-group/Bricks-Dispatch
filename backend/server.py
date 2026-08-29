@@ -42,8 +42,8 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
     """Validate X-Internal-Api-Key on service-to-service requests."""
     async def dispatch(self, request: Request, call_next):
         # Skip internal auth for health, seed, docs, root, and job intake endpoints
-        exempt_paths = ("/health", "/docs", "/openapi.json", "/redoc")
-        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts")
+        exempt_paths = ("/health", "/health/ready", "/docs", "/openapi.json", "/redoc")
+        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads")
         if request.url.path in exempt_paths or any(request.url.path.startswith(p) for p in exempt_prefixes):
             return await call_next(request)
 
@@ -256,4 +256,9 @@ async def ready():
     except Exception as e:
         db_status = "unreachable"
         raise HTTPException(status_code=503, detail=f'DB unreachable: {e}')
-    return {"status": "ready", "db": db_status}
+    from app.services.vendor_profile import ensure_owner_profile
+    try:
+        seed = await ensure_owner_profile(await get_db())
+    except Exception as e:
+        seed = {"ok": False, "error": str(e)[:200]}
+    return {"status": "ready", "db": db_status, "owner_profile": seed}

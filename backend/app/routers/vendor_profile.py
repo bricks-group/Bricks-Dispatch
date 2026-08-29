@@ -302,6 +302,30 @@ async def earnings_impl(
     }
 
 
+
+
+async def upload_photo_impl(
+    authorization: Optional[str],
+    x_user_id: Optional[str],
+    file: UploadFile,
+):
+    member = await _actor_member(authorization, x_user_id)
+    raw = await file.read()
+    if not raw:
+        api_error(400, "Empty file", "empty_file")
+    if len(raw) > 8 * 1024 * 1024:
+        api_error(400, "File too large (8 MB max)", "file_too_large")
+    filename = os.path.basename(file.filename or "profile.jpg").lstrip(".") or "profile.jpg"
+    mime = file.content_type or "image/jpeg"
+    from ..services.storage import upload_file
+    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], filename, mime)
+    db = await get_db()
+    updated = await _persist_safe(db, member["id"], {"avatar_url": file_key})
+    profile = await build_profile(updated)
+    profile["avatar_url"] = file_key
+    return profile
+
+
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 @router.get("/api/profile")
@@ -366,3 +390,21 @@ async def os_upload_rpas(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     return await upload_rpas_impl(authorization, x_user_id, file, level)
+
+@router.post("/api/profile/photo")
+async def upload_photo(
+    file: UploadFile = File(...),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await upload_photo_impl(authorization, x_user_id, file)
+
+
+@os_router.post("/profile/photo")
+async def os_upload_photo(
+    file: UploadFile = File(...),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await upload_photo_impl(authorization, x_user_id, file)
+

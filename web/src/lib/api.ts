@@ -85,6 +85,7 @@ export type VendorProfile = {
   payout_model: 'owner_full' | 'ic_rate_card';
   payout_label: string;
   show_platform_cut: boolean;
+  avatar_url?: string | null;
 };
 
 export async function login(email: string): Promise<void> {
@@ -161,6 +162,8 @@ export type Job = {
   payout_display_cad?: number;
   payout_model?: string;
   deduction?: number;
+  uploaded_count?: number;
+  job_type?: string;
 };
 
 export type PaginatedJobsResponse = {

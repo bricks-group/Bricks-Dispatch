@@ -251,7 +251,7 @@ def owner_payout_cents(job: Any) -> int:
 def display_title(member: Any) -> str:
     if is_platform_owner(member):
         return "Owner"
-    return str(_as_dict(member).get("role") or "Photographer") or "Photographer"
+    return "Photographer IC"
 
 
 async def ensure_owner_profile(db) -> dict:
@@ -263,6 +263,8 @@ async def ensure_owner_profile(db) -> dict:
         "name": "Ajani Kamali Akio",
         "email": "akashorter@icloud.com",
         "role": "Owner",
+        "title": "Owner",
+        "payout_mode": "owner_full",
         "specialty": "photo",
         "status": "available",
         "is_active": True,

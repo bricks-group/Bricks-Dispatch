@@ -85,6 +85,15 @@ def owner_seed_fields(member: dict) -> dict:
         patch["drone_certified"] = True
     if (member.get("rpas_certificate_level") or "").lower() != "advanced":
         patch["rpas_certificate_level"] = "advanced"
+    if not member.get("service_areas"):
+        patch["service_areas"] = ["Mississauga", "GTA", "Toronto", "Peel", "Halton", "York", "Durham"]
+    if not member.get("home_city"):
+        patch["home_city"] = "Mississauga"
+        patch["home_lat"] = 43.5890
+        patch["home_lng"] = -79.6441
+        patch["max_travel_km"] = 80
+    if not member.get("polycam_equipped"):
+        patch["polycam_equipped"] = True
     return patch
 
 

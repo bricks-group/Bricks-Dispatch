@@ -50,8 +50,12 @@ async def list_uploads(
     sb = await get_db()
 
     if job_id:
-        res_job = await sb.table("jobs").select("id").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-        if not res_job.data:
+        res_job = await sb.table("jobs").select("id, vendor_id, assignee_id").eq("id", job_id).maybe_single().execute()
+        job = res_job.data or {}
+        if not job or (
+            job.get("vendor_id") not in (vendor_id, actor_id)
+            and job.get("assignee_id") != actor_id
+        ):
             api_error(404, "Job not found", "job_not_found")
         query = sb.table("uploads").select("*").eq("job_id", job_id)
     else:
@@ -93,9 +97,14 @@ async def create_upload(
     db = await get_db()
 
     # Verify job belongs to this vendor
-    res_job = await db.table("jobs").select("id, uploaded_count, deliverables_count, status").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
+    res_job = await db.table("jobs").select("id, uploaded_count, deliverables_count, status, vendor_id, assignee_id").eq("id", job_id).maybe_single().execute()
+    job_row = res_job.data or {}
+    if not job_row or (
+        job_row.get("vendor_id") not in (vendor_id, actor_id)
+        and job_row.get("assignee_id") != actor_id
+    ):
         api_error(404, "Job not found", "job_not_found")
+    res_job.data = job_row
 
     # Decode base64 payload
     try:

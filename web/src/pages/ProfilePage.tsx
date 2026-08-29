@@ -16,6 +16,7 @@ export function ProfilePage() {
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const photoRef = useRef<HTMLInputElement>(null);
 
   const load = () =>
     api.get<VendorProfile>('/api/vendor-os/profile').then((res) => {
@@ -61,6 +62,24 @@ export function ProfilePage() {
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const onPhoto = async (event: FormEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await api.postForm<VendorProfile>('/api/vendor-os/profile/photo', fd);
+      setData(res);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploading(false);
+      if (photoRef.current) photoRef.current.value = '';
     }
   };
 
@@ -124,6 +143,15 @@ export function ProfilePage() {
                 <input value={data.phone} onChange={(e) => setData({ ...data, phone: e.target.value })} style={{ width: 320 }} />
               </label>
               <p className="muted" style={{ padding: 0 }}>{data.email}</p>
+              <label style={{ flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                Photo
+                {data.avatar_url ? (
+                  <img src={data.avatar_url} alt="" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8 }} />
+                ) : (
+                  <span className="muted">No photo yet</span>
+                )}
+                <input ref={photoRef} type="file" accept="image/*" onChange={onPhoto} />
+              </label>
             </div>
           </section>
 

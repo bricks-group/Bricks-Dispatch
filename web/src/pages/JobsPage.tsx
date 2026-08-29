@@ -135,6 +135,59 @@ function JobListingPanel({
   const [hits, setHits] = useState<ListingHit[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [uploads, setUploads] = useState<{ id: string; filename: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    api.get<{ items?: { id: string; filename: string }[]; data?: { id: string; filename: string }[] } | { id: string; filename: string }[]>(
+      '/api/uploads',
+      { job_id: job.id },
+    ).then((res) => {
+      const rows = Array.isArray(res) ? res : (res.items || (res as { data?: { id: string; filename: string }[] }).data || []);
+      setUploads(rows as { id: string; filename: string }[]);
+    }).catch(() => setUploads([]));
+  }, [job.id]);
+
+  const checkIn = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      await api.post(`/api/vendor-os/jobs/${job.id}/check-in`);
+      onPatched({ ...job, status: 'in_progress' });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onUpload = async (event: FormEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setErr('');
+    try {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      bytes.forEach((b) => { binary += String.fromCharCode(b); });
+      const fd = new FormData();
+      fd.append('job_id', job.id);
+      fd.append('filename', file.name);
+      fd.append('file_size', String(file.size));
+      fd.append('mime_type', file.type || 'application/octet-stream');
+      fd.append('file_data', btoa(binary));
+      const rec = await api.postForm<{ id: string; filename: string }>('/api/uploads', fd);
+      setUploads((list) => [...list, rec]);
+      onPatched({ ...job, uploaded_count: (job.uploaded_count || 0) + 1 });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setUploading(false);
+      event.currentTarget.value = '';
+    }
+  };
+
 
   const search = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -191,6 +244,40 @@ function JobListingPanel({
           ) : (
             <p className="muted" style={{ padding: 0, margin: '4px 0 0' }}>Not attached</p>
           )}
+        </div>
+        <div>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>PAYOUT</p>
+          <p style={{ margin: '4px 0 0', fontWeight: 500 }}>
+            {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
+            {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : <span className="muted"> · rate card</span>}
+          </p>
+        </div>
+        <div className="row">
+          {job.status === 'assigned' ? (
+            <button type="button" disabled={busy} onClick={checkIn}>Check in</button>
+          ) : null}
+          {job.status === 'in_progress' ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true); setErr('');
+                try {
+                  await api.put(`/api/vendor-os/jobs/${job.id}/status`, { status: 'completed' });
+                  onPatched({ ...job, status: 'completed' });
+                } catch (e) { setErr((e as Error).message); }
+                finally { setBusy(false); }
+              }}
+            >Mark complete</button>
+          ) : null}
+        </div>
+        <div>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS</p>
+          <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
+            {uploads.length === 0 ? <li className="muted">None yet</li> : uploads.map((u) => <li key={u.id}>{u.filename}</li>)}
+          </ul>
+          <input type="file" onChange={onUpload} disabled={uploading || job.status === 'assigned'} />
+          {uploading && <span className="muted"> Uploading…</span>}
         </div>
         <form className="row" onSubmit={search}>
           <input
