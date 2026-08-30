@@ -157,7 +157,7 @@ async def _send_apns(device_token: str, title: str, body: str, data: dict | None
             headers={"kid": key_id, "alg": "ES256"},
         )
     except Exception as exc:
-        logger.info("APNs JWT could not be built (%s) — skipping iOS push", type(exc).__name__)
+        logger.warning("APNs JWT could not be built (%s) — skipping iOS push", type(exc).__name__)
         return False
     host = "api.push.apple.com" if os.environ.get("APNS_PRODUCTION", "").lower() in ("1", "true", "yes") else "api.sandbox.push.apple.com"
     payload = {
@@ -178,7 +178,7 @@ async def _send_apns(device_token: str, title: str, body: str, data: dict | None
             )
         if r.status_code == 200:
             return True
-        logger.info("APNs not sent (HTTP %s)", r.status_code)
+        logger.warning("APNs not sent (HTTP %s)", r.status_code)
         if r.status_code in (410, 400):
             try:
                 await (await get_db()).table("push_tokens").update({"active": False}).eq("token", device_token).execute()
@@ -186,7 +186,7 @@ async def _send_apns(device_token: str, title: str, body: str, data: dict | None
                 pass
         return False
     except Exception as exc:
-        logger.info("APNs send skipped: %s", exc)
+        logger.warning("APNs send failed: %s", exc)
         return False
 
 
