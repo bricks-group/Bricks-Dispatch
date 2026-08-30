@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: — Shared UserDefaults keys (written by JobStore in main app)
 private enum DispatchWidgetKey {
-    static let suite        = "group.com.bricks.dispatch"
+    static let suite        = "group.com.bricks.go"
     static let hasJob       = "dispatch.widget.nextJob.exists"
     static let address      = "dispatch.widget.nextJob.address"
     static let date         = "dispatch.widget.nextJob.date"

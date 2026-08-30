@@ -41,6 +41,16 @@ struct TodayJobsView: View {
 
     private var jobList: some View {
         List {
+            let unassigned = store.todayJobs.filter { $0.isUnassigned }
+            if !unassigned.isEmpty {
+                Section("UNASSIGNED") {
+                    ForEach(unassigned) { job in
+                        JobRowView(job: job)
+                            .onTapGesture { selectedJob = job }
+                    }
+                }
+            }
+
             if let active = store.todayJobs.first(where: { $0.isActive }) {
                 Section("ACTIVE") {
                     JobRowView(job: active)
@@ -108,6 +118,13 @@ struct JobRowView: View {
                     Text(job.packageName ?? job.jobType.capitalized)
                         .font(.caption)
                         .foregroundStyle(Color(.secondaryLabel))
+                    if job.isUnassigned {
+                        Text("·")
+                            .foregroundStyle(Color(.tertiaryLabel))
+                        Text(job.displayAssignee)
+                            .font(.caption)
+                            .foregroundStyle(Color(.secondaryLabel))
+                    }
                 }
             }
             Spacer()
@@ -135,6 +152,7 @@ struct JobRowView: View {
         switch job.status {
         case .inProgress: return .green
         case .assigned:   return BricksColors.brick
+        case .pendingAssignment, .pending: return .orange
         case .completed, .delivered: return Color(.tertiaryLabel)
         default: return Color(.quaternaryLabel)
         }

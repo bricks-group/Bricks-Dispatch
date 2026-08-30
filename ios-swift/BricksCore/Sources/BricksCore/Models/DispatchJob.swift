@@ -26,13 +26,19 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     public let complexityScore: Int?
     public let createdAt: String
     public let updatedAt: String
+    public var assigneeId: String?
+    public var assigneeName: String?
+    public var transactionId: String?
+    public var listingAddress: String?
 
     public init(
         id: String, bookingId: String, address: String, city: String, state: String, zipCode: String,
         lat: Double, lng: Double, timeWindowStart: String, timeWindowEnd: String, scheduledDate: String,
         jobType: String, status: JobStatus, packageName: String?, packagePrice: Int?, vendorPayout: Double?,
         agentName: String?, agentPhone: String?, agentEmail: String?, clientInstructions: String?,
-        checklist: [ChecklistItem], complexityScore: Int?, createdAt: String, updatedAt: String
+        checklist: [ChecklistItem], complexityScore: Int?, createdAt: String, updatedAt: String,
+        assigneeId: String? = nil, assigneeName: String? = nil,
+        transactionId: String? = nil, listingAddress: String? = nil
     ) {
         self.id = id; self.bookingId = bookingId; self.address = address; self.city = city
         self.state = state; self.zipCode = zipCode; self.lat = lat; self.lng = lng
@@ -42,7 +48,69 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         self.agentName = agentName; self.agentPhone = agentPhone; self.agentEmail = agentEmail
         self.clientInstructions = clientInstructions; self.checklist = checklist
         self.complexityScore = complexityScore; self.createdAt = createdAt; self.updatedAt = updatedAt
+        self.assigneeId = assigneeId; self.assigneeName = assigneeName
+        self.transactionId = transactionId; self.listingAddress = listingAddress
     }
+
+    enum CodingKeys: String, CodingKey {
+        case id, bookingId, address, city, state, zipCode, lat, lng
+        case timeWindowStart, timeWindowEnd, scheduledDate, jobType, status
+        case packageName, packagePrice, vendorPayout
+        case agentName, agentPhone, agentEmail, clientInstructions
+        case checklist, complexityScore, createdAt, updatedAt
+        case assigneeId, assigneeName, transactionId, listingAddress
+    }
+    enum ExtraKeys: String, CodingKey {
+        case payoutDisplayCad
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        bookingId = try c.decodeIfPresent(String.self, forKey: .bookingId) ?? ""
+        address = try c.decodeIfPresent(String.self, forKey: .address) ?? ""
+        city = try c.decodeIfPresent(String.self, forKey: .city) ?? ""
+        state = try c.decodeIfPresent(String.self, forKey: .state) ?? ""
+        zipCode = try c.decodeIfPresent(String.self, forKey: .zipCode) ?? ""
+        lat = Self.decodeDouble(c, .lat)
+        lng = Self.decodeDouble(c, .lng)
+        timeWindowStart = try c.decodeIfPresent(String.self, forKey: .timeWindowStart) ?? ""
+        timeWindowEnd = try c.decodeIfPresent(String.self, forKey: .timeWindowEnd) ?? ""
+        let rawDate = try c.decodeIfPresent(String.self, forKey: .scheduledDate) ?? ""
+        scheduledDate = String(rawDate.prefix(10))
+        jobType = try c.decodeIfPresent(String.self, forKey: .jobType) ?? "photo"
+        status = try c.decodeIfPresent(JobStatus.self, forKey: .status) ?? .pending
+        packageName = try c.decodeIfPresent(String.self, forKey: .packageName)
+        packagePrice = try c.decodeIfPresent(Int.self, forKey: .packagePrice)
+        let extra = try decoder.container(keyedBy: ExtraKeys.self)
+        vendorPayout = try c.decodeIfPresent(Double.self, forKey: .vendorPayout)
+            ?? extra.decodeIfPresent(Double.self, forKey: .payoutDisplayCad)
+        agentName = try c.decodeIfPresent(String.self, forKey: .agentName)
+        agentPhone = try c.decodeIfPresent(String.self, forKey: .agentPhone)
+        agentEmail = try c.decodeIfPresent(String.self, forKey: .agentEmail)
+        clientInstructions = try c.decodeIfPresent(String.self, forKey: .clientInstructions)
+        checklist = (try? c.decodeIfPresent([ChecklistItem].self, forKey: .checklist)) ?? []
+        complexityScore = try c.decodeIfPresent(Int.self, forKey: .complexityScore)
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+        let rawAssignee = try c.decodeIfPresent(String.self, forKey: .assigneeId)
+        assigneeId = (rawAssignee?.isEmpty == true) ? nil : rawAssignee
+        assigneeName = try c.decodeIfPresent(String.self, forKey: .assigneeName)
+        let rawTxn = try c.decodeIfPresent(String.self, forKey: .transactionId)
+        transactionId = (rawTxn?.isEmpty == true) ? nil : rawTxn
+        listingAddress = try c.decodeIfPresent(String.self, forKey: .listingAddress)
+    }
+
+    private static func decodeDouble(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Double {
+        if let v = try? c.decodeIfPresent(Double.self, forKey: key) { return v ?? 0 }
+        if let v = try? c.decodeIfPresent(Int.self, forKey: key) { return Double(v ?? 0) }
+        if let s = try? c.decodeIfPresent(String.self, forKey: key), let v = Double(s ?? "") { return v }
+        return 0
+    }
+
+    // Identity is the job id so navigation destinations stay stable after assign/attach.
+    public static func == (lhs: DispatchJob, rhs: DispatchJob) -> Bool { lhs.id == rhs.id }
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     // Derived helpers
 
@@ -63,14 +131,62 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
 
     public var isActive: Bool { status == .inProgress }
     public var isUpcoming: Bool { status == .assigned }
+    public var isUnassigned: Bool { status == .pendingAssignment || status == .pending }
+
+    public var displayAssignee: String {
+        if let name = assigneeName, !name.isEmpty, name.lowercased() != "unassigned" {
+            return name
+        }
+        if let id = assigneeId, !id.isEmpty { return id }
+        return "Unassigned"
+    }
+
+    /// Calendar date in America/Toronto, matching Expo `en-CA` Today filter.
+    public static func torontoToday(now: Date = Date()) -> String {
+        let fmt = DateFormatter()
+        fmt.calendar = Calendar(identifier: .gregorian)
+        fmt.locale = Locale(identifier: "en_CA")
+        fmt.timeZone = TimeZone(identifier: "America/Toronto")
+        fmt.dateFormat = "yyyy-MM-dd"
+        return fmt.string(from: now)
+    }
+
+    public func applyingAssignment(from other: DispatchJob) -> DispatchJob {
+        var copy = self
+        copy.assigneeId = other.assigneeId
+        copy.assigneeName = other.assigneeName
+        copy.status = other.status
+        copy.transactionId = other.transactionId ?? copy.transactionId
+        copy.listingAddress = other.listingAddress ?? copy.listingAddress
+        return copy
+    }
+
+    public func applyingListing(transactionId: String?, listingAddress: String?) -> DispatchJob {
+        var copy = self
+        copy.transactionId = transactionId
+        copy.listingAddress = listingAddress
+        return copy
+    }
 }
 
 public enum JobStatus: String, Codable, Sendable, Hashable {
-    case pending, assigned
+    case pending
+    case pendingAssignment = "pending_assignment"
+    case assigned
     case inProgress = "in_progress"
     case completed, delivered
     case declined, cancelled
     case dispatchFailed = "dispatch_failed"
+    case agentNoShow = "agent_no_show"
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = JobStatus(rawValue: raw) ?? .pending
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
 }
 
 public struct ChecklistItem: Codable, Identifiable, Sendable, Hashable {
@@ -83,6 +199,15 @@ public struct ChecklistItem: Codable, Identifiable, Sendable, Hashable {
         self.label = label
         self.completed = completed
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+        completed = try c.decodeIfPresent(Bool.self, forKey: .completed) ?? false
+    }
+
+    enum CodingKeys: String, CodingKey { case id, label, completed }
 }
 
 public struct JobStatusUpdate: Encodable {
@@ -103,4 +228,30 @@ public struct WatchActionRequest: Encodable {
 
 public enum WatchAction: String {
     case accept, decline, onWay = "on_way", arrived
+}
+
+public struct OfficeListing: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let address: String
+    public let city: String?
+    public let dealType: String?
+
+    public init(id: String, address: String, city: String? = nil, dealType: String? = nil) {
+        self.id = id; self.address = address; self.city = city; self.dealType = dealType
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        address = try c.decodeIfPresent(String.self, forKey: .address) ?? "Listing"
+        city = try c.decodeIfPresent(String.self, forKey: .city)
+        dealType = try c.decodeIfPresent(String.self, forKey: .dealType)
+    }
+
+        enum CodingKeys: String, CodingKey { case id, address, city, dealType }
+
+    public var subtitle: String {
+        let bits = [city, dealType].compactMap { $0 }.filter { !$0.isEmpty }
+        return bits.isEmpty ? "Office listing" : bits.joined(separator: " · ")
+    }
 }

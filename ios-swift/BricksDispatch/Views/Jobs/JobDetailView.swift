@@ -7,6 +7,10 @@ struct JobDetailView: View {
     @StateObject private var store = JobStore.shared
     @State private var cameraPosition: MapCameraPosition
     @State private var showNavigation = false
+    @State private var pick = ""
+    @State private var listingQuery = ""
+    @State private var assigning = false
+    @State private var listingBusy = false
 
     init(job: DispatchJob) {
         self.job = job
@@ -14,6 +18,11 @@ struct JobDetailView: View {
         self._cameraPosition = State(initialValue: .region(
             MKCoordinateRegion(center: coord, latitudinalMeters: 500, longitudinalMeters: 500)
         ))
+        self._pick = State(initialValue: job.assigneeId ?? "")
+    }
+
+    private var live: DispatchJob {
+        store.job(id: job.id) ?? job
     }
 
     var body: some View {
@@ -21,7 +30,7 @@ struct JobDetailView: View {
             VStack(spacing: 0) {
                 // MapKit preview — native, turn-by-turn capable
                 Map(position: $cameraPosition) {
-                    Annotation(job.address, coordinate: CLLocationCoordinate2D(latitude: job.lat, longitude: job.lng)) {
+                    Annotation(live.address, coordinate: CLLocationCoordinate2D(latitude: live.lat, longitude: live.lng)) {
                         ZStack {
                             Circle().fill(BricksColors.brick).frame(width: 32, height: 32)
                             Image(systemName: "camera.fill").foregroundStyle(.white).font(.caption.bold())
@@ -34,19 +43,19 @@ struct JobDetailView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     // Header
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(job.address)
+                        Text(live.address)
                             .font(.title3.bold())
-                        Text(job.city + (job.state.isEmpty ? "" : ", \(job.state)"))
+                        Text(live.city + (live.state.isEmpty ? "" : ", \(live.state)"))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
 
                     // Status + payout row
                     HStack {
-                        StatusPill(status: job.status)
+                        StatusPill(status: live.status)
                         Spacer()
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text(job.formattedPayout)
+                            Text(live.formattedPayout)
                                 .font(.title3.monospacedDigit().bold())
                                 .foregroundStyle(BricksColors.brick)
                             Text("your payout")
@@ -62,13 +71,19 @@ struct JobDetailView: View {
 
                     Divider()
 
+                    assignedSection
+
+                    Divider()
+
+                    officeListingSection
+
                     // Agent contact
-                    if let name = job.agentName {
-                        agentSection(name: name, phone: job.agentPhone)
+                    if let name = live.agentName {
+                        agentSection(name: name, phone: live.agentPhone)
                     }
 
                     // Checklist
-                    if !job.checklist.isEmpty {
+                    if !live.checklist.isEmpty {
                         checklistSection
                     }
 
@@ -80,25 +95,203 @@ struct JobDetailView: View {
         }
         .navigationTitle("Job Detail")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            pick = live.assigneeId ?? ""
+            await store.loadTeam()
+        }
+        .onChange(of: live.assigneeId) { _, new in
+            pick = new ?? ""
+        }
     }
 
     private var detailsGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            DetailCell(label: "Package", value: job.packageName ?? job.jobType.capitalized)
+            DetailCell(label: "Package", value: live.packageName ?? live.jobType.capitalized)
             DetailCell(label: "Scheduled", value: scheduledLabel)
-            DetailCell(label: "Type", value: job.jobType.capitalized)
-            if let instructions = job.clientInstructions, !instructions.isEmpty {
+            DetailCell(label: "Type", value: live.jobType.capitalized)
+            if let instructions = live.clientInstructions, !instructions.isEmpty {
                 DetailCell(label: "Notes", value: instructions)
             }
         }
     }
 
     private var scheduledLabel: String {
-        guard let dt = job.scheduledDateTime else { return "\(job.scheduledDate) \(job.timeWindowStart)" }
+        guard let dt = live.scheduledDateTime else { return "\(live.scheduledDate) \(live.timeWindowStart)" }
         let fmt = DateFormatter()
         fmt.dateStyle = .short
         fmt.timeStyle = .short
         return fmt.string(from: dt)
+    }
+
+    // MARK: — Assigned to (Owner picker / IC name only)
+
+    private var assignedSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("ASSIGNED TO")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            Text(live.displayAssignee)
+                .font(.subheadline.weight(.medium))
+
+            if store.isAdmin {
+                Text("Active photographers. Pending applicants are not listed.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                pickerRow(id: "", title: "Unassigned", subtitle: nil)
+
+                ForEach(store.pickers) { member in
+                    pickerRow(id: member.id, title: member.name, subtitle: member.pickerLabel)
+                }
+
+                if let err = store.error, assigning {
+                    Text(err).font(.caption).foregroundStyle(.red)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        Task {
+                            assigning = true
+                            await store.assign(jobId: live.id, memberId: pick)
+                            assigning = false
+                        }
+                    } label: {
+                        if assigning {
+                            ProgressView().tint(.white)
+                        } else {
+                            Text(live.assigneeId == nil ? "Assign" : "Reassign")
+                        }
+                    }
+                    .buttonStyle(SharpControlButton(filled: true))
+                    .disabled(assigning)
+
+                    Button {
+                        Task {
+                            assigning = true
+                            await store.assign(jobId: live.id, memberId: "auto")
+                            assigning = false
+                        }
+                    } label: {
+                        Text("Auto")
+                    }
+                    .buttonStyle(SharpControlButton(filled: false))
+                    .disabled(assigning)
+                }
+            }
+        }
+    }
+
+    private func pickerRow(id: String, title: String, subtitle: String?) -> some View {
+        let on = pick == id
+        return Button {
+            pick = id
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .background(on ? BricksColors.brick.opacity(0.08) : Color(.secondarySystemBackground))
+            .overlay(
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(on ? BricksColors.brick : Color(.separator), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 2))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: — Office listing attach / detach
+
+    private var officeListingSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("OFFICE")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            if let addr = live.listingAddress, !addr.isEmpty {
+                Text(addr)
+                    .font(.subheadline.weight(.medium))
+            } else {
+                Text("Not attached")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            TextField("Search office listings or paste id", text: $listingQuery)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+                .onSubmit { Task { await runSearch() } }
+
+            HStack(spacing: 8) {
+                Button {
+                    Task { await runSearch() }
+                } label: {
+                    if listingBusy {
+                        ProgressView().tint(.white)
+                    } else {
+                        Text("Search")
+                    }
+                }
+                .buttonStyle(SharpControlButton(filled: true))
+                .disabled(listingBusy)
+
+                if live.transactionId != nil {
+                    Button {
+                        Task {
+                            listingBusy = true
+                            await store.attachListing(jobId: live.id, transactionId: nil)
+                            listingBusy = false
+                        }
+                    } label: {
+                        Text("Detach")
+                    }
+                    .buttonStyle(SharpControlButton(filled: false))
+                    .disabled(listingBusy)
+                }
+            }
+
+            ForEach(store.listingHits) { hit in
+                Button {
+                    Task {
+                        listingBusy = true
+                        await store.attachListing(jobId: live.id, transactionId: hit.id)
+                        listingQuery = ""
+                        listingBusy = false
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(hit.address)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
+                        Text(hit.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+                .disabled(listingBusy)
+            }
+        }
+    }
+
+    private func runSearch() async {
+        listingBusy = true
+        await store.searchListings(q: listingQuery, jobId: live.id)
+        listingBusy = false
     }
 
     private func agentSection(name: String, phone: String?) -> some View {
@@ -121,7 +314,7 @@ struct JobDetailView: View {
                             .foregroundStyle(BricksColors.brick)
                             .padding(10)
                             .background(BricksColors.brick.opacity(0.12))
-                            .clipShape(Circle())
+                            .clipShape(RoundedRectangle(cornerRadius: 2))
                     }
                 }
             }
@@ -133,7 +326,7 @@ struct JobDetailView: View {
             Text("CHECKLIST")
                 .font(.caption.bold())
                 .foregroundStyle(.secondary)
-            ForEach(job.checklist) { item in
+            ForEach(live.checklist) { item in
                 HStack(spacing: 10) {
                     Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(item.completed ? .green : Color(.tertiaryLabel))
@@ -147,7 +340,7 @@ struct JobDetailView: View {
 
     @ViewBuilder
     private var actionButtons: some View {
-        switch job.status {
+        switch live.status {
         case .assigned:
             VStack(spacing: 10) {
                 // In-app turn-by-turn navigation
@@ -157,11 +350,11 @@ struct JobDetailView: View {
                 }
                 .buttonStyle(BricksPrimaryButton())
                 .fullScreenCover(isPresented: $showNavigation) {
-                    JobNavigationView(job: job)
+                    JobNavigationView(job: live)
                 }
 
                 Button {
-                    Task { await store.markInProgress(job) }
+                    Task { await store.markInProgress(live) }
                 } label: {
                     Label("I'm on my way", systemImage: "car.fill")
                         .frame(maxWidth: .infinity)
@@ -171,7 +364,7 @@ struct JobDetailView: View {
 
         case .inProgress:
             Button {
-                Task { await store.markCompleted(job) }
+                Task { await store.markCompleted(live) }
             } label: {
                 Label("Mark shoot complete", systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
@@ -181,6 +374,24 @@ struct JobDetailView: View {
         default:
             EmptyView()
         }
+    }
+}
+
+/// 2px controls for assign / office listing — not Capsule pills.
+struct SharpControlButton: ButtonStyle {
+    var filled: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                filled
+                    ? BricksColors.brick.opacity(configuration.isPressed ? 0.85 : 1)
+                    : Color(.secondarySystemBackground)
+            )
+            .foregroundStyle(filled ? Color.white : Color.primary)
+            .clipShape(RoundedRectangle(cornerRadius: 2))
     }
 }
 
@@ -194,7 +405,7 @@ struct StatusPill: View {
             .padding(.vertical, 4)
             .background(color.opacity(0.15))
             .foregroundStyle(color)
-            .clipShape(Capsule())
+            .clipShape(RoundedRectangle(cornerRadius: 2))
     }
 
     private var label: String {
@@ -204,6 +415,7 @@ struct StatusPill: View {
         case .completed: return "COMPLETED"
         case .delivered: return "DELIVERED"
         case .declined: return "DECLINED"
+        case .pendingAssignment: return "UNASSIGNED"
         default: return status.rawValue.uppercased()
         }
     }
@@ -212,6 +424,7 @@ struct StatusPill: View {
         switch status {
         case .inProgress: return .green
         case .assigned: return BricksColors.brick
+        case .pendingAssignment, .pending: return .orange
         case .completed, .delivered: return .secondary
         default: return .secondary
         }
@@ -234,7 +447,7 @@ struct DetailCell: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 2))
     }
 }
 
@@ -245,7 +458,7 @@ struct BricksPrimaryButton: ButtonStyle {
             .padding(.vertical, 14)
             .background(BricksColors.brick.opacity(configuration.isPressed ? 0.85 : 1))
             .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 2))
     }
 }
 
@@ -256,6 +469,6 @@ struct BricksSecondaryButton: ButtonStyle {
             .padding(.vertical, 14)
             .background(Color(.secondarySystemBackground))
             .foregroundStyle(.primary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 2))
     }
 }

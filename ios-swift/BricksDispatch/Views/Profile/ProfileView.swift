@@ -226,7 +226,7 @@ final class ProfileViewModel: ObservableObject {
 
     func load() async {
         do {
-            let p: ProfileDTO = try await api.get("/api/profile")
+            let p: ProfileDTO = try await api.get("/api/vendor-os/profile")
             name = p.name ?? name
             title = p.title ?? p.role ?? title
             skills = p.skills ?? skills
@@ -243,7 +243,7 @@ final class ProfileViewModel: ObservableObject {
     func setAvailability(_ val: Bool) async {
         struct Body: Encodable { let availability: Bool }
         struct Resp: Decodable {}
-        _ = try? await api.patch("/api/profile", body: Body(availability: val)) as Resp
+        _ = try? await api.put("/api/vendor-os/profile", body: Body(availability: val)) as Resp
     }
 
     func uploadRPAS(_ url: URL) async {
@@ -252,7 +252,7 @@ final class ProfileViewModel: ObservableObject {
         guard url.startAccessingSecurityScopedResource() else { return }
         defer { url.stopAccessingSecurityScopedResource() }
         guard let data = try? Data(contentsOf: url) else { return }
-        var req = URLRequest(url: URL(string: BricksConfig.apiBaseURL)!.appendingPathComponent("/api/profile/rpas"))
+        var req = URLRequest(url: api.url(path: "/api/vendor-os/profile/rpas"))
         req.httpMethod = "POST"
         let boundary = "Boundary-\(UUID().uuidString)"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")

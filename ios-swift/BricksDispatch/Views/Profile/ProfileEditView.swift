@@ -74,7 +74,7 @@ final class ProfileEditViewModel: ObservableObject {
             struct Profile: Decodable {
                 let name: String; let phone: String; let availability: Bool
             }
-            let p: Profile = try await api.get("/api/profile")
+            let p: Profile = try await api.get("/api/vendor-os/profile")
             name = p.name; phone = p.phone; availability = p.availability
         } catch {}
     }
@@ -88,8 +88,8 @@ final class ProfileEditViewModel: ObservableObject {
                 let name: String; let phone: String; let availability: Bool
             }
             struct ProfileResponse: Decodable {}
-            let _: ProfileResponse = try await api.patch(
-                "/api/profile",
+            let _: ProfileResponse = try await api.put(
+                "/api/vendor-os/profile",
                 body: ProfileUpdate(name: name, phone: phone, availability: availability)
             )
         } catch {

@@ -1,5 +1,9 @@
 # XcodeGen project spec — run `xcodegen generate` to create BricksDispatch.xcodeproj
 # Install: brew install xcodegen
+#
+# Signing: DEVELOPMENT_TEAM is filled in Xcode (Signing & Capabilities).
+# Do not invent a team id. CODE_SIGN_STYLE is Automatic.
+# Archive the Release scheme for TestFlight.
 
 name: BricksDispatch
 options:
@@ -19,7 +23,9 @@ settings:
     SWIFT_VERSION: "5.9"
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
-    DEVELOPMENT_TEAM: ""   # Fill in: Apple Developer Team ID
+    # DEVELOPMENT_TEAM is filled in Xcode. Automatic signing. Archive Release for TestFlight.
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
 
 schemes:
   BricksDispatch:
@@ -64,6 +70,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.bricks.go
         INFOPLIST_FILE: BricksDispatch/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
         SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0cXd4d3JjeHdydWFxb2pvaHBmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1ODg4NDIsImV4cCI6MjA4ODE2NDg0Mn0.8t7hYHaLVDPMz9Ubx8VNxM8rPw8-Y4IXFn4HN4YhcRw
 
   BricksDispatchWatch:
@@ -84,6 +91,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.bricks.go.watchkitapp
         INFOPLIST_FILE: BricksDispatchWatch/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
 
   BricksDispatchWidgets:
     type: app-extension
@@ -106,3 +114,4 @@ targets:
         INFOPLIST_FILE: BricksDispatchWidgets/Info.plist
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
+        CODE_SIGN_STYLE: Automatic
