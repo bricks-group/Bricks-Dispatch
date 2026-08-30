@@ -224,7 +224,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
                 if assignee_id and assignee_id != "default_user":
                     q = db.table("agent_noshow_trip_fees").update({
                         "status": "paid_out",
-                        "paid_from_payout_id": existing_payout_id,
+                        "paid_via_payout_id": existing_payout_id,
                         "paid_at": datetime.now(timezone.utc).isoformat(),
                     }).eq("member_id", assignee_id).eq("status", "reserved")
                     if payout_created_at:
@@ -254,7 +254,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
                 try:
                     q = db.table("agent_noshow_trip_fees").update({
                         "status": "paid_out",
-                        "paid_from_payout_id": existing_payout_id,
+                        "paid_via_payout_id": existing_payout_id,
                         "paid_at": datetime.now(timezone.utc).isoformat(),
                     }).eq("member_id", assignee_id).eq("status", "reserved")
                     if payout_created_at:
@@ -390,7 +390,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         if pending_trip_fee_ids:
             await db.table("agent_noshow_trip_fees").update({
                 "status": "paid_out",
-                "paid_from_payout_id": payout_id,
+                "paid_via_payout_id": payout_id,
                 "paid_at": datetime.now(timezone.utc).isoformat(),
             }).in_("id", pending_trip_fee_ids).execute()
     except Exception as e:
