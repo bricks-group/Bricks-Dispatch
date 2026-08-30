@@ -355,6 +355,10 @@ class VendorApplicationCreate(BaseModel):
     accepted_terms: bool
     ic_agreement_version: str = "1.3"
     hst_number: Optional[str] = None
+    # CRA small-supplier exemption: under $30,000 CAD/year across all clients,
+    # registration for GST/HST isn't legally required. Lets an applicant pass
+    # the gate below without a number by attesting to the exemption instead.
+    hst_exempt: bool = False
     drone_certified: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced" (Transport Canada)

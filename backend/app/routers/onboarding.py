@@ -200,8 +200,8 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
                 break
 
     hst = (application.hst_number or "").strip()
-    if not hst:
-        errs.append("HST / GST number is required.")
+    if not hst and not application.hst_exempt:
+        errs.append("HST / GST number is required, or confirm the small-supplier exemption (under $30,000 CAD/year).")
 
     if errs:
         raise HTTPException(status_code=400, detail=" ".join(errs))
