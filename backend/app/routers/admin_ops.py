@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Header, HTTPException
 
-from ..shared.auth import is_vendor_admin, get_vendor_member, resolve_vendor_actor_id
+from ..shared.auth import is_vendor_admin, get_vendor_member, resolve_vendor_actor_id, require_vendor_admin
 from ..shared.database import get_db
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
@@ -580,3 +580,19 @@ async def manual_reassign_dispatch_failure(
         "assigned": False,
         "detail": "No eligible vendor found. Job returned to dispatch_failed. A new escalation has been written.",
     }
+
+
+@router.post("/seed-owner-profile")
+async def seed_owner_profile(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """Explicitly (re-)seed the platform Owner's vendor_members profile:
+    top-tier, GTA, Advanced RPAS, and normalizes jobs/vendor rows that
+    predate that seeding. Idempotent. Used to run on every /health/ready
+    poll -- moved here 2026-08-30 because a readiness probe must not
+    perform writes on every hit from an uptime monitor or load balancer."""
+    await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
+    from ..services.vendor_profile import ensure_owner_profile
+    return await ensure_owner_profile(await get_db())

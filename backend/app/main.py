@@ -44,17 +44,16 @@ async def health():
 
 @app.get("/health/ready")
 async def ready(db: Client = Depends(get_db)):
+    # Read-only on purpose: this is a liveness/readiness probe, polled
+    # frequently by uptime monitors and the platform's own health checks.
+    # It must never perform writes. Owner-profile seeding used to run here
+    # as a workaround and got demoted to an explicit admin-triggered
+    # endpoint instead -- see POST /api/admin/seed-owner-profile.
     try:
         db.table("jobs").select("id").limit(1).execute() # Example check
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"DB unreachable: {e}")
-    from app.services.vendor_profile import ensure_owner_profile
-    from app.shared.database import get_db as get_async_db
-    try:
-        seed = await ensure_owner_profile(await get_async_db())
-    except Exception as e:
-        seed = {"ok": False, "error": str(e)[:200]}
-    return {"status": "ready", "db": "ok", "owner_profile": seed}
+    return {"status": "ready", "db": "ok"}
 
 # --- Register Routers ---
 # dispatch.router and payouts.router carry their own /api/v1/* prefix internally.
