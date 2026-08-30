@@ -1,10 +1,13 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, ActivityIndicator, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Bell, Vibrate } from 'lucide-react-native';
+import { ArrowLeft, Bell, Vibrate, CreditCard } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
+import { actorHeaders } from '../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
+
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -14,6 +17,55 @@ export default function SettingsScreen() {
   const [chatNotifs, setChatNotifs] = useState(true);
   const [payoutNotifs, setPayoutNotifs] = useState(true);
   const [vibrate, setVibrate] = useState(true);
+  const [stripe, setStripe] = useState<{ connected: boolean; connect_status: string } | null>(null);
+  const [stripeVisible, setStripeVisible] = useState(false);
+  const [stripeBusy, setStripeBusy] = useState(false);
+  const [stripeErr, setStripeErr] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const headers = await actorHeaders();
+        const res = await fetch(`${API}/api/vendor-os/stripe-connect/status`, { headers });
+        if (res.status === 403) {
+          setStripeVisible(false);
+          return;
+        }
+        if (!res.ok) {
+          setStripeVisible(true);
+          setStripeErr('Could not load payout status.');
+          return;
+        }
+        const data = await res.json();
+        setStripe({ connected: !!data.connected, connect_status: data.connect_status || 'not_connected' });
+        setStripeVisible(true);
+      } catch {
+        setStripeVisible(false);
+      }
+    })();
+  }, []);
+
+  const startStripe = async () => {
+    setStripeBusy(true);
+    setStripeErr('');
+    try {
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      const res = await fetch(`${API}/api/vendor-os/stripe-connect/onboard`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ return_url: 'https://dispatch.brxs.ca/settings?stripe=return' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail?.message || data.detail || `HTTP ${res.status}`);
+      if (!data.url) throw new Error('Stripe did not return an onboarding URL.');
+      await Linking.openURL(data.url);
+    } catch (e: any) {
+      setStripeErr(e.message || 'Could not start Stripe onboarding.');
+      Alert.alert('Payouts', e.message || 'Could not start Stripe onboarding.');
+    } finally {
+      setStripeBusy(false);
+    }
+  };
 
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]} edges={['top']}>
@@ -26,6 +78,39 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+        {stripeVisible ? (
+          <View style={s.section}>
+            <Text style={[s.sectionLabel, { color: c.textFaint }]}>PAYOUTS</Text>
+            <View style={[s.menuCard, { backgroundColor: c.surface, borderColor: c.border }]}>
+              <View style={[s.row, { borderBottomWidth: 1, borderBottomColor: c.border }]}>
+                <CreditCard size={15} color={c.textMuted} strokeWidth={1.5} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.rowLabel, { color: c.text }]}>Stripe Connect</Text>
+                  <Text style={s.rowSub}>
+                    {stripe == null
+                      ? (stripeErr || 'Status unavailable')
+                      : stripe.connected
+                        ? 'Connected — job payouts go to this account.'
+                        : 'Not connected. Owner payouts are the full package with $0 deduction.'}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={s.row}
+                onPress={startStripe}
+                disabled={stripeBusy}
+                activeOpacity={0.7}
+              >
+                {stripeBusy
+                  ? <ActivityIndicator size="small" color={TOKENS.brick} />
+                  : <Text style={[s.rowLabel, { color: TOKENS.brick }]}>
+                      {stripe?.connected ? 'Update Stripe account' : 'Connect Stripe'}
+                    </Text>}
+              </TouchableOpacity>
+            </View>
+            {stripeErr ? <Text style={{ color: TOKENS.bad, fontSize: 12, marginTop: 8 }}>{stripeErr}</Text> : null}
+          </View>
+        ) : null}
         <View style={s.section}>
           <Text style={[s.sectionLabel, { color: c.textFaint }]}>NOTIFICATIONS</Text>
           <View style={[s.menuCard, { backgroundColor: c.surface, borderColor: c.border }]}>

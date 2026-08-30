@@ -118,7 +118,7 @@ export default function RootLayout() {
     (async () => {
       try {
         const headers = await actorHeaders();
-        const res = await fetch(`${API}/api/profile`, { headers });
+        const res = await fetch(`${API}/api/vendor-os/profile`, { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const profile = await res.json();
         

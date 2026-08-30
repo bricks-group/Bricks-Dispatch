@@ -79,6 +79,7 @@ export type VendorProfile = {
   drone_certified: boolean;
   rpas_certificate_url?: string | null;
   rpas_certificate_level?: string | null;
+  rpas_certificate_number?: string | null;
   onboarding_status: string;
   assignable: boolean;
   assignable_reason?: string | null;

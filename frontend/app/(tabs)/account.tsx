@@ -1,18 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Linking, Share } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Linking, Share, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { User, Star, Briefcase, Calendar, Download, LogOut, ChevronRight, Pencil, Settings } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
+import { VendorProfile, mediaUrl } from '../../lib/vendor';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
-type Profile = {
-  name: string; email: string; role: string; phone: string;
-  availability: boolean; total_jobs_completed: number; rating: number; member_since: string;
-};
+type Profile = VendorProfile;
 
 function initials(name: string) {
   return name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
@@ -35,7 +33,7 @@ async function openCalendar(platform: 'google' | 'apple') {
 
 export default function AccountScreen() {
   const router = useRouter();
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profile, setProfile] = useState<VendorProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [availability, setAvailability] = useState(true);
@@ -45,9 +43,9 @@ export default function AccountScreen() {
     setError(false);
     try {
       const headers = await actorHeaders();
-      const res = await fetch(`${API}/api/profile`, { headers });
+      const res = await fetch(`${API}/api/vendor-os/profile`, { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: Profile = await res.json();
+      const data: VendorProfile = await res.json();
       setProfile(data);
       setAvailability(data.availability);
     } catch (e) {
@@ -64,7 +62,7 @@ export default function AccountScreen() {
     setTogglingAvail(true);
     try {
       const headers = await actorHeaders({ 'Content-Type': 'application/json' });
-      const res = await fetch(`${API}/api/profile`, {
+      const res = await fetch(`${API}/api/vendor-os/profile`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({ availability: val }),
@@ -115,11 +113,16 @@ export default function AccountScreen() {
         {/* Avatar + identity */}
         <View style={s.identity}>
           <View style={s.avatar}>
-            <Text style={s.avatarText}>{initials(profile.name)}</Text>
+            {mediaUrl(profile.avatar_url) ? (
+              <Image source={{ uri: mediaUrl(profile.avatar_url) }} style={s.avatarImg} />
+            ) : (
+              <Text style={s.avatarText}>{initials(profile.name)}</Text>
+            )}
           </View>
           <View style={s.identityInfo}>
             <Text style={s.name}>{profile.name}</Text>
-            <Text style={s.role}>{profile.role}</Text>
+            <Text style={s.role}>{profile.title || profile.role}</Text>
+            <Text style={s.email}>{profile.payout_label || profile.email}</Text>
             <Text style={s.email}>{profile.email}</Text>
           </View>
         </View>
@@ -130,14 +133,14 @@ export default function AccountScreen() {
             <View style={s.railIcon}>
               <Briefcase size={13} color={TOKENS.moonMute} strokeWidth={1.5} />
             </View>
-            <Text style={s.railVal}>{profile.total_jobs_completed}</Text>
+            <Text style={s.railVal}>{profile.total_jobs_completed || 0}</Text>
             <Text style={s.railLabel}>JOBS</Text>
           </View>
           <View style={[s.railCell, s.railDivider]}>
             <View style={s.railIcon}>
               <Star size={13} color={TOKENS.moonMute} strokeWidth={1.5} />
             </View>
-            <Text style={s.railVal}>{profile.rating.toFixed(1)}</Text>
+            <Text style={s.railVal}>{Number(profile.rating || 0).toFixed(1)}</Text>
             <Text style={s.railLabel}>RATING</Text>
           </View>
           <View style={[s.railCell, s.railDivider]}>
@@ -159,7 +162,7 @@ export default function AccountScreen() {
               </View>
               <View style={s.menuText}>
                 <Text style={s.menuLabel}>Edit profile</Text>
-                <Text style={s.menuSub}>Update your name, phone, and bio</Text>
+                <Text style={s.menuSub}>Title, skills, RPAS, service area</Text>
               </View>
               <ChevronRight size={14} color={TOKENS.moonFaint} strokeWidth={1.5} />
             </TouchableOpacity>

@@ -8,6 +8,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
+import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
@@ -29,6 +30,8 @@ type Job = {
   transaction_id?: string | null;
   listing_address?: string | null;
   listing?: ListingHit | null;
+  assignee_id?: string | null;
+  assignee_name?: string | null;
 };
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -83,15 +86,36 @@ export default function JobDetailScreen() {
   const [listingSearching, setListingSearching] = useState(false);
   const [listingSaving, setListingSaving] = useState(false);
   const [listingError, setListingError] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [photographers, setPhotographers] = useState<TeamMember[]>([]);
+  const [pick, setPick] = useState('');
+  const [assigning, setAssigning] = useState(false);
+  const [assignError, setAssignError] = useState('');
 
   useEffect(() => {
     if (!id) return;
     (async () => {
       try {
         const headers = await actorHeaders();
-        const res = await fetch(`${API}/api/vendor-os/jobs/${id}`, { headers });
-        if (!res.ok) throw new Error(`${res.status}`);
-        setJob(await res.json());
+        const [jobRes, profileRes, teamRes] = await Promise.all([
+          fetch(`${API}/api/vendor-os/jobs/${id}`, { headers }),
+          fetch(`${API}/api/vendor-os/profile`, { headers }),
+          fetch(`${API}/api/vendor-os/team?page=1&page_size=200`, { headers }),
+        ]);
+        if (!jobRes.ok) throw new Error(`${jobRes.status}`);
+        const jobData: Job = await jobRes.json();
+        setJob(jobData);
+        setPick(jobData.assignee_id || '');
+        if (profileRes.ok) {
+          const profile = await profileRes.json();
+          const admin = isVendorAdmin(profile);
+          setIsAdmin(admin);
+          if (admin && teamRes.ok) {
+            const team = await teamRes.json();
+            const items: TeamMember[] = Array.isArray(team.items) ? team.items : [];
+            setPhotographers(items.filter(isPickerMember));
+          }
+        }
       } catch {
         Alert.alert('Error', 'Could not load job details.');
       } finally {
@@ -146,6 +170,35 @@ export default function JobDetailScreen() {
       setListingHits([]);
     } finally {
       setListingSearching(false);
+    }
+  };
+
+  const assignJob = async (memberId: string) => {
+    if (!job || assigning) return;
+    setAssigning(true);
+    setAssignError('');
+    try {
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/assign`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ member_id: memberId || 'unassign' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail?.message || data.detail || `HTTP ${res.status}`);
+      }
+      setJob((prev) => prev ? {
+        ...prev,
+        assignee_id: data.assignee_id ?? null,
+        assignee_name: data.assignee_name ?? (data.assignee_id ? prev.assignee_name : 'Unassigned'),
+        status: data.status || prev.status,
+      } : prev);
+      setPick(data.assignee_id || '');
+    } catch (e: any) {
+      setAssignError(e.message || 'Could not assign.');
+    } finally {
+      setAssigning(false);
     }
   };
 
@@ -355,6 +408,56 @@ export default function JobDetailScreen() {
           )}
         </View>
 
+        <View style={s.card}>
+          <InfoRow icon={<User size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="ASSIGNED TO">
+            <Text style={s.infoValue}>{job.assignee_name || (job.assignee_id ? job.assignee_id : 'Unassigned')}</Text>
+          </InfoRow>
+          {isAdmin ? (
+            <>
+              <View style={s.divider} />
+              <Text style={s.assignHint}>Active photographers. Pending applicants are not listed.</Text>
+              <TouchableOpacity
+                style={[s.photogRow, !pick && s.photogRowOn]}
+                onPress={() => setPick('')}
+                activeOpacity={0.7}
+              >
+                <Text style={s.infoValue}>Unassigned</Text>
+              </TouchableOpacity>
+              {photographers.map((p) => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={[s.photogRow, pick === p.id && s.photogRowOn]}
+                  onPress={() => setPick(p.id)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={s.infoValue}>{p.name}</Text>
+                  <Text style={s.infoSub}>{p.title || p.role || 'Photographer'}</Text>
+                </TouchableOpacity>
+              ))}
+              {assignError ? <Text style={s.listingErr}>{assignError}</Text> : null}
+              <View style={s.listingActions}>
+                <TouchableOpacity
+                  style={s.listingBtn}
+                  onPress={() => assignJob(pick)}
+                  disabled={assigning}
+                  activeOpacity={0.7}
+                >
+                  {assigning
+                    ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                    : <Text style={s.listingBtnText}>{job.assignee_id ? 'Reassign' : 'Assign'}</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={s.listingBtnGhost}
+                  onPress={() => assignJob('auto')}
+                  disabled={assigning}
+                  activeOpacity={0.7}
+                >
+                  <Text style={s.listingBtnGhostText}>Auto</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : null}
+        </View>
 
         <View style={s.card}>
           <InfoRow icon={<Home size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="LISTING">
@@ -717,6 +820,12 @@ const s = StyleSheet.create({
     marginTop: 8, paddingVertical: 10, paddingHorizontal: 4,
     borderTopWidth: 1, borderTopColor: TOKENS.nightHair,
   },
+  photogRow: {
+    marginTop: 8, paddingVertical: 10, paddingHorizontal: 10,
+    borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: TOKENS.radius,
+  },
+  photogRowOn: { borderColor: TOKENS.brick, backgroundColor: TOKENS.brick + '14' },
+  assignHint: { fontSize: 12, color: TOKENS.moonFaint, marginTop: 10, marginBottom: 4 },
   // Capture flow — Start Capture button shown on active jobs
   captureBtn: {
     flex: 1, height: 48, borderRadius: TOKENS.radius,

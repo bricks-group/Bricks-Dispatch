@@ -43,6 +43,7 @@ class ProfileUpdateBody(BaseModel):
     max_travel_km: Optional[int] = None
     bio: Optional[str] = None
     rpas_certificate_level: Optional[str] = None
+    rpas_certificate_number: Optional[str] = None
 
 
 async def _actor_member(authorization: Optional[str], x_user_id: Optional[str]) -> dict:
@@ -64,7 +65,8 @@ async def _persist_safe(db, member_id: str, patch: dict) -> dict:
             return res.data[0]
     except Exception:
         optional = {
-            "title", "skills", "payout_mode", "rpas_certificate_url", "bio", "avatar_url",
+            "title", "skills", "payout_mode", "rpas_certificate_url", "rpas_certificate_level",
+            "rpas_certificate_number", "bio", "avatar_url", "service_areas", "home_city",
         }
         slim = {k: v for k, v in patch.items() if k not in optional}
         if slim:
@@ -149,6 +151,8 @@ async def update_profile_impl(
         patch["rpas_certificate_level"] = level
         if level == "advanced":
             patch["drone_certified"] = True
+    if payload.rpas_certificate_number is not None:
+        patch["rpas_certificate_number"] = payload.rpas_certificate_number.strip()
     if payload.bio is not None:
         patch["bio"] = payload.bio
         patch["internal_notes"] = payload.bio
@@ -176,6 +180,7 @@ async def upload_rpas_impl(
     x_user_id: Optional[str],
     file: UploadFile,
     level: str = "advanced",
+    certificate_number: str = "",
 ):
     member = await _actor_member(authorization, x_user_id)
     raw = await file.read()
@@ -202,11 +207,14 @@ async def upload_rpas_impl(
     level = (level or "advanced").strip().lower()
     if level not in ("basic", "advanced"):
         level = "advanced"
-    updated = await _persist_safe(db, member["id"], {
+    rpas_patch = {
         "rpas_certificate_url": file_key,
         "rpas_certificate_level": level,
         "drone_certified": True,
-    })
+    }
+    if (certificate_number or "").strip():
+        rpas_patch["rpas_certificate_number"] = certificate_number.strip()
+    updated = await _persist_safe(db, member["id"], rpas_patch)
     profile = await build_profile(updated)
     profile["rpas_document_id"] = doc_id
     profile["rpas_certificate_url"] = file_key
@@ -350,10 +358,11 @@ async def update_profile(
 async def upload_rpas(
     file: UploadFile = File(...),
     level: str = Form("advanced"),
+    certificate_number: str = Form(""),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    return await upload_rpas_impl(authorization, x_user_id, file, level)
+    return await upload_rpas_impl(authorization, x_user_id, file, level, certificate_number)
 
 
 @router.get("/api/payouts")
@@ -386,10 +395,11 @@ async def os_update_profile(
 async def os_upload_rpas(
     file: UploadFile = File(...),
     level: str = Form("advanced"),
+    certificate_number: str = Form(""),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    return await upload_rpas_impl(authorization, x_user_id, file, level)
+    return await upload_rpas_impl(authorization, x_user_id, file, level, certificate_number)
 
 @router.post("/api/profile/photo")
 async def upload_photo(
