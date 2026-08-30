@@ -16,7 +16,7 @@ from ..services.notifications import create_notification
 from ..shared.database import get_db
 from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, VendorMember, VendorDocument
 
-ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "akashorter@gmail.com")
+ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
@@ -102,7 +102,7 @@ _DISPOSABLE_DOMAINS = {
     "yopmail.com", "yopmail.net", "yopmail.org",
     "throwawaymail.com", "sharklasers.com", "dispostable.com",
     "maildrop.cc", "fakeinbox.com", "mailnesia.com", "spam4.me",
-    "guerrillamail.com", "mintemail.com", "mohmal.com", "emailondeck.com",
+    "mintemail.com", "mohmal.com", "emailondeck.com",
 }
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
