@@ -53,9 +53,12 @@ export async function getCaptureSession(
           .select('name, frames, tone')
           .eq('job_id', jobId)
           .order('position', { ascending: true }),
+        // Pipeline stages (Captured/Splatting/QC/Delivered) reflect this job's
+        // own progress, not a shared template — scope by job_id like capture_rooms.
         supabase
           .from('capture_pipeline')
           .select('title, detail, status')
+          .eq('job_id', jobId)
           .order('position', { ascending: true }),
       ]);
 

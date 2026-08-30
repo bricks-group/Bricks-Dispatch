@@ -141,7 +141,7 @@ export default function CaptureScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.doneBtn}
-            onPress={() => router.push('review' as any)}
+            onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId } } as any)}
           >
             <Text style={styles.chipText}>✓</Text>
           </TouchableOpacity>
