@@ -145,6 +145,13 @@ async def _update_job_assignee(job_id: str, member_id: str):
     except Exception as e:
         logger.error(f"Booking confirmed notification failed for job {job_id}: {e}")
 
+    try:
+        from .notifications import notify_assignment
+        res = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        await notify_assignment(res.data or {"id": job_id}, member_id)
+    except Exception as e:
+        logger.error(f"Vendor assignment notify failed for job {job_id}: {e}")
+
 
 _MAX_ASSIGNMENT_ATTEMPTS = 3
 

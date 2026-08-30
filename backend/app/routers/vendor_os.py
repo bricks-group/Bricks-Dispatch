@@ -343,7 +343,7 @@ async def get_vendor_os_jobs(
         
     page, page_size, skip = normalize_pagination(page, page_size)
     res = await query.order("scheduled_date", desc=False).range(skip, skip + page_size - 1).execute()
-    jobs = res.data
+    jobs = res.data or []
     total = res.count or 0
     
     db = await get_db()
@@ -361,7 +361,9 @@ async def get_vendor_os_jobs(
         job["payout_model"] = "owner_full" if is_owner_member(m) else "ic_rate_card"
         if job["payout_model"] == "owner_full":
             job["deduction"] = 0
-    return paginated_response(jobs, total, page, page_size)
+    payload = paginated_response(jobs, total, page, page_size)
+    payload["jobs"] = jobs  # Swift JobStore decodes { jobs: [...] }
+    return payload
 
 
 
@@ -566,6 +568,16 @@ async def assign_job_to_member(
     else:
         await db.table("jobs").update(patch).eq("id", job_id).execute()
         new_assignee_id = patch.get("assignee_id")
+        if new_assignee_id:
+            try:
+                from ..services.notifications import notify_assignment
+                task = asyncio.create_task(
+                    notify_assignment({**existing_job, **patch, "id": job_id}, new_assignee_id)
+                )
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
+            except Exception as _ne:
+                logger.error("Assignment notify failed for job %s: %s", job_id, _ne)
 
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if member_id == "auto" else "manual"})
     res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
@@ -804,6 +816,26 @@ async def start_stripe_connect_onboarding(
 
     await write_audit_event(actor_id, "stripe_connect", vendor_id, "onboard_started", vendor_id=vendor_id)
     return {"url": url}
+
+
+
+@router.post("/push-token")
+async def register_vendor_os_push_token(
+    payload: dict,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Swift GO PushNotificationService POSTs device_token + platform=ios."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    token = str(payload.get("device_token") or payload.get("token") or "").strip()
+    if not token:
+        api_error(400, "device_token is required", "token_required")
+    platform = str(payload.get("platform") or "ios").strip() or "ios"
+    from ..services.notifications import store_push_token
+    try:
+        return await store_push_token(actor_id, token, platform)
+    except Exception:
+        api_error(503, "Could not store push token", "push_token_store_failed")
 
 
 @router.get("/earnings")

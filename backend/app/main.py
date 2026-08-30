@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException
 from supabase import create_client, Client
 import os
 import sentry_sdk
@@ -9,7 +9,7 @@ from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 
 # Import routers
-from app.routers import dispatch, notifications, payouts, post_production, vendor_os, onboarding, admin_ops, uploads, auth
+from app.routers import dispatch, notifications, payouts, post_production, vendor_os, onboarding, admin_ops, uploads, auth, jobs
 
 limiter = Limiter(key_func=get_remote_address, default_limits=['100/minute'])
 
@@ -60,7 +60,8 @@ async def ready(db: Client = Depends(get_db)):
 # dispatch.router and payouts.router carry their own /api/v1/* prefix internally.
 app.include_router(dispatch.router, tags=["dispatch"])
 app.include_router(payouts.router, tags=["payouts"])
-app.include_router(notifications.router, prefix="/dispatch/notifications", tags=["notifications"])
+app.include_router(notifications.router, tags=["notifications"])
+app.include_router(jobs.router, tags=["jobs"])
 app.include_router(post_production.router, tags=["post-production"])
 app.include_router(vendor_os.router, tags=["vendor-os"])
 app.include_router(onboarding.router, tags=["onboarding"])
@@ -75,22 +76,3 @@ from .routers.vendor_profile import router as vendor_profile_router, os_router a
 app.include_router(vendor_profile_router)
 app.include_router(vendor_profile_os_router)
 
-# --- Rate Limited Endpoints (Placeholders) ---
-# These would typically be defined within their respective routers
-
-@limiter.limit('10/minute')
-async def login(request: Request):
-    # Placeholder for actual login endpoint implementation
-    pass
-
-@limiter.limit('10/minute')
-async def register(request: Request):
-    # Placeholder for actual register endpoint implementation
-    pass
-
-@limiter.limit('10/minute')
-async def push_token_register(request: Request):
-    # Placeholder for actual push_token_register endpoint implementation
-    pass
-
-# Other routes and middleware would be imported/defined here.

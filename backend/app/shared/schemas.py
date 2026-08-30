@@ -258,7 +258,8 @@ class ProfileUpdate(BaseModel):
 
 
 class PushTokenRegister(BaseModel):
-    token: str
+    token: Optional[str] = None
+    device_token: Optional[str] = None  # Swift GO posts this
     platform: str = "expo"
 
 
@@ -269,6 +270,7 @@ class NotificationRecord(BaseModel):
     type: str = "info"
     data: dict = {}
     read: bool = False
+    member_id: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

@@ -4,7 +4,7 @@ Payout API router for Bricks GO.
 Endpoints:
   POST /api/v1/payouts/trigger  — manually trigger payout for a job (internal only)
   GET  /api/v1/payouts          — list payouts (admin only)
-  GET  /api/v1/payouts/summary  — payout summary for brokerage dashboard (admin only)
+  GET  /api/v1/payouts/summary  — payout summary for office dashboard (admin only)
 """
 
 import logging
@@ -78,7 +78,7 @@ async def list_payouts(
     return result.data or []
 
 
-@router.get("/summary", summary="Payout summary for brokerage dashboard")
+@router.get("/summary", summary="Payout summary for office dashboard")
 async def payout_summary(
     authorization: Optional[str] = Header(None),
     x_user_id: Optional[str] = Header(None),
