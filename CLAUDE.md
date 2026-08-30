@@ -115,7 +115,7 @@ Score = 100-point system:
 - Load balance (5): 1 - active_assignments / 4
 
 Repeat-agent bonus: +5 points if vendor completed prior job for this agent.
-Brokerage favourite bonus: +15 points if the booking's brokerage has favourited this photographer (reads `brokerage_vendor_favorites` table). **⚠️ Cannot fire, as of 2026-07-27**: `Job`/`JobIntakeRequest` (`app/shared/schemas.py`) don't declare `brokerage_id`, so `getattr(job, "brokerage_id", None)` in `integrations/bricks_ai_dispatch.py:344` always returns `None` regardless of what's sent or stored. This is dead code, not a working bonus — the ✅ below is wrong. Fix: add `brokerage_id: Optional[str] = None` to both models.
+Brokerage favourite bonus: +15 points if the booking's brokerage has favourited this photographer (reads `brokerage_vendor_favorites` table). **Corrected 2026-08-30 — the 2026-07-27 "cannot fire" note below was itself stale.** `Job`/`JobIntakeRequest` (`app/shared/schemas.py:71,129`) both declare `brokerage_id: Optional[str] = None`, and `bricks_ai_dispatch.py:337-355` reads it via `getattr(job, "brokerage_id", None)` and queries `brokerage_vendor_favorites` when set. This is real, working code, not dead — verified by reading both files directly. Unclear exactly when the schema fix landed relative to the correction below; the doc just never caught up.
 Drone gate: `vendor.drone_certified=True` required for `job_type="drone"`.
 
 **Gemini 1.5 Flash** used ONLY for explainability string — called async after routing, shown in admin dashboard. Never on the hot dispatch path.
@@ -217,7 +217,7 @@ pick_vendor_rule_based(job, vendors)
 - Job state machine (pending → assigned → in_progress → completed → delivered) ✅
 - **Deterministic weighted dispatch scorer (specialty/proximity/on_time/quality/reliability/load)** ✅
 - **Repeat-agent bonus (+5pts if vendor has shot for this agent before)** ✅
-- ~~**Brokerage favourite bonus (+15pts if brokerage has favourited the photographer)** ✅~~ — **❌ corrected 2026-07-27: does not work, see line 117 above. Structurally dead code, not done.**
+- **Brokerage favourite bonus (+15pts if brokerage has favourited the photographer)** ✅ — **re-corrected 2026-08-30: this is real and working, see line 117 above. The 2026-07-27 "dead code" correction was itself stale by the time this session found it.**
 - **Drone certification hard gate (drone_certified required for drone jobs)** ✅
 - **Gemini 1.5 Flash: explainability only (async, non-blocking, dashboard display)** ✅
 - Rule-based fallback with tier gate ✅
