@@ -16,7 +16,7 @@ function initials(name: string) {
   return name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
 }
 
-function fmtMemberSince(iso: string) {
+function fmtMemberSince(iso?: string) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -278,7 +278,8 @@ const s = StyleSheet.create({
   screenTitle: { fontSize: 26, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, letterSpacing: -0.4, marginBottom: 28 },
 
   identity: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 28 },
-  avatar: { width: 60, height: 60, borderRadius: 30, backgroundColor: TOKENS.nightDeep, borderWidth: 1, borderColor: TOKENS.nightHairS, alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 60, height: 60, borderRadius: 30, backgroundColor: TOKENS.nightDeep, borderWidth: 1, borderColor: TOKENS.nightHairS, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  avatarImg: { width: 60, height: 60, borderRadius: 30 },
   avatarText: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 18, color: TOKENS.moon, letterSpacing: 1 },
   identityInfo: { flex: 1 },
   name: { fontSize: 18, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, marginBottom: 3 },

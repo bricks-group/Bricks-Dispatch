@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, View, Text } from 'react-native';
-import { T } from '../../constants/Theme';
+import { T } from '../../../constants/Theme';
 
 // Bricks UI Components for React Native (Dispatch)
 // Dark mode by default
