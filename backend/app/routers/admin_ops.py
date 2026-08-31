@@ -160,6 +160,17 @@ async def verify_document(
     if not res.data:
         api_error(404, "Document not found", "document_not_found")
 
+    doc = res.data[0]
+    # Denormalize the expiry onto vendor_members so member_eligible_for_job()
+    # can gate dispatch on it without an extra query per candidate. Only coi
+    # and wsib are dispatch-blocking documents; other doc_types (hst_registry,
+    # id_verification, rpas_certificate, resume) don't have a lapse concept.
+    if status == "verified" and doc.get("doc_type") in ("coi", "wsib") and doc.get("expiry_date"):
+        column = "coi_expires_on" if doc["doc_type"] == "coi" else "wsib_expires_on"
+        await db.table("vendor_members").update({
+            column: doc["expiry_date"],
+        }).eq("id", member_id).execute()
+
     return {"id": doc_id, "status": status}
 
 

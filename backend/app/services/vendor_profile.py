@@ -6,6 +6,7 @@ is the fixed vendor_payout_rates card, NOT a % of rack. The platform owner
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from ..shared.geospatial import haversine_km
@@ -205,11 +206,30 @@ def is_drone_job(job: Any) -> bool:
     return "drone" in _add_on_keys(j.get("add_ons") or [])
 
 
+def has_lapsed_insurance(member: Any) -> bool:
+    """True only when a verified COI or WSIB expiry date has actually passed.
+    Fail-open on missing/unverified dates (NULL) -- most currently-active
+    vendors predate this field and have never had one set; blocking on NULL
+    would suspend the entire existing roster, not just genuinely lapsed
+    coverage. Only a confirmed past date counts, matching the IC agreement's
+    "lapsed coverage is automatic suspension from dispatch" clause.
+    """
+    m = _as_dict(member)
+    today = datetime.now(timezone.utc).date().isoformat()
+    for field in ("coi_expires_on", "wsib_expires_on"):
+        value = m.get(field)
+        if value and str(value) < today:
+            return True
+    return False
+
+
 def member_eligible_for_job(member: Any, job: Any) -> bool:
     m = _as_dict(member)
     if not m.get("is_active"):
         return False
     if is_aman_pending(m):
+        return False
+    if has_lapsed_insurance(m):
         return False
     if int(m.get("tier") or 1) < min_tier_for_job(job):
         return False
