@@ -460,11 +460,115 @@ async def upload_compliance_document(
         expiry_date=expiry_date,
         status="pending"
     )
-    
+
     await (await get_db()).table("vendor_documents").insert(doc.dict()).execute()
-    
+
+    # COI and WSIB are the two IC-agreement Clause 6 compliance documents with
+    # hard minimums (coverage amount, additional insured, clearance/exemption) —
+    # auto-validate them on upload so applicants get a fast pending/flagged
+    # signal instead of waiting on manual admin review to catch a bad upload.
+    if doc_type in ("coi", "wsib"):
+        from ..services.compliance_validator import validate_compliance_document
+
+        async def _run_compliance_validation():
+            try:
+                from ..services.storage import get_signed_download_url
+                signed_url = await get_signed_download_url(file_key)
+                if not signed_url:
+                    return
+                validation = await validate_compliance_document(
+                    document_url=signed_url, doc_type=doc_type, filename=filename
+                )
+                status = (
+                    "verified" if validation["outcome"] == "verified"
+                    else "pending" if validation["outcome"] == "failed"
+                    else "flagged"
+                )
+                update_fields = {
+                    "status": status,
+                    "validation_result": validation,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if validation.get("expiry_date"):
+                    update_fields["expiry_date"] = validation["expiry_date"]
+                await (await get_db()).table("vendor_documents").update(
+                    update_fields
+                ).eq("id", doc.id).execute()
+            except Exception:
+                logger.error(
+                    f"compliance auto-validation failed for doc {doc.id}:\n"
+                    + traceback.format_exc()
+                )
+
+        import asyncio
+        asyncio.create_task(_run_compliance_validation())
+
     return {
         "success": True,
         "document_id": doc.id,
         "status": "pending"
+    }
+
+
+@router.post("/validate-compliance/{member_id}")
+async def validate_compliance(member_id: str, doc_type: str, request: Request):
+    """
+    Run Gemini-based validation on a member's most recent COI or WSIB document
+    against IC agreement Clause 6 minimums (coverage amount, additional
+    insured, clearance/exemption). Requires X-Internal-Api-Key — admin/internal
+    callers only (mirrors /validate-rpas/{member_id}).
+    """
+    if doc_type not in ("coi", "wsib"):
+        raise HTTPException(status_code=400, detail="doc_type must be 'coi' or 'wsib'")
+
+    _api_keys = set(k for k in os.environ.get("INTERNAL_API_KEYS", "").split(",") if k)
+    _caller_key = request.headers.get("X-Internal-Api-Key", "")
+    if not _api_keys or _caller_key not in _api_keys:
+        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+
+    db = await get_db()
+
+    res_m = await db.table("vendor_members").select("name").eq("id", member_id).maybe_single().execute()
+    if not res_m.data:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    res_d = await db.table("vendor_documents").select("id, file_url, status").eq(
+        "member_id", member_id
+    ).eq("doc_type", doc_type).order("created_at", desc=True).limit(1).execute()
+    if not res_d.data:
+        raise HTTPException(status_code=404, detail=f"No {doc_type} document found for this member")
+
+    doc = res_d.data[0]
+    doc_id = doc["id"]
+
+    from ..services.storage import get_signed_download_url
+    document_url = await get_signed_download_url(doc["file_url"])
+    if not document_url:
+        raise HTTPException(status_code=500, detail="Could not generate signed URL for document")
+
+    from ..services.compliance_validator import validate_compliance_document
+    validation = await validate_compliance_document(document_url=document_url, doc_type=doc_type)
+
+    status = (
+        "verified" if validation["outcome"] == "verified"
+        else "pending" if validation["outcome"] == "failed"
+        else "flagged"
+    )
+    update_fields = {
+        "status": status,
+        "validation_result": validation,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if validation.get("expiry_date"):
+        update_fields["expiry_date"] = validation["expiry_date"]
+    await db.table("vendor_documents").update(update_fields).eq("id", doc_id).execute()
+
+    return {
+        "member_id": member_id,
+        "doc_id": doc_id,
+        "doc_type": doc_type,
+        "outcome": validation["outcome"],
+        "expiry_date": validation.get("expiry_date"),
+        "issues": validation.get("issues", []),
+        "status": status,
     }
