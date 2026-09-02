@@ -43,7 +43,7 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip internal auth for health, seed, docs, root, and job intake endpoints
         exempt_paths = ("/health", "/health/ready", "/docs", "/openapi.json", "/redoc")
-        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads", "/api/jobs", "/api/notifications", "/api/push-tokens")
+        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads", "/api/jobs", "/api/notifications", "/api/push-tokens", "/api/capture")
         if request.url.path in exempt_paths or any(request.url.path.startswith(p) for p in exempt_prefixes):
             return await call_next(request)
 
@@ -73,6 +73,7 @@ from app.routers.post_production import router as post_production_router
 from app.routers.vendor_profile import router as vendor_profile_router, os_router as vendor_profile_os_router
 from app.routers.notifications import router as notifications_router
 from app.routers.jobs import router as jobs_router
+from app.routers.capture import router as capture_router
 from app.shared.database import get_db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -175,6 +176,7 @@ app.include_router(vendor_profile_router)
 app.include_router(vendor_profile_os_router)
 app.include_router(notifications_router)
 app.include_router(jobs_router)
+app.include_router(capture_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
 _ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca,https://www.brxs.ca,https://brxs.ca,https://bricks-dispatch-web.vercel.app,https://app.brxs.ca").split(",") if o.strip()]
