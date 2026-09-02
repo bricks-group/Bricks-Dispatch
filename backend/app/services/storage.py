@@ -3,6 +3,7 @@ import base64
 import io
 import os
 from typing import Optional, Tuple
+from urllib.parse import quote
 
 from PIL import Image
 
@@ -115,5 +116,77 @@ async def get_signed_download_url(storage_path: str, expiry: int = SIGNED_URL_EX
         db = await get_db()
         result = await db.storage.from_(STORAGE_BUCKET).create_signed_url(storage_path, expiry)
         return result.get("signedURL") or result.get("signedUrl") or result.get("signed_url")
+    except Exception:
+        return None
+
+
+def _signed_upload_fields(result) -> Optional[dict]:
+    """Normalize storage3 / REST signed-upload payloads to {path, token, signed_url}."""
+    if result is None:
+        return None
+    data = result if isinstance(result, dict) else getattr(result, "__dict__", None)
+    if not data:
+        return None
+    inner = data.get("data") if isinstance(data.get("data"), dict) else data
+    path = inner.get("path") or inner.get("Key") or inner.get("key")
+    token = inner.get("token")
+    signed = (
+        inner.get("signedURL")
+        or inner.get("signedUrl")
+        or inner.get("signed_url")
+        or inner.get("url")
+    )
+    if signed and not token and "token=" in str(signed):
+        token = str(signed).split("token=", 1)[-1].split("&", 1)[0]
+    if not path and not signed:
+        return None
+    return {"path": path, "token": token, "signed_url": signed}
+
+
+async def create_signed_upload_url(storage_path: str) -> Optional[dict]:
+    """Mint a short-lived signed upload URL for an object in brxs-deliverables.
+
+    Used by phone capture so JPEG bytes go straight to Storage and never through
+    POST /api/uploads (professional stills, 4MB Vercel cap).
+    Returns {path, token, signed_url} or None.
+    """
+    if not storage_path:
+        return None
+    try:
+        db = await get_db()
+        bucket = db.storage.from_(STORAGE_BUCKET)
+        result = await bucket.create_signed_upload_url(storage_path)
+        parsed = _signed_upload_fields(result)
+        if parsed:
+            parsed["path"] = parsed.get("path") or storage_path
+            return parsed
+    except Exception:
+        pass
+
+    # REST fallback — same service key get_db() already uses.
+    try:
+        import httpx
+
+        url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_KEY", ""))
+        if not url or not key:
+            return None
+        encoded = "/".join(quote(part, safe="") for part in storage_path.split("/") if part)
+        endpoint = f"{url}/storage/v1/object/upload/sign/{STORAGE_BUCKET}/{encoded}"
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {key}", "apikey": key},
+            )
+        if resp.status_code >= 400:
+            return None
+        parsed = _signed_upload_fields(resp.json())
+        if not parsed:
+            return None
+        parsed["path"] = parsed.get("path") or storage_path
+        signed = parsed.get("signed_url") or ""
+        if signed.startswith("/"):
+            parsed["signed_url"] = f"{url}/storage/v1{signed}"
+        return parsed
     except Exception:
         return None

@@ -9,7 +9,7 @@ from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 
 # Import routers
-from app.routers import dispatch, notifications, payouts, post_production, vendor_os, onboarding, admin_ops, uploads, auth, jobs
+from app.routers import dispatch, notifications, payouts, post_production, vendor_os, onboarding, admin_ops, uploads, auth, jobs, capture
 
 limiter = Limiter(key_func=get_remote_address, default_limits=['100/minute'])
 
@@ -71,6 +71,7 @@ app.include_router(admin_ops.router, tags=["admin"])
 # for the documented IC-agreement re-prompt-on-login behavior.
 app.include_router(uploads.router, tags=["uploads"])
 app.include_router(auth.router, tags=["auth"])
+app.include_router(capture.router, tags=["capture"])
 from .routers.vendor_profile import router as vendor_profile_router, os_router as vendor_profile_os_router
 app.include_router(vendor_profile_router)
 app.include_router(vendor_profile_os_router)

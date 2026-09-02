@@ -6,7 +6,6 @@ import { COLORS, FONTS } from '../../constants/CaptureTheme';
 import { getCaptureSession, submitCaptureSession } from '../../lib/capture-api';
 import type { CaptureSession } from '../../lib/capture-api';
 
-// Tone -> color mapping (mirrors the static TONE_COLOR refs).
 const TONE_COLOR: Record<string, string> = { ok: COLORS.ok, warn: COLORS.warn, bad: COLORS.bad };
 
 export default function ReviewScreen() {
@@ -18,7 +17,6 @@ export default function ReviewScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Load session data when jobId is available.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -42,17 +40,17 @@ export default function ReviewScreen() {
       setSubmitError(result.error ?? 'Submit failed');
       return;
     }
+    if (result.session) setSession(result.session);
     router.back();
   };
 
-  // Static fallback shape when session hasn't loaded yet.
   const rooms = session?.rooms ?? [];
   const pipeline = session?.pipeline ?? [];
-  const totalFrames = session?.frameCount ?? 1204;
-  const address = session?.address ?? '214 Linden St';
-  const meta = session?.meta ?? 'HOUSE · 2,140 SQFT';
+  const totalFrames = session?.frameCount ?? 0;
+  const address = session?.address || 'Property';
+  const meta = session?.meta || '';
   const coveredCount = rooms.filter(r => r.n > 0).length;
-  const totalCount = rooms.length || 8;
+  const totalCount = rooms.length;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -69,20 +67,22 @@ export default function ReviewScreen() {
             <Text style={styles.backChipText}>‹</Text>
           </TouchableOpacity>
           <Text style={styles.heroAddress}>{address}</Text>
-          <Text style={styles.heroMeta}>{meta} · {totalFrames.toLocaleString()} FRAMES</Text>
+          <Text style={styles.heroMeta}>
+            {[meta, `${totalFrames.toLocaleString()} FRAMES`].filter(Boolean).join(' · ')}
+          </Text>
         </View>
 
         <View style={styles.body}>
           <View style={styles.sectionHead}>
             <Text style={styles.sectionLabel}>Coverage by room</Text>
-            <Text style={styles.sectionNote}>{coveredCount} / {totalCount} strong</Text>
+            <Text style={styles.sectionNote}>{coveredCount} / {totalCount} captured</Text>
           </View>
           <View style={styles.roomGrid}>
             {rooms.length === 0 && !loading ? (
               <Text style={styles.emptyText}>No rooms recorded yet.</Text>
             ) : (
               rooms.map(r => (
-                <View key={r.name} style={styles.roomCell}>
+                <View key={r.id ?? r.name} style={styles.roomCell}>
                   <View style={[styles.dot, { backgroundColor: TONE_COLOR[r.tone] ?? COLORS.bad }]} />
                   <Text style={styles.roomName}>{r.name}</Text>
                   <Text style={styles.roomCount}>{r.n}</Text>
@@ -91,11 +91,10 @@ export default function ReviewScreen() {
             )}
           </View>
 
-          {/* Weakest coverage warning — derived from session data */}
           {!loading && rooms.length > 0 && (
             (() => {
               const weakest = rooms.slice().sort((a, b) => a.n - b.n)[0];
-              if (weakest && weakest.n < 80) {
+              if (weakest && weakest.n < 20) {
                 return (
                   <View style={styles.warnBanner}>
                     <Text style={styles.warnText}>
@@ -110,22 +109,26 @@ export default function ReviewScreen() {
 
           <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Pipeline</Text>
           <View style={{ marginTop: 12 }}>
-            {pipeline.map((p, i) => {
-              const done = p.status === 'done', active = p.status === 'active';
-              return (
-                <View key={p.title} style={styles.pipeRow}>
-                  <View style={{ alignItems: 'center', width: 22 }}>
-                    <View style={[styles.pipeDot, done && { backgroundColor: COLORS.ok }, active && { backgroundColor: COLORS.brick }]} />
-                    {i !== pipeline.length - 1 && <View style={[styles.pipeLine, done && { backgroundColor: COLORS.ok }]} />}
+            {pipeline.length === 0 && !loading ? (
+              <Text style={styles.emptyText}>No pipeline yet — submit is unavailable until a session exists.</Text>
+            ) : (
+              pipeline.map((p, i) => {
+                const done = p.status === 'done', active = p.status === 'active';
+                return (
+                  <View key={p.title} style={styles.pipeRow}>
+                    <View style={{ alignItems: 'center', width: 22 }}>
+                      <View style={[styles.pipeDot, done && { backgroundColor: COLORS.ok }, active && { backgroundColor: COLORS.brick }]} />
+                      {i !== pipeline.length - 1 && <View style={[styles.pipeLine, done && { backgroundColor: COLORS.ok }]} />}
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={[styles.pipeTitle, p.status === 'todo' && { color: COLORS.ink3 }]}>{p.title}</Text>
+                      <Text style={styles.pipeDetail}>{p.detail}</Text>
+                    </View>
+                    {active && <Text style={styles.runningBadge}>In progress</Text>}
                   </View>
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={[styles.pipeTitle, p.status === 'todo' && { color: COLORS.ink3 }]}>{p.title}</Text>
-                    <Text style={styles.pipeDetail}>{p.detail}</Text>
-                  </View>
-                  {active && <Text style={styles.runningBadge}>Running</Text>}
-                </View>
-              );
-            })}
+                );
+              })
+            )}
           </View>
         </View>
       </ScrollView>
@@ -136,13 +139,13 @@ export default function ReviewScreen() {
           <Text style={styles.submitEta}>
             {session?.estimatedDeliveryHours != null
               ? `~${session.estimatedDeliveryHours} hrs`
-              : '~ 22 hrs'}
+              : '—'}
           </Text>
         </View>
         <TouchableOpacity
-          style={[styles.submitBtn, submitting && { opacity: 0.5 }]}
+          style={[styles.submitBtn, (submitting || pipeline.length === 0) && { opacity: 0.5 }]}
           onPress={handleSubmit}
-          disabled={submitting || loading}
+          disabled={submitting || loading || pipeline.length === 0}
         >
           <Text style={styles.submitBtnText}>
             {submitting ? 'Submitting…' : 'Submit to pipeline →'}

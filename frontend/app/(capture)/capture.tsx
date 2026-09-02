@@ -5,12 +5,10 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
-import { getCaptureSession, bumpFrameCount } from '../../lib/capture-api';
+import { ensureCaptureSession, uploadCaptureFrame } from '../../lib/capture-api';
 import type { CaptureSession } from '../../lib/capture-api';
 
-// ── Coverage dome — unchanged from current capture.tsx ──────────────────────
-// Ring of ticks, captured ones lit terracotta, rest faint.
-// Maps to real session data when the Supabase tables exist; static until then.
+const DOME_TOTAL = 24;
 
 function CoverageDome({ captured, total }: { captured: number; total: number }) {
   const R = 92, cx = 110, cy = 110;
@@ -34,37 +32,35 @@ function CoverageDome({ captured, total }: { captured: number; total: number }) 
   );
 }
 
-// ── Screen ────────────────────────────────────────────────────────────────────
-
 export default function CaptureScreen() {
   const router = useRouter();
   const { jobId } = useLocalSearchParams<{ jobId: string }>();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
+  const shutterBusy = useRef(false);
 
-  // Session state — wired to capture-api (falls back to static shape if tables don't exist yet).
   const [session, setSession] = useState<CaptureSession | null>(null);
-  const [loading, setLoading] = useState(true);
   const [frameCount, setFrameCount] = useState(0);
   const [shutterPressed, setShutterPressed] = useState(false);
+  const [captureError, setCaptureError] = useState<string | null>(null);
 
-  // Load session data when jobId is available.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!jobId) { setLoading(false); return; }
-      const s = await getCaptureSession(jobId);
+      if (!jobId) return;
+      const s = await ensureCaptureSession(jobId);
       if (!cancelled) {
         setSession(s);
-        setFrameCount(s?.frameCount ?? 0);
-        setLoading(false);
+        setFrameCount(s.frameCount ?? 0);
       }
     })();
     return () => { cancelled = true; };
   }, [jobId]);
 
-  const sessionData = session ?? null;
-  const pct = sessionData ? Math.round(sessionData.rooms.reduce((s, r) => s + r.n, 0) / sessionData.rooms.length / 24 * 100) : 0;
+  const currentRoom = session?.rooms?.find(r => r.name === session.guidance?.room)
+    ?? session?.rooms?.[0];
+  const capturedForDome = currentRoom?.n ?? frameCount;
+  const pct = Math.round(Math.min(capturedForDome, DOME_TOTAL) / DOME_TOTAL * 100);
 
   if (!permission) return <View style={styles.dark} />;
   if (!permission.granted) {
@@ -78,10 +74,36 @@ export default function CaptureScreen() {
     );
   }
 
-  // Static fallback shape when session hasn't loaded yet.
-  const address = sessionData?.address ?? '214 Linden St';
-  const roomLabel = sessionData?.guidance?.room ?? 'ROOM 6 · KITCHEN';
-  const frameCountDisplay = frameCount > 0 ? frameCount : (sessionData?.frameCount ?? 184);
+  const address = session?.address || 'Property';
+  const roomLabel = session?.guidance?.room
+    ? session.guidance.room.toUpperCase()
+    : (currentRoom?.name ? currentRoom.name.toUpperCase() : 'ROOM 1');
+
+  const onShutter = async () => {
+    if (shutterBusy.current || !jobId) return;
+    shutterBusy.current = true;
+    setShutterPressed(true);
+    setCaptureError(null);
+    try {
+      const photo = await cameraRef.current?.takePictureAsync({ quality: 0.8 });
+      if (!photo?.uri) {
+        setCaptureError('Camera did not return a photo');
+        return;
+      }
+      const result = await uploadCaptureFrame(jobId, photo.uri, session?.currentRoomId);
+      if (!result.ok) {
+        setCaptureError(result.error ?? 'Frame upload failed');
+        return;
+      }
+      if (result.session) setSession(result.session);
+      setFrameCount(result.frameCount ?? (c => c + 1));
+    } catch (e: any) {
+      setCaptureError(String(e?.message ?? e));
+    } finally {
+      shutterBusy.current = false;
+      setShutterPressed(false);
+    }
+  };
 
   return (
     <View style={styles.dark}>
@@ -101,14 +123,12 @@ export default function CaptureScreen() {
         </View>
 
         <View style={styles.pillRow}>
-          <Text style={styles.pill}>{frameCountDisplay} frames</Text>
-          <Text style={styles.pill}>02:41</Text>
-          <Text style={styles.pill}>Sharp · 98%</Text>
+          <Text style={styles.pill}>{frameCount} frames</Text>
         </View>
 
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <View>
-            <CoverageDome captured={sessionData ? Math.round(sessionData.rooms.reduce((s, r) => s + r.n, 0) / 24) : 17} total={24} />
+            <CoverageDome captured={capturedForDome} total={DOME_TOTAL} />
             <View style={styles.domeCenter} pointerEvents="none">
               <Text style={styles.domePct}>{pct}%</Text>
               <Text style={styles.domeLabel}>Angles covered</Text>
@@ -118,23 +138,22 @@ export default function CaptureScreen() {
 
         <View style={styles.guidance}>
           <Text style={styles.guidanceTitle}>
-            {sessionData?.guidance ? `Pan to ${sessionData.guidance.room}` : 'Pan slowly left'}
+            {session?.guidance ? `Pan to ${session.guidance.room}` : 'Pan slowly around the room'}
           </Text>
           <Text style={styles.guidanceBody}>
-            {sessionData?.guidance?.message ?? 'Keep the far counter in frame — fill the gap by the window.'}
+            {session?.guidance?.message ?? 'Fill the coverage ring — splat/tour frames, not stills.'}
           </Text>
         </View>
+
+        {captureError ? (
+          <Text style={styles.errorText}>{captureError}</Text>
+        ) : null}
 
         <View style={styles.shutterRow}>
           <View style={{ width: 56 }} />
           <TouchableOpacity
             style={[styles.shutterOuter, shutterPressed && styles.shutterPressed]}
-            onPress={() => {
-              setShutterPressed(true);
-              setFrameCount(c => c + 1);
-              if (jobId) bumpFrameCount(jobId).then(() => setShutterPressed(false));
-              setTimeout(() => setShutterPressed(false), 200);
-            }}
+            onPress={onShutter}
             activeOpacity={0.8}
           >
             <View style={styles.shutterInner} />
@@ -151,16 +170,11 @@ export default function CaptureScreen() {
   );
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-/** Color-code the room sub-label by coverage tone. */
 function roomSubColor(label: string): { color?: string } {
   if (label.includes('EXTERIOR')) return { color: COLORS.bad };
   if (label.includes('BATH')) return { color: COLORS.warn };
   return {};
 }
-
-// ── Styles ─────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   dark: { flex: 1, backgroundColor: '#0C0B09' },
@@ -182,6 +196,7 @@ const styles = StyleSheet.create({
   guidance: { marginHorizontal: 20, backgroundColor: COLORS.brick, borderRadius: 2, padding: 12 },
   guidanceTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#fff' },
   guidanceBody: { fontFamily: FONTS.body, fontSize: 11, color: '#FFFFFFCC', marginTop: 2 },
+  errorText: { fontFamily: FONTS.body, fontSize: 11, color: '#F4F1EB', backgroundColor: COLORS.bad, marginHorizontal: 20, marginTop: 8, padding: 8, borderRadius: 2, textAlign: 'center' },
   shutterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 18 },
   shutterOuter: { width: 74, height: 74, borderRadius: 37, borderWidth: 3, borderColor: '#F4F1EB', alignItems: 'center', justifyContent: 'center' },
   shutterPressed: { transform: [{ scale: 0.92 }] },

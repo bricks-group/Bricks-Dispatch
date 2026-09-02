@@ -1,24 +1,19 @@
-// Capture-flow API — ports the static capture screens (capture.tsx, review.tsx)
-// onto Dispatch's existing supabase.ts + api.ts. Everything is a Supabase direct
-// read (no backend server needed). Mutations go through supabase.from().update().
-//
-// Contract (Claude can diff against this file to see what changed):
-//   - getCaptureSession(jobId)        → room coverage + pipeline stages for a job
-//   - submitCaptureSession(jobId)     → marks the capture as submitted to pipeline
-//   - bumpFrameCount(jobId)           → increments the frame counter (optimistic)
-//   - getCaptureGuidance(jobId)       → next-room guidance text
-//
-// All reads are best-effort: if the tables/columns don't exist yet, the calls
-// return graceful defaults so the UI keeps working with static fallback shape.
+// Capture-flow API — Dispatch phone capture for owned-splat / tour frames.
+// JPEG bytes never go through POST /api/uploads (professional stills).
+// Session rows live behind the Dispatch backend (service_role); the app
+// PUTs frames to a signed Storage URL at capture/{session_id}/{n}.jpg.
 
-import { supabase } from '../lib/supabase';
+import { actorHeaders } from './api';
+import { supabase } from './supabase';
 
-// ── Types (mirror the static shape the screens already render) ──────────────
+const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const CAPTURE_BUCKET = 'brxs-deliverables';
 
 export interface CaptureRoom {
+  id?: string;
   name: string;
   tone: 'ok' | 'warn' | 'bad';
-  n: number; // frame count for that room
+  n: number;
 }
 
 export interface PipelineStage {
@@ -28,166 +23,178 @@ export interface PipelineStage {
 }
 
 export interface CaptureSession {
+  sessionId?: string | null;
+  currentRoomId?: string | null;
   address: string;
-  meta: string;        // e.g. "HOUSE · 2,140 SQFT"
+  meta: string;
   rooms: CaptureRoom[];
   pipeline: PipelineStage[];
   frameCount: number;
-  /** Next room to capture + guidance. Null when all rooms are covered. */
   guidance?: { room: string; message: string };
-  estimatedDeliveryHours?: number;
+  estimatedDeliveryHours?: number | null;
 }
 
-// ── Reads ───────────────────────────────────────────────────────────────────
-
-export async function getCaptureSession(
-  jobId: string,
-): Promise<CaptureSession | null> {
-  // Try the real Supabase tables first. If anything is missing or the query
-  // returns nothing, fall back to the static shape the screens already render.
-  try {
-    const [{ data: roomsData, error: roomsErr }, { data: pipelineData, error: pipelineErr }] =
-      await Promise.all([
-        supabase
-          .from('capture_rooms')
-          .select('name, frames, tone')
-          .eq('job_id', jobId)
-          .order('position', { ascending: true }),
-        // Pipeline stages (Captured/Splatting/QC/Delivered) reflect this job's
-        // own progress, not a shared template — scope by job_id like capture_rooms.
-        supabase
-          .from('capture_pipeline')
-          .select('title, detail, status')
-          .eq('job_id', jobId)
-          .order('position', { ascending: true }),
-      ]);
-
-    if (roomsErr || !roomsData) {
-      return _staticFallback(jobId);
-    }
-
-    const rooms: CaptureRoom[] = (roomsData ?? []).map((r: any) => ({
-      name: r.name ?? 'Room',
-      tone: r.tone as CaptureRoom['tone'] ?? 'ok',
-      n: r.frames ?? 0,
-    }));
-
-    if (pipelineErr || !pipelineData) {
-      return _staticFallback(jobId);
-    }
-
-    const pipeline: PipelineStage[] = (pipelineData ?? []).map((p: any) => ({
-      title: p.title ?? '',
-      detail: p.detail ?? '',
-      status: (p.status ?? 'todo') as PipelineStage['status'],
-    }));
-
-    // Try to also pull the job-level meta from the jobs table
-    let address = 'Property', meta = 'Property';
-    const { data: jobData } = await supabase
-      .from('jobs')
-      .select('address, property_type, sqft')
-      .eq('id', jobId)
-      .single();
-    if (jobData) {
-      address = jobData.address ?? 'Property';
-      meta = [jobData.property_type, jobData.sqft, 'SQFT']
-        .filter(Boolean)
-        .join(' · ');
-    }
-
-    const totalFrames = rooms.reduce((s, r) => s + r.n, 0);
-    const coveredRooms = rooms.filter(r => r.n > 0).length;
-    const guidance = _deriveGuidance(rooms, jobId);
-
-    return {
-      address,
-      meta,
-      rooms,
-      pipeline,
-      frameCount: totalFrames,
-      guidance,
-      estimatedDeliveryHours: coveredRooms === rooms.length ? 22 : undefined,
-    };
-  } catch (_) {
-    return _staticFallback(jobId);
-  }
-}
-
-// ── Guidance derivation ─────────────────────────────────────────────────────
-
-function _deriveGuidance(rooms: CaptureRoom[], jobId: string): CaptureSession['guidance'] {
-  // Pick the first room that isn't fully covered, or the weakest-covered room.
-  const uncovered = rooms.filter(r => r.n === 0);
-  if (uncovered.length) {
-    return { room: uncovered[0].name, message: `Head to the ${uncovered[0].name} — it hasn't been captured yet.` };
-  }
-  const weakest = rooms.slice().sort((a, b) => a.n - b.n)[0];
-  if (weakest && weakest.n < 80) {
-    return { room: weakest.name, message: `Coverage in the ${weakest.name} is thin — add a few more angles before submitting.` };
-  }
-  return undefined; // everything looks OK
-}
-
-// ── Static fallback (keeps screens working if tables don't exist yet) ──────
-
-function _staticFallback(jobId: string): CaptureSession {
+function _emptySession(): CaptureSession {
   return {
-    address: jobId ? `Property ${jobId.slice(0, 6)}` : '214 Linden St',
-    meta: 'HOUSE · 2,140 SQFT',
-    rooms: [
-      { name: 'Living', tone: 'ok', n: 212 },
-      { name: 'Kitchen', tone: 'ok', n: 188 },
-      { name: 'Dining', tone: 'ok', n: 96 },
-      { name: 'Primary', tone: 'ok', n: 174 },
-      { name: 'Bath 1', tone: 'warn', n: 54 },
-      { name: 'Bath 2', tone: 'warn', n: 41 },
-      { name: 'Bed 2', tone: 'ok', n: 120 },
-      { name: 'Exterior', tone: 'bad', n: 28 },
-    ],
-    pipeline: [
-      { title: 'Captured', detail: '1,204 frames · 8 rooms', status: 'done' },
-      { title: 'Splatting', detail: 'Gaussian reconstruction · ~14 min', status: 'active' },
-      { title: 'QC pass', detail: 'Auto + human review', status: 'todo' },
-      { title: 'Delivered', detail: 'Tour + stills to agent', status: 'todo' },
-    ],
-    frameCount: 1204,
-    guidance: { room: 'Exterior', message: 'Exterior coverage is thin — add 20+ frames before submitting.' },
+    sessionId: null,
+    currentRoomId: null,
+    address: 'Property',
+    meta: '',
+    rooms: [],
+    pipeline: [],
+    frameCount: 0,
+    guidance: undefined,
     estimatedDeliveryHours: undefined,
   };
 }
 
-// ── Mutations ───────────────────────────────────────────────────────────────
+function _asSession(raw: any): CaptureSession {
+  if (!raw || typeof raw !== 'object') return _emptySession();
+  const rooms: CaptureRoom[] = Array.isArray(raw.rooms)
+    ? raw.rooms.map((r: any) => ({
+        id: r.id,
+        name: r.name ?? 'Room',
+        tone: (r.tone ?? 'bad') as CaptureRoom['tone'],
+        n: Number(r.n ?? r.frames ?? 0) || 0,
+      }))
+    : [];
+  const pipeline: PipelineStage[] = Array.isArray(raw.pipeline)
+    ? raw.pipeline.map((p: any) => ({
+        title: p.title ?? '',
+        detail: p.detail ?? '',
+        status: (p.status ?? 'todo') as PipelineStage['status'],
+      }))
+    : [];
+  return {
+    sessionId: raw.sessionId ?? raw.session_id ?? null,
+    currentRoomId: raw.currentRoomId ?? raw.current_room_id ?? null,
+    address: raw.address || 'Property',
+    meta: raw.meta || '',
+    rooms,
+    pipeline,
+    frameCount: Number(raw.frameCount ?? raw.frame_count ?? 0) || 0,
+    guidance: raw.guidance ?? undefined,
+    estimatedDeliveryHours: raw.estimatedDeliveryHours ?? undefined,
+  };
+}
 
-export async function submitCaptureSession(jobId: string): Promise<{ ok: boolean; error?: string }> {
+async function _readError(res: Response): Promise<string> {
   try {
-    const { error: updErr } = await supabase
-      .from('capture_sessions')
-      .update({ status: 'submitted', submitted_at: new Date().toISOString() })
-      .eq('job_id', jobId);
-    if (updErr) return { ok: false, error: updErr.message };
-    return { ok: true };
-  } catch (e: any) {
-    return { ok: false, error: String(e) };
+    const j = await res.json();
+    if (typeof j?.detail === 'string') return j.detail;
+    if (j?.detail?.message) return j.detail.message;
+    if (j?.message) return j.message;
+    if (j?.error) return j.error;
+    return `HTTP ${res.status}`;
+  } catch {
+    return `HTTP ${res.status}`;
   }
 }
 
-export async function bumpFrameCount(jobId: string): Promise<{ ok: boolean }> {
-  // Optimistic counter — we don't have a real per-shot event stream yet.
-  // In the future this would come from the camera's frame-done events.
+export async function getCaptureSession(jobId: string): Promise<CaptureSession> {
+  if (!jobId) return _emptySession();
   try {
-    const { data } = await supabase
-      .from('capture_sessions')
-      .select('frame_count')
-      .eq('job_id', jobId)
-      .single();
-    const current = (data?.frame_count ?? 0) + 1;
-    const { error: updErr } = await supabase
-      .from('capture_sessions')
-      .update({ frame_count: current, updated_at: new Date().toISOString() })
-      .eq('job_id', jobId);
-    return { ok: !updErr };
-  } catch (_) {
-    return { ok: false };
+    const headers = await actorHeaders();
+    const res = await fetch(
+      `${API_BASE}/api/capture/sessions?job_id=${encodeURIComponent(jobId)}`,
+      { headers },
+    );
+    if (!res.ok) return _emptySession();
+    return _asSession(await res.json());
+  } catch {
+    return _emptySession();
+  }
+}
+
+export async function ensureCaptureSession(jobId: string): Promise<CaptureSession> {
+  if (!jobId) return _emptySession();
+  try {
+    const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+    const res = await fetch(`${API_BASE}/api/capture/sessions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ job_id: jobId }),
+    });
+    if (!res.ok) return _emptySession();
+    return _asSession(await res.json());
+  } catch {
+    return _emptySession();
+  }
+}
+
+export async function submitCaptureSession(jobId: string): Promise<{ ok: boolean; error?: string; session?: CaptureSession }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
+  try {
+    const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+    const res = await fetch(`${API_BASE}/api/capture/submit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ job_id: jobId }),
+    });
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    const body = await res.json();
+    return { ok: true, session: _asSession(body.session ?? body) };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+export async function uploadCaptureFrame(
+  jobId: string,
+  fileUri: string,
+  roomId?: string | null,
+): Promise<{ ok: boolean; error?: string; session?: CaptureSession; frameCount?: number }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
+  if (!fileUri) return { ok: false, error: 'Missing photo' };
+  try {
+    const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+    const signRes = await fetch(`${API_BASE}/api/capture/frames/sign`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ job_id: jobId, room_id: roomId ?? undefined }),
+    });
+    if (!signRes.ok) return { ok: false, error: await _readError(signRes) };
+    const signed = await signRes.json();
+    const path: string = signed.path;
+    const token: string | undefined = signed.token;
+    const signedUrl: string | undefined = signed.signed_url;
+    const bucket: string = signed.bucket || CAPTURE_BUCKET;
+
+    const fileRes = await fetch(fileUri);
+    const bytes = await fileRes.arrayBuffer();
+
+    let uploaded = false;
+    if (token && path) {
+      const { error: upErr } = await supabase.storage
+        .from(bucket)
+        .uploadToSignedUrl(path, token, bytes, { contentType: 'image/jpeg' });
+      if (!upErr) uploaded = true;
+      else if (!signedUrl) return { ok: false, error: upErr.message };
+    }
+    if (!uploaded) {
+      if (!signedUrl) return { ok: false, error: 'No signed upload URL' };
+      const put = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'image/jpeg' },
+        body: bytes,
+      });
+      if (!put.ok) return { ok: false, error: `Storage PUT failed (${put.status})` };
+    }
+
+    const commitRes = await fetch(`${API_BASE}/api/capture/frames/commit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        job_id: jobId,
+        session_id: signed.session_id,
+        room_id: signed.room_id ?? roomId ?? null,
+        storage_path: path,
+      }),
+    });
+    if (!commitRes.ok) return { ok: false, error: await _readError(commitRes) };
+    const session = _asSession(await commitRes.json());
+    return { ok: true, session, frameCount: session.frameCount };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
   }
 }
