@@ -11,10 +11,12 @@ from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import VendorMemberUpdate, VendorLead
 from ..services.webhooks import send_dispatch_status_update_webhook
 from ..services.vendor_selection import assign_vendor_for_job
+from ..services.notifications import create_notification
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin-ops"])
+ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
 
 @router.post("/leads")
 async def create_lead(
@@ -492,6 +494,103 @@ async def reconcile_noshow_claims(
         "checked_fees": len(fees),
         "mismatch_count": len(mismatches),
         "mismatches": mismatches,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Vendor compliance expiry scan
+#
+# IC agreement Clause 6 requires current COI/WSIB before every dispatched job,
+# and vendor_os.py already enforces that gate at dispatch time (lapsed ->
+# automatic suspension). This scan is the proactive half: surface COI/WSIB
+# expiring soon so ops can chase renewals *before* a vendor gets suspended
+# mid-pipeline, mirroring the churn-scan / reconcile-noshow admin patterns
+# already established in this repo and Bricks-Companion. Homies AI has no
+# equivalent concept -- it has no independent-contractor network at all.
+# ---------------------------------------------------------------------------
+
+@router.get("/compliance-expiry-scan")
+async def compliance_expiry_scan(
+    days_threshold: int = 14,
+    notify: bool = False,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Scan active vendors' COI/WSIB documents for lapsed or soon-to-lapse coverage.
+
+    notify=false (default): report only, sends nothing.
+    notify=true: sends one digest admin notification (Resend + in-app) if any
+    vendor is flagged. Does not email vendors directly -- ops decides how to
+    follow up.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    db = await get_db()
+
+    res_docs = await db.table("vendor_documents").select(
+        "id, member_id, doc_type, expiry_date, status"
+    ).in_("doc_type", ["coi", "wsib"]).not_.is_("expiry_date", "null").execute()
+    docs = res_docs.data or []
+
+    res_members = await db.table("vendor_members").select(
+        "id, name, email, is_active"
+    ).in_("id", list({d["member_id"] for d in docs})).execute() if docs else None
+    members_by_id = {m["id"]: m for m in (res_members.data or [])} if res_members else {}
+
+    today = datetime.now(timezone.utc).date()
+    flagged = []
+    for doc in docs:
+        member = members_by_id.get(doc["member_id"])
+        if not member or not member.get("is_active"):
+            continue
+        try:
+            expiry = datetime.fromisoformat(doc["expiry_date"]).date()
+        except (ValueError, TypeError):
+            continue
+        days_left = (expiry - today).days
+        if days_left < 0:
+            severity = "expired"
+        elif days_left <= days_threshold:
+            severity = "expiring_soon"
+        else:
+            continue
+        flagged.append({
+            "member_id": member["id"],
+            "vendor_name": member.get("name"),
+            "vendor_email": member.get("email"),
+            "doc_type": doc["doc_type"],
+            "expiry_date": doc["expiry_date"],
+            "days_left": days_left,
+            "severity": severity,
+        })
+
+    flagged.sort(key=lambda f: f["days_left"])
+
+    if notify and flagged:
+        lines = [
+            f"{f['vendor_name']} — {f['doc_type'].upper()} {f['severity']} "
+            f"({f['expiry_date']}, {f['days_left']}d)"
+            for f in flagged
+        ]
+        await create_notification(
+            title=f"{len(flagged)} vendor(s) with lapsed/expiring compliance docs",
+            body="\n".join(lines),
+            ntype="compliance_expiry_scan",
+            data={"flagged_count": len(flagged)},
+            email_to=ADMIN_NOTIFICATION_EMAIL,
+            email_subject=f"Compliance expiry scan: {len(flagged)} vendor(s) need attention",
+        )
+
+    return {
+        "days_threshold": days_threshold,
+        "checked_documents": len(docs),
+        "flagged_count": len(flagged),
+        "flagged": flagged,
+        "notified": bool(notify and flagged),
     }
 
 
