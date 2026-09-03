@@ -2,7 +2,7 @@ import SwiftUI
 import BricksCore
 
 /// Honest 3D-tour stub. Native shutter is not wired here.
-/// Owned Gaussian splat capture runs in GO Expo: Start Capture → 3D tour.
+/// 360 station capture runs in GO Expo: Start Capture → 3D tour.
 struct SplatCaptureStubView: View {
     let job: DispatchJob
     @Environment(\.dismiss) private var dismiss
@@ -34,9 +34,9 @@ struct SplatCaptureStubView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text(job.address)
                     .font(.title3.weight(.semibold))
-                Text("Native splat shutter is not wired in this build.")
+                Text("Native 360 shutter is not wired in this build.")
                     .font(.subheadline.weight(.medium))
-                Text("Path-confined 3D tour frames run in GO (Expo) — Start Capture → 3D tour. Not a virtual visit. Professional HDR stills stay on the vendor camera.")
+                Text("Path-confined 360 stations run in GO (Expo) — Start Capture → 3D tour. Server stitches each station into an equirect. Not a virtual visit. Professional HDR stills stay on the vendor camera.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

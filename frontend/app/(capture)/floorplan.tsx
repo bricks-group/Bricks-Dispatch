@@ -2,22 +2,21 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, TextInput, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Location from 'expo-location';
 import Svg, { Rect, Line } from 'react-native-svg';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
-import { addCaptureRoom, ensureCaptureSession, uploadCaptureFrame } from '../../lib/capture-api';
+import { addCaptureRoom, ensureCaptureSession, openCaptureStation, uploadCaptureFrame } from '../../lib/capture-api';
 import type { CaptureSession } from '../../lib/capture-api';
 
 const KIND = 'floorplan' as const;
 const CORNER_TOTAL = 4;
 
 const CUES = [
-  { title: 'Near-left corner', body: 'Stand in the doorway. Photograph where the near-left walls meet. Tracing frames, not HDR stills.' },
-  { title: 'Far-left corner', body: 'Walk the left wall. Capture the far-left corner, including any window.' },
-  { title: 'Far-right corner', body: 'Capture the far-right corner so the tracer can close the room.' },
-  { title: 'Near-right corner', body: 'Back toward the door — near-right corner and the opening you came through.' },
-  { title: 'Openings', body: 'Photograph remaining doors, windows, and closets in this room.' },
-  { title: 'Full wall', body: 'One wall-on shot if a wall is still missing. Then add the next room.' },
+  { title: 'Station 360', body: 'Stand in the middle of this room. Pan slowly and fire at each tick of the ring. The server derives the plan from aligned stations — not from snapshot guesses.' },
+  { title: 'Keep panning', body: 'Overlap each frame. Fill the dome, then add the next room / next station.' },
+  { title: 'Openings', body: 'Include doors and openings in the sweep so rooms connect on the compiled plan.' },
+  { title: 'Next room', body: 'When this station is full, add a room and walk there. One station per room is the Matterport pattern.' },
 ];
 
 function CornerBox({ captured, total }: { captured: number; total: number }) {
@@ -51,6 +50,22 @@ export default function FloorPlanCaptureScreen() {
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [newRoomName, setNewRoomName] = useState('');
   const [addingRoom, setAddingRoom] = useState(false);
+  const headingRef = useRef(0);
+  const [stationIndex, setStationIndex] = useState(0);
+
+  useEffect(() => {
+    let sub: Location.LocationSubscription | undefined;
+    (async () => {
+      try {
+        const perm = await Location.requestForegroundPermissionsAsync();
+        if (perm.status !== 'granted') return;
+        sub = await Location.watchHeadingAsync((h) => {
+          headingRef.current = Number(h.trueHeading ?? h.magHeading ?? 0);
+        });
+      } catch { /* optional */ }
+    })();
+    return () => { sub?.remove(); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,7 +90,7 @@ export default function FloorPlanCaptureScreen() {
   if (!permission.granted) {
     return (
       <SafeAreaView style={[styles.dark, styles.permWrap]}>
-        <Text style={styles.permText}>Bricks needs camera access to photograph floor-plan corners.</Text>
+        <Text style={styles.permText}>Bricks needs camera access to capture 360 stations for the floor plan.</Text>
         <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
           <Text style={styles.permBtnText}>Allow camera</Text>
         </TouchableOpacity>
@@ -97,7 +112,15 @@ export default function FloorPlanCaptureScreen() {
         setCaptureError('Camera did not return a photo');
         return;
       }
-      const result = await uploadCaptureFrame(jobId, photo.uri, selectedRoomId ?? currentRoom?.id, KIND);
+      const yaw = headingRef.current;
+      const idx = session?.rooms?.findIndex(r => r.id === (selectedRoomId ?? currentRoom?.id)) ?? stationIndex;
+      const result = await uploadCaptureFrame(jobId, photo.uri, selectedRoomId ?? currentRoom?.id, KIND, {
+        stationIndex: idx < 0 ? stationIndex : idx,
+        yaw,
+        heading: yaw,
+        role: 'pan',
+        contentType: 'image/jpeg',
+      });
       if (!result.ok) {
         setCaptureError(result.error ?? 'Frame upload failed');
         return;
@@ -181,7 +204,7 @@ export default function FloorPlanCaptureScreen() {
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <CornerBox captured={roomFrames} total={CORNER_TOTAL} />
           <Text style={styles.domePct}>{roomFrames} / {CORNER_TOTAL}</Text>
-          <Text style={styles.domeLabel}>Corners this room</Text>
+          <Text style={styles.domeLabel}>Station frames this room</Text>
         </View>
 
         <View style={styles.guidance}>
@@ -189,7 +212,7 @@ export default function FloorPlanCaptureScreen() {
           <Text style={styles.guidanceBody}>{cue.body}</Text>
         </View>
 
-        <Text style={styles.pill}>{frameCount} frames · not stills</Text>
+        <Text style={styles.pill}>{frameCount} station frames · compiled on server</Text>
 
         {captureError ? (
           <Text style={styles.errorText}>{captureError}</Text>

@@ -6,6 +6,9 @@ is_configured() / run_vision_qc() here, never the Gemini API directly, so
 switching providers (OpenAI, a self-hosted VLM, Anthropic) means rewriting
 this one file — not the QC control flow, the OpenCV pre-pass routing, or
 the fail-open behavior in qc_agent.py.
+
+generate_from_images() is for COI/WSIB (compliance_validator.py) and
+this QC path. Floor plans are derived from aligned 360 stations, not Gemini.
 """
 import base64
 import json
@@ -23,9 +26,13 @@ _GEMINI_VISION_URL = (
 )
 
 
+def _api_key() -> str:
+    return os.environ.get("GEMINI_API_KEY", "") or _GEMINI_API_KEY
+
+
 def is_configured() -> bool:
     """Whether a vision QC provider is available to call."""
-    return bool(_GEMINI_API_KEY)
+    return bool(_api_key())
 
 
 def _detect_mime(image_bytes: bytes) -> str:
@@ -63,7 +70,7 @@ async def run_vision_qc(image_bytes: bytes, prompt: str) -> dict:
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
-            f"{_GEMINI_VISION_URL}?key={_GEMINI_API_KEY}",
+            f"{_GEMINI_VISION_URL}?key={_api_key()}",
             json=payload,
         )
         resp.raise_for_status()
@@ -83,3 +90,62 @@ async def run_vision_qc(image_bytes: bytes, prompt: str) -> dict:
             text = text[4:]
 
     return json.loads(text)
+
+
+async def generate_from_images(
+    prompt: str,
+    images: list,
+    *,
+    max_output_tokens: int = 4096,
+    temperature: float = 0.2,
+    timeout: float = 90.0,
+) -> str:
+    """Multi-image Gemini Vision call. Same 1.5 Flash endpoint as COI/WSIB/QC.
+
+    `images` is a list of raw image bytes. Returns the model text (JSON expected).
+    Raises if GEMINI_API_KEY is missing or the request fails.
+    """
+    api_key = _api_key()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    parts = [{"text": prompt}]
+    for img in images:
+        if not img:
+            continue
+        raw = img if isinstance(img, (bytes, bytearray)) else bytes(img)
+        parts.append({
+            "inline_data": {
+                "mime_type": _detect_mime(raw),
+                "data": base64.b64encode(raw).decode(),
+            }
+        })
+    if len(parts) < 2:
+        raise RuntimeError("No images to send to Gemini Vision")
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_output_tokens,
+            "responseMimeType": "application/json",
+        },
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            _GEMINI_VISION_URL,
+            params={"key": api_key},
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    text = (
+        data.get("candidates", [{}])[0]
+        .get("content", {})
+        .get("parts", [{}])[0]
+        .get("text", "")
+    ).strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    return text

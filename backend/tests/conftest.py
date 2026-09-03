@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 # ── Stub external packages before any production module imports them ──────────
 
 for _mod in (
+    "dotenv",
     "stripe", "stripe.error",
     "supabase", "supabase.client", "supabase.lib", "supabase.lib.client_options",
     "gotrue", "gotrue.types", "gotrue.constants",

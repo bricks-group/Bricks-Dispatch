@@ -43,19 +43,22 @@ async def _call_booking_comms(path: str, payload: dict) -> bool:
         logger.error(f"Booking comms call to {path} failed: {e}")
         return False
 
-async def register_property_visit(property_id: str, storage_path: str, title: str = "Virtual Visit") -> bool:
-    """POST a finished splat to Bricks-OS's property_visits table via
-    POST /api/internal/visit-ready. Replaces the dead media_delivery.splat_url write
-    (that column was never actually added to the live DB -- see BRICKS_STATUS.md).
-    "Visit" not "tour" (renamed 2026-08-03, Kam): a tour implies a fixed, guided
-    path; a visit is self-directed exploration, which is what the viewer actually
-    lets someone do.
-    Same INTERNAL_API_KEYS / X-Internal-Api-Key convention as _call_booking_comms
-    above, just a different target service -- this repo's own INTERNAL_API_KEYS
-    value, which must be one Bricks-OS also accepts (that's a deploy/ops step,
-    not verifiable from this repo). Previously read a separate INTERNAL_API_KEY
-    (singular) var that was never configured, so this call always no-op'd --
-    fixed 2026-08-15, see get_own_internal_api_key()'s docstring."""
+async def register_property_visit(
+    property_id: str,
+    storage_path: str = "",
+    title: str = "Virtual Visit",
+    embed_url: str | None = None,
+    visit_type: str | None = None,
+) -> bool:
+    """POST a finished capture to Bricks-OS property_visits via
+    POST /api/internal/visit-ready.
+
+    type=file + storage_path — Gaussian splat / .ply virtual visit (VisitViewer gsplat).
+    type=url + embed_url — hosted 3D tour walkthrough (VisitViewer iframe). Do not
+    send phone-tour HTML as type=file; that path is the splat viewer.
+
+    Same INTERNAL_API_KEYS / X-Internal-Api-Key convention as _call_booking_comms.
+    """
     api_key = get_own_internal_api_key()
     os_url = os.environ.get("BRICKS_OS_API_URL")
     if not api_key:
@@ -64,12 +67,28 @@ async def register_property_visit(property_id: str, storage_path: str, title: st
     if not os_url:
         logger.warning("BRICKS_OS_API_URL not set — skipping visit-ready call")
         return False
+    body = {"property_id": property_id, "title": title}
+    if storage_path:
+        body["storage_path"] = storage_path
+    if embed_url:
+        body["embed_url"] = embed_url
+        body["type"] = visit_type or "url"
+    elif visit_type:
+        body["type"] = visit_type
+    if "type" not in body:
+        body["type"] = "file"
+    if body["type"] == "file" and not storage_path:
+        logger.warning("visit-ready skipped — type=file needs storage_path")
+        return False
+    if body["type"] == "url" and not embed_url:
+        logger.warning("visit-ready skipped — type=url needs embed_url")
+        return False
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{os_url}/api/internal/visit-ready",
                 headers={"X-Internal-Api-Key": api_key},
-                json={"property_id": property_id, "storage_path": storage_path, "title": title},
+                json=body,
             )
             resp.raise_for_status()
             return True

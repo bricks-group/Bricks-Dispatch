@@ -1,8 +1,6 @@
-// Capture-flow API — Dispatch phone capture for owned-splat / tour frames
-// and in-app floor-plan tracing frames.
+// Capture-flow API — Matterport-style 360 stations.
 // JPEG bytes never go through POST /api/uploads (professional stills).
-// Session rows live behind the Dispatch backend (service_role); the app
-// PUTs frames to a signed Storage URL at capture/{session_id}/{n}.jpg.
+// Pan burst / equirect PUTs land at capture/{session}/stations/{n}/.
 
 import { actorHeaders } from './api';
 import { supabase } from './supabase';
@@ -38,6 +36,32 @@ export interface CaptureSession {
   guidance?: { room: string; message: string };
   estimatedDeliveryHours?: number | null;
   outputStoragePath?: string | null;
+  stationCount?: number;
+  currentStationIndex?: number;
+  stations?: CaptureStation[];
+}
+
+export interface CaptureStation {
+  station_index: number;
+  room?: string;
+  panCount?: number;
+  hasEquirect?: boolean;
+  heading?: number | null;
+  content_type?: string;
+}
+
+export type CaptureRole = 'pan' | 'equirect' | 'usdz' | 'roomplan';
+
+export interface StationUploadOpts {
+  roomId?: string | null;
+  kind?: CaptureKind;
+  stationIndex?: number;
+  yaw?: number | null;
+  heading?: number | null;
+  poseX?: number | null;
+  poseY?: number | null;
+  role?: CaptureRole;
+  contentType?: string;
 }
 
 function _emptySession(kind: CaptureKind = 'splat'): CaptureSession {
@@ -90,6 +114,9 @@ function _asSession(raw: any, fallbackKind: CaptureKind = 'splat'): CaptureSessi
     guidance: raw.guidance ?? undefined,
     estimatedDeliveryHours: raw.estimatedDeliveryHours ?? undefined,
     outputStoragePath: raw.outputStoragePath ?? raw.output_storage_path ?? null,
+    stationCount: Number(raw.stationCount ?? raw.station_count ?? 0) || 0,
+    currentStationIndex: Number(raw.currentStationIndex ?? raw.current_station_index ?? 0) || 0,
+    stations: Array.isArray(raw.stations) ? raw.stations : [],
   };
 }
 
@@ -177,20 +204,61 @@ export async function submitCaptureSession(
   }
 }
 
+export async function openCaptureStation(
+  jobId: string,
+  kind: CaptureKind = 'splat',
+  opts?: { roomId?: string | null; room?: string; heading?: number | null; increment?: boolean },
+): Promise<{ ok: boolean; error?: string; session?: CaptureSession }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
+  try {
+    const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+    const res = await fetch(`${API_BASE}/api/capture/stations`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        job_id: jobId,
+        kind,
+        room_id: opts?.roomId ?? undefined,
+        room: opts?.room,
+        heading: opts?.heading ?? undefined,
+        new: opts?.increment ?? false,
+      }),
+    });
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    return { ok: true, session: _asSession(await res.json(), kind) };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
 export async function uploadCaptureFrame(
   jobId: string,
   fileUri: string,
   roomId?: string | null,
   kind: CaptureKind = 'splat',
+  opts?: StationUploadOpts,
 ): Promise<{ ok: boolean; error?: string; session?: CaptureSession; frameCount?: number }> {
   if (!jobId) return { ok: false, error: 'Missing job' };
   if (!fileUri) return { ok: false, error: 'Missing photo' };
+  const role: CaptureRole = opts?.role ?? 'pan';
+  const contentType = opts?.contentType ?? (role === 'equirect' || role === 'pan' ? 'image/jpeg' : undefined);
   try {
     const headers = await actorHeaders({ 'Content-Type': 'application/json' });
     const signRes = await fetch(`${API_BASE}/api/capture/frames/sign`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ job_id: jobId, room_id: roomId ?? undefined, kind }),
+      body: JSON.stringify({
+        job_id: jobId,
+        room_id: opts?.roomId ?? roomId ?? undefined,
+        kind: opts?.kind ?? kind,
+        station_index: opts?.stationIndex,
+        yaw: opts?.yaw,
+        heading: opts?.heading,
+        pose_x: opts?.poseX,
+        pose_y: opts?.poseY,
+        role,
+        content_type: contentType,
+      }),
     });
     if (!signRes.ok) return { ok: false, error: await _readError(signRes) };
     const signed = await signRes.json();
@@ -228,7 +296,14 @@ export async function uploadCaptureFrame(
         session_id: signed.session_id,
         room_id: signed.room_id ?? roomId ?? null,
         storage_path: path,
-        kind,
+        kind: opts?.kind ?? kind,
+        station_index: signed.station_index ?? opts?.stationIndex,
+        yaw: opts?.yaw,
+        heading: opts?.heading,
+        pose_x: opts?.poseX,
+        pose_y: opts?.poseY,
+        role: signed.role ?? role,
+        content_type: signed.content_type ?? contentType,
       }),
     });
     if (!commitRes.ok) return { ok: false, error: await _readError(commitRes) };

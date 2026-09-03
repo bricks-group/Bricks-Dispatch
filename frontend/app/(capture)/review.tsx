@@ -47,11 +47,15 @@ export default function ReviewScreen() {
 
   const rooms = session?.rooms ?? [];
   const pipeline = session?.pipeline ?? [];
+  const stations = session?.stations ?? [];
+  const stationCount = session?.stationCount ?? stations.length;
   const totalFrames = session?.frameCount ?? 0;
   const address = session?.address || 'Property';
   const meta = session?.meta || '';
   const coveredCount = rooms.filter(r => r.n > 0).length;
   const totalCount = rooms.length;
+  const thinStations = stations.filter(s => !s.hasEquirect && (s.panCount ?? 0) < 8);
+  const canSubmit = pipeline.length > 0 && stationCount > 0 && thinStations.length === 0;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -69,7 +73,7 @@ export default function ReviewScreen() {
           </TouchableOpacity>
           <Text style={styles.heroAddress}>{address}</Text>
           <Text style={styles.heroMeta}>
-            {[meta, kind === 'floorplan' ? 'FLOOR PLAN' : '3D TOUR', `${totalFrames.toLocaleString()} FRAMES`].filter(Boolean).join(' · ')}
+            {[meta, kind === 'floorplan' ? 'FLOOR PLAN' : '3D TOUR', `${stationCount} STATION${stationCount === 1 ? '' : 'S'}`, `${totalFrames.toLocaleString()} PANS`].filter(Boolean).join(' · ')}
           </Text>
         </View>
 
@@ -92,23 +96,14 @@ export default function ReviewScreen() {
             )}
           </View>
 
-          {!loading && rooms.length > 0 && (
-            (() => {
-              const weakest = rooms.slice().sort((a, b) => a.n - b.n)[0];
-              const minOk = kind === 'floorplan' ? 4 : 20;
-              if (weakest && weakest.n < minOk) {
-                return (
-                  <View style={styles.warnBanner}>
-                    <Text style={styles.warnText}>
-                      {kind === 'floorplan'
-                        ? `${weakest.name} still needs more corners/walls before submitting.`
-                        : `${weakest.name} coverage is thin — add a few more frames before submitting.`}
-                    </Text>
-                  </View>
-                );
-              }
-              return null;
-            })()
+          {!loading && (stationCount === 0 || thinStations.length > 0) && (
+            <View style={styles.warnBanner}>
+              <Text style={styles.warnText}>
+                {stationCount === 0
+                  ? 'Submit needs at least one 360 station (coverage dome), not snapshot stills.'
+                  : `Station ${thinStations[0].station_index} sweep is thin — fill the dome (8+ overlapping pans) or capture an equirect.`}
+              </Text>
+            </View>
           )}
 
           <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Pipeline</Text>
@@ -147,9 +142,9 @@ export default function ReviewScreen() {
           </Text>
         </View>
         <TouchableOpacity
-          style={[styles.submitBtn, (submitting || pipeline.length === 0) && { opacity: 0.5 }]}
+          style={[styles.submitBtn, (submitting || !canSubmit) && { opacity: 0.5 }]}
           onPress={handleSubmit}
-          disabled={submitting || loading || pipeline.length === 0}
+          disabled={submitting || loading || !canSubmit}
         >
           <Text style={styles.submitBtnText}>
             {submitting ? 'Submitting…' : 'Submit to pipeline →'}

@@ -2,26 +2,29 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Location from 'expo-location';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
-import { ensureCaptureSession, uploadCaptureFrame } from '../../lib/capture-api';
+import { ensureCaptureSession, openCaptureStation, uploadCaptureFrame } from '../../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
 
 const DEFAULT_KIND: CaptureKind = 'splat';
 
 const DOME_TOTAL = 24;
 
-function CoverageDome({ captured, total }: { captured: number; total: number }) {
+function CoverageDome({ captured, total, headingTick }: { captured: Set<number> | number; total: number; headingTick?: number }) {
   const R = 92, cx = 110, cy = 110;
+  const onSet = captured instanceof Set ? captured : new Set(Array.from({ length: Math.min(Number(captured) || 0, total) }, (_, i) => i));
   const ticks = Array.from({ length: total }, (_, i) => {
     const ang = (i / total) * Math.PI * 2 - Math.PI / 2;
-    const on = i < captured;
+    const on = onSet.has(i);
+    const aim = headingTick === i;
     const x1 = cx + Math.cos(ang) * (R - 12), y1 = cy + Math.sin(ang) * (R - 12);
     const x2 = cx + Math.cos(ang) * R, y2 = cy + Math.sin(ang) * R;
     return (
       <Line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-        stroke={on ? COLORS.brick : '#F4F1EB30'} strokeWidth={on ? 3 : 2} strokeLinecap="round" />
+        stroke={aim ? '#F4F1EB' : on ? COLORS.brick : '#F4F1EB30'} strokeWidth={aim || on ? 3 : 2} strokeLinecap="round" />
     );
   });
   return (
@@ -46,6 +49,11 @@ export default function CaptureScreen() {
   const [frameCount, setFrameCount] = useState(0);
   const [shutterPressed, setShutterPressed] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [stationIndex, setStationIndex] = useState(0);
+  const [heading0, setHeading0] = useState<number | null>(null);
+  const [ticks, setTicks] = useState<Set<number>>(() => new Set());
+  const [aimTick, setAimTick] = useState(0);
+  const headingRef = useRef(0);
 
   useEffect(() => {
     if (kind === 'floorplan' && jobId) {
@@ -61,14 +69,33 @@ export default function CaptureScreen() {
       if (!cancelled) {
         setSession(s);
         setFrameCount(s.frameCount ?? 0);
+        setStationIndex(s.currentStationIndex ?? 0);
       }
     })();
     return () => { cancelled = true; };
   }, [jobId, kind]);
 
+  useEffect(() => {
+    let sub: Location.LocationSubscription | undefined;
+    (async () => {
+      try {
+        const perm = await Location.requestForegroundPermissionsAsync();
+        if (perm.status !== 'granted') return;
+        sub = await Location.watchHeadingAsync((h) => {
+          const yaw = Number(h.trueHeading ?? h.magHeading ?? 0);
+          headingRef.current = yaw;
+          const origin = heading0 ?? yaw;
+          const rel = ((yaw - origin) + 360) % 360;
+          setAimTick(Math.round(rel / (360 / DOME_TOTAL)) % DOME_TOTAL);
+        });
+      } catch { /* heading optional; yaw still sent as 0 */ }
+    })();
+    return () => { sub?.remove(); };
+  }, [heading0]);
+
   const currentRoom = session?.rooms?.find(r => r.name === session.guidance?.room)
     ?? session?.rooms?.[0];
-  const capturedForDome = currentRoom?.n ?? frameCount;
+  const capturedForDome = ticks.size;
   const pct = Math.round(Math.min(capturedForDome, DOME_TOTAL) / DOME_TOTAL * 100);
 
   if (!permission) return <View style={styles.dark} />;
@@ -94,24 +121,56 @@ export default function CaptureScreen() {
     setShutterPressed(true);
     setCaptureError(null);
     try {
+      const yaw = headingRef.current;
+      if (heading0 == null) setHeading0(yaw);
+      const origin = heading0 ?? yaw;
+      const rel = ((yaw - origin) + 360) % 360;
+      const tick = Math.round(rel / (360 / DOME_TOTAL)) % DOME_TOTAL;
       const photo = await cameraRef.current?.takePictureAsync({ quality: 0.8 });
       if (!photo?.uri) {
         setCaptureError('Camera did not return a photo');
         return;
       }
-      const result = await uploadCaptureFrame(jobId, photo.uri, session?.currentRoomId, kind);
+      const result = await uploadCaptureFrame(jobId, photo.uri, session?.currentRoomId, kind, {
+        stationIndex,
+        yaw,
+        heading: yaw,
+        role: 'pan',
+        contentType: 'image/jpeg',
+      });
       if (!result.ok) {
         setCaptureError(result.error ?? 'Frame upload failed');
         return;
       }
-      if (result.session) setSession(result.session);
+      if (result.session) {
+        setSession(result.session);
+        if (result.session.currentStationIndex != null) setStationIndex(result.session.currentStationIndex);
+      }
       setFrameCount(result.frameCount ?? (c => c + 1));
+      setTicks(prev => new Set(prev).add(tick));
     } catch (e: any) {
       setCaptureError(String(e?.message ?? e));
     } finally {
       shutterBusy.current = false;
       setShutterPressed(false);
     }
+  };
+
+  const onNewStation = async () => {
+    if (!jobId) return;
+    const result = await openCaptureStation(jobId, kind, {
+      roomId: session?.currentRoomId,
+      heading: headingRef.current,
+      increment: true,
+    });
+    if (!result.ok) {
+      setCaptureError(result.error ?? 'Could not open next station');
+      return;
+    }
+    if (result.session) setSession(result.session);
+    setStationIndex((result.session?.currentStationIndex ?? stationIndex) + 0);
+    setTicks(new Set());
+    setHeading0(null);
   };
 
   return (
@@ -132,25 +191,25 @@ export default function CaptureScreen() {
         </View>
 
         <View style={styles.pillRow}>
-          <Text style={styles.pill}>{frameCount} frames</Text>
+          <Text style={styles.pill}>Station {stationIndex} · {ticks.size}/{DOME_TOTAL} · {frameCount} frames</Text>
         </View>
 
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <View>
-            <CoverageDome captured={capturedForDome} total={DOME_TOTAL} />
+            <CoverageDome captured={ticks} total={DOME_TOTAL} headingTick={aimTick} />
             <View style={styles.domeCenter} pointerEvents="none">
               <Text style={styles.domePct}>{pct}%</Text>
-              <Text style={styles.domeLabel}>Angles covered</Text>
+              <Text style={styles.domeLabel}>Station {stationIndex} sweep</Text>
             </View>
           </View>
         </View>
 
         <View style={styles.guidance}>
           <Text style={styles.guidanceTitle}>
-            {session?.guidance ? `Pan to ${session.guidance.room}` : 'Pan slowly around the room'}
+            {session?.guidance ? `360 station · ${session.guidance.room}` : 'Stand still · pan slowly through 360'}
           </Text>
           <Text style={styles.guidanceBody}>
-            {session?.guidance?.message ?? 'Fill the coverage ring — splat/tour frames, not stills.'}
+            {session?.guidance?.message ?? 'Fill the coverage dome for this station, then walk to the next. Server stitches the pan into a 360.'}
           </Text>
         </View>
 
@@ -159,7 +218,9 @@ export default function CaptureScreen() {
         ) : null}
 
         <View style={styles.shutterRow}>
-          <View style={{ width: 56 }} />
+          <TouchableOpacity style={styles.doneBtn} onPress={onNewStation}>
+            <Text style={[styles.chipText, { fontSize: 11 }]}>+St</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.shutterOuter, shutterPressed && styles.shutterPressed]}
             onPress={onShutter}

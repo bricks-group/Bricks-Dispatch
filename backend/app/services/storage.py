@@ -190,3 +190,60 @@ async def create_signed_upload_url(storage_path: str) -> Optional[dict]:
         return parsed
     except Exception:
         return None
+
+
+
+def resize_image_bytes(image_bytes: bytes, max_side: int = 1280, quality: int = 75) -> bytes:
+    """Downscale an image to JPEG for Gemini / tour scenes."""
+    img = Image.open(io.BytesIO(image_bytes))
+    img = img.convert("RGB")
+    img.thumbnail((max_side, max_side), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+async def download_bytes(storage_path: str) -> Optional[bytes]:
+    """Fetch object bytes from brxs-deliverables. Signed-URL fallback if download() fails."""
+    if not storage_path:
+        return None
+    try:
+        db = await get_db()
+        data = await db.storage.from_(STORAGE_BUCKET).download(storage_path)
+        if data:
+            return bytes(data)
+    except Exception:
+        pass
+    url = await get_signed_download_url(storage_path, expiry=120)
+    if not url:
+        return None
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.content
+    except Exception:
+        return None
+
+
+async def upload_bytes(
+    storage_path: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+    upsert: bool = True,
+) -> bool:
+    """Upload raw bytes to brxs-deliverables. Returns True on success."""
+    if not storage_path or not data:
+        return False
+    try:
+        db = await get_db()
+        bucket = db.storage.from_(STORAGE_BUCKET)
+        options = {
+            "content-type": content_type or "application/octet-stream",
+            "upsert": "true" if upsert else "false",
+        }
+        await bucket.upload(path=storage_path, file=data, file_options=options)
+        return True
+    except Exception:
+        return False
