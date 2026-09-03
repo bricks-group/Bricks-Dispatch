@@ -26,7 +26,7 @@
       },
       "package": "com.bricks.go",
       "edgeToEdgeEnabled": true,
-      "versionCode": 4,
+      "versionCode": 5,
       "permissions": [
         "CAMERA",
         "ACCESS_FINE_LOCATION",
