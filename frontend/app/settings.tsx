@@ -7,7 +7,7 @@ import { useTheme } from '../context/ThemeContext';
 import { actorHeaders } from '../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 export default function SettingsScreen() {
   const router = useRouter();

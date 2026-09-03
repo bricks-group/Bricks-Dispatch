@@ -165,6 +165,13 @@ export type Job = {
   deduction?: number;
   uploaded_count?: number;
   job_type?: string;
+  package_id?: string | null;
+  package_name?: string | null;
+  add_ons?: unknown;
+  checklist?: unknown;
+  client_instructions?: string | null;
+  property_details?: string | null;
+  capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
 };
 
 export type PaginatedJobsResponse = {

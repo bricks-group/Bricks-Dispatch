@@ -7,7 +7,7 @@ import { actorHeaders } from '../../lib/api';
 import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import type { CaptureFlags } from '../../lib/capture-modes';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 export default function CaptureModeScreen() {
   const router = useRouter();

@@ -5,7 +5,7 @@
 import { actorHeaders } from './api';
 import { supabase } from './supabase';
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 const CAPTURE_BUCKET = 'brxs-deliverables';
 
 export type CaptureKind = 'splat' | 'floorplan';

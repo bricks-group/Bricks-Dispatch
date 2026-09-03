@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 export async function actorHeaders(extra: Record<string, string> = {}) {
   const { data: { session } } = await supabase.auth.getSession();

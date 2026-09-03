@@ -8,7 +8,7 @@ import { supabase } from '../../lib/supabase';
 import { VendorProfile, mediaUrl } from '../../lib/vendor';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 type Profile = VendorProfile;
 

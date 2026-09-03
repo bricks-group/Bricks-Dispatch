@@ -8,7 +8,7 @@ import { Bell, Check, ChevronLeft, UploadCloud, Briefcase, AlertTriangle } from 
 import { TOKENS } from '../constants/Theme';
 import { supabase } from '../lib/supabase';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 async function authHeaders(): Promise<Record<string, string>> {
   const { data: { session } } = await supabase.auth.getSession();

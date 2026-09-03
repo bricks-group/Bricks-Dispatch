@@ -9,7 +9,7 @@ import { Upload, FileText } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 type UploadRecord = {
   id: string; job_id: string; filename: string; file_size: number;

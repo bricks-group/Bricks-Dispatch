@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { logout, me } from './lib/api';
@@ -12,6 +12,8 @@ import { PerformancePage } from './pages/PerformancePage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TeamPage } from './pages/TeamPage';
+import { CapturePage } from './pages/CapturePage';
+import { CaptureReviewPage } from './pages/CaptureReviewPage';
 
 function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
   const now = new Date();
@@ -72,10 +74,26 @@ function ProtectedLayout() {
   );
 }
 
+function CaptureGate({ children }: { children: React.ReactNode }) {
+  const [loading, setLoading] = useState(true);
+  const [ok, setOk] = useState(false);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setOk(!!session);
+      setLoading(false);
+    });
+  }, []);
+  if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
+  if (!ok) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/capture" element={<CaptureGate><CapturePage /></CaptureGate>} />
+      <Route path="/capture/review" element={<CaptureGate><CaptureReviewPage /></CaptureGate>} />
       <Route path="/*"     element={<ProtectedLayout />} />
     </Routes>
   );

@@ -14,7 +14,7 @@ import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 type ChecklistItem = { id: string; label: string; completed: boolean };
 type ListingHit = { id: string; address: string; city?: string; deal_type?: string | null };

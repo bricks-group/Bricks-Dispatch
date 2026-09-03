@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, AuthMember, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamResponse, TeamMember, me } from '../lib/api';
+import { captureNeitherCopy, jobCaptureModes } from '../lib/capture-modes';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -371,6 +372,9 @@ function JobListingPanel({
             >Mark complete</button>
           ) : null}
         </div>
+        {['assigned', 'in_progress'].includes(job.status) ? (
+          <CaptureStartBlock job={job} />
+        ) : null}
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS</p>
           <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
@@ -407,5 +411,33 @@ function JobListingPanel({
         )}
       </div>
     </section>
+  );
+}
+
+
+function CaptureStartBlock({ job }: { job: Job }) {
+  const flags = jobCaptureModes(job);
+  const hasMode = flags.tour || flags.floorplan;
+  if (!hasMode) {
+    return (
+      <div className="capture-none">
+        <p className="muted" style={{ padding: 0, margin: 0 }}>{captureNeitherCopy(flags)}</p>
+      </div>
+    );
+  }
+  if (flags.tour && flags.floorplan) {
+    return (
+      <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=splat`}>Start Capture · 3D tour</Link>
+        <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=floorplan`}>Start Capture · Floor plan</Link>
+      </div>
+    );
+  }
+  const kind = flags.tour ? 'splat' : 'floorplan';
+  const label = flags.tour ? 'Start Capture' : 'Start Capture · Floor plan';
+  return (
+    <div className="row">
+      <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=${kind}`}>{label}</Link>
+    </div>
   );
 }

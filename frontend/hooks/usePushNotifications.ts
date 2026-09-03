@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 
-const API = process.env.EXPO_PUBLIC_BACKEND_URL;
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 export function usePushNotifications() {
   const [expoPushToken, setExpoPushToken] = useState<string | undefined>(undefined);
