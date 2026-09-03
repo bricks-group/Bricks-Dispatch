@@ -1,8 +1,8 @@
-/* Bricks Vendor OS — dark design system */
+/* bricks GO — dark design system */
 @import url('https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* Vendor OS is always dark */
+/* GO is always dark */
 :root {
   --c-bg:        #141210;
   --c-bg-soft:   #1C1A17;
@@ -53,6 +53,18 @@ body {
   padding: 4px 8px 18px;
   border-bottom: 1px solid var(--c-hair);
   margin-bottom: 14px;
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-word {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.4px;
 }
 
 .brand-sub {

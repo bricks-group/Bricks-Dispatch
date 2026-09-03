@@ -109,7 +109,7 @@ export function SettingsPage() {
 
       {data && (
         <section className="card full">
-          <h3>Vendor profile</h3>
+          <h3>Company</h3>
           <div className="stack">
             <label style={{ flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
               Company name

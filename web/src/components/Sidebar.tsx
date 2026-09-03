@@ -27,7 +27,10 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <BrickMark size={20} />
+        <div className="brand-row">
+          <BrickMark size={20} />
+          <span className="brand-word">bricks</span>
+        </div>
         <span className="brand-sub">GO</span>
       </div>
       <nav className="nav">
