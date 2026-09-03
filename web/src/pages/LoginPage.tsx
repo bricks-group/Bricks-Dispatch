@@ -55,7 +55,7 @@ export function LoginPage() {
           <BrickMark />
           <h2>Check your email</h2>
           <p className="muted" style={{ margin: 0 }}>Sent a verification code to {email}</p>
-          <label className="login-card label">
+          <label className="login-field">
             Code
             <input type="text" value={otp} onChange={(e) => setOtp(e.target.value)} required placeholder="123456" />
           </label>
@@ -71,9 +71,9 @@ export function LoginPage() {
     <div className="login-wrap">
       <form className="login-card" onSubmit={onLogin}>
         <BrickMark />
-        <h2>Vendor OS</h2>
-        <p className="muted" style={{ margin: 0 }}>Sign in to manage team workload and operations.</p>
-        <label className="login-card label">
+        <h2>bricks</h2>
+        <p className="muted" style={{ margin: 0 }}>Sign in to GO.</p>
+        <label className="login-field">
           Email
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="you@example.com" />
         </label>

@@ -417,11 +417,15 @@ label {
 }
 
 .login-card {
-  width: min(440px, 92vw);
+  width: min(440px, calc(100vw - 32px));
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 40px;
+  padding: 28px 20px;
   border: 1px solid var(--c-hair);
   border-radius: var(--radius);
   background: var(--c-bg-soft);
@@ -434,14 +438,24 @@ label {
   letter-spacing: -0.6px;
 }
 
-.login-card label {
+.login-card label,
+.login-field {
+  display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 6px;
+  width: 100%;
+  min-width: 0;
   font-size: 13px;
   color: var(--c-ink-mute);
 }
 
-.login-card input { width: 100%; }
+.login-card input,
+.login-field input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
