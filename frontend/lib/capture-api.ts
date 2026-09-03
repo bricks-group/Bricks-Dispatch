@@ -1,4 +1,5 @@
-// Capture-flow API — Dispatch phone capture for owned-splat / tour frames.
+// Capture-flow API — Dispatch phone capture for owned-splat / tour frames
+// and in-app floor-plan tracing frames.
 // JPEG bytes never go through POST /api/uploads (professional stills).
 // Session rows live behind the Dispatch backend (service_role); the app
 // PUTs frames to a signed Storage URL at capture/{session_id}/{n}.jpg.
@@ -8,6 +9,8 @@ import { supabase } from './supabase';
 
 const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 const CAPTURE_BUCKET = 'brxs-deliverables';
+
+export type CaptureKind = 'splat' | 'floorplan';
 
 export interface CaptureRoom {
   id?: string;
@@ -27,19 +30,23 @@ export interface CaptureSession {
   currentRoomId?: string | null;
   address: string;
   meta: string;
+  kind: CaptureKind;
+  status?: string | null;
   rooms: CaptureRoom[];
   pipeline: PipelineStage[];
   frameCount: number;
   guidance?: { room: string; message: string };
   estimatedDeliveryHours?: number | null;
+  outputStoragePath?: string | null;
 }
 
-function _emptySession(): CaptureSession {
+function _emptySession(kind: CaptureKind = 'splat'): CaptureSession {
   return {
     sessionId: null,
     currentRoomId: null,
     address: 'Property',
     meta: '',
+    kind,
     rooms: [],
     pipeline: [],
     frameCount: 0,
@@ -48,8 +55,13 @@ function _emptySession(): CaptureSession {
   };
 }
 
-function _asSession(raw: any): CaptureSession {
-  if (!raw || typeof raw !== 'object') return _emptySession();
+function _asKind(raw: any): CaptureKind {
+  const k = String(raw ?? 'splat').toLowerCase().replace(/[-_]/g, '');
+  return k === 'floorplan' || k === 'floorplans' ? 'floorplan' : 'splat';
+}
+
+function _asSession(raw: any, fallbackKind: CaptureKind = 'splat'): CaptureSession {
+  if (!raw || typeof raw !== 'object') return _emptySession(fallbackKind);
   const rooms: CaptureRoom[] = Array.isArray(raw.rooms)
     ? raw.rooms.map((r: any) => ({
         id: r.id,
@@ -70,11 +82,14 @@ function _asSession(raw: any): CaptureSession {
     currentRoomId: raw.currentRoomId ?? raw.current_room_id ?? null,
     address: raw.address || 'Property',
     meta: raw.meta || '',
+    kind: _asKind(raw.kind ?? fallbackKind),
+    status: raw.status ?? null,
     rooms,
     pipeline,
     frameCount: Number(raw.frameCount ?? raw.frame_count ?? 0) || 0,
     guidance: raw.guidance ?? undefined,
     estimatedDeliveryHours: raw.estimatedDeliveryHours ?? undefined,
+    outputStoragePath: raw.outputStoragePath ?? raw.output_storage_path ?? null,
   };
 }
 
@@ -91,49 +106,72 @@ async function _readError(res: Response): Promise<string> {
   }
 }
 
-export async function getCaptureSession(jobId: string): Promise<CaptureSession> {
-  if (!jobId) return _emptySession();
+export async function getCaptureSession(jobId: string, kind: CaptureKind = 'splat'): Promise<CaptureSession> {
+  if (!jobId) return _emptySession(kind);
   try {
     const headers = await actorHeaders();
     const res = await fetch(
-      `${API_BASE}/api/capture/sessions?job_id=${encodeURIComponent(jobId)}`,
+      `${API_BASE}/api/capture/sessions?job_id=${encodeURIComponent(jobId)}&kind=${encodeURIComponent(kind)}`,
       { headers },
     );
-    if (!res.ok) return _emptySession();
-    return _asSession(await res.json());
+    if (!res.ok) return _emptySession(kind);
+    return _asSession(await res.json(), kind);
   } catch {
-    return _emptySession();
+    return _emptySession(kind);
   }
 }
 
-export async function ensureCaptureSession(jobId: string): Promise<CaptureSession> {
-  if (!jobId) return _emptySession();
+export async function ensureCaptureSession(jobId: string, kind: CaptureKind = 'splat'): Promise<CaptureSession> {
+  if (!jobId) return _emptySession(kind);
   try {
     const headers = await actorHeaders({ 'Content-Type': 'application/json' });
     const res = await fetch(`${API_BASE}/api/capture/sessions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ job_id: jobId }),
+      body: JSON.stringify({ job_id: jobId, kind }),
     });
-    if (!res.ok) return _emptySession();
-    return _asSession(await res.json());
+    if (!res.ok) return _emptySession(kind);
+    return _asSession(await res.json(), kind);
   } catch {
-    return _emptySession();
+    return _emptySession(kind);
   }
 }
 
-export async function submitCaptureSession(jobId: string): Promise<{ ok: boolean; error?: string; session?: CaptureSession }> {
+export async function addCaptureRoom(
+  jobId: string,
+  name: string,
+  kind: CaptureKind = 'splat',
+): Promise<{ ok: boolean; error?: string; session?: CaptureSession }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
+  try {
+    const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+    const res = await fetch(`${API_BASE}/api/capture/rooms`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ job_id: jobId, kind, name }),
+    });
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    return { ok: true, session: _asSession(await res.json(), kind) };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+export async function submitCaptureSession(
+  jobId: string,
+  kind: CaptureKind = 'splat',
+): Promise<{ ok: boolean; error?: string; session?: CaptureSession }> {
   if (!jobId) return { ok: false, error: 'Missing job' };
   try {
     const headers = await actorHeaders({ 'Content-Type': 'application/json' });
     const res = await fetch(`${API_BASE}/api/capture/submit`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ job_id: jobId }),
+      body: JSON.stringify({ job_id: jobId, kind }),
     });
     if (!res.ok) return { ok: false, error: await _readError(res) };
     const body = await res.json();
-    return { ok: true, session: _asSession(body.session ?? body) };
+    return { ok: true, session: _asSession(body.session ?? body, kind) };
   } catch (e: any) {
     return { ok: false, error: String(e?.message ?? e) };
   }
@@ -143,6 +181,7 @@ export async function uploadCaptureFrame(
   jobId: string,
   fileUri: string,
   roomId?: string | null,
+  kind: CaptureKind = 'splat',
 ): Promise<{ ok: boolean; error?: string; session?: CaptureSession; frameCount?: number }> {
   if (!jobId) return { ok: false, error: 'Missing job' };
   if (!fileUri) return { ok: false, error: 'Missing photo' };
@@ -151,7 +190,7 @@ export async function uploadCaptureFrame(
     const signRes = await fetch(`${API_BASE}/api/capture/frames/sign`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ job_id: jobId, room_id: roomId ?? undefined }),
+      body: JSON.stringify({ job_id: jobId, room_id: roomId ?? undefined, kind }),
     });
     if (!signRes.ok) return { ok: false, error: await _readError(signRes) };
     const signed = await signRes.json();
@@ -189,10 +228,11 @@ export async function uploadCaptureFrame(
         session_id: signed.session_id,
         room_id: signed.room_id ?? roomId ?? null,
         storage_path: path,
+        kind,
       }),
     });
     if (!commitRes.ok) return { ok: false, error: await _readError(commitRes) };
-    const session = _asSession(await commitRes.json());
+    const session = _asSession(await commitRes.json(), kind);
     return { ok: true, session, frameCount: session.frameCount };
   } catch (e: any) {
     return { ok: false, error: String(e?.message ?? e) };

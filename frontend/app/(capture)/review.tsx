@@ -4,13 +4,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
 import { getCaptureSession, submitCaptureSession } from '../../lib/capture-api';
-import type { CaptureSession } from '../../lib/capture-api';
+import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
 
 const TONE_COLOR: Record<string, string> = { ok: COLORS.ok, warn: COLORS.warn, bad: COLORS.bad };
 
 export default function ReviewScreen() {
   const router = useRouter();
-  const { jobId } = useLocalSearchParams<{ jobId: string }>();
+  const { jobId, kind: kindParam } = useLocalSearchParams<{ jobId: string; kind?: string }>();
+  const kind: CaptureKind = kindParam === 'floorplan' ? 'floorplan' : 'splat';
 
   const [session, setSession] = useState<CaptureSession | null>(null);
   const [loading, setLoading] = useState(true);
@@ -21,20 +22,20 @@ export default function ReviewScreen() {
     let cancelled = false;
     (async () => {
       if (!jobId) { setLoading(false); return; }
-      const s = await getCaptureSession(jobId);
+      const s = await getCaptureSession(jobId, kind);
       if (!cancelled) {
         setSession(s);
         setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [jobId]);
+  }, [jobId, kind]);
 
   const handleSubmit = async () => {
     if (!jobId) return;
     setSubmitting(true);
     setSubmitError(null);
-    const result = await submitCaptureSession(jobId);
+    const result = await submitCaptureSession(jobId, kind);
     setSubmitting(false);
     if (!result.ok) {
       setSubmitError(result.error ?? 'Submit failed');
@@ -68,7 +69,7 @@ export default function ReviewScreen() {
           </TouchableOpacity>
           <Text style={styles.heroAddress}>{address}</Text>
           <Text style={styles.heroMeta}>
-            {[meta, `${totalFrames.toLocaleString()} FRAMES`].filter(Boolean).join(' · ')}
+            {[meta, kind === 'floorplan' ? 'FLOOR PLAN' : '3D TOUR', `${totalFrames.toLocaleString()} FRAMES`].filter(Boolean).join(' · ')}
           </Text>
         </View>
 
@@ -94,11 +95,14 @@ export default function ReviewScreen() {
           {!loading && rooms.length > 0 && (
             (() => {
               const weakest = rooms.slice().sort((a, b) => a.n - b.n)[0];
-              if (weakest && weakest.n < 20) {
+              const minOk = kind === 'floorplan' ? 4 : 20;
+              if (weakest && weakest.n < minOk) {
                 return (
                   <View style={styles.warnBanner}>
                     <Text style={styles.warnText}>
-                      {weakest.name} coverage is thin — add a few more frames before submitting.
+                      {kind === 'floorplan'
+                        ? `${weakest.name} still needs more corners/walls before submitting.`
+                        : `${weakest.name} coverage is thin — add a few more frames before submitting.`}
                     </Text>
                   </View>
                 );

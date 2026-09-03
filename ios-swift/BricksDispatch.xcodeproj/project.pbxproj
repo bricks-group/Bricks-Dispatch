@@ -41,6 +41,8 @@
 		F3048F3F96E2354076689666 /* NextJobWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E27BA42AA2616FC551268EF /* NextJobWidget.swift */; };
 		F5A98EB40F6A092AAF4F58EA /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0090A352F28A63ACCE1FBA26 /* ProfileEditView.swift */; };
 		FDD22D9FA211EED49BF331AD /* JobNavigationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */; };
+		8D02F3B15C6E7F902B3C4D5E /* FloorPlanCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91E2A04B5D6E8F1A2B3C4D /* FloorPlanCaptureView.swift */; };
+		B5F92C03D1E4A5B6C7D8E9F0 /* SplatCaptureStubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E81B92C0D3F4A5B6C7D8E9 /* SplatCaptureStubView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -114,6 +116,8 @@
 		F7EB18ED7956CB789E3678B0 /* JobDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobDetailView.swift; sourceTree = "<group>"; };
 		F87A93F941139D23AED3EA21 /* JobOfferView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobOfferView.swift; sourceTree = "<group>"; };
 		FE8A78F8D2EB4CD128E90BC6 /* JobLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobLiveActivity.swift; sourceTree = "<group>"; };
+		7C91E2A04B5D6E8F1A2B3C4D /* FloorPlanCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanCaptureView.swift; sourceTree = "<group>"; };
+		A4E81B92C0D3F4A5B6C7D8E9 /* SplatCaptureStubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatCaptureStubView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -303,10 +307,20 @@
 			path = Uploads;
 			sourceTree = "<group>";
 		};
+		9E13A4C26D7F80A13C4D5E6F /* Capture */ = {
+			isa = PBXGroup;
+			children = (
+				7C91E2A04B5D6E8F1A2B3C4D /* FloorPlanCaptureView.swift */,
+				A4E81B92C0D3F4A5B6C7D8E9 /* SplatCaptureStubView.swift */,
+			);
+			path = Capture;
+			sourceTree = "<group>";
+		};
 		CBC999DA83EB09994D73B1B9 /* Views */ = {
 			isa = PBXGroup;
 			children = (
 				41DC7035BD1DD695DCEB6E1E /* Auth */,
+				9E13A4C26D7F80A13C4D5E6F /* Capture */,
 				D08C6A85E1110F7480AC63BF /* Delivery */,
 				047AC49CCB64AB56B36E853C /* Earnings */,
 				771204456DA48C19FAB532D8 /* Jobs */,
@@ -503,6 +517,8 @@
 				BF65E3AD972A43F8F5D84FC1 /* DeliveryRevealView.swift in Sources */,
 				414919BE406979CC67E19F48 /* EarningsView.swift in Sources */,
 				63CDC83D3918CD9626AF51C0 /* JobDetailView.swift in Sources */,
+				8D02F3B15C6E7F902B3C4D5E /* FloorPlanCaptureView.swift in Sources */,
+				B5F92C03D1E4A5B6C7D8E9F0 /* SplatCaptureStubView.swift in Sources */,
 				FDD22D9FA211EED49BF331AD /* JobNavigationView.swift in Sources */,
 				8590404A516DC9F059A91248 /* JobOfferCard.swift in Sources */,
 				854C58FCE5E5E014AE38D113 /* JobStore.swift in Sources */,

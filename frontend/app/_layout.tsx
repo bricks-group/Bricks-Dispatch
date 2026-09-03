@@ -98,8 +98,9 @@ export default function RootLayout() {
   // Auth routing guard — new users see welcome slides first
   useEffect(() => {
     if (!authChecked || !fontsLoaded) return;
-    const inAuth = segments[0] === '(auth)';
-    const inOnboardingSlides = segments[0] === 'onboarding' && segments[1] === 'slides';
+    const segs = segments as string[];
+    const inAuth = segs[0] === '(auth)';
+    const inOnboardingSlides = segs[0] === 'onboarding' && segs[1] === 'slides';
     if (!session && !inAuth && !inOnboardingSlides) {
       AsyncStorage.getItem('welcome_seen').then(seen => {
         if (!seen) router.replace('/onboarding/slides' as any);

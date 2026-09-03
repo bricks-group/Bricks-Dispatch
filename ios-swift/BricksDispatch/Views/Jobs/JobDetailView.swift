@@ -11,6 +11,8 @@ struct JobDetailView: View {
     @State private var listingQuery = ""
     @State private var assigning = false
     @State private var listingBusy = false
+    @State private var showFloorPlanCapture = false
+    @State private var showSplatCapture = false
 
     init(job: DispatchJob) {
         self.job = job
@@ -101,6 +103,12 @@ struct JobDetailView: View {
         }
         .onChange(of: live.assigneeId) { _, new in
             pick = new ?? ""
+        }
+        .fullScreenCover(isPresented: $showFloorPlanCapture) {
+            FloorPlanCaptureView(job: live)
+        }
+        .fullScreenCover(isPresented: $showSplatCapture) {
+            SplatCaptureStubView(job: live)
         }
     }
 
@@ -360,19 +368,41 @@ struct JobDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(BricksSecondaryButton())
+
+                captureModeButtons
             }
 
         case .inProgress:
-            Button {
-                Task { await store.markCompleted(live) }
-            } label: {
-                Label("Mark shoot complete", systemImage: "checkmark.circle.fill")
-                    .frame(maxWidth: .infinity)
+            VStack(spacing: 10) {
+                Button {
+                    Task { await store.markCompleted(live) }
+                } label: {
+                    Label("Mark shoot complete", systemImage: "checkmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(BricksPrimaryButton())
+
+                captureModeButtons
             }
-            .buttonStyle(BricksPrimaryButton())
 
         default:
             EmptyView()
+        }
+    }
+
+    private var captureModeButtons: some View {
+        VStack(spacing: 10) {
+            Button { showSplatCapture = true } label: {
+                Label("3D tour capture", systemImage: "cube.transparent")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(BricksSecondaryButton())
+
+            Button { showFloorPlanCapture = true } label: {
+                Label("Floor plan capture", systemImage: "square.split.bottomrightquarter")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(BricksSecondaryButton())
         }
     }
 }

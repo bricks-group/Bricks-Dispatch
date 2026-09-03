@@ -1,9 +1,13 @@
-"""Phone-capture endpoints for owned-splat frames.
+"""Phone-capture endpoints for owned-splat frames and in-app floor plans.
 
 JPEG bytes do NOT go through POST /api/uploads (professional stills, 4MB
 Vercel cap). The app takes a picture, asks this router for a signed upload
 URL in brxs-deliverables at capture/{session_id}/{n}.jpg, PUTs the file
 straight to Storage, then commits the frame row.
+
+kind=splat  — Gaussian tour frames (existing shutter).
+kind=floorplan — room-corner / wall tracing frames. Separate session so a
+job can have both. Phone frames are NOT sent to BoxBrownie.
 
 Tables live in Bricks-OS (capture_sessions / rooms / pipeline / frames) and
 are service-role-only, same as jobs/uploads.
@@ -11,7 +15,7 @@ are service-role-only, same as jobs/uploads.
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 
 from ..services.storage import STORAGE_BUCKET, create_signed_upload_url
 from ..shared.auth import get_vendor_member, is_vendor_admin, resolve_vendor_actor_id
@@ -21,12 +25,34 @@ from ..shared.job_scope import job_visible_to
 
 router = APIRouter(prefix="/api/capture", tags=["capture"])
 
-_PIPELINE = (
-    ("Captured", "0 frames", "active"),
-    ("Splatting", "Queued — reconstruction worker not running yet", "todo"),
-    ("QC", "Auto + human review", "todo"),
-    ("Delivered", "Splat tour to agent", "todo"),
-)
+_VALID_KINDS = ("splat", "floorplan")
+
+_PIPELINES = {
+    "splat": (
+        ("Captured", "0 frames", "active"),
+        ("Splatting", "Queued — reconstruction worker not running yet", "todo"),
+        ("QC", "Auto + human review", "todo"),
+        ("Delivered", "Splat tour to agent", "todo"),
+    ),
+    "floorplan": (
+        ("Captured", "0 frames", "active"),
+        ("Tracing", "Queued — floor-plan tracer not running yet", "todo"),
+        ("QC", "Human review of traced plan", "todo"),
+        ("Delivered", "Floor plan to listing file", "todo"),
+    ),
+}
+
+_FLOORPLAN_NOTE = "Floor plan capture submitted"
+
+
+def _normalize_kind(raw) -> str:
+    k = str(raw or "splat").strip().lower().replace("-", "").replace("_", "")
+    if k in ("floorplan", "floorplans"):
+        return "floorplan"
+    if k in ("splat", "splats", "tour", "3dtour", "3d"):
+        return "splat"
+    api_error(400, "kind must be splat or floorplan", "bad_capture_kind")
+    return "splat"
 
 
 def _missing_table(exc: Exception) -> bool:
@@ -46,7 +72,13 @@ def _job_meta(job: dict) -> tuple[str, str]:
     return address, " · ".join(parts)
 
 
-def _tone(frames: int) -> str:
+def _tone(frames: int, kind: str = "splat") -> str:
+    if kind == "floorplan":
+        if frames >= 4:
+            return "ok"
+        if frames >= 2:
+            return "warn"
+        return "bad"
     if frames >= 20:
         return "ok"
     if frames >= 8:
@@ -54,27 +86,39 @@ def _tone(frames: int) -> str:
     return "bad"
 
 
-def _derive_guidance(rooms: list[dict]) -> Optional[dict]:
+def _derive_guidance(rooms: list[dict], kind: str = "splat") -> Optional[dict]:
     if not rooms:
         return None
     uncovered = [r for r in rooms if (r.get("n") or 0) == 0]
     if uncovered:
         name = uncovered[0]["name"]
+        if kind == "floorplan":
+            return {
+                "room": name,
+                "message": f"Walk the {name} — photograph each corner and wall. Tracing frames, not HDR stills.",
+            }
         return {"room": name, "message": f"Head to the {name} — it hasn't been captured yet."}
     weakest = sorted(rooms, key=lambda r: r.get("n") or 0)[0]
-    if weakest and (weakest.get("n") or 0) < 20:
+    min_ok = 4 if kind == "floorplan" else 20
+    if weakest and (weakest.get("n") or 0) < min_ok:
         name = weakest["name"]
+        if kind == "floorplan":
+            return {
+                "room": name,
+                "message": f"The {name} still needs more corners and walls before submit.",
+            }
         return {"room": name, "message": f"Coverage in the {name} is thin — add a few more angles before submitting."}
     return None
 
 
-def _empty_session(job: Optional[dict] = None) -> dict:
+def _empty_session(job: Optional[dict] = None, kind: str = "splat") -> dict:
     address, meta = _job_meta(job or {})
     return {
         "sessionId": None,
         "currentRoomId": None,
         "address": address,
         "meta": meta,
+        "kind": kind,
         "rooms": [],
         "pipeline": [],
         "frameCount": 0,
@@ -83,7 +127,14 @@ def _empty_session(job: Optional[dict] = None) -> dict:
     }
 
 
-def _shape_session(job: dict, session: dict, rooms_rows: list, pipeline_rows: list) -> dict:
+def _shape_session(
+    job: dict,
+    session: dict,
+    rooms_rows: list,
+    pipeline_rows: list,
+    preferred_room_id: Optional[str] = None,
+) -> dict:
+    kind = session.get("kind") or "splat"
     rooms = [
         {
             "name": r.get("name") or "Room",
@@ -104,19 +155,24 @@ def _shape_session(job: dict, session: dict, rooms_rows: list, pipeline_rows: li
     address, meta = _job_meta(job)
     frame_count = session.get("frame_count") or 0
     current_room = rooms[0] if rooms else None
-    guidance = _derive_guidance(rooms)
-    if guidance:
+    if preferred_room_id:
+        current_room = next((r for r in rooms if r.get("id") == preferred_room_id), current_room)
+    guidance = _derive_guidance(rooms, kind)
+    if guidance and not preferred_room_id:
         current_room = next((r for r in rooms if r["name"] == guidance["room"]), current_room)
     return {
         "sessionId": session.get("id"),
         "currentRoomId": (current_room or {}).get("id"),
         "address": address,
         "meta": meta,
+        "kind": kind,
+        "status": session.get("status"),
         "rooms": rooms,
         "pipeline": pipeline,
         "frameCount": frame_count,
         "guidance": guidance,
         "estimatedDeliveryHours": None,
+        "outputStoragePath": session.get("output_storage_path"),
     }
 
 
@@ -127,7 +183,7 @@ async def _actor_and_job(authorization: Optional[str], x_user_id: Optional[str],
     actor_member = await get_vendor_member(actor_id)
     db = await get_db()
     res = await db.table("jobs").select(
-        "id, address, job_type, sqft, vendor_id, assignee_id, status"
+        "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id"
     ).eq("id", job_id).maybe_single().execute()
     job = res.data or {}
     if not job_visible_to(
@@ -139,7 +195,9 @@ async def _actor_and_job(authorization: Optional[str], x_user_id: Optional[str],
     return actor_member, job
 
 
-async def _load_session_bundle(db, job_id: str, session: Optional[dict], job: dict) -> dict:
+async def _load_session_bundle(
+    db, job_id: str, session: Optional[dict], job: dict, preferred_room_id: Optional[str] = None,
+) -> dict:
     if not session:
         return _empty_session(job)
     sid = session["id"]
@@ -149,21 +207,21 @@ async def _load_session_bundle(db, job_id: str, session: Optional[dict], job: di
     pipeline = await db.table("capture_pipeline").select("title, detail, status, position").eq(
         "session_id", sid
     ).order("position", desc=False).execute()
-    return _shape_session(job, session, rooms.data or [], pipeline.data or [])
+    return _shape_session(job, session, rooms.data or [], pipeline.data or [], preferred_room_id)
 
 
-async def _latest_session(db, job_id: str) -> Optional[dict]:
-    res = await db.table("capture_sessions").select("*").eq("job_id", job_id).order(
-        "created_at", desc=True
-    ).limit(1).execute()
+async def _latest_session(db, job_id: str, kind: str) -> Optional[dict]:
+    res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
+        "kind", kind
+    ).order("created_at", desc=True).limit(1).execute()
     rows = res.data or []
     return rows[0] if rows else None
 
 
-async def _in_progress_session(db, job_id: str) -> Optional[dict]:
+async def _in_progress_session(db, job_id: str, kind: str) -> Optional[dict]:
     res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
         "status", "in_progress"
-    ).order("created_at", desc=True).limit(1).execute()
+    ).eq("kind", kind).order("created_at", desc=True).limit(1).execute()
     rows = res.data or []
     return rows[0] if rows else None
 
@@ -171,18 +229,22 @@ async def _in_progress_session(db, job_id: str) -> Optional[dict]:
 @router.get("/sessions")
 async def get_session(
     job_id: str,
+    kind: str = Query(default="splat"),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """Return the latest capture session for a job, or an honest empty shape."""
+    """Return the latest capture session of this kind for a job, or an honest empty shape."""
+    kind = _normalize_kind(kind)
     _, job = await _actor_and_job(authorization, x_user_id, job_id)
     try:
         db = await get_db()
-        session = await _latest_session(db, job_id)
-        return await _load_session_bundle(db, job_id, session, job)
+        session = await _latest_session(db, job_id, kind)
+        payload = await _load_session_bundle(db, job_id, session, job)
+        payload["kind"] = kind
+        return payload
     except Exception as e:
         if _missing_table(e):
-            return _empty_session(job)
+            return _empty_session(job, kind)
         raise
 
 
@@ -192,12 +254,16 @@ async def ensure_session(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """Create capture_sessions + four pipeline rows + a default room if needed."""
+    """Create capture_sessions + four pipeline rows + a default room if needed.
+
+    kind is splat | floorplan. A job may have one in-progress session of each.
+    """
     job_id = (payload or {}).get("job_id") or ""
+    kind = _normalize_kind((payload or {}).get("kind"))
     _, job = await _actor_and_job(authorization, x_user_id, job_id)
     try:
         db = await get_db()
-        existing = await _in_progress_session(db, job_id)
+        existing = await _in_progress_session(db, job_id, kind)
         if existing:
             return await _load_session_bundle(db, job_id, existing, job)
 
@@ -205,6 +271,7 @@ async def ensure_session(
         inserted = await db.table("capture_sessions").insert({
             "job_id": job_id,
             "status": "in_progress",
+            "kind": kind,
             "frame_count": 0,
             "created_at": now,
             "updated_at": now,
@@ -223,7 +290,7 @@ async def ensure_session(
                 "status": status,
                 "position": i,
             }
-            for i, (title, detail, status) in enumerate(_PIPELINE)
+            for i, (title, detail, status) in enumerate(_PIPELINES[kind])
         ]).execute()
         await db.table("capture_rooms").insert({
             "session_id": sid,
@@ -233,11 +300,55 @@ async def ensure_session(
             "tone": "bad",
             "position": 0,
         }).execute()
-        session = await _in_progress_session(db, job_id) or session
+        session = await _in_progress_session(db, job_id, kind) or session
         return await _load_session_bundle(db, job_id, session, job)
     except Exception as e:
         if _missing_table(e):
-            return _empty_session(job)
+            return _empty_session(job, kind)
+        raise
+
+
+@router.post("/rooms")
+async def add_room(
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Add a named room to the in-progress session of this kind (floor-plan walk)."""
+    job_id = (payload or {}).get("job_id") or ""
+    kind = _normalize_kind((payload or {}).get("kind"))
+    name = str((payload or {}).get("name") or "").strip()
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    try:
+        db = await get_db()
+        session = await _in_progress_session(db, job_id, kind)
+        if not session:
+            api_error(409, "No in-progress capture session", "session_not_found")
+        sid = session["id"]
+        existing = await db.table("capture_rooms").select("id, name, position").eq(
+            "session_id", sid
+        ).order("position", desc=False).execute()
+        rows = existing.data or []
+        next_pos = (max((r.get("position") or 0) for r in rows) + 1) if rows else 0
+        if not name:
+            name = f"Room {len(rows) + 1}"
+        inserted = await db.table("capture_rooms").insert({
+            "session_id": sid,
+            "job_id": job_id,
+            "name": name,
+            "frames": 0,
+            "tone": "bad",
+            "position": next_pos,
+        }).execute()
+        room = (inserted.data or [None])[0]
+        return await _load_session_bundle(
+            db, job_id, session, job, preferred_room_id=(room or {}).get("id"),
+        )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        if _missing_table(e):
+            api_error(503, "Capture tables are not applied yet", "capture_tables_missing")
         raise
 
 
@@ -249,10 +360,11 @@ async def sign_frame_upload(
 ):
     """Return a signed upload URL for capture/{session_id}/{n}.jpg."""
     job_id = (payload or {}).get("job_id") or ""
+    kind = _normalize_kind((payload or {}).get("kind"))
     _, job = await _actor_and_job(authorization, x_user_id, job_id)
     try:
         db = await get_db()
-        session = await _in_progress_session(db, job_id)
+        session = await _in_progress_session(db, job_id, kind)
         if not session:
             api_error(409, "No in-progress capture session", "session_not_found")
         sid = session["id"]
@@ -272,6 +384,7 @@ async def sign_frame_upload(
         return {
             "session_id": sid,
             "room_id": room_id,
+            "kind": kind,
             "n": n,
             "path": signed.get("path") or path,
             "token": signed.get("token"),
@@ -310,6 +423,7 @@ async def commit_frame(
         session = session_res.data or {}
         if not session or session.get("status") != "in_progress":
             api_error(409, "No in-progress capture session", "session_not_found")
+        kind = session.get("kind") or "splat"
 
         now = datetime.now(timezone.utc).isoformat()
         await db.table("capture_frames").insert({
@@ -335,7 +449,7 @@ async def commit_frame(
                 room_frames = int(room.get("frames") or 0) + 1
                 await db.table("capture_rooms").update({
                     "frames": room_frames,
-                    "tone": _tone(room_frames),
+                    "tone": _tone(room_frames, kind),
                 }).eq("id", room_id).execute()
 
         await db.table("capture_pipeline").update({
@@ -344,7 +458,7 @@ async def commit_frame(
         }).eq("session_id", session_id).eq("title", "Captured").execute()
 
         session["frame_count"] = new_count
-        return await _load_session_bundle(db, job_id, session, job)
+        return await _load_session_bundle(db, job_id, session, job, preferred_room_id=room_id)
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
@@ -353,21 +467,40 @@ async def commit_frame(
         raise
 
 
+async def _note_floorplan_on_job(db, job: dict, job_id: str, sid: str, n: int, now: str) -> None:
+    """Checklist + output_storage_path. Do NOT send phone frames to BoxBrownie."""
+    checklist = job.get("checklist") or []
+    if not isinstance(checklist, list):
+        checklist = []
+    already = any(
+        isinstance(c, dict) and (c.get("label") or "") == _FLOORPLAN_NOTE
+        for c in checklist
+    )
+    if not already:
+        checklist = list(checklist) + [{"label": _FLOORPLAN_NOTE, "completed": True}]
+        await db.table("jobs").update({
+            "checklist": checklist,
+            "updated_at": now,
+        }).eq("id", job_id).execute()
+    # Placeholder status lives on the session; listing-file viewer is not wired.
+    # media_files.floor_plan is the BoxBrownie stills path — leave it alone.
+
+
 @router.post("/submit")
 async def submit_session(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """Mark the session submitted. Captured=done, Splatting stays todo (no worker yet)."""
+    """Mark the session submitted. Next pipeline stage stays todo until a worker exists."""
     job_id = (payload or {}).get("job_id") or ""
+    kind = _normalize_kind((payload or {}).get("kind"))
     _, job = await _actor_and_job(authorization, x_user_id, job_id)
     try:
         db = await get_db()
-        session = await _in_progress_session(db, job_id)
+        session = await _in_progress_session(db, job_id, kind)
         if not session:
-            # Already submitted is ok; missing entirely is not.
-            latest = await _latest_session(db, job_id)
+            latest = await _latest_session(db, job_id, kind)
             if latest and latest.get("status") == "submitted":
                 return {"ok": True, "session": await _load_session_bundle(db, job_id, latest, job)}
             api_error(409, "No in-progress capture session to submit", "session_not_found")
@@ -375,23 +508,35 @@ async def submit_session(
         now = datetime.now(timezone.utc).isoformat()
         n = int(session.get("frame_count") or 0)
         sid = session["id"]
+        output_path = f"capture/{sid}/"
         await db.table("capture_sessions").update({
             "status": "submitted",
             "submitted_at": now,
             "updated_at": now,
+            "output_storage_path": output_path,
         }).eq("id", sid).execute()
         await db.table("capture_pipeline").update({
             "status": "done",
             "detail": f"{n} frames",
         }).eq("session_id", sid).eq("title", "Captured").execute()
-        # Worker does not exist yet — never paint Splatting as active.
-        await db.table("capture_pipeline").update({
-            "status": "todo",
-            "detail": "Queued — reconstruction worker not running yet",
-        }).eq("session_id", sid).eq("title", "Splatting").execute()
+
+        if kind == "floorplan":
+            # Tracer does not exist yet — never paint Tracing as active.
+            await db.table("capture_pipeline").update({
+                "status": "todo",
+                "detail": "Queued — floor-plan tracer not running yet",
+            }).eq("session_id", sid).eq("title", "Tracing").execute()
+            await _note_floorplan_on_job(db, job, job_id, sid, n, now)
+        else:
+            # Worker does not exist yet — never paint Splatting as active.
+            await db.table("capture_pipeline").update({
+                "status": "todo",
+                "detail": "Queued — reconstruction worker not running yet",
+            }).eq("session_id", sid).eq("title", "Splatting").execute()
 
         session["status"] = "submitted"
         session["submitted_at"] = now
+        session["output_storage_path"] = output_path
         return {"ok": True, "session": await _load_session_bundle(db, job_id, session, job)}
     except Exception as e:
         if isinstance(e, HTTPException):

@@ -604,7 +604,7 @@ export default function JobDetailScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={[s.captureBtn, actioning && { opacity: 0.5 }]}
-              onPress={() => router.push({ pathname: '/(capture)/capture', params: { jobId: id } } as any)}
+              onPress={() => router.push({ pathname: '/(capture)/mode', params: { jobId: id } } as any)}
               disabled={actioning}
             >
               {actioning

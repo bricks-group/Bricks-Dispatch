@@ -6,7 +6,9 @@ import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
 import { ensureCaptureSession, uploadCaptureFrame } from '../../lib/capture-api';
-import type { CaptureSession } from '../../lib/capture-api';
+import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
+
+const DEFAULT_KIND: CaptureKind = 'splat';
 
 const DOME_TOTAL = 24;
 
@@ -34,7 +36,8 @@ function CoverageDome({ captured, total }: { captured: number; total: number }) 
 
 export default function CaptureScreen() {
   const router = useRouter();
-  const { jobId } = useLocalSearchParams<{ jobId: string }>();
+  const { jobId, kind: kindParam } = useLocalSearchParams<{ jobId: string; kind?: string }>();
+  const kind: CaptureKind = kindParam === 'floorplan' ? 'floorplan' : DEFAULT_KIND;
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const shutterBusy = useRef(false);
@@ -45,17 +48,23 @@ export default function CaptureScreen() {
   const [captureError, setCaptureError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (kind === 'floorplan' && jobId) {
+      router.replace({ pathname: '/(capture)/floorplan', params: { jobId, kind: 'floorplan' } } as any);
+    }
+  }, [kind, jobId]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!jobId) return;
-      const s = await ensureCaptureSession(jobId);
+      if (!jobId || kind === 'floorplan') return;
+      const s = await ensureCaptureSession(jobId, kind);
       if (!cancelled) {
         setSession(s);
         setFrameCount(s.frameCount ?? 0);
       }
     })();
     return () => { cancelled = true; };
-  }, [jobId]);
+  }, [jobId, kind]);
 
   const currentRoom = session?.rooms?.find(r => r.name === session.guidance?.room)
     ?? session?.rooms?.[0];
@@ -90,7 +99,7 @@ export default function CaptureScreen() {
         setCaptureError('Camera did not return a photo');
         return;
       }
-      const result = await uploadCaptureFrame(jobId, photo.uri, session?.currentRoomId);
+      const result = await uploadCaptureFrame(jobId, photo.uri, session?.currentRoomId, kind);
       if (!result.ok) {
         setCaptureError(result.error ?? 'Frame upload failed');
         return;
@@ -160,7 +169,7 @@ export default function CaptureScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.doneBtn}
-            onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId } } as any)}
+            onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId, kind } } as any)}
           >
             <Text style={styles.chipText}>✓</Text>
           </TouchableOpacity>
