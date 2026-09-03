@@ -146,9 +146,37 @@ public final class BricksAPIClient: @unchecked Sendable {
         case 404:
             throw BricksAPIError.notFound
         default:
-            let msg = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw BricksAPIError.serverError(http.statusCode, msg)
+            let parsed = BricksAPIError.parseBody(data)
+            throw BricksAPIError.serverError(http.statusCode, parsed.message)
         }
+    }
+}
+
+extension BricksAPIError {
+    /// FastAPI `{detail: {code, message}}` or `{detail: "…"}` or `{message}/{error}`.
+    public static func parseBody(_ data: Data) -> (code: String?, message: String) {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) else {
+            let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return (nil, raw.isEmpty ? "Unknown error" : raw)
+        }
+        return parseJSON(obj)
+    }
+
+    public static func parseJSON(_ obj: Any) -> (code: String?, message: String) {
+        guard let dict = obj as? [String: Any] else {
+            return (nil, String(describing: obj))
+        }
+        var code: String?
+        var message: String?
+        if let detail = dict["detail"] as? [String: Any] {
+            code = detail["code"] as? String
+            message = detail["message"] as? String
+        } else if let detail = dict["detail"] as? String {
+            message = detail
+        }
+        if code == nil { code = dict["code"] as? String }
+        if message == nil { message = dict["message"] as? String ?? dict["error"] as? String }
+        return (code, message ?? "Unknown error")
     }
 }
 

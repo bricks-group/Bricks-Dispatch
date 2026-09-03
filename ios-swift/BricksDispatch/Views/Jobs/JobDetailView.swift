@@ -108,7 +108,7 @@ struct JobDetailView: View {
             FloorPlanCaptureView(job: live)
         }
         .fullScreenCover(isPresented: $showSplatCapture) {
-            SplatCaptureStubView(job: live)
+            TourCaptureView(job: live)
         }
     }
 

@@ -100,4 +100,53 @@ final class BricksCoreTests: XCTestCase {
         XCTAssertEqual(s.count, 10)
         XCTAssertTrue(s.contains("-"))
     }
+
+    func testCaptureSessionParsesCamelCase() throws {
+        let json = """
+        {"sessionId":"s1","currentRoomId":"r1","address":"10 Main","meta":"PHOTO","kind":"splat","frameCount":12,"stationCount":1,"currentStationIndex":0,"rooms":[{"id":"r1","name":"Kitchen","tone":"ok","n":12}],"pipeline":[{"title":"Captured","detail":"12 frames","status":"active"}],"stations":[{"station_index":0,"room":"Kitchen","panCount":12,"hasEquirect":false}]}
+        """.data(using: .utf8)!
+        let s = CaptureAPIClient.parseSession(json, kind: .splat)
+        XCTAssertEqual(s.sessionId, "s1")
+        XCTAssertEqual(s.currentRoomId, "r1")
+        XCTAssertEqual(s.address, "10 Main")
+        XCTAssertEqual(s.frameCount, 12)
+        XCTAssertEqual(s.stationCount, 1)
+        XCTAssertEqual(s.rooms.count, 1)
+        XCTAssertEqual(s.rooms[0].name, "Kitchen")
+        XCTAssertEqual(s.stations.first?.panCount, 12)
+        XCTAssertTrue(s.canSubmit)
+    }
+
+    func testCaptureSessionParsesSnakeCase() throws {
+        let json = """
+        {"session_id":"s2","current_room_id":"r2","address":"12 King","kind":"floorplan","frame_count":4,"station_count":1,"current_station_index":1,"rooms":[{"id":"r2","name":"Bath","tone":"warn","frames":4}]}
+        """.data(using: .utf8)!
+        let s = CaptureAPIClient.parseSession(json, kind: .floorplan)
+        XCTAssertEqual(s.sessionId, "s2")
+        XCTAssertEqual(s.kind, .floorplan)
+        XCTAssertEqual(s.frameCount, 4)
+        XCTAssertEqual(s.currentStationIndex, 1)
+        XCTAssertEqual(s.rooms.first?.n, 4)
+    }
+
+    func testCaptureForbiddenErrorCopy() {
+        let data = """
+        {"detail":{"code":"capture_kind_not_purchased","message":"This job has no 3D tour. Start Capture does not shoot a tour that was not purchased."}}
+        """.data(using: .utf8)!
+        let parsed = BricksAPIError.parseBody(data)
+        XCTAssertEqual(parsed.code, CaptureAPIClient.notPurchasedCode)
+        XCTAssertTrue(parsed.message.contains("3D tour"))
+        let fail = CaptureAPIClient.fail(data, fallback: "HTTP 403")
+        XCTAssertFalse(fail.ok)
+        XCTAssertEqual(fail.code, "capture_kind_not_purchased")
+        XCTAssertEqual(fail.error, parsed.message)
+    }
+
+    func testDomeTickWraps() {
+        XCTAssertEqual(CaptureDome.tick(yaw: 0, origin: 0), 0)
+        XCTAssertEqual(CaptureDome.tick(yaw: 15, origin: 0), 1)
+        XCTAssertEqual(CaptureDome.tick(yaw: 350, origin: 0), 23)
+        XCTAssertEqual(CaptureDome.tick(yaw: 10, origin: 10), 0)
+        XCTAssertEqual(CaptureDome.total, 24)
+    }
 }

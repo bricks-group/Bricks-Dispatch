@@ -35,6 +35,8 @@
 	<string>Bricks needs your location to verify you arrived at the shoot address.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Bricks uses the camera for real estate photography jobs.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Bricks uses motion sensors for compass heading while you pan a 360 station.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Bricks saves shoot photos to your photo library.</string>
 	<key>SUPABASE_ANON_KEY</key>

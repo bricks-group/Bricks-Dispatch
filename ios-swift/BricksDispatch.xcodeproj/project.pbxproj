@@ -42,7 +42,11 @@
 		F5A98EB40F6A092AAF4F58EA /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0090A352F28A63ACCE1FBA26 /* ProfileEditView.swift */; };
 		FDD22D9FA211EED49BF331AD /* JobNavigationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59561CDFBD43A34451F1AE28 /* JobNavigationView.swift */; };
 		8D02F3B15C6E7F902B3C4D5E /* FloorPlanCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91E2A04B5D6E8F1A2B3C4D /* FloorPlanCaptureView.swift */; };
-		B5F92C03D1E4A5B6C7D8E9F0 /* SplatCaptureStubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E81B92C0D3F4A5B6C7D8E9 /* SplatCaptureStubView.swift */; };
+		B5F92C03D1E4A5B6C7D8E9F0 /* TourCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E81B92C0D3F4A5B6C7D8E9 /* TourCaptureView.swift */; };
+		D9B2C3D4E5F60718293A4B5C /* CaptureChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A1B2C3D4E5F60718293A4B /* CaptureChrome.swift */; };
+		F1D4E5F60718293A4B5C6D7E /* CaptureFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0C3D4E5F60718293A4B5C6D /* CaptureFlow.swift */; };
+		B3F60718293A4B5C6D7E8F90 /* CaptureReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E5F60718293A4B5C6D7E8F /* CaptureReviewView.swift */; };
+		D5B8293A4B5C6D7E8F90A1B2 /* CaptureHardware.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A718293A4B5C6D7E8F90A1 /* CaptureHardware.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -117,7 +121,11 @@
 		F87A93F941139D23AED3EA21 /* JobOfferView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobOfferView.swift; sourceTree = "<group>"; };
 		FE8A78F8D2EB4CD128E90BC6 /* JobLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobLiveActivity.swift; sourceTree = "<group>"; };
 		7C91E2A04B5D6E8F1A2B3C4D /* FloorPlanCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanCaptureView.swift; sourceTree = "<group>"; };
-		A4E81B92C0D3F4A5B6C7D8E9 /* SplatCaptureStubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatCaptureStubView.swift; sourceTree = "<group>"; };
+		A4E81B92C0D3F4A5B6C7D8E9 /* TourCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TourCaptureView.swift; sourceTree = "<group>"; };
+		C8A1B2C3D4E5F60718293A4B /* CaptureChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureChrome.swift; sourceTree = "<group>"; };
+		E0C3D4E5F60718293A4B5C6D /* CaptureFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureFlow.swift; sourceTree = "<group>"; };
+		A2E5F60718293A4B5C6D7E8F /* CaptureReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureReviewView.swift; sourceTree = "<group>"; };
+		C4A718293A4B5C6D7E8F90A1 /* CaptureHardware.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureHardware.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -293,6 +301,7 @@
 		7FF66001F7020D04E420505C /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				C4A718293A4B5C6D7E8F90A1 /* CaptureHardware.swift */,
 				80BCC8C13F50BC7486102230 /* JobStore.swift */,
 				212130DC62B3E72A521A18F9 /* PushNotificationService.swift */,
 			);
@@ -310,8 +319,11 @@
 		9E13A4C26D7F80A13C4D5E6F /* Capture */ = {
 			isa = PBXGroup;
 			children = (
+				C8A1B2C3D4E5F60718293A4B /* CaptureChrome.swift */,
+				E0C3D4E5F60718293A4B5C6D /* CaptureFlow.swift */,
+				A2E5F60718293A4B5C6D7E8F /* CaptureReviewView.swift */,
 				7C91E2A04B5D6E8F1A2B3C4D /* FloorPlanCaptureView.swift */,
-				A4E81B92C0D3F4A5B6C7D8E9 /* SplatCaptureStubView.swift */,
+				A4E81B92C0D3F4A5B6C7D8E9 /* TourCaptureView.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
@@ -518,7 +530,11 @@
 				414919BE406979CC67E19F48 /* EarningsView.swift in Sources */,
 				63CDC83D3918CD9626AF51C0 /* JobDetailView.swift in Sources */,
 				8D02F3B15C6E7F902B3C4D5E /* FloorPlanCaptureView.swift in Sources */,
-				B5F92C03D1E4A5B6C7D8E9F0 /* SplatCaptureStubView.swift in Sources */,
+				B5F92C03D1E4A5B6C7D8E9F0 /* TourCaptureView.swift in Sources */,
+				D9B2C3D4E5F60718293A4B5C /* CaptureChrome.swift in Sources */,
+				F1D4E5F60718293A4B5C6D7E /* CaptureFlow.swift in Sources */,
+				B3F60718293A4B5C6D7E8F90 /* CaptureReviewView.swift in Sources */,
+				D5B8293A4B5C6D7E8F90A1B2 /* CaptureHardware.swift in Sources */,
 				FDD22D9FA211EED49BF331AD /* JobNavigationView.swift in Sources */,
 				8590404A516DC9F059A91248 /* JobOfferCard.swift in Sources */,
 				854C58FCE5E5E014AE38D113 /* JobStore.swift in Sources */,
