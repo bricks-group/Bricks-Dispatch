@@ -111,13 +111,32 @@ def test_plan_from_roomplan_json():
 
 def test_tour_html_is_equirect_walkthrough():
     stations = [
-        {"id": "station-0", "room": "Kitchen", "file": "scenes/0.jpg", "station_index": 0},
+        {"id": "station-0", "room": "Kitchen", "file": "scenes/0.jpg", "station_index": 0, "heading": 90},
         {"id": "station-1", "room": "Living", "file": "scenes/1.jpg", "station_index": 1},
     ]
     html = build_tour_html(stations, address="10 Main", title="3D tour")
+    low = html.lower()
+    compact = "".join(low.split())
     assert "scenes/0.jpg" in html
     assert "scenes/1.jpg" in html
-    assert "equirect-walkthrough" in build_tour_json(stations)
+    assert "<canvas" in low
+    assert "webgl" in low
+    assert "getcontext" in low
+    assert "object-fit:cover" not in compact
+    assert "object-fit: cover" not in low
+    assert "drag" in low
+    assert "previous" in low
+    assert "next station" in low
+    assert "kitchen" in low
+    assert "living" in low
+    assert "bricks" in low and "3d tour" in low
+    assert "border-radius:2px" in compact
+    meta = build_tour_json(stations)
+    assert "equirect-walkthrough" in meta
+    assert '"panorama": "scenes/0.jpg"' in meta
+    assert '"next": "station-1"' in meta
+    assert '"prev": "station-0"' in meta
+    assert '"heading": 90' in meta
     assert "Pannellum of perspective" not in html
     assert "station-0" in html or "Kitchen" in html
     try:
