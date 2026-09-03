@@ -11,7 +11,13 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.bricks.go"
+      "bundleIdentifier": "com.bricks.go",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Bricks GO uses the camera to capture 3D tour stations and floor plans on listing jobs.",
+        "NSLocationWhenInUseUsageDescription": "Bricks GO uses your location to verify you're on-site when checking in to a job.",
+        "NSMotionUsageDescription": "Bricks GO uses motion sensors for compass heading while you pan a 360 station.",
+        "NSPhotoLibraryUsageDescription": "Bricks GO accesses your photo library so you can upload listing files and profile photos."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -20,7 +26,12 @@
       },
       "package": "com.bricks.go",
       "edgeToEdgeEnabled": true,
-      "versionCode": 4
+      "versionCode": 4,
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -42,6 +53,14 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Bricks GO uses your location to verify you're on-site when checking in to a job."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Bricks GO uses the camera to capture 3D tour stations and floor plans on listing jobs.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ]
     ],

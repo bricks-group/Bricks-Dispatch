@@ -18,6 +18,9 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
+      "ios": {
+        "simulator": true
+      },
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca"
       }
@@ -25,8 +28,29 @@
     "production": {
       "autoIncrement": true,
       "channel": "production",
+      "distribution": "store",
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "simulator": true
+      }
+    },
+    "play": {
+      "extends": "production",
+      "distribution": "store",
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "simulator": true
       }
     }
   }
