@@ -5,9 +5,10 @@ Vercel cap). The app takes a picture, asks this router for a signed upload
 URL in brxs-deliverables at capture/{session_id}/{n}.jpg, PUTs the file
 straight to Storage, then commits the frame row.
 
-kind=splat  — Gaussian tour frames (existing shutter).
+kind=splat  — path-confined 3D tour frames (existing shutter kind enum).
 kind=floorplan — room-corner / wall tracing frames. Separate session so a
-job can have both. Phone frames are NOT sent to BoxBrownie.
+job can have both if both were purchased. Phone frames are NOT sent to BoxBrownie.
+Virtual visit (Gaussian splat / SuperSplat) is not this shutter.
 
 Tables live in Bricks-OS (capture_sessions / rooms / pipeline / frames) and
 are service-role-only, same as jobs/uploads.
@@ -17,6 +18,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query
 
+from ..services.capture_entitlements import (
+    capture_forbidden_message,
+    job_capture_entitlements,
+    kind_purchased,
+)
 from ..services.storage import STORAGE_BUCKET, create_signed_upload_url
 from ..shared.auth import get_vendor_member, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.database import get_db
@@ -124,6 +130,7 @@ def _empty_session(job: Optional[dict] = None, kind: str = "splat") -> dict:
         "frameCount": 0,
         "guidance": None,
         "estimatedDeliveryHours": None,
+        "capture": job_capture_entitlements(job or {}),
     }
 
 
@@ -173,6 +180,7 @@ def _shape_session(
         "guidance": guidance,
         "estimatedDeliveryHours": None,
         "outputStoragePath": session.get("output_storage_path"),
+        "capture": job_capture_entitlements(job),
     }
 
 
@@ -183,7 +191,8 @@ async def _actor_and_job(authorization: Optional[str], x_user_id: Optional[str],
     actor_member = await get_vendor_member(actor_id)
     db = await get_db()
     res = await db.table("jobs").select(
-        "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id"
+        "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id, "
+        "package_id, package_name, add_ons, client_instructions, property_details"
     ).eq("id", job_id).maybe_single().execute()
     job = res.data or {}
     if not job_visible_to(
@@ -261,6 +270,9 @@ async def ensure_session(
     job_id = (payload or {}).get("job_id") or ""
     kind = _normalize_kind((payload or {}).get("kind"))
     _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    flags = job_capture_entitlements(job)
+    if not kind_purchased(job, kind):
+        api_error(403, capture_forbidden_message(kind, flags), "capture_kind_not_purchased")
     try:
         db = await get_db()
         existing = await _in_progress_session(db, job_id, kind)

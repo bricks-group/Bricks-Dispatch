@@ -9,6 +9,7 @@ import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone,
 import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
+import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
@@ -24,6 +25,9 @@ type Job = {
   agent_name: string | null; agent_phone: string | null;
   client_instructions: string | null;
   checklist: ChecklistItem[];
+  package_id?: string | null;
+  add_ons?: unknown;
+  capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
   vendor_payout?: number | null;
   lat?: number | null;
   lng?: number | null;
@@ -348,6 +352,21 @@ export default function JobDetailScreen() {
   const statusColor = STATUS_COLOR[job.status] || TOKENS.moonMute;
   const isComplete = job.status === 'completed';
   const isActive = ['assigned', 'in_progress'].includes(job.status);
+  const captureFlags = jobCaptureModes(job);
+  const hasCaptureMode = captureFlags.tour || captureFlags.floorplan;
+  const startCapture = () => {
+    if (captureFlags.tour && captureFlags.floorplan) {
+      router.push({ pathname: '/(capture)/mode', params: { jobId: id } } as any);
+      return;
+    }
+    if (captureFlags.tour) {
+      router.push({ pathname: '/(capture)/capture', params: { jobId: id, kind: 'splat' } } as any);
+      return;
+    }
+    if (captureFlags.floorplan) {
+      router.push({ pathname: '/(capture)/floorplan', params: { jobId: id, kind: 'floorplan' } } as any);
+    }
+  };
   const canReportNoShow = isActive && (() => {
     // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
     // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
@@ -602,16 +621,22 @@ export default function JobDetailScreen() {
                 : <Text style={s.primaryBtnText}>Mark Complete</Text>
               }
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[s.captureBtn, actioning && { opacity: 0.5 }]}
-              onPress={() => router.push({ pathname: '/(capture)/mode', params: { jobId: id } } as any)}
-              disabled={actioning}
-            >
-              {actioning
-                ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                : <Text style={s.captureBtnText}>Start Capture</Text>
-              }
-            </TouchableOpacity>
+            {hasCaptureMode ? (
+              <TouchableOpacity
+                style={[s.captureBtn, actioning && { opacity: 0.5 }]}
+                onPress={startCapture}
+                disabled={actioning}
+              >
+                {actioning
+                  ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                  : <Text style={s.captureBtnText}>Start Capture</Text>
+                }
+              </TouchableOpacity>
+            ) : (
+              <View style={s.captureNone}>
+                <Text style={s.captureNoneText}>{captureNeitherCopy(captureFlags)}</Text>
+              </View>
+            )}
           </>
         ) : null}
       </View>
@@ -833,4 +858,8 @@ const s = StyleSheet.create({
     marginLeft: 10,
   },
   captureBtnText: { fontSize: 15, color: TOKENS.ink, fontWeight: '600' as const },
+  captureNone: {
+    flex: 1, minHeight: 48, justifyContent: 'center', marginLeft: 10,
+  },
+  captureNoneText: { fontSize: 12, color: TOKENS.moonMute, lineHeight: 16 },
 });

@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
+from ..services.capture_entitlements import stamp_capture
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
@@ -92,7 +93,7 @@ def _apply_listing(job: dict, listings: dict) -> dict:
     job["transaction_id"] = tid
     job["listing_address"] = (listing or {}).get("address") if listing else None
     job["listing"] = listing
-    return job
+    return stamp_capture(job)
 
 
 async def _listings_by_ids(db, ids) -> dict:

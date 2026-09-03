@@ -1,16 +1,78 @@
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
+import { actorHeaders } from '../../lib/api';
+import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
+import type { CaptureFlags } from '../../lib/capture-modes';
+
+const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 export default function CaptureModeScreen() {
   const router = useRouter();
   const { jobId } = useLocalSearchParams<{ jobId: string }>();
+  const [flags, setFlags] = useState<CaptureFlags | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!jobId) {
+        setFlags({ tour: false, floorplan: false, visit: false });
+        return;
+      }
+      try {
+        const headers = await actorHeaders();
+        const res = await fetch(`${API}/api/vendor-os/jobs/${jobId}`, { headers });
+        const job = res.ok ? await res.json() : {};
+        if (cancelled) return;
+        const next = jobCaptureModes(job);
+        if (next.tour && !next.floorplan) {
+          router.replace({ pathname: '/(capture)/capture', params: { jobId, kind: 'splat' } } as any);
+          return;
+        }
+        if (next.floorplan && !next.tour) {
+          router.replace({ pathname: '/(capture)/floorplan', params: { jobId, kind: 'floorplan' } } as any);
+          return;
+        }
+        setFlags(next);
+      } catch {
+        if (!cancelled) setFlags({ tour: false, floorplan: false, visit: false });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [jobId]);
 
   const go = (kind: 'splat' | 'floorplan') => {
     const pathname = kind === 'floorplan' ? '/(capture)/floorplan' : '/(capture)/capture';
     router.replace({ pathname, params: { jobId, kind } } as any);
   };
+
+  if (!flags) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <ActivityIndicator size="large" color={COLORS.brick} style={{ flex: 1 }} />
+      </SafeAreaView>
+    );
+  }
+
+  if (!flags.tour && !flags.floorplan) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.top}>
+          <TouchableOpacity style={styles.chip} onPress={() => router.back()}>
+            <Text style={styles.chipText}>✕</Text>
+          </TouchableOpacity>
+          <Text style={styles.kicker}>CAPTURE</Text>
+          <View style={styles.chip} />
+        </View>
+        <View style={styles.body}>
+          <Text style={styles.title}>Nothing to capture in GO</Text>
+          <Text style={styles.sub}>{captureNeitherCopy(flags)}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -25,14 +87,14 @@ export default function CaptureModeScreen() {
       <View style={styles.body}>
         <Text style={styles.title}>What are you capturing?</Text>
         <Text style={styles.sub}>
-          Same job can have both. Professional HDR stills stay on the camera — not here.
+          This job purchased both. Professional HDR stills stay on the camera — not here. Virtual visit is not this shutter.
         </Text>
 
         <TouchableOpacity style={styles.card} onPress={() => go('splat')} activeOpacity={0.85}>
           <Text style={styles.cardKicker}>3D TOUR</Text>
-          <Text style={styles.cardTitle}>Gaussian splat frames</Text>
+          <Text style={styles.cardTitle}>Path-confined walkthrough</Text>
           <Text style={styles.cardBody}>
-            Pan slowly around each room. Owned tour reconstruction — not stills, not Polycam unless we fall back later.
+            Pan slowly around each room. This is the virtual tour you stay on the path for — not a free-roam virtual visit.
           </Text>
         </TouchableOpacity>
 

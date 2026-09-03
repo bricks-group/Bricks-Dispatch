@@ -36,7 +36,7 @@ struct SplatCaptureStubView: View {
                     .font(.title3.weight(.semibold))
                 Text("Native splat shutter is not wired in this build.")
                     .font(.subheadline.weight(.medium))
-                Text("Pan-the-room Gaussian frames run in GO (Expo) — Start Capture → 3D tour. Professional HDR stills stay on the vendor camera.")
+                Text("Path-confined 3D tour frames run in GO (Expo) — Start Capture → 3D tour. Not a virtual visit. Professional HDR stills stay on the vendor camera.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

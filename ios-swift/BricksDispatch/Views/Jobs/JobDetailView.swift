@@ -391,18 +391,28 @@ struct JobDetailView: View {
     }
 
     private var captureModeButtons: some View {
-        VStack(spacing: 10) {
-            Button { showSplatCapture = true } label: {
-                Label("3D tour capture", systemImage: "cube.transparent")
-                    .frame(maxWidth: .infinity)
+        let modes = live.captureModes
+        return VStack(spacing: 10) {
+            if modes.tour {
+                Button { showSplatCapture = true } label: {
+                    Label("3D tour capture", systemImage: "cube.transparent")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(BricksSecondaryButton())
             }
-            .buttonStyle(BricksSecondaryButton())
-
-            Button { showFloorPlanCapture = true } label: {
-                Label("Floor plan capture", systemImage: "square.split.bottomrightquarter")
-                    .frame(maxWidth: .infinity)
+            if modes.floorplan {
+                Button { showFloorPlanCapture = true } label: {
+                    Label("Floor plan capture", systemImage: "square.split.bottomrightquarter")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(BricksSecondaryButton())
             }
-            .buttonStyle(BricksSecondaryButton())
+            if !modes.hasPhoneMode {
+                Text(modes.neitherCopy)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 }

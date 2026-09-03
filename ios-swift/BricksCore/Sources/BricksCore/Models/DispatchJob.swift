@@ -1,5 +1,26 @@
 import Foundation
 
+public struct CaptureEntitlements: Codable, Sendable, Hashable {
+    public let tour: Bool
+    public let floorplan: Bool
+    public let visit: Bool
+
+    public init(tour: Bool, floorplan: Bool, visit: Bool) {
+        self.tour = tour; self.floorplan = floorplan; self.visit = visit
+    }
+
+    public static let none = CaptureEntitlements(tour: false, floorplan: false, visit: false)
+
+    public var hasPhoneMode: Bool { tour || floorplan }
+
+    public var neitherCopy: String {
+        if visit && !tour {
+            return "Virtual visit is not captured in GO. Use the Polycam URL / .ply / .splat upload path. HDR stills stay on the camera."
+        }
+        return "This job has no in-app 3D tour or floor plan. HDR stills stay on the camera."
+    }
+}
+
 public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     public let id: String
     public let bookingId: String
@@ -30,6 +51,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     public var assigneeName: String?
     public var transactionId: String?
     public var listingAddress: String?
+    public var capture: CaptureEntitlements?
 
     public init(
         id: String, bookingId: String, address: String, city: String, state: String, zipCode: String,
@@ -38,7 +60,8 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         agentName: String?, agentPhone: String?, agentEmail: String?, clientInstructions: String?,
         checklist: [ChecklistItem], complexityScore: Int?, createdAt: String, updatedAt: String,
         assigneeId: String? = nil, assigneeName: String? = nil,
-        transactionId: String? = nil, listingAddress: String? = nil
+        transactionId: String? = nil, listingAddress: String? = nil,
+        capture: CaptureEntitlements? = nil
     ) {
         self.id = id; self.bookingId = bookingId; self.address = address; self.city = city
         self.state = state; self.zipCode = zipCode; self.lat = lat; self.lng = lng
@@ -50,6 +73,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         self.complexityScore = complexityScore; self.createdAt = createdAt; self.updatedAt = updatedAt
         self.assigneeId = assigneeId; self.assigneeName = assigneeName
         self.transactionId = transactionId; self.listingAddress = listingAddress
+        self.capture = capture
     }
 
     enum CodingKeys: String, CodingKey {
@@ -58,7 +82,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         case packageName, packagePrice, vendorPayout
         case agentName, agentPhone, agentEmail, clientInstructions
         case checklist, complexityScore, createdAt, updatedAt
-        case assigneeId, assigneeName, transactionId, listingAddress
+        case assigneeId, assigneeName, transactionId, listingAddress, capture
     }
     enum ExtraKeys: String, CodingKey {
         case payoutDisplayCad
@@ -99,6 +123,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         let rawTxn = try c.decodeIfPresent(String.self, forKey: .transactionId)
         transactionId = (rawTxn?.isEmpty == true) ? nil : rawTxn
         listingAddress = try c.decodeIfPresent(String.self, forKey: .listingAddress)
+        capture = try c.decodeIfPresent(CaptureEntitlements.self, forKey: .capture)
     }
 
     private static func decodeDouble(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Double {
@@ -132,6 +157,36 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     public var isActive: Bool { status == .inProgress }
     public var isUpcoming: Bool { status == .assigned }
     public var isUnassigned: Bool { status == .pendingAssignment || status == .pending }
+
+
+    public var captureModes: CaptureEntitlements {
+        if let capture { return capture }
+        return Self.inferredCapture(packageName: packageName, jobType: jobType, checklist: checklist)
+    }
+
+    public static func inferredCapture(packageName: String?, jobType: String, checklist: [ChecklistItem]) -> CaptureEntitlements {
+        let name = (packageName ?? "").lowercased()
+        let type = jobType.lowercased().replacingOccurrences(of: "-", with: "_")
+        let blob = ([name, type] + checklist.map { $0.label.lowercased() }).joined(separator: " ")
+        let photosOnly = blob.contains("photos only") || blob.contains("photo only") || blob.contains("no floor plan")
+        let visit = blob.contains("virtual visit") || blob.contains("gaussian splat") || blob.contains("supersplat")
+        let cleaned = blob.replacingOccurrences(of: "virtual visit", with: " ")
+            .replacingOccurrences(of: "gaussian splat 3d virtual tour", with: " ")
+            .replacingOccurrences(of: "gaussian splat", with: " ")
+            .replacingOccurrences(of: "supersplat", with: " ")
+        let tourType = ["3d_tour", "3dtour", "virtual_tour", "virtualtour"].contains(type)
+        let tourPkg = name.contains("showcase") || name.contains("full suite") || name.hasPrefix("suite")
+        let tour = tourType || tourPkg || cleaned.contains("virtual tour") || cleaned.contains("3d tour") || cleaned.contains("path-confined") || cleaned.contains("path confined")
+        let explicitFloor = blob.contains("floor plan") && !blob.contains("floor plan capture submitted")
+        let photoPkg = ["essentials", "story", "showcase", "suite", "standard", "premium", "luxury", "estate"].contains(where: { name.contains($0) })
+            || type == "photo"
+            || name.contains("hdr photo")
+        let floorplan: Bool
+        if photosOnly && !explicitFloor { floorplan = false }
+        else if explicitFloor || type.contains("floorplan") || type.contains("floor_plan") { floorplan = true }
+        else { floorplan = photoPkg }
+        return CaptureEntitlements(tour: tour, floorplan: floorplan, visit: visit)
+    }
 
     public var displayAssignee: String {
         if let name = assigneeName, !name.isEmpty, name.lowercased() != "unassigned" {
