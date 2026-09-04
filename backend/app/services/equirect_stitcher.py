@@ -3,6 +3,10 @@
 Matterport phone pattern: overlapping perspective frames at known yaws,
 compiled on our server. Not a gallery of stills. Fail honestly if coverage
 is too thin or OpenCV/yaw-blend cannot produce a 2:1 equirect.
+
+Yaw-blend path (not OpenCV Stitcher): exposure-normalize pans, then
+2D-feathered weighted average onto the equirect canvas — stays inside
+Vercel maxDuration budgets where full OpenCV stitch times out.
 """
 from __future__ import annotations
 
@@ -20,6 +24,11 @@ EQUIRECT_H = 1024
 MIN_PAN_FRAMES = 8
 MIN_YAW_SPAN = 270.0
 PHONE_HFOV = 70.0
+# Soft floor so a single strip still paints when alone; seams still taper hard.
+FEATHER_FLOOR = 0.02
+EXPOSURE_GAIN_MIN = 0.55
+EXPOSURE_GAIN_MAX = 1.85
+TARGET_LUMA = 110.0
 
 
 class StitchError(RuntimeError):
@@ -50,14 +59,18 @@ def yaw_span_deg(yaws: list[float]) -> float:
 
 
 def station_is_stitchable(pans: list[dict]) -> bool:
-    """pans: [{bytes, yaw}]. Need overlapping coverage around the station."""
+    """pans: [{bytes, yaw}]. Need overlapping coverage around the station.
+
+    When enough frames carry yaw metadata, require MIN_YAW_SPAN — do not let
+    a dense narrow burst pass via the no-yaw frame-count fallback.
+    """
     usable = [p for p in pans if p.get("bytes")]
     if len(usable) < MIN_PAN_FRAMES:
         return False
     yaws = [p.get("yaw") for p in usable if p.get("yaw") is not None]
-    if len(yaws) >= MIN_PAN_FRAMES and yaw_span_deg(yaws) >= MIN_YAW_SPAN:
-        return True
-    # No yaws: still stitchable if the photographer filled the dome (many frames).
+    if len(yaws) >= MIN_PAN_FRAMES:
+        return yaw_span_deg(yaws) >= MIN_YAW_SPAN
+    # No (enough) yaws: still stitchable if the photographer filled the dome.
     return len(usable) >= 12
 
 
@@ -132,17 +145,82 @@ def _opencv_stitch(images: list[np.ndarray]) -> Optional[np.ndarray]:
         return None
 
 
+def _luma_mean_bgr(img: np.ndarray) -> float:
+    """Rec.601 luma from BGR float/uint8 array."""
+    x = img.astype(np.float64)
+    return float(np.mean(0.114 * x[:, :, 0] + 0.587 * x[:, :, 1] + 0.299 * x[:, :, 2]))
+
+
+def _exposure_gains(lumas: list[float]) -> list[float]:
+    """Per-frame gains toward the median pan luma (clamped)."""
+    valid = [L for L in lumas if L > 1e-3]
+    if not valid:
+        return [1.0] * len(lumas)
+    target = float(np.median(np.asarray(valid, dtype=np.float64)))
+    # Nudge very dark/bright sets toward a readable mid-gray without blowing highlights.
+    target = 0.7 * target + 0.3 * TARGET_LUMA
+    target = max(40.0, min(180.0, target))
+    gains: list[float] = []
+    for L in lumas:
+        if L <= 1e-3:
+            gains.append(1.0)
+            continue
+        g = target / L
+        gains.append(float(np.clip(g, EXPOSURE_GAIN_MIN, EXPOSURE_GAIN_MAX)))
+    return gains
+
+
+def _feather_2d(strip_w: int, strip_h: int) -> np.ndarray:
+    """Raised-cosine weight field: hard taper at edges (seams), soft floor in core."""
+    xs = np.linspace(-1.0, 1.0, strip_w, dtype=np.float64)
+    ys = np.linspace(-1.0, 1.0, strip_h, dtype=np.float64)
+    # Cosine → 0 at ±1, 1 at center. Vertical taper is gentler (0.85 mix) so
+    # horizon band stays stronger than zenith/nadir letterbox edges.
+    hann_x = 0.5 * (1.0 + np.cos(np.pi * xs))
+    hann_y = 0.5 * (1.0 + np.cos(np.pi * ys))
+    hann_y = 0.85 * hann_y + 0.15
+    w2d = hann_y[:, None] * hann_x[None, :]
+    return np.clip(w2d, FEATHER_FLOOR, 1.0)
+
+
+def _place_weighted(
+    canvas: np.ndarray,
+    weight: np.ndarray,
+    contrib: np.ndarray,
+    wstrip: np.ndarray,
+    y0: int,
+    strip_h: int,
+    start: int,
+    out_w: int,
+) -> None:
+    strip_w = contrib.shape[1]
+    end = start + strip_w
+    if end <= out_w:
+        canvas[y0:y0 + strip_h, start:end] += contrib
+        weight[y0:y0 + strip_h, start:end] += wstrip
+        return
+    first = out_w - start
+    canvas[y0:y0 + strip_h, start:out_w] += contrib[:, :first]
+    weight[y0:y0 + strip_h, start:out_w] += wstrip[:, :first]
+    rest = strip_w - first
+    canvas[y0:y0 + strip_h, 0:rest] += contrib[:, first:]
+    weight[y0:y0 + strip_h, 0:rest] += wstrip[:, first:]
+
+
 def _yaw_blend(frames: list[dict], out_w: int = EQUIRECT_W, out_h: int = EQUIRECT_H) -> np.ndarray:
-    """Project each pan frame onto a 2:1 canvas at its yaw. Requires yaws."""
+    """Project each pan frame onto a 2:1 canvas at its yaw. Requires yaws.
+
+    Exposure-normalizes strips toward median luma, then blends with a 2D
+    raised-cosine feather so overlapping seams prefer frame centers.
+    """
     canvas = np.zeros((out_h, out_w, 3), dtype=np.float64)
     weight = np.zeros((out_h, out_w), dtype=np.float64)
     strip_w = max(32, int(out_w * PHONE_HFOV / 360.0))
     strip_h = max(32, int(out_h * 0.52))
-    xs = np.linspace(-1.0, 1.0, strip_w, dtype=np.float64)
-    hann = np.clip(0.5 * (1.0 + np.cos(np.pi * xs)), 0.05, 1.0)
+    w2d = _feather_2d(strip_w, strip_h)
     y0 = (out_h - strip_h) // 2
 
-    placed = 0
+    decoded: list[tuple[np.ndarray, float]] = []
     for i, fr in enumerate(frames):
         img = _decode_bgr(fr["bytes"])
         if img is None:
@@ -151,23 +229,23 @@ def _yaw_blend(frames: list[dict], out_w: int = EQUIRECT_W, out_h: int = EQUIREC
         if yaw is None:
             yaw = (i / max(len(frames), 1)) * 360.0
         im = _resize_bgr(img, (strip_w, strip_h)).astype(np.float64)
-        contrib = im * hann[None, :, None]
+        decoded.append((im, float(yaw)))
+
+    if len(decoded) < MIN_PAN_FRAMES:
+        raise StitchError(
+            f"Only {len(decoded)} pan frames decoded — need {MIN_PAN_FRAMES} for a 360 station"
+        )
+
+    lumas = [_luma_mean_bgr(im) for im, _ in decoded]
+    gains = _exposure_gains(lumas)
+
+    for (im, yaw), gain in zip(decoded, gains):
+        im_n = np.clip(im * gain, 0.0, 255.0)
+        contrib = im_n * w2d[:, :, None]
         x_center = int((float(yaw) % 360.0) / 360.0 * out_w)
         start = (x_center - strip_w // 2) % out_w
-        end = start + strip_w
-        if end <= out_w:
-            canvas[y0:y0 + strip_h, start:end] += contrib
-            weight[y0:y0 + strip_h, start:end] += hann[None, :]
-        else:
-            first = out_w - start
-            canvas[y0:y0 + strip_h, start:out_w] += contrib[:, :first]
-            weight[y0:y0 + strip_h, start:out_w] += hann[None, :first]
-            rest = strip_w - first
-            canvas[y0:y0 + strip_h, 0:rest] += contrib[:, first:]
-            weight[y0:y0 + strip_h, 0:rest] += hann[None, first:]
-        placed += 1
-    if placed < MIN_PAN_FRAMES:
-        raise StitchError(f"Only {placed} pan frames decoded — need {MIN_PAN_FRAMES} for a 360 station")
+        _place_weighted(canvas, weight, contrib, w2d, y0, strip_h, start, out_w)
+
     filled = weight > 1e-6
     if filled.mean() < 0.35:
         raise StitchError("Pan coverage is too thin to stitch a 360 equirect")
@@ -190,6 +268,9 @@ def stitch_pan_to_equirect(pans: list[dict]) -> bytes:
     ordered = sorted(usable, key=lambda p: (p.get("yaw") is None, float(p.get("yaw") or 0)))
     pano = _yaw_blend(ordered)
     h, w = pano.shape[:2]
-    if w / float(h) < 1.6:
+    if abs(w / float(h) - 2.0) > 0.05:
+        pano = _letterbox_equirect(pano)
+    h, w = pano.shape[:2]
+    if w != EQUIRECT_W or h != EQUIRECT_H:
         pano = _letterbox_equirect(pano)
     return _encode_jpeg(pano)

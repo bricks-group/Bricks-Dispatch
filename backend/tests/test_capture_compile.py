@@ -73,7 +73,9 @@ def test_stitch_pan_produces_equirect():
     jpeg = stitch_pan_to_equirect(pans)
     assert is_equirect_image(jpeg)
     img = Image.open(io.BytesIO(jpeg))
-    assert abs(img.size[0] / img.size[1] - 2.0) < 0.15
+    # Exact Matterport-class 2:1 canvas from yaw-blend path.
+    assert img.size == (2048, 1024)
+    assert abs(img.size[0] / img.size[1] - 2.0) < 0.01
 
 
 def test_stitch_refuses_thin_coverage():
@@ -83,6 +85,30 @@ def test_stitch_refuses_thin_coverage():
         assert False, "should have failed"
     except StitchError:
         pass
+
+
+def test_stitch_refuses_narrow_yaw_even_with_many_frames():
+    # Dense burst but only ~45° of yaw — must not pass via frame-count fallback.
+    pans = [{"bytes": _jpeg(80, 60, (40, 40, 40)), "yaw": i * 5} for i in range(12)]
+    assert station_is_stitchable(pans) is False
+    try:
+        stitch_pan_to_equirect(pans)
+        assert False, "narrow yaw should refuse"
+    except StitchError as e:
+        assert "360" in str(e).lower() or "span" in str(e).lower() or "sweep" in str(e).lower()
+
+
+def test_exposure_normalize_reduces_brightness_jumps():
+    from app.services.equirect_stitcher import _exposure_gains, _luma_mean_bgr
+    import numpy as np
+    dark = np.full((40, 40, 3), 40, dtype=np.uint8)
+    bright = np.full((40, 40, 3), 200, dtype=np.uint8)
+    mid = np.full((40, 40, 3), 110, dtype=np.uint8)
+    lumas = [_luma_mean_bgr(dark), _luma_mean_bgr(mid), _luma_mean_bgr(bright)]
+    gains = _exposure_gains(lumas)
+    adjusted = [l * g for l, g in zip(lumas, gains)]
+    assert max(adjusted) - min(adjusted) < max(lumas) - min(lumas)
+    assert gains[0] > 1.0 and gains[2] < 1.0
 
 
 def test_plan_from_station_graph():
