@@ -39,6 +39,7 @@ from ..services.capture_worker import (
     load_session_tags,
     load_station_records,
     process_capture_session,
+    rebuild_floorplan_from_stations,
     rebuild_tour_from_equirects,
     save_session_tags,
     stations_have_compile_input,
@@ -929,6 +930,36 @@ async def _run_rebuild_tour(db, job: dict, session: dict) -> dict:
     }
 
 
+async def _run_rebuild_floorplan(db, job: dict, session: dict) -> dict:
+    """Rewrite floor-plan PNG from stored stations/RoomPlan. No recapture."""
+    kind = session.get("kind") or "floorplan"
+    if kind != "floorplan":
+        api_error(400, "Rebuild floor plan is for floor plans, not 3D tours", "not_a_floorplan")
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        output = await rebuild_floorplan_from_stations(db, job, session)
+    except CaptureWorkerError as e:
+        bundle = await _load_session_bundle(db, job["id"], session, job)
+        return {"ok": False, "rebuilt": False, "stitched": False, "error": str(e), "session": bundle}
+    session["output_storage_path"] = output
+    if session.get("status") != "delivered":
+        await _deliver_session(db, session["id"], output, "floorplan", now)
+        session["status"] = "delivered"
+    else:
+        await db.table("capture_sessions").update({
+            "output_storage_path": output,
+            "updated_at": now,
+        }).eq("id", session["id"]).execute()
+    bundle = await _load_session_bundle(db, job["id"], session, job)
+    return {
+        "ok": True,
+        "rebuilt": True,
+        "stitched": False,
+        "outputStoragePath": output,
+        "session": bundle,
+    }
+
+
 
 
 @router.get("/sessions/{session_id}/scenes/{station_index}/url")
@@ -1084,6 +1115,53 @@ async def rebuild_tour_for_job(
     return await _run_rebuild_tour(db, job, session)
 
 
+@router.post("/sessions/{session_id}/rebuild-floorplan")
+async def rebuild_floorplan_for_session(
+    session_id: str,
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """Refresh a delivered floor-plan PNG from stored stations/RoomPlan. Does not recapture.
+
+    Idempotent: rewrites the same storage path with current floorplan_tracer
+    (north arrow, scale, labels). Listing media URL path stays the same.
+    """
+    db = await get_db()
+    session = await _session_by_id(db, session_id)
+    if not session:
+        api_error(409, "No capture session", "session_not_found")
+    job_id = session.get("job_id") or (payload or {}).get("job_id") or ""
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
+    if session.get("job_id") and session["job_id"] != job["id"]:
+        api_error(404, "Job not found", "job_not_found")
+    return await _run_rebuild_floorplan(db, job, session)
+
+
+@router.post("/rebuild-floorplan")
+async def rebuild_floorplan_for_job(
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """Job-scoped rebuild. Same as POST /sessions/{id}/rebuild-floorplan."""
+    job_id = (payload or {}).get("job_id") or ""
+    kind = _normalize_kind((payload or {}).get("kind") or "floorplan")
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
+    db = await get_db()
+    session_id = (payload or {}).get("session_id") or (payload or {}).get("sessionId")
+    session = await _session_by_id(db, session_id) if session_id else None
+    if session and session.get("job_id") and session["job_id"] != job["id"]:
+        api_error(404, "Job not found", "job_not_found")
+    if not session:
+        session = await _latest_session(db, job_id, kind)
+    if not session:
+        api_error(409, "No capture session", "session_not_found")
+    return await _run_rebuild_floorplan(db, job, session)
+
+
 @router.post("/process")
 async def process_session(
     payload: dict = Body(default={}),
@@ -1101,6 +1179,8 @@ async def process_session(
     if session.get("status") == "delivered" and session.get("output_storage_path"):
         if kind == "splat" or session.get("kind") == "splat":
             return await _run_rebuild_tour(db, job, session)
+        if kind == "floorplan" or session.get("kind") == "floorplan":
+            return await _run_rebuild_floorplan(db, job, session)
         return {
             "ok": True,
             "rebuilt": False,

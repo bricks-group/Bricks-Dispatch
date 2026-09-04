@@ -337,6 +337,45 @@ export async function uploadCaptureFrameBlob(
   }
 }
 
+
+export async function rebuildFloorPlan(
+  jobId: string,
+  sessionId?: string | null,
+): Promise<{ ok: boolean; rebuilt?: boolean; stitched?: boolean; error?: string; session?: CaptureSession }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
+  try {
+    const headers = await authHeaders({ 'Content-Type': 'application/json' });
+    const path = sessionId
+      ? `${API_BASE}/api/capture/sessions/${encodeURIComponent(sessionId)}/rebuild-floorplan`
+      : `${API_BASE}/api/capture/rebuild-floorplan`;
+    const res = await fetch(path, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ job_id: jobId, kind: 'floorplan', session_id: sessionId || undefined }),
+    });
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    const body = await res.json();
+    const session = _asSession(body.session ?? body, 'floorplan');
+    if (body && body.ok === false) {
+      return {
+        ok: false,
+        rebuilt: false,
+        stitched: false,
+        error: String(body.error || body.detail || 'Rebuild failed'),
+        session,
+      };
+    }
+    return {
+      ok: true,
+      rebuilt: body.rebuilt !== false,
+      stitched: false,
+      session,
+    };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
 export async function rebuildTourPlayer(
   jobId: string,
   kind: CaptureKind = 'splat',

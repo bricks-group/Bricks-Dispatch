@@ -172,20 +172,30 @@ final class CaptureFlowModel: ObservableObject {
     }
 
     func rebuildTourPlayer() async {
-        guard kind == .splat else { return }
+        guard kind == .splat || kind == .floorplan else { return }
         rebuilding = true
         rebuildMsg = nil
         defer { rebuilding = false }
-        let result = await CaptureAPIClient.shared.rebuildTourPlayer(
-            jobId: job.id,
-            kind: kind,
-            sessionId: session.sessionId
-        )
+        let result: CaptureCallResult
+        if kind == .floorplan {
+            result = await CaptureAPIClient.shared.rebuildFloorPlan(
+                jobId: job.id,
+                sessionId: session.sessionId
+            )
+        } else {
+            result = await CaptureAPIClient.shared.rebuildTourPlayer(
+                jobId: job.id,
+                kind: kind,
+                sessionId: session.sessionId
+            )
+        }
         if let s = result.session {
             session = s
         }
         if result.ok {
-            rebuildMsg = "Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see tags."
+            rebuildMsg = kind == .floorplan
+                ? "Floor plan PNG rebuilt from stored stations. Refresh the listing to see north arrow, scale, and labels."
+                : "Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see tags."
         } else {
             rebuildMsg = result.error ?? "Rebuild failed"
         }

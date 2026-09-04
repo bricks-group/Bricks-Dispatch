@@ -457,6 +457,110 @@ def test_router_rebuild_tour_endpoint_is_honest():
     assert "rebuild-tour" in web_api.read_text()
 
 
+def test_router_rebuild_floorplan_endpoint_is_honest():
+    src = (ROOT / "app/routers/capture.py").read_text()
+    assert "/sessions/{session_id}/rebuild-floorplan" in src
+    assert '@router.post("/rebuild-floorplan")' in src
+    assert "rebuild_floorplan_from_stations" in src
+    assert "_run_rebuild_floorplan" in src
+    process = src.split("async def process_session")[1]
+    delivered = process.split('status") == "delivered"')[1].split("now = datetime")[0]
+    assert "_run_rebuild_floorplan" in delivered
+    worker = (ROOT / "app/services/capture_worker.py").read_text()
+    assert "async def rebuild_floorplan_from_stations" in worker
+    assert "No recapture, no stitch" in worker or "no stitch" in worker.lower()
+    web_review = (ROOT.parent / "web/src/pages/CaptureReviewPage.tsx").read_text()
+    web_jobs = (ROOT.parent / "web/src/pages/JobsPage.tsx").read_text()
+    web_api = (ROOT.parent / "web/src/lib/capture-api.ts").read_text()
+    assert "Rebuild floor plan" in web_review
+    assert "Rebuild floor plan" in web_jobs
+    assert "rebuild-floorplan" in web_api
+    assert "rebuildFloorPlan" in web_api
+
+
+def test_rebuild_floorplan_from_stations_uses_tracer_no_stitch():
+    import asyncio
+    import app.services.capture_worker as cw
+
+    stations = [
+        {"station_index": 0, "room": "Kitchen", "pose_x": 0.0, "pose_y": 0.0, "heading": 0},
+        {"station_index": 1, "room": "Hall", "pose_x": 3.0, "pose_y": 0.0, "heading": 90},
+    ]
+    uploads = []
+
+    async def fake_load_station_records(db, sid, rooms=None):
+        return stations
+
+    async def fake_load_roomplan(sid):
+        return None
+
+    async def fake_upload(path, data, content_type, upsert=False):
+        uploads.append((path, data[:8], content_type, upsert))
+        return True
+
+    async def fake_attach(db, job, storage_path, session_id):
+        return None
+
+    async def boom_ensure(*a, **k):
+        raise AssertionError("rebuild floor plan must not stitch")
+
+    orig = (
+        cw.load_station_records,
+        cw.load_roomplan,
+        cw.upload_bytes,
+        cw._attach_floorplan_media,
+        cw.ensure_station_equirect,
+    )
+    cw.load_station_records = fake_load_station_records
+    cw.load_roomplan = fake_load_roomplan
+    cw.upload_bytes = fake_upload
+    cw._attach_floorplan_media = fake_attach
+    cw.ensure_station_equirect = boom_ensure
+    try:
+        out = asyncio.run(cw.rebuild_floorplan_from_stations(
+            None,
+            {"id": "job1", "address": "10 Main", "booking_id": None},
+            {"id": "sess1", "output_storage_path": "visits/job1/floorplan-sess1.png"},
+        ))
+        assert out == "visits/job1/floorplan-sess1.png"
+        assert uploads and uploads[0][0] == out
+        assert uploads[0][1] == b"\x89PNG\r\n\x1a\n"
+        assert uploads[0][3] is True
+    finally:
+        (
+            cw.load_station_records,
+            cw.load_roomplan,
+            cw.upload_bytes,
+            cw._attach_floorplan_media,
+            cw.ensure_station_equirect,
+        ) = orig
+
+
+def test_rebuild_floorplan_fails_honestly_without_input():
+    import asyncio
+    import app.services.capture_worker as cw
+
+    async def fake_load_station_records(db, sid, rooms=None):
+        return []
+
+    async def fake_load_roomplan(sid):
+        return None
+
+    orig = (cw.load_station_records, cw.load_roomplan)
+    cw.load_station_records = fake_load_station_records
+    cw.load_roomplan = fake_load_roomplan
+    try:
+        try:
+            asyncio.run(cw.rebuild_floorplan_from_stations(
+                None, {"id": "job1", "address": ""}, {"id": "sess1"},
+            ))
+            assert False, "expected CaptureWorkerError"
+        except cw.CaptureWorkerError as e:
+            assert "station" in str(e).lower() or "RoomPlan" in str(e)
+    finally:
+        cw.load_station_records, cw.load_roomplan = orig
+
+
 def test_normalize_tag_refuses_empty_label():
     assert normalize_tag({}) is None
     assert normalize_tag({"label": "  "}) is None

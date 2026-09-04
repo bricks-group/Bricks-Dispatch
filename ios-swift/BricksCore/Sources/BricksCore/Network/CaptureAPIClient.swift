@@ -449,6 +449,36 @@ public final class CaptureAPIClient: @unchecked Sendable {
         }
     }
 
+    public func rebuildFloorPlan(jobId: String, sessionId: String?) async -> CaptureCallResult {
+        guard !jobId.isEmpty else { return .failure("Missing job") }
+        do {
+            let path: String
+            if let sessionId, !sessionId.isEmpty {
+                path = "/api/capture/sessions/\(sessionId)/rebuild-floorplan"
+            } else {
+                path = "/api/capture/rebuild-floorplan"
+            }
+            var body: [String: Any] = ["job_id": jobId, "kind": CaptureKind.floorplan.rawValue]
+            if let sessionId, !sessionId.isEmpty { body["session_id"] = sessionId }
+            let url = BricksAPIURL.make(base: baseURL, path: path)
+            let (data, http) = try await jsonRequest(url: url, method: "POST", body: body)
+            if http.statusCode < 200 || http.statusCode >= 300 {
+                return Self.fail(data, fallback: "HTTP \(http.statusCode)")
+            }
+            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let sessionBlob: Any = obj?["session"] ?? (obj as Any)
+            let session = Self.parseSessionObject(sessionBlob, kind: .floorplan)
+            if let obj, let okFlag = obj["ok"] as? Bool, okFlag == false {
+                let message = string(obj["error"] ?? obj["detail"]) ?? "Rebuild failed"
+                return CaptureCallResult(ok: false, error: message, code: string(obj["code"]), session: session, frameCount: session.frameCount, rebuilt: false)
+            }
+            let rebuilt = (obj?["rebuilt"] as? Bool) ?? true
+            return .success(session, rebuilt: rebuilt)
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
     public func addTourTag(
         jobId: String,
         sessionId: String?,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { getCaptureSession, rebuildTourPlayer, submitCaptureSession } from '../lib/capture-api';
+import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer, submitCaptureSession } from '../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../lib/capture-api';
 import { captureStatusCopy } from '../lib/capture-modes';
 import { TourTagEditor } from '../components/TourTagEditor';
@@ -51,18 +51,24 @@ export function CaptureReviewPage() {
   };
 
   const handleRebuild = async () => {
-    if (!jobId || kind !== 'splat') return;
+    if (!jobId || (kind !== 'splat' && kind !== 'floorplan')) return;
     setRebuilding(true);
     setRebuildMsg(null);
     setSubmitError(null);
-    const result = await rebuildTourPlayer(jobId, kind, session?.sessionId);
+    const result = kind === 'floorplan'
+      ? await rebuildFloorPlan(jobId, session?.sessionId)
+      : await rebuildTourPlayer(jobId, kind, session?.sessionId);
     setRebuilding(false);
     if (result.session) setSession(result.session);
     if (!result.ok) {
       setRebuildMsg(result.error ?? 'Rebuild failed');
       return;
     }
-    setRebuildMsg('Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see in-scene hotspots.');
+    setRebuildMsg(
+      kind === 'floorplan'
+        ? 'Floor plan PNG rebuilt from stored stations. Refresh the listing to see north arrow, scale, and labels.'
+        : 'Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see in-scene hotspots.',
+    );
   };
 
   const rooms = session?.rooms ?? [];
@@ -111,10 +117,10 @@ export function CaptureReviewPage() {
               {failed
                 ? (submitError || statusLine || 'Compile failed — try again from review or recapture stations.')
                 : (statusLine || (ready
-                  ? `${kindLabel === 'FLOOR PLAN' ? 'Floor plan' : '3D tour'} is ready on the job.${kind === 'splat' ? ' Rebuild tour player refreshes hosted HTML from existing 360s — no recapture.' : ''}`
+                  ? `${kindLabel === 'FLOOR PLAN' ? 'Floor plan' : '3D tour'} is ready on the job.${kind === 'splat' ? ' Rebuild tour player refreshes hosted HTML from existing 360s — no recapture.' : ' Rebuild floor plan regenerates the PNG from stored stations — no recapture.'}`
                   : `${kindLabel === 'FLOOR PLAN' ? 'Floor plan' : '3D tour'} is compiling. This usually takes a few minutes.`))}
             </p>
-            {rebuildMsg ? <p className={rebuildMsg.startsWith('Tour player rebuilt') ? undefined : 'error'} style={{ margin: 0, padding: 0 }}>{rebuildMsg}</p> : null}
+            {rebuildMsg ? <p className={(rebuildMsg.startsWith('Tour player rebuilt') || rebuildMsg.startsWith('Floor plan PNG rebuilt')) ? undefined : 'error'} style={{ margin: 0, padding: 0 }}>{rebuildMsg}</p> : null}
             <div className="row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
               <Link className="btn-capture" to={jobHref}>Back to job</Link>
               {failed ? (
@@ -126,13 +132,13 @@ export function CaptureReviewPage() {
                   {submitting ? 'Retrying…' : 'Retry compile'}
                 </button>
               ) : null}
-              {ready && kind === 'splat' ? (
+              {ready && (kind === 'splat' || kind === 'floorplan') ? (
                 <button
                   type="button"
                   disabled={rebuilding}
                   onClick={handleRebuild}
                 >
-                  {rebuilding ? 'Rebuilding…' : 'Rebuild tour player'}
+                  {rebuilding ? 'Rebuilding…' : (kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
                 </button>
               ) : null}
               <Link to={`/capture?jobId=${encodeURIComponent(jobId)}&kind=${kind}`}>

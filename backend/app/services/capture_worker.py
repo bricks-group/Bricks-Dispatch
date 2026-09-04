@@ -186,10 +186,17 @@ async def _attach_floorplan_media(db, job: dict, storage_path: str, session_id: 
     if not booking_id:
         return
     try:
+        signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24 * 7)
         existing = await db.table("media_files").select("id").eq("storage_path", storage_path).limit(1).execute()
         if existing.data:
+            row_id = existing.data[0].get("id")
+            if row_id and signed:
+                await db.table("media_files").update({
+                    "file_url": signed,
+                    "file_name": f"floorplan-{session_id}.png",
+                    "label": "Floor plan",
+                }).eq("id", row_id).execute()
             return
-        signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24 * 7)
         await db.table("media_files").insert({
             "booking_id": booking_id,
             "file_type": "floor_plan",
@@ -447,9 +454,24 @@ async def rebuild_tour_from_equirects(db, job: dict, session: dict) -> str:
     return await _publish_tour_player(job, session, compiled, upload_scenes=False)
 
 
-async def compile_floorplan(db, job: dict, session: dict, stations: list[dict]) -> str:
+async def _upload_floorplan_png(job: dict, session: dict, png: bytes) -> str:
+    """Write PNG to the delivered path when present, else the standard visit path."""
     sid = session["id"]
     job_id = job["id"]
+    candidates = []
+    existing = (session.get("output_storage_path") or "").strip()
+    if existing and existing.endswith(".png"):
+        candidates.append(existing)
+    candidates.append(f"visits/{job_id}/floorplan-{sid}.png")
+    candidates.append(f"capture/{sid}/plan.png")
+    for path in candidates:
+        if await upload_bytes(path, png, "image/png", upsert=True):
+            return path
+    raise CaptureWorkerError("Could not upload floor-plan PNG")
+
+
+async def compile_floorplan(db, job: dict, session: dict, stations: list[dict]) -> str:
+    sid = session["id"]
     roomplan = await load_roomplan(sid)
     # Best-effort stitch. Plan still compiles from station poses when corners are not a full 360.
     for st in stations:
@@ -462,11 +484,29 @@ async def compile_floorplan(db, job: dict, session: dict, stations: list[dict]) 
         png = derive_floorplan(stations, address=(job.get("address") or "").strip(), roomplan=roomplan)
     except FloorplanError as e:
         raise CaptureWorkerError(str(e)) from e
-    path = f"visits/{job_id}/floorplan-{sid}.png"
-    if not await upload_bytes(path, png, "image/png", upsert=True):
-        path = f"capture/{sid}/plan.png"
-        if not await upload_bytes(path, png, "image/png", upsert=True):
-            raise CaptureWorkerError("Could not upload floor-plan PNG")
+    path = await _upload_floorplan_png(job, session, png)
+    await _attach_floorplan_media(db, job, path, sid)
+    return path
+
+
+async def rebuild_floorplan_from_stations(db, job: dict, session: dict) -> str:
+    """Regenerate floor-plan PNG from stored stations/RoomPlan. No recapture, no stitch."""
+    sid = session["id"]
+    stations = await load_station_records(db, sid)
+    roomplan = await load_roomplan(sid)
+    ok, reason = stations_have_compile_input(stations, kind="floorplan", has_roomplan=bool(roomplan))
+    if not ok:
+        raise CaptureWorkerError(
+            "Rebuild needs stored stations or RoomPlan — recapture corners first"
+            if reason == "no_stations"
+            else "Rebuild needs stored station poses or RoomPlan"
+        )
+    stations = infer_station_poses(stations)
+    try:
+        png = derive_floorplan(stations, address=(job.get("address") or "").strip(), roomplan=roomplan)
+    except FloorplanError as e:
+        raise CaptureWorkerError(str(e)) from e
+    path = await _upload_floorplan_png(job, session, png)
     await _attach_floorplan_media(db, job, path, sid)
     return path
 

@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
-import { getCaptureSession, rebuildTourPlayer, submitCaptureSession } from '../../lib/capture-api';
+import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer, submitCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
 import { captureStatusCopy } from '../../lib/capture-modes';
 import { TourTagEditor } from '../../components/TourTagEditor';
@@ -56,18 +56,24 @@ export default function ReviewScreen() {
   };
 
   const handleRebuild = async () => {
-    if (!jobId || kind !== 'splat') return;
+    if (!jobId || (kind !== 'splat' && kind !== 'floorplan')) return;
     setRebuilding(true);
     setRebuildMsg(null);
     setSubmitError(null);
-    const result = await rebuildTourPlayer(jobId, kind, session?.sessionId);
+    const result = kind === 'floorplan'
+      ? await rebuildFloorPlan(jobId, session?.sessionId)
+      : await rebuildTourPlayer(jobId, kind, session?.sessionId);
     setRebuilding(false);
     if (result.session) setSession(result.session);
     if (!result.ok) {
       setRebuildMsg(result.error ?? 'Rebuild failed');
       return;
     }
-    setRebuildMsg('Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see tags.');
+    setRebuildMsg(
+      kind === 'floorplan'
+        ? 'Floor plan PNG rebuilt from stored stations. Refresh the listing to see north arrow, scale, and labels.'
+        : 'Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see tags.',
+    );
   };
 
   const goBackToJob = () => {
@@ -142,7 +148,7 @@ export default function ReviewScreen() {
               <Text style={styles.resultTitle}>{title}</Text>
               <Text style={styles.resultBody}>{body}</Text>
               {rebuildMsg ? (
-                <Text style={[styles.rebuildMsg, rebuildMsg.startsWith('Tour player rebuilt') ? styles.rebuildOk : styles.rebuildErr]}>
+                <Text style={[styles.rebuildMsg, (rebuildMsg.startsWith('Tour player rebuilt') || rebuildMsg.startsWith('Floor plan PNG rebuilt')) ? styles.rebuildOk : styles.rebuildErr]}>
                   {rebuildMsg}
                 </Text>
               ) : null}
@@ -161,14 +167,14 @@ export default function ReviewScreen() {
                     </Text>
                   </TouchableOpacity>
                 ) : null}
-                {ready && kind === 'splat' ? (
+                {ready && (kind === 'splat' || kind === 'floorplan') ? (
                   <TouchableOpacity
                     style={[styles.resultBtn, rebuilding && { opacity: 0.5 }]}
                     onPress={handleRebuild}
                     disabled={rebuilding}
                   >
                     <Text style={styles.resultBtnText}>
-                      {rebuilding ? 'Rebuilding…' : 'Rebuild tour player'}
+                      {rebuilding ? 'Rebuilding…' : (kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
                     </Text>
                   </TouchableOpacity>
                 ) : null}

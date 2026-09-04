@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, AuthMember, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamResponse, TeamMember, me } from '../lib/api';
-import { getCaptureSession, rebuildTourPlayer } from '../lib/capture-api';
+import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer } from '../lib/capture-api';
 import type { CaptureKind } from '../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
@@ -477,14 +477,20 @@ function CaptureStatusBlock({ job }: { job: Job }) {
     return () => { cancelled = true; };
   }, [job.id, flags.tour, flags.floorplan]);
 
-  const handleRebuild = async (sessionId?: string | null) => {
+  const handleRebuild = async (kind: CaptureKind, sessionId?: string | null) => {
     setRebuildState({ busy: true });
-    const result = await rebuildTourPlayer(job.id, 'splat', sessionId);
+    const result = kind === 'floorplan'
+      ? await rebuildFloorPlan(job.id, sessionId)
+      : await rebuildTourPlayer(job.id, 'splat', sessionId);
     if (!result.ok) {
       setRebuildState({ error: result.error ?? 'Rebuild failed' });
       return;
     }
-    setRebuildState({ msg: 'Tour player rebuilt from existing 360s. Hard-refresh the listing iframe — no recapture.' });
+    setRebuildState({
+      msg: kind === 'floorplan'
+        ? 'Floor plan PNG rebuilt from stored stations. Refresh the listing — no recapture.'
+        : 'Tour player rebuilt from existing 360s. Hard-refresh the listing iframe — no recapture.',
+    });
   };
 
   if (rows.length === 0) return null;
@@ -501,9 +507,9 @@ function CaptureStatusBlock({ job }: { job: Job }) {
             <div key={r.kind} className={`capture-status-row ${cls}`}>
               <span>{r.line}</span>
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                {ready && r.kind === 'splat' ? (
-                  <button type="button" disabled={rebuildState.busy} onClick={() => handleRebuild(r.sessionId)}>
-                    {rebuildState.busy ? 'Rebuilding…' : 'Rebuild tour player'}
+                {ready && (r.kind === 'splat' || r.kind === 'floorplan') ? (
+                  <button type="button" disabled={rebuildState.busy} onClick={() => handleRebuild(r.kind, r.sessionId)}>
+                    {rebuildState.busy ? 'Rebuilding…' : (r.kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
                   </button>
                 ) : null}
                 <Link to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>

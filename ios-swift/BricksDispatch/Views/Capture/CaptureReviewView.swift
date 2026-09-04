@@ -111,11 +111,11 @@ struct CaptureReviewView: View {
                     .disabled(!canSubmit || flow.submitting)
                 }
 
-                if ready && flow.kind == .splat {
+                if ready && (flow.kind == .splat || flow.kind == .floorplan) {
                     Button {
                         Task { await flow.rebuildTourPlayer() }
                     } label: {
-                        Text(flow.rebuilding ? "Rebuilding…" : "Rebuild tour player")
+                        Text(flow.rebuilding ? "Rebuilding…" : (flow.kind == .floorplan ? "Rebuild floor plan" : "Rebuild tour player"))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Color(hex: "#14110E"))
                             .padding(.horizontal, 14)
