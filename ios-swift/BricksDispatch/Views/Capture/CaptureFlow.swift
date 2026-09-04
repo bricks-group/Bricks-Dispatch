@@ -21,6 +21,7 @@ final class CaptureFlowModel: ObservableObject {
     @Published var addingRoom = false
     @Published var showReview = false
     @Published var submitting = false
+    @Published var submitted = false
 
     let hardware = CaptureHardware()
     private var hardwareBag = Set<AnyCancellable>()
@@ -141,6 +142,9 @@ final class CaptureFlowModel: ObservableObject {
         if selectedRoomId == nil {
             selectedRoomId = s.currentRoomId ?? s.rooms.first?.id
         }
+        if CaptureKind.isTerminalPipelineStatus(s.status) {
+            submitted = true
+        }
     }
 
     func submit() async -> Bool {
@@ -149,7 +153,15 @@ final class CaptureFlowModel: ObservableObject {
         defer { submitting = false }
         let result = await CaptureAPIClient.shared.submit(jobId: job.id, kind: kind)
         apply(result, resetTicks: false)
+        // Match Expo/web: show compiling / failed / ready even when ok:false.
+        submitted = true
         return result.ok
+    }
+
+    func clearSubmittedForRecapture() {
+        submitted = false
+        error = nil
+        errorCode = nil
     }
 
     private func apply(_ result: CaptureCallResult, resetTicks: Bool) {

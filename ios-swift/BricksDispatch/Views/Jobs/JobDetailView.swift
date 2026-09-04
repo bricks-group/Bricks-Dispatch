@@ -13,6 +13,9 @@ struct JobDetailView: View {
     @State private var listingBusy = false
     @State private var showFloorPlanCapture = false
     @State private var showSplatCapture = false
+    @State private var showCaptureReview = false
+    @State private var reviewKind: CaptureKind = .splat
+    @State private var captureStatusRows: [CaptureStatusRow] = []
 
     init(job: DispatchJob) {
         self.job = job
@@ -89,6 +92,8 @@ struct JobDetailView: View {
                         checklistSection
                     }
 
+                    captureStatusSection
+
                     // Action buttons
                     actionButtons
                 }
@@ -100,15 +105,28 @@ struct JobDetailView: View {
         .task {
             pick = live.assigneeId ?? ""
             await store.loadTeam()
+            await refreshCaptureStatus()
         }
         .onChange(of: live.assigneeId) { _, new in
             pick = new ?? ""
+        }
+        .onChange(of: showFloorPlanCapture) { _, open in
+            if !open { Task { await refreshCaptureStatus() } }
+        }
+        .onChange(of: showSplatCapture) { _, open in
+            if !open { Task { await refreshCaptureStatus() } }
+        }
+        .onChange(of: showCaptureReview) { _, open in
+            if !open { Task { await refreshCaptureStatus() } }
         }
         .fullScreenCover(isPresented: $showFloorPlanCapture) {
             FloorPlanCaptureView(job: live)
         }
         .fullScreenCover(isPresented: $showSplatCapture) {
             TourCaptureView(job: live)
+        }
+        .fullScreenCover(isPresented: $showCaptureReview) {
+            CaptureReviewHost(job: live, kind: reviewKind)
         }
     }
 
@@ -395,14 +413,17 @@ struct JobDetailView: View {
         return VStack(spacing: 10) {
             if modes.tour {
                 Button { showSplatCapture = true } label: {
-                    Label("3D tour capture", systemImage: "cube.transparent")
-                        .frame(maxWidth: .infinity)
+                    Label(
+                        modes.floorplan ? "Start Capture · 3D tour" : "Start Capture",
+                        systemImage: "cube.transparent"
+                    )
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(BricksSecondaryButton())
             }
             if modes.floorplan {
                 Button { showFloorPlanCapture = true } label: {
-                    Label("Floor plan capture", systemImage: "square.split.bottomrightquarter")
+                    Label("Start Capture · Floor plan", systemImage: "square.split.bottomrightquarter")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(BricksSecondaryButton())
@@ -415,6 +436,83 @@ struct JobDetailView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var captureStatusSection: some View {
+        if !captureStatusRows.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("CAPTURE STATUS")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                ForEach(captureStatusRows) { row in
+                    let failed = row.status == "failed"
+                    let ready = row.status == "delivered"
+                    let compiling = CaptureKind.isCompilingStatus(row.status)
+                    HStack(alignment: .center, spacing: 10) {
+                        Text(row.line)
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            reviewKind = row.kind
+                            showCaptureReview = true
+                        } label: {
+                            Text(failed ? "Review / retry" : "Open review")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(BricksColors.brick)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(12)
+                    .background(failed ? BricksColors.bad.opacity(0.08) : Color(.secondarySystemBackground))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .stroke(
+                                failed ? BricksColors.bad.opacity(0.7)
+                                    : ready ? BricksColors.ok.opacity(0.55)
+                                    : compiling ? BricksColors.brick.opacity(0.55)
+                                    : Color(.separator),
+                                lineWidth: 1
+                            )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                }
+            }
+        }
+    }
+
+    private func refreshCaptureStatus() async {
+        let modes = live.captureModes
+        var kinds: [CaptureKind] = []
+        if modes.tour { kinds.append(.splat) }
+        if modes.floorplan { kinds.append(.floorplan) }
+        guard !kinds.isEmpty else {
+            captureStatusRows = []
+            return
+        }
+        var next: [CaptureStatusRow] = []
+        for kind in kinds {
+            let s = await CaptureAPIClient.shared.getSession(jobId: live.id, kind: kind)
+            let status = (s.status ?? "").lowercased()
+            if status.isEmpty { continue }
+            if status == "in_progress" && s.frameCount == 0 { continue }
+            let line = CaptureKind.statusCopy(status, kind: kind)
+            if line.isEmpty && status.isEmpty { continue }
+            next.append(CaptureStatusRow(
+                kind: kind,
+                status: status,
+                line: line.isEmpty ? status : line
+            ))
+        }
+        captureStatusRows = next
+    }
+}
+
+struct CaptureStatusRow: Identifiable, Hashable {
+    var id: String { kind.rawValue }
+    let kind: CaptureKind
+    let status: String
+    let line: String
 }
 
 /// 2px controls for assign / office listing — not Capsule pills.

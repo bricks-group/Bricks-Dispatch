@@ -2,9 +2,45 @@ import Foundation
 
 /// Phone capture kinds on dispatch-api. `splat` is the path-confined 3D tour.
 /// Virtual visit is not a shutter mode.
-public enum CaptureKind: String, Codable, Sendable {
+public enum CaptureKind: String, Codable, Sendable, Hashable, Identifiable {
     case splat
     case floorplan
+
+    public var id: String { rawValue }
+
+    public var shortLabel: String {
+        switch self {
+        case .floorplan: return "Floor plan"
+        case .splat: return "3D tour"
+        }
+    }
+
+    /// Honest status line for job detail / post-submit — matches Expo `captureStatusCopy`.
+    public static func statusCopy(_ status: String?, kind: CaptureKind = .splat) -> String {
+        let label = kind.shortLabel
+        switch (status ?? "").lowercased() {
+        case "delivered":
+            return "\(label) ready."
+        case "failed":
+            return "\(label) compile failed — open review to retry or recapture."
+        case "submitted", "splatting", "tracing":
+            return "\(label) compiling… usually a few minutes."
+        case "in_progress":
+            return "\(label) capture in progress."
+        default:
+            return ""
+        }
+    }
+
+    public static func isTerminalPipelineStatus(_ status: String?) -> Bool {
+        let st = (status ?? "").lowercased()
+        return ["submitted", "splatting", "tracing", "delivered", "failed"].contains(st)
+    }
+
+    public static func isCompilingStatus(_ status: String?) -> Bool {
+        let st = (status ?? "").lowercased()
+        return ["submitted", "splatting", "tracing"].contains(st)
+    }
 }
 
 public enum CaptureRole: String, Codable, Sendable {
@@ -244,7 +280,19 @@ public final class CaptureAPIClient: @unchecked Sendable {
             }
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             let sessionBlob: Any = obj?["session"] ?? (obj as Any)
-            return .success(Self.parseSessionObject(sessionBlob, kind: kind))
+            let session = Self.parseSessionObject(sessionBlob, kind: kind)
+            // Backend may return HTTP 200 with { ok: false } when compile fails.
+            if let obj, let okFlag = obj["ok"] as? Bool, okFlag == false {
+                let message = string(obj["error"] ?? obj["detail"]) ?? "Compile failed"
+                return CaptureCallResult(
+                    ok: false,
+                    error: message,
+                    code: string(obj["code"]),
+                    session: session,
+                    frameCount: session.frameCount
+                )
+            }
+            return .success(session)
         } catch {
             return .failure(error.localizedDescription)
         }
