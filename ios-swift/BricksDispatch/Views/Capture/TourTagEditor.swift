@@ -16,6 +16,27 @@ struct TourTagEditor: View {
     @State private var busy = false
     @State private var msg: String?
 
+    /// Canada RE amenity presets — keep in sync with web/Expo amenityPresets.
+    /// Chips only fill the label field; never auto-add onto the tour.
+    private static let amenityPresets: [String] = [
+        "Chef's kitchen",
+        "Kitchen island",
+        "Quartz counters",
+        "Stainless appliances",
+        "Walk-in closet",
+        "Ensuite",
+        "Soaker tub",
+        "Hardwood floors",
+        "Fireplace",
+        "Open concept",
+        "Home office",
+        "Finished basement",
+        "Laundry",
+        "Deck / patio",
+        "Pool",
+        "Garage",
+    ]
+
     private var sessionId: String { session.sessionId ?? "" }
     private var stations: [CaptureStationInfo] { session.stations }
     private var tags: [TourTag] { session.allTags }
@@ -84,6 +105,16 @@ struct TourTagEditor: View {
                             .textFieldStyle(TagFieldStyle())
                             .disabled(busy)
                     }
+                }
+
+                fieldLabel("Presets")
+                Text("Tap to fill label, then Add — nothing is invented onto the tour.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(hex: "#6B6054"))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                FlowAmenityChips(presets: Self.amenityPresets, selected: label, disabled: busy) { picked in
+                    label = picked
                 }
 
                 fieldLabel("Label")
@@ -262,5 +293,41 @@ private struct TagFieldStyle: TextFieldStyle {
                 RoundedRectangle(cornerRadius: 2)
                     .stroke(Color(hex: "#14111020"), lineWidth: 1)
             )
+    }
+}
+
+
+/// Simple wrap layout for amenity preset chips.
+private struct FlowAmenityChips: View {
+    let presets: [String]
+    let selected: String
+    var disabled: Bool = false
+    var onPick: (String) -> Void
+
+    var body: some View {
+        let cols = [GridItem(.adaptive(minimum: 110), spacing: 8)]
+        LazyVGrid(columns: cols, alignment: .leading, spacing: 8) {
+            ForEach(presets, id: \.self) { p in
+                let on = selected.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == p.lowercased()
+                Button {
+                    onPick(p)
+                } label: {
+                    Text(p)
+                        .font(.system(size: 12, weight: on ? .semibold : .regular))
+                        .foregroundStyle(Color(hex: on ? "#14110E" : "#3B332A"))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 2)
+                                .stroke(on ? CaptureChrome.brick : Color(hex: "#14111020"), lineWidth: 1)
+                        )
+                        .background(on ? CaptureChrome.brick.opacity(0.12) : Color.clear)
+                }
+                .buttonStyle(.plain)
+                .disabled(disabled)
+            }
+        }
+        .padding(.top, 2)
     }
 }

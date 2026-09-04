@@ -8,6 +8,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { COLORS, FONTS } from '../constants/CaptureTheme';
+import { AMENITY_PRESETS } from '../constants/amenityPresets';
 import { addTourTag, deleteTourTag } from '../lib/capture-api';
 import type { CaptureSession, CaptureStation, TourTag } from '../lib/capture-api';
 
@@ -164,6 +165,26 @@ export function TourTagEditor({ jobId, session, onSession }: Props) {
         </View>
       </View>
 
+      <Text style={styles.fieldLabel}>Presets</Text>
+      <Text style={styles.presetHint}>
+        Tap to fill label, then Add — nothing is invented onto the tour.
+      </Text>
+      <View style={styles.presetWrap}>
+        {AMENITY_PRESETS.map((p) => {
+          const on = label.trim().toLowerCase() === p.toLowerCase();
+          return (
+            <TouchableOpacity
+              key={p}
+              style={[styles.presetChip, on && styles.presetChipOn]}
+              onPress={() => setLabel(p)}
+              disabled={busy}
+            >
+              <Text style={[styles.presetChipText, on && styles.presetChipTextOn]}>{p}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       <Text style={styles.fieldLabel}>Label</Text>
       <TextInput
         style={styles.input}
@@ -257,6 +278,41 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: COLORS.ink3,
     marginTop: 6,
+  },
+
+  presetHint: {
+    fontFamily: FONTS.body,
+    fontSize: 11,
+    color: COLORS.ink3,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+  presetWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  presetChip: {
+    borderWidth: 1,
+    borderColor: COLORS.hair,
+    borderRadius: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  presetChipOn: {
+    borderColor: COLORS.brick,
+    backgroundColor: 'rgba(210, 84, 43, 0.12)',
+  },
+  presetChipText: {
+    fontFamily: FONTS.body,
+    fontSize: 12,
+    color: COLORS.ink2,
+  },
+  presetChipTextOn: {
+    color: COLORS.ink,
+    fontFamily: FONTS.bodySemibold,
   },
   stationRow: { marginTop: 4, marginBottom: 4 },
   stationChip: {

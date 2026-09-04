@@ -5,6 +5,7 @@ import {
   getSceneLookUrl,
 } from '../lib/capture-api';
 import type { CaptureSession, CaptureStation, TourTag } from '../lib/capture-api';
+import { AMENITY_PRESETS } from '../lib/amenityPresets';
 
 type Props = {
   jobId: string;
@@ -199,6 +200,28 @@ export function TourTagEditor({ jobId, session, onSession }: Props) {
         <p className="muted" style={{ padding: 0, margin: 0, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
           Look · yaw {yaw.toFixed(1)}° · pitch {pitch.toFixed(1)}°
         </p>
+        <div>
+          <p className="muted" style={{ padding: 0, margin: '0 0 6px', fontSize: 12 }}>
+            Presets — tap to fill label, then Add (nothing is invented onto the tour).
+          </p>
+          <div className="chip-row" style={{ paddingTop: 0 }}>
+            {AMENITY_PRESETS.map((p) => {
+              const on = label.trim().toLowerCase() === p.toLowerCase();
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  className={`chip ${on ? 'chip-on' : ''}`}
+                  style={{ textTransform: 'none', letterSpacing: '0.02em' }}
+                  disabled={busy}
+                  onClick={() => setLabel(p)}
+                >
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <label>
           Label
           <input
