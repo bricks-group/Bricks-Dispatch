@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { getCaptureSession, submitCaptureSession } from '../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../lib/capture-api';
+import { captureStatusCopy } from '../lib/capture-modes';
 
 export function CaptureReviewPage() {
   const [params] = useSearchParams();
-  const navigate = useNavigate();
   const jobId = params.get('jobId') || '';
   const kind: CaptureKind = params.get('kind') === 'floorplan' ? 'floorplan' : 'splat';
 
@@ -13,6 +13,7 @@ export function CaptureReviewPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -21,6 +22,10 @@ export function CaptureReviewPage() {
       const s = await getCaptureSession(jobId, kind);
       if (!cancelled) {
         setSession(s);
+        const st = (s.status || '').toLowerCase();
+        if (['submitted', 'splatting', 'tracing', 'delivered', 'failed'].includes(st)) {
+          setSubmitted(true);
+        }
         setLoading(false);
       }
     })();
@@ -33,12 +38,13 @@ export function CaptureReviewPage() {
     setSubmitError(null);
     const result = await submitCaptureSession(jobId, kind);
     setSubmitting(false);
+    if (result.session) setSession(result.session);
     if (!result.ok) {
       setSubmitError(result.error ?? 'Submit failed');
+      setSubmitted(true);
       return;
     }
-    if (result.session) setSession(result.session);
-    navigate(`/jobs?id=${encodeURIComponent(jobId)}`);
+    setSubmitted(true);
   };
 
   const rooms = session?.rooms ?? [];
@@ -51,6 +57,10 @@ export function CaptureReviewPage() {
   const coveredCount = rooms.filter((r) => r.n > 0).length;
   const thinStations = stations.filter((s) => !s.hasEquirect && (s.panCount ?? 0) < 8);
   const canSubmit = pipeline.length > 0 && stationCount > 0 && thinStations.length === 0;
+  const status = (session?.status || '').toLowerCase();
+  const statusLine = captureStatusCopy(status, kind);
+  const kindLabel = kind === 'floorplan' ? 'FLOOR PLAN' : '3D TOUR';
+  const jobHref = `/jobs?id=${encodeURIComponent(jobId)}`;
 
   if (!jobId) {
     return (
@@ -61,13 +71,58 @@ export function CaptureReviewPage() {
     );
   }
 
+  if (submitted) {
+    const failed = status === 'failed' || !!submitError;
+    const compiling = ['submitted', 'splatting', 'tracing'].includes(status);
+    const ready = status === 'delivered';
+    return (
+      <div className="page-content capture-review">
+        <div className="page-header">
+          <div>
+            <h1>{address}</h1>
+            <p>{[meta, kindLabel].filter(Boolean).join(' · ')}</p>
+          </div>
+        </div>
+        <section className={`card full capture-submit-result ${failed ? 'is-failed' : ready ? 'is-ready' : 'is-compiling'}`}>
+          <div className="stack" style={{ padding: 20 }}>
+            <h3 style={{ margin: 0, padding: 0 }}>
+              {failed ? 'Compile failed' : ready ? 'Submitted · ready' : 'Submitted · compiling'}
+            </h3>
+            <p style={{ margin: 0 }}>
+              {failed
+                ? (submitError || statusLine || 'Compile failed — try again from review or recapture stations.')
+                : (statusLine || (ready
+                  ? `${kindLabel === 'FLOOR PLAN' ? 'Floor plan' : '3D tour'} is ready on the job.`
+                  : `${kindLabel === 'FLOOR PLAN' ? 'Floor plan' : '3D tour'} is compiling. This usually takes a few minutes.`))}
+            </p>
+            <div className="row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
+              <Link className="btn-capture" to={jobHref}>Back to job</Link>
+              {failed ? (
+                <button
+                  type="button"
+                  disabled={submitting || !canSubmit}
+                  onClick={handleSubmit}
+                >
+                  {submitting ? 'Retrying…' : 'Retry compile'}
+                </button>
+              ) : null}
+              <Link to={`/capture?jobId=${encodeURIComponent(jobId)}&kind=${kind}`}>
+                {failed ? 'Recapture' : 'Continue capture'}
+              </Link>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="page-content capture-review">
       <div className="page-header">
         <div>
           <h1>{address}</h1>
           <p>
-            {[meta, kind === 'floorplan' ? 'FLOOR PLAN' : '3D TOUR', `${stationCount} stations`, `${totalFrames} pans`].filter(Boolean).join(' · ')}
+            {[meta, kindLabel, `${stationCount} stations`, `${totalFrames} pans`].filter(Boolean).join(' · ')}
           </p>
         </div>
         <Link to={`/capture?jobId=${encodeURIComponent(jobId)}&kind=${kind}`}>Continue capture</Link>
@@ -111,11 +166,11 @@ export function CaptureReviewPage() {
 
           {submitError && <p className="error" style={{ padding: 0 }}>{submitError}</p>}
 
-          <div className="row" style={{ marginTop: 16 }}>
+          <div className="row" style={{ marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
             <button type="button" disabled={!canSubmit || submitting} onClick={handleSubmit}>
               {submitting ? 'Submitting…' : 'Submit capture'}
             </button>
-            <Link to={`/jobs?id=${encodeURIComponent(jobId)}`}>Back to job</Link>
+            <Link to={jobHref}>Back to job</Link>
           </div>
         </div>
       </section>

@@ -1,7 +1,9 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, AuthMember, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamResponse, TeamMember, me } from '../lib/api';
-import { captureNeitherCopy, jobCaptureModes } from '../lib/capture-modes';
+import { getCaptureSession } from '../lib/capture-api';
+import type { CaptureKind } from '../lib/capture-api';
+import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../lib/capture-modes';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -375,6 +377,7 @@ function JobListingPanel({
         {['assigned', 'in_progress'].includes(job.status) ? (
           <CaptureStartBlock job={job} />
         ) : null}
+        <CaptureStatusBlock job={job} />
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS</p>
           <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
@@ -438,6 +441,56 @@ function CaptureStartBlock({ job }: { job: Job }) {
   return (
     <div className="row">
       <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=${kind}`}>{label}</Link>
+    </div>
+  );
+}
+
+
+function CaptureStatusBlock({ job }: { job: Job }) {
+  const flags = jobCaptureModes(job);
+  const kinds: CaptureKind[] = [];
+  if (flags.tour) kinds.push('splat');
+  if (flags.floorplan) kinds.push('floorplan');
+  const [rows, setRows] = useState<{ kind: CaptureKind; status: string; line: string }[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (kinds.length === 0) { setRows([]); return; }
+      const next: { kind: CaptureKind; status: string; line: string }[] = [];
+      for (const kind of kinds) {
+        const s = await getCaptureSession(job.id, kind);
+        const status = (s.status || '').toLowerCase();
+        if (!status || status === 'in_progress' && (s.frameCount || 0) === 0) continue;
+        const line = captureStatusCopy(status, kind);
+        if (!line && !status) continue;
+        next.push({ kind, status, line: line || status });
+      }
+      if (!cancelled) setRows(next);
+    })();
+    return () => { cancelled = true; };
+  }, [job.id, flags.tour, flags.floorplan]);
+
+  if (rows.length === 0) return null;
+  return (
+    <div className="capture-status-block">
+      <p className="muted" style={{ padding: 0, margin: '0 0 8px' }}>CAPTURE STATUS</p>
+      <div className="stack" style={{ gap: 8 }}>
+        {rows.map((r) => {
+          const failed = r.status === 'failed';
+          const ready = r.status === 'delivered';
+          const compiling = ['submitted', 'splatting', 'tracing'].includes(r.status);
+          const cls = failed ? 'is-failed' : ready ? 'is-ready' : compiling ? 'is-compiling' : '';
+          return (
+            <div key={r.kind} className={`capture-status-row ${cls}`}>
+              <span>{r.line}</span>
+              <Link to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>
+                {failed ? 'Review / retry' : 'Open review'}
+              </Link>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

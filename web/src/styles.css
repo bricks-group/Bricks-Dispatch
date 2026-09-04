@@ -701,3 +701,25 @@ input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
 }
 .capture-shutter.pressed { transform: scale(0.92); }
 .capture-review .card h3 { padding: 16px 20px 0; margin: 0; }
+
+.capture-submit-result.is-compiling { border-color: var(--c-brick); }
+.capture-submit-result.is-ready { border-color: #2F6B4F; }
+.capture-submit-result.is-failed { border-color: #8B2E1F; }
+.capture-status-block { margin-top: 8px; }
+.capture-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--c-hair);
+  border-radius: var(--radius);
+  background: var(--c-bg-soft);
+  font-size: 13px;
+}
+.capture-status-row.is-compiling { border-color: rgba(210, 84, 43, 0.55); }
+.capture-status-row.is-ready { border-color: rgba(47, 107, 79, 0.55); }
+.capture-status-row.is-failed { border-color: rgba(139, 46, 31, 0.7); background: rgba(139, 46, 31, 0.08); }
+.today-capture { margin-top: 6px; }
+.today-capture .btn-capture { padding: 8px 12px; font-size: 13px; }

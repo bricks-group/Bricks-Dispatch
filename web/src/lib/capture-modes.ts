@@ -173,3 +173,22 @@ export function captureNeitherCopy(flags: CaptureFlags): string {
   }
   return 'This job has no in-app 3D tour or floor plan. HDR stills stay on the camera.';
 }
+
+
+export function captureStatusCopy(status: string | null | undefined, kind: 'splat' | 'floorplan' = 'splat'): string {
+  const label = kind === 'floorplan' ? 'Floor plan' : '3D tour';
+  switch ((status || '').toLowerCase()) {
+    case 'delivered':
+      return `${label} ready.`;
+    case 'failed':
+      return `${label} compile failed — open review to retry or recapture.`;
+    case 'submitted':
+    case 'splatting':
+    case 'tracing':
+      return `${label} compiling… usually a few minutes.`;
+    case 'in_progress':
+      return `${label} capture in progress.`;
+    default:
+      return '';
+  }
+}

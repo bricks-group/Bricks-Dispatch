@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, Job, PaginatedJobsResponse } from '../lib/api';
+import { captureNeitherCopy, jobCaptureModes } from '../lib/capture-modes';
 
 type Overview = {
   jobs_assigned_today: number;
@@ -87,13 +88,19 @@ export function OverviewPage() {
               : (
                 <ul className="list">
                   {todayJobs.map((job) => (
-                    <li
-                      key={job.id}
-                      className="list-row row-click"
-                      onClick={() => navigate(`/jobs?id=${encodeURIComponent(job.id)}`)}
-                    >
-                      <span>{job.address}</span>
-                      <span className="muted">{job.time_window_start} – {job.time_window_end} · {job.status?.replace('_', ' ')}</span>
+                    <li key={job.id} className="list-row">
+                      <button
+                        type="button"
+                        className="row-click today-job-main"
+                        onClick={() => navigate(`/jobs?id=${encodeURIComponent(job.id)}`)}
+                        style={{ all: 'unset', cursor: 'pointer', display: 'flex', width: '100%', justifyContent: 'space-between', gap: 12 }}
+                      >
+                        <span>{job.address}</span>
+                        <span className="muted">{job.time_window_start} – {job.time_window_end} · {job.status?.replace('_', ' ')}</span>
+                      </button>
+                      {['assigned', 'in_progress'].includes(job.status || '') ? (
+                        <TodayCaptureEntry job={job} />
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -126,3 +133,32 @@ export function OverviewPage() {
     </div>
   );
 }
+
+
+function TodayCaptureEntry({ job }: { job: Job }) {
+  const flags = jobCaptureModes(job);
+  const hasMode = flags.tour || flags.floorplan;
+  if (!hasMode) {
+    return (
+      <div className="today-capture capture-none">
+        <p className="muted" style={{ padding: 0, margin: 0 }}>{captureNeitherCopy(flags)}</p>
+      </div>
+    );
+  }
+  if (flags.tour && flags.floorplan) {
+    return (
+      <div className="today-capture row" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=splat`}>Start Capture · 3D tour</Link>
+        <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=floorplan`}>Start Capture · Floor plan</Link>
+      </div>
+    );
+  }
+  const kind = flags.tour ? 'splat' : 'floorplan';
+  const label = flags.tour ? 'Start Capture' : 'Start Capture · Floor plan';
+  return (
+    <div className="today-capture row">
+      <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=${kind}`}>{label}</Link>
+    </div>
+  );
+}
+

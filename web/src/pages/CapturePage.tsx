@@ -75,19 +75,50 @@ export function CapturePage() {
   const [shutterPressed, setShutterPressed] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [headingNote, setHeadingNote] = useState('');
 
   const startCamera = useCallback(async () => {
     setCamNote('');
     try {
+      if (!window.isSecureContext) {
+        setPerm('denied');
+        setCamNote('Camera needs HTTPS (or localhost). Open the live GO site on your phone.');
+        return;
+      }
       if (!navigator.mediaDevices?.getUserMedia) {
         setPerm('denied');
         setCamNote('This browser has no camera API. Use Expo Go / the native GO app for capture.');
         return;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false,
-      });
+      // iPhone Safari often rejects tight constraints — fall back to simpler facingMode, then any camera.
+      const attempts: MediaStreamConstraints[] = [
+        { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+        { video: { facingMode: { ideal: 'environment' } }, audio: false },
+        { video: true, audio: false },
+      ];
+      let stream: MediaStream | null = null;
+      let lastErr: any = null;
+      for (const constraints of attempts) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      if (!stream) {
+        setPerm('denied');
+        const name = String(lastErr?.name || '');
+        const msg = String(lastErr?.message || lastErr || 'Camera permission denied');
+        if (name === 'NotAllowedError' || /permission|denied/i.test(msg)) {
+          setCamNote('Camera blocked. Tap Allow camera, or enable camera for this site in Safari Settings.');
+        } else if (name === 'NotFoundError') {
+          setCamNote('No camera found on this device.');
+        } else {
+          setCamNote(msg);
+        }
+        return;
+      }
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -123,23 +154,34 @@ export function CapturePage() {
   }, [jobId, kind]);
 
   useEffect(() => {
+    const total = kind === 'floorplan' ? CORNER_TOTAL : DOME_TOTAL;
     const onOrient = (ev: DeviceOrientationEvent) => {
       // alpha is compass-like when available; fallback 0 keeps pan workable
       const yaw = typeof ev.alpha === 'number' ? (360 - ev.alpha) % 360 : headingRef.current;
       headingRef.current = yaw;
       const origin = heading0 ?? yaw;
       const rel = ((yaw - origin) + 360) % 360;
-      setAimTick(Math.round(rel / (360 / DOME_TOTAL)) % DOME_TOTAL);
+      setAimTick(Math.round(rel / (360 / total)) % total);
     };
     window.addEventListener('deviceorientation', onOrient);
     return () => window.removeEventListener('deviceorientation', onOrient);
-  }, [heading0]);
+  }, [heading0, kind]);
 
   const requestMotion = async () => {
+    setHeadingNote('');
     const DOE = DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> };
     if (typeof DOE.requestPermission === 'function') {
-      try { await DOE.requestPermission(); } catch { /* optional */ }
+      try {
+        const res = await DOE.requestPermission();
+        if (res !== 'granted') {
+          setHeadingNote('Heading locked — pan still works; fill the dome by eye.');
+        }
+      } catch {
+        setHeadingNote('Heading unavailable — pan still works; fill the dome by eye.');
+      }
+      return;
     }
+    setHeadingNote('Compass not required here — pan slowly and fill the dome.');
   };
 
   if (!jobId) {
@@ -292,6 +334,7 @@ export function CapturePage() {
               </div>
             )}
 
+            {headingNote ? <div className="capture-pill" style={{ marginBottom: 8 }}>{headingNote}</div> : null}
             {captureError ? <div className="capture-error">{captureError}</div> : null}
 
             <div className="capture-shutter-row">
