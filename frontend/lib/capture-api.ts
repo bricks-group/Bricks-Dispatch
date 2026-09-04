@@ -198,7 +198,16 @@ export async function submitCaptureSession(
     });
     if (!res.ok) return { ok: false, error: await _readError(res) };
     const body = await res.json();
-    return { ok: true, session: _asSession(body.session ?? body, kind) };
+    const session = _asSession(body.session ?? body, kind);
+    // Backend may return HTTP 200 with { ok: false } when compile fails.
+    if (body && body.ok === false) {
+      return {
+        ok: false,
+        error: String(body.error || body.detail || 'Compile failed'),
+        session,
+      };
+    }
+    return { ok: true, session };
   } catch (e: any) {
     return { ok: false, error: String(e?.message ?? e) };
   }

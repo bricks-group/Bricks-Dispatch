@@ -9,7 +9,9 @@ import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone,
 import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
-import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
+import { getCaptureSession } from '../../lib/capture-api';
+import type { CaptureKind } from '../../lib/capture-api';
+import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
@@ -95,6 +97,7 @@ export default function JobDetailScreen() {
   const [pick, setPick] = useState('');
   const [assigning, setAssigning] = useState(false);
   const [assignError, setAssignError] = useState('');
+  const [captureStatusRows, setCaptureStatusRows] = useState<{ kind: CaptureKind; status: string; line: string }[]>([]);
 
   useEffect(() => {
     if (!id) return;
@@ -150,6 +153,29 @@ export default function JobDetailScreen() {
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [escalationSentAt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!job) { setCaptureStatusRows([]); return; }
+      const flags = jobCaptureModes(job);
+      const kinds: CaptureKind[] = [];
+      if (flags.tour) kinds.push('splat');
+      if (flags.floorplan) kinds.push('floorplan');
+      if (kinds.length === 0) { setCaptureStatusRows([]); return; }
+      const next: { kind: CaptureKind; status: string; line: string }[] = [];
+      for (const kind of kinds) {
+        const s = await getCaptureSession(job.id, kind);
+        const status = (s.status || '').toLowerCase();
+        if (!status || (status === 'in_progress' && (s.frameCount || 0) === 0)) continue;
+        const line = captureStatusCopy(status, kind);
+        if (!line && !status) continue;
+        next.push({ kind, status, line: line || status });
+      }
+      if (!cancelled) setCaptureStatusRows(next);
+    })();
+    return () => { cancelled = true; };
+  }, [job?.id, job?.capture, job?.package_id, job?.package_name, job?.job_type, job?.add_ons, job?.checklist, job?.client_instructions]);
 
   const searchListings = async (text?: string) => {
     if (!job) return;
@@ -354,19 +380,23 @@ export default function JobDetailScreen() {
   const isActive = ['assigned', 'in_progress'].includes(job.status);
   const captureFlags = jobCaptureModes(job);
   const hasCaptureMode = captureFlags.tour || captureFlags.floorplan;
+  const openCapture = (kind: CaptureKind) => {
+    const pathname = kind === 'floorplan' ? '/(capture)/floorplan' : '/(capture)/capture';
+    router.push({ pathname, params: { jobId: id, kind } } as any);
+  };
   const startCapture = () => {
     if (captureFlags.tour && captureFlags.floorplan) {
       router.push({ pathname: '/(capture)/mode', params: { jobId: id } } as any);
       return;
     }
-    if (captureFlags.tour) {
-      router.push({ pathname: '/(capture)/capture', params: { jobId: id, kind: 'splat' } } as any);
-      return;
-    }
-    if (captureFlags.floorplan) {
-      router.push({ pathname: '/(capture)/floorplan', params: { jobId: id, kind: 'floorplan' } } as any);
-    }
+    if (captureFlags.tour) { openCapture('splat'); return; }
+    if (captureFlags.floorplan) { openCapture('floorplan'); }
   };
+  const captureStartLabel = captureFlags.tour && captureFlags.floorplan
+    ? 'Start Capture'
+    : captureFlags.tour
+      ? 'Start Capture'
+      : 'Start Capture · Floor plan';
   const canReportNoShow = isActive && (() => {
     // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
     // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
@@ -596,6 +626,40 @@ export default function JobDetailScreen() {
             )}
           </View>
         )}
+
+        {['assigned', 'in_progress'].includes(job.status) && hasCaptureMode && captureFlags.tour && captureFlags.floorplan ? (
+          <View style={s.captureStartBlock}>
+            <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('splat')} activeOpacity={0.8}>
+              <Text style={s.captureStartChipText}>Start Capture · 3D tour</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('floorplan')} activeOpacity={0.8}>
+              <Text style={s.captureStartChipText}>Start Capture · Floor plan</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+        {captureStatusRows.length > 0 ? (
+          <View style={s.captureStatusBlock}>
+            <Text style={s.sectionEye}>CAPTURE STATUS</Text>
+            {captureStatusRows.map((r) => {
+              const failed = r.status === 'failed';
+              const ready = r.status === 'delivered';
+              const compiling = ['submitted', 'splatting', 'tracing'].includes(r.status);
+              const tone = failed ? s.captureStatusFailed : ready ? s.captureStatusReady : compiling ? s.captureStatusCompiling : s.captureStatusRow;
+              return (
+                <View key={r.kind} style={[s.captureStatusRow, tone]}>
+                  <Text style={s.captureStatusLine}>{r.line}</Text>
+                  <TouchableOpacity
+                    onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId: id, kind: r.kind } } as any)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={s.captureStatusLink}>{failed ? 'Review / retry' : 'Open review'}</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+
       </ScrollView>
 
       <View style={s.footer}>
@@ -629,7 +693,7 @@ export default function JobDetailScreen() {
               >
                 {actioning
                   ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                  : <Text style={s.captureBtnText}>Start Capture</Text>
+                  : <Text style={s.captureBtnText}>{captureStartLabel}</Text>
                 }
               </TouchableOpacity>
             ) : (
@@ -862,4 +926,22 @@ const s = StyleSheet.create({
     flex: 1, minHeight: 48, justifyContent: 'center', marginLeft: 10,
   },
   captureNoneText: { fontSize: 12, color: TOKENS.moonMute, lineHeight: 16 },
+  captureStartBlock: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  captureStartChip: {
+    backgroundColor: TOKENS.moon, borderRadius: TOKENS.radius, paddingHorizontal: 12, paddingVertical: 10,
+  },
+  captureStartChipText: { fontSize: 12, color: TOKENS.ink, fontWeight: '600' as const },
+  captureStatusBlock: {
+    marginTop: 8, marginBottom: 8, padding: 14,
+    backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: TOKENS.radius,
+  },
+  captureStatusRow: {
+    marginTop: 8, padding: 12, borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: TOKENS.radius,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+  },
+  captureStatusCompiling: { borderColor: 'rgba(210, 84, 43, 0.55)' },
+  captureStatusReady: { borderColor: 'rgba(47, 107, 79, 0.55)' },
+  captureStatusFailed: { borderColor: 'rgba(139, 46, 31, 0.7)', backgroundColor: 'rgba(139, 46, 31, 0.08)' },
+  captureStatusLine: { flex: 1, fontSize: 13, color: TOKENS.moon, lineHeight: 18 },
+  captureStatusLink: { fontSize: 12, color: TOKENS.brick, fontWeight: '600' as const },
 });

@@ -5,6 +5,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
 import { getCaptureSession, submitCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
+import { captureStatusCopy } from '../../lib/capture-modes';
 
 const TONE_COLOR: Record<string, string> = { ok: COLORS.ok, warn: COLORS.warn, bad: COLORS.bad };
 
@@ -17,6 +18,7 @@ export default function ReviewScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -25,6 +27,10 @@ export default function ReviewScreen() {
       const s = await getCaptureSession(jobId, kind);
       if (!cancelled) {
         setSession(s);
+        const st = (s.status || '').toLowerCase();
+        if (['submitted', 'splatting', 'tracing', 'delivered', 'failed'].includes(st)) {
+          setSubmitted(true);
+        }
         setLoading(false);
       }
     })();
@@ -37,12 +43,26 @@ export default function ReviewScreen() {
     setSubmitError(null);
     const result = await submitCaptureSession(jobId, kind);
     setSubmitting(false);
+    if (result.session) setSession(result.session);
     if (!result.ok) {
       setSubmitError(result.error ?? 'Submit failed');
+      setSubmitted(true);
       return;
     }
-    if (result.session) setSession(result.session);
+    setSubmitted(true);
+  };
+
+  const goBackToJob = () => {
+    if (jobId) {
+      router.replace(`/job/${jobId}` as any);
+      return;
+    }
     router.back();
+  };
+
+  const goRecapture = () => {
+    const pathname = kind === 'floorplan' ? '/(capture)/floorplan' : '/(capture)/capture';
+    router.replace({ pathname, params: { jobId, kind } } as any);
   };
 
   const rooms = session?.rooms ?? [];
@@ -56,6 +76,79 @@ export default function ReviewScreen() {
   const totalCount = rooms.length;
   const thinStations = stations.filter(s => !s.hasEquirect && (s.panCount ?? 0) < 8);
   const canSubmit = pipeline.length > 0 && stationCount > 0 && thinStations.length === 0;
+  const status = (session?.status || '').toLowerCase();
+  const statusLine = captureStatusCopy(status, kind);
+  const kindLabel = kind === 'floorplan' ? 'FLOOR PLAN' : '3D TOUR';
+
+  if (!jobId) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.body}>
+          <Text style={styles.emptyText}>Missing jobId</Text>
+          <TouchableOpacity style={styles.resultBtn} onPress={() => router.back()}>
+            <Text style={styles.resultBtnText}>Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (submitted) {
+    const failed = status === 'failed' || !!submitError;
+    const compiling = ['submitted', 'splatting', 'tracing'].includes(status);
+    const ready = status === 'delivered';
+    const resultTone = failed ? styles.resultFailed : ready ? styles.resultReady : styles.resultCompiling;
+    const title = failed ? 'Compile failed' : ready ? 'Submitted · ready' : 'Submitted · compiling';
+    const body = failed
+      ? (submitError || statusLine || 'Compile failed — try again from review or recapture stations.')
+      : (statusLine || (ready
+        ? `${kind === 'floorplan' ? 'Floor plan' : '3D tour'} is ready on the job.`
+        : `${kind === 'floorplan' ? 'Floor plan' : '3D tour'} is compiling. This usually takes a few minutes.`));
+
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <ScrollView>
+          <View style={styles.hero}>
+            <TouchableOpacity style={styles.backChip} onPress={goBackToJob}>
+              <Text style={styles.backChipText}>‹</Text>
+            </TouchableOpacity>
+            <Text style={styles.heroAddress}>{address}</Text>
+            <Text style={styles.heroMeta}>
+              {[meta, kindLabel].filter(Boolean).join(' · ')}
+            </Text>
+          </View>
+
+          <View style={styles.body}>
+            <View style={[styles.resultCard, resultTone]}>
+              <Text style={styles.resultTitle}>{title}</Text>
+              <Text style={styles.resultBody}>{body}</Text>
+              <View style={styles.resultActions}>
+                <TouchableOpacity style={styles.resultBtn} onPress={goBackToJob}>
+                  <Text style={styles.resultBtnText}>Back to job</Text>
+                </TouchableOpacity>
+                {failed ? (
+                  <TouchableOpacity
+                    style={[styles.resultBtnPrimary, (submitting || !canSubmit) && { opacity: 0.5 }]}
+                    onPress={handleSubmit}
+                    disabled={submitting || !canSubmit}
+                  >
+                    <Text style={styles.resultBtnPrimaryText}>
+                      {submitting ? 'Retrying…' : 'Retry compile'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity style={styles.resultLink} onPress={goRecapture}>
+                  <Text style={styles.resultLinkText}>
+                    {failed ? 'Recapture' : 'Continue capture'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -73,7 +166,7 @@ export default function ReviewScreen() {
           </TouchableOpacity>
           <Text style={styles.heroAddress}>{address}</Text>
           <Text style={styles.heroMeta}>
-            {[meta, kind === 'floorplan' ? 'FLOOR PLAN' : '3D TOUR', `${stationCount} STATION${stationCount === 1 ? '' : 'S'}`, `${totalFrames.toLocaleString()} PANS`].filter(Boolean).join(' · ')}
+            {[meta, kindLabel, `${stationCount} STATION${stationCount === 1 ? '' : 'S'}`, `${totalFrames.toLocaleString()} PANS`].filter(Boolean).join(' · ')}
           </Text>
         </View>
 
@@ -201,4 +294,17 @@ const styles = StyleSheet.create({
   submitBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 14, color: '#fff' },
   errorBar: { position: 'absolute', bottom: 100, left: 20, right: 20, backgroundColor: COLORS.bad, padding: 12, borderRadius: 2 },
   errorText: { fontFamily: FONTS.body, fontSize: 12, color: '#fff', textAlign: 'center' },
+  resultCard: { borderWidth: 1, borderRadius: 2, padding: 18, gap: 10 },
+  resultCompiling: { borderColor: 'rgba(210, 84, 43, 0.55)', backgroundColor: 'rgba(210, 84, 43, 0.08)' },
+  resultReady: { borderColor: 'rgba(47, 107, 79, 0.55)', backgroundColor: 'rgba(47, 107, 79, 0.08)' },
+  resultFailed: { borderColor: 'rgba(139, 46, 31, 0.7)', backgroundColor: 'rgba(139, 46, 31, 0.08)' },
+  resultTitle: { fontFamily: FONTS.bodySemibold, fontSize: 18, color: COLORS.ink },
+  resultBody: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.ink2, lineHeight: 18 },
+  resultActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  resultBtn: { borderWidth: 1, borderColor: COLORS.hair, borderRadius: 2, paddingHorizontal: 14, paddingVertical: 10 },
+  resultBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: COLORS.ink },
+  resultBtnPrimary: { backgroundColor: COLORS.brick, borderRadius: 2, paddingHorizontal: 14, paddingVertical: 10 },
+  resultBtnPrimaryText: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#fff' },
+  resultLink: { paddingHorizontal: 8, paddingVertical: 10 },
+  resultLinkText: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.brick },
 });

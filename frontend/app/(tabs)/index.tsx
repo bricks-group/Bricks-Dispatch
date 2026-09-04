@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, Navigation, Phone, Check } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
+import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
@@ -19,6 +20,10 @@ type Job = {
   scheduled_date: string; package_name: string | null; package_price: number | null;
   agent_name: string | null; client_instructions: string | null;
   checklist: ChecklistItem[];
+  package_id?: string | null;
+  add_ons?: unknown;
+  capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
+  property_details?: string | null;
 };
 
 function todayISO() {
@@ -45,6 +50,39 @@ function fmtMoney(amount: number) {
 function initials(name: string | null) {
   if (!name) return '??';
   return name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
+}
+
+function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' | 'floorplan' | 'mode') => void }) {
+  const flags = jobCaptureModes(job);
+  const hasMode = flags.tour || flags.floorplan;
+  if (!hasMode) {
+    return (
+      <View style={s.todayCaptureNone}>
+        <Text style={s.todayCaptureNoneText}>{captureNeitherCopy(flags)}</Text>
+      </View>
+    );
+  }
+  if (flags.tour && flags.floorplan) {
+    return (
+      <View style={s.todayCaptureRow}>
+        <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('splat')} activeOpacity={0.8}>
+          <Text style={s.todayCaptureBtnText}>Start Capture · 3D tour</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('floorplan')} activeOpacity={0.8}>
+          <Text style={s.todayCaptureBtnText}>Start Capture · Floor plan</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+  const kind = flags.tour ? 'splat' : 'floorplan';
+  const label = flags.tour ? 'Start Capture' : 'Start Capture · Floor plan';
+  return (
+    <View style={s.todayCaptureRow}>
+      <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen(kind)} activeOpacity={0.8}>
+        <Text style={s.todayCaptureBtnText}>{label}</Text>
+      </TouchableOpacity>
+    </View>
+  );
 }
 
 export default function TodayScreen() {
@@ -92,6 +130,15 @@ export default function TodayScreen() {
     Linking.openURL(`maps://?q=${addr}`).catch(() =>
       Linking.openURL(`https://maps.google.com/?q=${addr}`)
     );
+  };
+
+  const openCapture = (job: Job, kind?: 'splat' | 'floorplan' | 'mode') => {
+    if (kind === 'mode' || !kind) {
+      router.push({ pathname: '/(capture)/mode', params: { jobId: job.id } } as any);
+      return;
+    }
+    const pathname = kind === 'floorplan' ? '/(capture)/floorplan' : '/(capture)/capture';
+    router.push({ pathname, params: { jobId: job.id, kind } } as any);
   };
 
   return (
@@ -167,15 +214,23 @@ export default function TodayScreen() {
                     </TouchableOpacity>
                   </View>
                 </TouchableOpacity>
+                {['assigned', 'in_progress'].includes(nextJob.status || '') ? (
+                  <View style={s.nextCaptureWrap}>
+                    <TodayCaptureEntry
+                      job={nextJob}
+                      onOpen={(kind) => openCapture(nextJob, kind)}
+                    />
+                  </View>
+                ) : null}
               </View>
             )}
 
             {/* Pre-shoot checklist for next job */}
-            {nextJob && nextJob.checklist.length > 0 && (
+            {nextJob && (nextJob.checklist?.length ?? 0) > 0 && (
               <View style={s.section}>
                 <Text style={s.sectionLabel}>PRE-SHOOT CHECKLIST</Text>
                 <View style={s.checkCard}>
-                  {nextJob.checklist.slice(0, 5).map((item, i, arr) => (
+                  {(nextJob.checklist || []).slice(0, 5).map((item, i, arr) => (
                     <View key={item.id} style={[s.checkRow, i < arr.length - 1 && s.checkRowBorder]}>
                       <View style={item.completed ? s.chkFilled : s.chkEmpty}>
                         {item.completed && <Check size={9} color="#FFF" strokeWidth={3} />}
@@ -196,21 +251,28 @@ export default function TodayScreen() {
                 <View style={s.laterList}>
                   {laterJobs.map((job, i) => {
                     const payout = job.package_price ? Math.round(job.package_price * VENDOR_RATE) : null;
+                    const active = ['assigned', 'in_progress'].includes(job.status || '');
                     return (
-                      <TouchableOpacity
-                        key={job.id}
-                        style={[s.laterRow, i < laterJobs.length - 1 && s.laterRowBorder]}
-                        onPress={() => router.push(`/job/${job.id}`)}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={s.laterTime}>{fmtTime(job.time_window_start)}</Text>
-                        <View style={s.laterDivider} />
-                        <View style={s.laterInfo}>
-                          <Text style={s.laterAddress}>{job.address.toLowerCase()}</Text>
-                          <Text style={s.laterType}>{job.job_type.replace(/_/g, ' ')}</Text>
-                        </View>
-                        {payout && <Text style={s.laterPayout}>{fmtMoney(payout)}</Text>}
-                      </TouchableOpacity>
+                      <View key={job.id} style={[i < laterJobs.length - 1 && s.laterRowBorder]}>
+                        <TouchableOpacity
+                          style={s.laterRow}
+                          onPress={() => router.push(`/job/${job.id}`)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={s.laterTime}>{fmtTime(job.time_window_start)}</Text>
+                          <View style={s.laterDivider} />
+                          <View style={s.laterInfo}>
+                            <Text style={s.laterAddress}>{job.address.toLowerCase()}</Text>
+                            <Text style={s.laterType}>{job.job_type.replace(/_/g, ' ')}</Text>
+                          </View>
+                          {payout && <Text style={s.laterPayout}>{fmtMoney(payout)}</Text>}
+                        </TouchableOpacity>
+                        {active ? (
+                          <View style={s.laterCaptureWrap}>
+                            <TodayCaptureEntry job={job} onOpen={(kind) => openCapture(job, kind)} />
+                          </View>
+                        ) : null}
+                      </View>
                     );
                   })}
                 </View>
@@ -274,4 +336,12 @@ const s = StyleSheet.create({
   laterAddress: { fontFamily: TYPOGRAPHY.heading, fontSize: 14, color: TOKENS.moon, marginBottom: 2 },
   laterType: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moonFaint, textTransform: 'capitalize' },
   laterPayout: { fontFamily: TYPOGRAPHY.mono, fontSize: 13, color: TOKENS.moon },
+  laterCaptureWrap: { paddingHorizontal: 14, paddingBottom: 12 },
+  todayCaptureRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  todayCaptureBtn: {
+    backgroundColor: TOKENS.moon, borderRadius: 2, paddingHorizontal: 12, paddingVertical: 10,
+  },
+  todayCaptureBtnText: { color: TOKENS.ink, fontFamily: TYPOGRAPHY.monoMedium, fontSize: 11, letterSpacing: 0.4 },
+  todayCaptureNone: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: TOKENS.nightHair },
+  todayCaptureNoneText: { fontFamily: TYPOGRAPHY.body, fontSize: 12, color: TOKENS.moonMute, lineHeight: 17 },
 });
