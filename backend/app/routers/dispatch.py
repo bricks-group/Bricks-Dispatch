@@ -25,7 +25,7 @@ async def create_dispatch_job(
     x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """
-    Intake endpoint for Booking backend. Creates a job and triggers AI assignment.
+    Intake endpoint for Booking backend. Creates a job and assigns a vendor before return.
     """
     internal_keys = [k.strip() for k in (os.environ.get("INTERNAL_API_KEYS") or "").split(",") if k.strip()]
     if not internal_keys or x_internal_api_key not in internal_keys:
@@ -60,9 +60,18 @@ async def create_dispatch_job(
         res = await db.table("jobs").insert(job_data).execute()
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to persist job")
-        
-        # Trigger AI assignment in background
-        background_tasks.add_task(assign_vendor_for_job, job_id)
+
+        # Assign synchronously before responding. Dispatch API runs on Vercel
+        # serverless — FastAPI BackgroundTasks often never run after the
+        # response, which left paid /book jobs stuck in pending_assignment
+        # with empty assignee_id so they never landed on GO.
+        assignee_id = None
+        status = "pending_assignment"
+        try:
+            assignee_id = await assign_vendor_for_job(job_id)
+            status = "assigned" if assignee_id else "unassigned"
+        except Exception:
+            logger.exception("Sync vendor assign failed for job %s", job_id)
 
         background_tasks.add_task(
             create_notification,
@@ -75,16 +84,17 @@ async def create_dispatch_job(
                 f"Booking ID: {job_data.get('booking_id', 'n/a')}"
             ),
             ntype="new_booking",
-            data={"job_id": job_id},
+            data={"job_id": job_id, "assignee_id": assignee_id or ""},
             email_to=ADMIN_NOTIFICATION_EMAIL,
             email_subject=f"New paid booking: {job_data.get('address', job_id)}",
         )
 
         return {
             "job_id": job_id,
-            "status": "pending_assignment",
+            "status": status,
+            "assignee_id": assignee_id or "",
             "created_at": now,
-            "checklist": job_data["checklist"]
+            "checklist": job_data.get("checklist") or [],
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
