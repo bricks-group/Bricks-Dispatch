@@ -28,10 +28,16 @@ struct CaptureReviewView: View {
             VStack(alignment: .leading, spacing: 0) {
                 hero(metaExtra: false)
 
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
                     resultCard
+                    if flow.kind == .splat {
+                        TourTagEditor(jobId: flow.job.id, session: flow.session) { s in
+                            flow.replaceSession(s)
+                        }
+                    }
                 }
                 .padding(22)
+                .padding(.bottom, 40)
             }
         }
     }
@@ -65,6 +71,13 @@ struct CaptureReviewView: View {
                 .foregroundStyle(Color(hex: "#3B332A"))
                 .fixedSize(horizontal: false, vertical: true)
 
+            if let rebuildMsg = flow.rebuildMsg, !rebuildMsg.isEmpty {
+                Text(rebuildMsg)
+                    .font(.system(size: 12))
+                    .foregroundStyle(rebuildMsg.hasPrefix("Tour player rebuilt") ? BricksColors.ok : BricksColors.bad)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 8) {
                 Button {
                     dismiss()
@@ -96,6 +109,24 @@ struct CaptureReviewView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSubmit || flow.submitting)
+                }
+
+                if ready && flow.kind == .splat {
+                    Button {
+                        Task { await flow.rebuildTourPlayer() }
+                    } label: {
+                        Text(flow.rebuilding ? "Rebuilding…" : "Rebuild tour player")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color(hex: "#14110E"))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(Color(hex: "#14111020"), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(flow.rebuilding)
                 }
 
                 Button {
@@ -214,6 +245,13 @@ struct CaptureReviewView: View {
                                 }
                             }
                         }
+                    }
+
+                    if flow.kind == .splat {
+                        TourTagEditor(jobId: flow.job.id, session: flow.session) { s in
+                            flow.replaceSession(s)
+                        }
+                        .padding(.top, 8)
                     }
                 }
                 .padding(22)

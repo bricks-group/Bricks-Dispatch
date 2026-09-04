@@ -71,6 +71,33 @@ public struct CapturePipelineStage: Sendable, Hashable {
     }
 }
 
+public struct TourTag: Sendable, Identifiable, Hashable {
+    public var id: String
+    public var label: String
+    public var note: String?
+    public var yaw: Double
+    public var pitch: Double
+    public var stationIndex: Int
+
+    public init(id: String, label: String, note: String? = nil, yaw: Double, pitch: Double, stationIndex: Int = 0) {
+        self.id = id; self.label = label; self.note = note
+        self.yaw = yaw; self.pitch = pitch; self.stationIndex = stationIndex
+    }
+
+    /// Expo/web wrap: yaw −180…180, pitch −80…80, tenths of a degree.
+    public static func wrapYaw(_ raw: Double) -> Double {
+        var yaw = raw
+        while yaw > 180 { yaw -= 360 }
+        while yaw < -180 { yaw += 360 }
+        return (yaw * 10).rounded() / 10
+    }
+
+    public static func clampPitch(_ raw: Double) -> Double {
+        let p = min(80, max(-80, raw))
+        return (p * 10).rounded() / 10
+    }
+}
+
 public struct CaptureStationInfo: Sendable, Hashable {
     public var stationIndex: Int
     public var room: String?
@@ -78,10 +105,12 @@ public struct CaptureStationInfo: Sendable, Hashable {
     public var hasEquirect: Bool
     public var heading: Double?
     public var contentType: String?
+    public var tags: [TourTag]
 
-    public init(stationIndex: Int, room: String?, panCount: Int, hasEquirect: Bool, heading: Double?, contentType: String?) {
+    public init(stationIndex: Int, room: String?, panCount: Int, hasEquirect: Bool, heading: Double?, contentType: String?, tags: [TourTag] = []) {
         self.stationIndex = stationIndex; self.room = room; self.panCount = panCount
         self.hasEquirect = hasEquirect; self.heading = heading; self.contentType = contentType
+        self.tags = tags
     }
 }
 
@@ -110,14 +139,27 @@ public struct GOCaptureSession: Sendable, Hashable {
     public var stationCount: Int
     public var currentStationIndex: Int
     public var stations: [CaptureStationInfo]
+    public var tags: [TourTag]
 
     public static func empty(kind: CaptureKind = .splat, address: String = "Property") -> GOCaptureSession {
         GOCaptureSession(
             sessionId: nil, currentRoomId: nil, address: address, meta: "", kind: kind,
             status: nil, rooms: [], pipeline: [], frameCount: 0, guidance: nil,
             estimatedDeliveryHours: nil, outputStoragePath: nil, stationCount: 0,
-            currentStationIndex: 0, stations: []
+            currentStationIndex: 0, stations: [], tags: []
         )
+    }
+
+    /// Session-level tags, or flattened from stations when the API nests them.
+    public var allTags: [TourTag] {
+        if !tags.isEmpty { return tags }
+        var out: [TourTag] = []
+        for st in stations {
+            for t in st.tags {
+                out.append(t)
+            }
+        }
+        return out
     }
 
     public var thinStations: [CaptureStationInfo] {
@@ -136,13 +178,14 @@ public struct CaptureCallResult: Sendable {
     public var code: String?
     public var session: GOCaptureSession?
     public var frameCount: Int?
+    public var rebuilt: Bool? = nil
 
-    public static func failure(_ error: String, code: String? = nil) -> CaptureCallResult {
-        CaptureCallResult(ok: false, error: error, code: code, session: nil, frameCount: nil)
+    public static func failure(_ error: String, code: String? = nil, session: GOCaptureSession? = nil, rebuilt: Bool? = nil) -> CaptureCallResult {
+        CaptureCallResult(ok: false, error: error, code: code, session: session, frameCount: session?.frameCount, rebuilt: rebuilt)
     }
 
-    public static func success(_ session: GOCaptureSession, frameCount: Int? = nil) -> CaptureCallResult {
-        CaptureCallResult(ok: true, error: nil, code: nil, session: session, frameCount: frameCount ?? session.frameCount)
+    public static func success(_ session: GOCaptureSession, frameCount: Int? = nil, rebuilt: Bool? = nil) -> CaptureCallResult {
+        CaptureCallResult(ok: true, error: nil, code: nil, session: session, frameCount: frameCount ?? session.frameCount, rebuilt: rebuilt)
     }
 }
 
@@ -290,7 +333,8 @@ public final class CaptureAPIClient: @unchecked Sendable {
                     error: message,
                     code: string(obj["code"]),
                     session: session,
-                    frameCount: session.frameCount
+                    frameCount: session.frameCount,
+                    rebuilt: nil
                 )
             }
             return .success(session)
@@ -371,6 +415,121 @@ public final class CaptureAPIClient: @unchecked Sendable {
         }
     }
 
+    public func rebuildTourPlayer(jobId: String, kind: CaptureKind = .splat, sessionId: String?) async -> CaptureCallResult {
+        guard !jobId.isEmpty else { return .failure("Missing job") }
+        guard kind == .splat else { return .failure("Rebuild tour player is for 3D tours, not floor plans") }
+        do {
+            let path: String
+            if let sessionId, !sessionId.isEmpty {
+                path = "/api/capture/sessions/\(sessionId)/rebuild-tour"
+            } else {
+                path = "/api/capture/rebuild-tour"
+            }
+            var body: [String: Any] = ["job_id": jobId, "kind": kind.rawValue]
+            if let sessionId, !sessionId.isEmpty { body["session_id"] = sessionId }
+            let url = BricksAPIURL.make(base: baseURL, path: path)
+            let (data, http) = try await jsonRequest(url: url, method: "POST", body: body)
+            if http.statusCode < 200 || http.statusCode >= 300 {
+                return Self.fail(data, fallback: "HTTP \(http.statusCode)")
+            }
+            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let sessionBlob: Any = obj?["session"] ?? (obj as Any)
+            var session = Self.parseSessionObject(sessionBlob, kind: kind)
+            if let tags = obj?["tags"] as? [Any] {
+                session.tags = Self.parseTags(tags)
+            }
+            if let obj, let okFlag = obj["ok"] as? Bool, okFlag == false {
+                let message = string(obj["error"] ?? obj["detail"]) ?? "Rebuild failed"
+                return CaptureCallResult(ok: false, error: message, code: string(obj["code"]), session: session, frameCount: session.frameCount, rebuilt: false)
+            }
+            let rebuilt = (obj?["rebuilt"] as? Bool) ?? true
+            return .success(session, rebuilt: rebuilt)
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    public func addTourTag(
+        jobId: String,
+        sessionId: String?,
+        stationIndex: Int,
+        label: String,
+        note: String?,
+        yaw: Double,
+        pitch: Double
+    ) async -> CaptureCallResult {
+        guard !jobId.isEmpty else { return .failure("Missing job") }
+        let lab = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lab.isEmpty else { return .failure("Tag needs a label") }
+        do {
+            let path: String
+            if let sessionId, !sessionId.isEmpty {
+                path = "/api/capture/sessions/\(sessionId)/tags"
+            } else {
+                path = "/api/capture/tags"
+            }
+            var body: [String: Any] = [
+                "job_id": jobId,
+                "station_index": stationIndex,
+                "label": lab,
+                "yaw": yaw,
+                "pitch": pitch,
+            ]
+            if let sessionId, !sessionId.isEmpty { body["session_id"] = sessionId }
+            if let note {
+                let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !n.isEmpty { body["note"] = n }
+            }
+            let url = BricksAPIURL.make(base: baseURL, path: path)
+            let (data, http) = try await jsonRequest(url: url, method: "POST", body: body)
+            if http.statusCode < 200 || http.statusCode >= 300 {
+                return Self.fail(data, fallback: "HTTP \(http.statusCode)")
+            }
+            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let sessionBlob: Any = obj?["session"] ?? (obj as Any)
+            var session = Self.parseSessionObject(sessionBlob, kind: .splat)
+            if let tags = obj?["tags"] as? [Any] {
+                session.tags = Self.parseTags(tags)
+            }
+            if let obj, let okFlag = obj["ok"] as? Bool, okFlag == false {
+                let message = string(obj["error"] ?? obj["detail"]) ?? "Tag saved but player rebuild failed"
+                return CaptureCallResult(ok: false, error: message, code: string(obj["code"]), session: session, frameCount: session.frameCount, rebuilt: false)
+            }
+            let rebuilt = (obj?["rebuilt"] as? Bool) ?? true
+            return .success(session, rebuilt: rebuilt)
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    public func deleteTourTag(jobId: String, sessionId: String, tagId: String) async -> CaptureCallResult {
+        guard !sessionId.isEmpty, !tagId.isEmpty else { return .failure("Missing tag") }
+        do {
+            let url = BricksAPIURL.make(
+                base: baseURL,
+                path: "/api/capture/sessions/\(sessionId)/tags/\(tagId)",
+                query: [URLQueryItem(name: "job_id", value: jobId)]
+            )
+            let (data, http) = try await jsonRequest(url: url, method: "DELETE", body: nil)
+            if http.statusCode < 200 || http.statusCode >= 300 {
+                return Self.fail(data, fallback: "HTTP \(http.statusCode)")
+            }
+            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let sessionBlob: Any = obj?["session"] ?? (obj as Any)
+            var session = Self.parseSessionObject(sessionBlob, kind: .splat)
+            if let tags = obj?["tags"] as? [Any] {
+                session.tags = Self.parseTags(tags)
+            }
+            if let obj, let okFlag = obj["ok"] as? Bool, okFlag == false {
+                let message = string(obj["error"] ?? obj["detail"]) ?? "Delete failed"
+                return CaptureCallResult(ok: false, error: message, code: string(obj["code"]), session: session, frameCount: session.frameCount, rebuilt: nil)
+            }
+            return .success(session)
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
     // MARK: — HTTP
 
     private func jsonRequest(url: URL, method: String, body: [String: Any]?) async throws -> (Data, HTTPURLResponse) {
@@ -421,15 +580,19 @@ public final class CaptureAPIClient: @unchecked Sendable {
         let stationsAny = dict["stations"] as? [Any] ?? []
         let stations: [CaptureStationInfo] = stationsAny.compactMap { item in
             guard let s = item as? [String: Any] else { return nil }
+            let idx = int(s["station_index"] ?? s["stationIndex"]) ?? 0
+            let nested = parseTags(s["tags"] as? [Any] ?? [], defaultStation: idx)
             return CaptureStationInfo(
-                stationIndex: int(s["station_index"] ?? s["stationIndex"]) ?? 0,
+                stationIndex: idx,
                 room: string(s["room"]),
                 panCount: int(s["panCount"] ?? s["pan_count"]) ?? 0,
                 hasEquirect: bool(s["hasEquirect"] ?? s["has_equirect"]) ?? false,
                 heading: double(s["heading"]),
-                contentType: string(s["content_type"] ?? s["contentType"])
+                contentType: string(s["content_type"] ?? s["contentType"]),
+                tags: nested
             )
         }
+        let tags = parseTags(dict["tags"] as? [Any] ?? [])
         var guidance: CaptureGuidance?
         if let g = dict["guidance"] as? [String: Any], let room = string(g["room"]), let message = string(g["message"]) {
             guidance = CaptureGuidance(room: room, message: message)
@@ -449,8 +612,24 @@ public final class CaptureAPIClient: @unchecked Sendable {
             outputStoragePath: string(dict["outputStoragePath"] ?? dict["output_storage_path"]),
             stationCount: int(dict["stationCount"] ?? dict["station_count"]) ?? stations.count,
             currentStationIndex: int(dict["currentStationIndex"] ?? dict["current_station_index"]) ?? 0,
-            stations: stations
+            stations: stations,
+            tags: tags
         )
+    }
+
+    public static func parseTags(_ raw: [Any], defaultStation: Int = 0) -> [TourTag] {
+        raw.compactMap { item in
+            guard let t = item as? [String: Any] else { return nil }
+            guard let id = string(t["id"]), let label = string(t["label"]) else { return nil }
+            return TourTag(
+                id: id,
+                label: label,
+                note: string(t["note"]),
+                yaw: double(t["yaw"]) ?? 0,
+                pitch: double(t["pitch"]) ?? 0,
+                stationIndex: int(t["station_index"] ?? t["stationIndex"]) ?? defaultStation
+            )
+        }
     }
 
     public static func parseSign(_ data: Data) -> CaptureSignPayload? {

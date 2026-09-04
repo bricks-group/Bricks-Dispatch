@@ -22,6 +22,8 @@ final class CaptureFlowModel: ObservableObject {
     @Published var showReview = false
     @Published var submitting = false
     @Published var submitted = false
+    @Published var rebuilding = false
+    @Published var rebuildMsg: String?
 
     let hardware = CaptureHardware()
     private var hardwareBag = Set<AnyCancellable>()
@@ -162,6 +164,31 @@ final class CaptureFlowModel: ObservableObject {
         submitted = false
         error = nil
         errorCode = nil
+        rebuildMsg = nil
+    }
+
+    func replaceSession(_ s: GOCaptureSession) {
+        session = s
+    }
+
+    func rebuildTourPlayer() async {
+        guard kind == .splat else { return }
+        rebuilding = true
+        rebuildMsg = nil
+        defer { rebuilding = false }
+        let result = await CaptureAPIClient.shared.rebuildTourPlayer(
+            jobId: job.id,
+            kind: kind,
+            sessionId: session.sessionId
+        )
+        if let s = result.session {
+            session = s
+        }
+        if result.ok {
+            rebuildMsg = "Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see tags."
+        } else {
+            rebuildMsg = result.error ?? "Rebuild failed"
+        }
     }
 
     private func apply(_ result: CaptureCallResult, resetTicks: Bool) {

@@ -149,7 +149,6 @@ final class BricksCoreTests: XCTestCase {
         XCTAssertEqual(CaptureDome.tick(yaw: 10, origin: 10), 0)
         XCTAssertEqual(CaptureDome.total, 24)
     }
-}
 
     func testShootWindowAfternoon() {
         let s = ShootWindow.format(
@@ -180,3 +179,37 @@ final class BricksCoreTests: XCTestCase {
         XCTAssertEqual(job.formattedShootWindow, "Evening · 16:00–19:00 ET")
     }
 
+    func testCaptureTagsParseAndFlatten() throws {
+        let json = """
+        {"sessionId":"s-tag","kind":"splat","address":"10 Main","frameCount":8,"stationCount":1,"rooms":[],"pipeline":[{"title":"Captured","detail":"ok","status":"done"}],"stations":[{"station_index":0,"room":"Kitchen","panCount":8,"hasEquirect":true}],"tags":[{"id":"t1","label":"Walk-in closet","note":"Cedar","yaw":45.2,"pitch":-8,"station_index":0}]}
+        """.data(using: .utf8)!
+        let s = CaptureAPIClient.parseSession(json, kind: .splat)
+        XCTAssertEqual(s.tags.count, 1)
+        XCTAssertEqual(s.allTags.first?.label, "Walk-in closet")
+        XCTAssertEqual(s.allTags.first?.note, "Cedar")
+        XCTAssertEqual(s.allTags.first?.yaw ?? 0, 45.2, accuracy: 0.01)
+        XCTAssertEqual(s.allTags.first?.pitch ?? 0, -8, accuracy: 0.01)
+        XCTAssertEqual(s.allTags.first?.stationIndex, 0)
+    }
+
+    func testCaptureTagsNestedOnStation() throws {
+        let json = """
+        {"session_id":"s-nested","kind":"splat","stations":[{"station_index":2,"room":"Bath","tags":[{"id":"n1","label":"Soaker tub","yaw":10,"pitch":0}]}]}
+        """.data(using: .utf8)!
+        let s = CaptureAPIClient.parseSession(json, kind: .splat)
+        XCTAssertTrue(s.tags.isEmpty)
+        XCTAssertEqual(s.allTags.count, 1)
+        XCTAssertEqual(s.allTags[0].label, "Soaker tub")
+        XCTAssertEqual(s.allTags[0].stationIndex, 2)
+        XCTAssertEqual(s.stations.first?.tags.count, 1)
+    }
+
+    func testTourTagLookWrap() {
+        XCTAssertEqual(TourTag.wrapYaw(190), -170, accuracy: 0.01)
+        XCTAssertEqual(TourTag.wrapYaw(-190), 170, accuracy: 0.01)
+        XCTAssertEqual(TourTag.wrapYaw(0), 0, accuracy: 0.01)
+        XCTAssertEqual(TourTag.clampPitch(90), 80, accuracy: 0.01)
+        XCTAssertEqual(TourTag.clampPitch(-90), -80, accuracy: 0.01)
+        XCTAssertEqual(TourTag.clampPitch(12.34), 12.3, accuracy: 0.01)
+    }
+}
