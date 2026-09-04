@@ -45,7 +45,7 @@ from ..services.capture_worker import (
 )
 from ..services.storage import STORAGE_BUCKET, create_signed_upload_url, get_signed_download_url, upload_bytes
 from ..services.tour_builder import normalize_tag, normalize_tags
-from ..shared.auth import get_vendor_member, is_vendor_admin, resolve_vendor_actor_id
+from ..shared.auth import get_vendor_member, is_vendor_admin, resolve_vendor_actor_id, verify_internal_api_key
 from ..shared.database import get_db
 from ..shared.errors import api_error
 from ..shared.job_scope import job_visible_to
@@ -214,17 +214,27 @@ def _shape_session(
     }
 
 
-async def _actor_and_job(authorization: Optional[str], x_user_id: Optional[str], job_id: str) -> tuple[dict, dict]:
+async def _actor_and_job(
+    authorization: Optional[str],
+    x_user_id: Optional[str],
+    job_id: str,
+    x_internal_api_key: Optional[str] = None,
+) -> tuple[dict, dict]:
+    """Vendor-assigned job gate. OS listing-file proxies may use X-Internal-Api-Key."""
     if not job_id:
         api_error(400, "job_id is required", "missing_job_id")
-    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    actor_member = await get_vendor_member(actor_id)
     db = await get_db()
     res = await db.table("jobs").select(
         "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id, "
         "package_id, package_name, add_ons, client_instructions, property_details"
     ).eq("id", job_id).maybe_single().execute()
     job = res.data or {}
+    if not job.get("id"):
+        api_error(404, "Job not found", "job_not_found")
+    if verify_internal_api_key(x_internal_api_key):
+        return {"id": "internal_service", "role": "internal"}, job
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
     if not job_visible_to(
         job, actor_id, actor_member,
         assigned_only=True,
@@ -958,6 +968,7 @@ async def add_tour_tag(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """Add an amenity/feature tag at a yaw/pitch on a stored 360. Rebuilds the player."""
     db = await get_db()
@@ -965,7 +976,7 @@ async def add_tour_tag(
     if not session:
         api_error(409, "No capture session", "session_not_found")
     job_id = session.get("job_id") or (payload or {}).get("job_id") or ""
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     tag = normalize_tag(payload or {}, station_index=(payload or {}).get("station_index"), mint_id=True)
     if not tag:
         api_error(400, "Tag needs a label", "missing_tag_label")
@@ -987,13 +998,14 @@ async def delete_tour_tag(
     job_id: Optional[str] = Query(default=None),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     db = await get_db()
     session = await _session_by_id(db, session_id)
     if not session:
         api_error(409, "No capture session", "session_not_found")
     job_id = session.get("job_id") or job_id or ""
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     existing = await load_session_tags(session_id) or []
     kept = [t for t in existing if t.get("id") != tag_id]
     if len(kept) == len(existing):
@@ -1010,6 +1022,7 @@ async def rebuild_tour_for_session(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """Refresh a compiled 3D tour player from stored equirects. Does not recapture.
 
@@ -1022,7 +1035,7 @@ async def rebuild_tour_for_session(
     if not session:
         api_error(409, "No capture session", "session_not_found")
     job_id = session.get("job_id") or (payload or {}).get("job_id") or ""
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     if session.get("job_id") and session["job_id"] != job["id"]:
         api_error(404, "Job not found", "job_not_found")
     return await _run_rebuild_tour(db, job, session)
@@ -1034,10 +1047,11 @@ async def add_tour_tag_for_job(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """Job-scoped add tag. Same as POST /sessions/{id}/tags."""
     job_id = (payload or {}).get("job_id") or ""
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     db = await get_db()
     session_id = (payload or {}).get("session_id") or (payload or {}).get("sessionId")
     session = await _session_by_id(db, session_id) if session_id else None
@@ -1045,18 +1059,19 @@ async def add_tour_tag_for_job(
         session = await _latest_session(db, job_id, "splat")
     if not session:
         api_error(409, "No capture session", "session_not_found")
-    return await add_tour_tag(session["id"], payload, authorization, x_user_id)
+    return await add_tour_tag(session["id"], payload, authorization, x_user_id, x_internal_api_key)
 
 @router.post("/rebuild-tour")
 async def rebuild_tour_for_job(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """Job-scoped rebuild. Same as POST /sessions/{id}/rebuild-tour."""
     job_id = (payload or {}).get("job_id") or ""
     kind = _normalize_kind((payload or {}).get("kind") or "splat")
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     db = await get_db()
     session_id = (payload or {}).get("session_id") or (payload or {}).get("sessionId")
     session = await _session_by_id(db, session_id) if session_id else None
