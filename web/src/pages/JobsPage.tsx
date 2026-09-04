@@ -4,6 +4,7 @@ import { api, AuthMember, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamR
 import { getCaptureSession } from '../lib/capture-api';
 import type { CaptureKind } from '../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../lib/capture-modes';
+import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -149,7 +150,7 @@ export function JobsPage() {
                 <td style={{ fontWeight: 500 }}>{job.address}</td>
                 <td className="muted">{job.listing_address || '—'}</td>
                 <td className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
-                <td className="muted">{job.time_window_start} – {job.time_window_end}</td>
+                <td className="muted">{formatShootWindow(job)}</td>
                 <td>{(job.assignee_id && (assigneeNames[job.assignee_id] ?? job.assignee_name)) || 'Unassigned'}</td>
                 <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
                   {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
@@ -321,6 +322,10 @@ function JobListingPanel({
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>ADDRESS</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{job.address}</p>
+        </div>
+        <div>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>SHOOT WINDOW</p>
+          <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{formatShootWhen(job)}</p>
         </div>
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>LISTING</p>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, Job, PaginatedJobsResponse } from '../lib/api';
 import { captureNeitherCopy, jobCaptureModes } from '../lib/capture-modes';
+import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
 
 type Overview = {
   jobs_assigned_today: number;
@@ -96,7 +97,7 @@ export function OverviewPage() {
                         style={{ all: 'unset', cursor: 'pointer', display: 'flex', width: '100%', justifyContent: 'space-between', gap: 12 }}
                       >
                         <span>{job.address}</span>
-                        <span className="muted">{job.time_window_start} – {job.time_window_end} · {job.status?.replace('_', ' ')}</span>
+                        <span className="muted">{formatShootWindow(job)} · {job.status?.replace('_', ' ')}</span>
                       </button>
                       {['assigned', 'in_progress'].includes(job.status || '') ? (
                         <TodayCaptureEntry job={job} />
@@ -120,7 +121,7 @@ export function OverviewPage() {
                       onClick={() => navigate(`/jobs?id=${encodeURIComponent(job.id)}`)}
                     >
                       <span>{job.address}</span>
-                      <span className="muted">{dateKey(job.scheduled_date)} · {job.time_window_start} – {job.time_window_end}</span>
+                      <span className="muted">{formatShootWhen(job)}</span>
                     </li>
                   ))}
                 </ul>
