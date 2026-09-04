@@ -1,4 +1,4 @@
-"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.3 verbatim."""
+"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.4 verbatim."""
 import ast
 from pathlib import Path
 
@@ -28,10 +28,10 @@ def test_ic_agreement_constants_are_v13():
     effective = _assignment_value(ONBOARDING, "_IC_AGREEMENT_EFFECTIVE_DATE")
     text = _assignment_value(ONBOARDING, "_IC_AGREEMENT_TEXT")
 
-    assert version == "1.3"
-    assert effective == "2026-08-27"
-    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.3")
-    assert "Effective: August 27, 2026" in text
+    assert version == "1.4"
+    assert effective == "2026-09-04"
+    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.4")
+    assert "Effective: September 4, 2026" in text
     assert 'Contracting party: Bricks Group ("Bricks")' in text
     assert "Questions: booking@brxs.ca" in text
     assert text.endswith("Bricks Group · Ontario, Canada")
@@ -40,7 +40,10 @@ def test_ic_agreement_constants_are_v13():
     assert "WSIB Certificate of Clearance" in text
     assert "Binding arbitration is not required." in text
     assert "fixed amount per accepted booking" in text
-    assert "Tier C 35%, Tier B 45%, Tier A 55%" in text
+    assert "fixed published dollar amounts from the add-on rate card" in text
+    assert "Tier C 35%, Tier B 45%, Tier A 55%" not in text
+    assert "percentage of rack" in text
+    assert "35%" not in text and "45%" not in text and "55%" not in text
     assert "18. CHANGES; ENTIRE AGREEMENT" in text
 
     assert "BRICKS DOES NOT REQUIRE PROOF OF INSURANCE" not in text
@@ -60,5 +63,5 @@ def test_get_ic_agreement_returns_version_date_text():
 
 def test_application_schema_defaults_to_v13():
     src = SCHEMAS.read_text()
-    assert 'ic_agreement_version: str = "1.3"' in src
+    assert 'ic_agreement_version: str = "1.4"' in src
     assert 'ic_agreement_version: str = "1.1"' not in src

@@ -23,7 +23,7 @@ const SLIDES = [
   {
     eye: 'Tiered payouts',
     head: 'Tier C to Tier A — move up.',
-    body: 'Start at 35%. Every delivered job builds your score. Tier A specialists earn 55% of each shoot.',
+    body: 'Paid on a published fixed rate card by package, size, and tier — never a percent of rack. Deliver jobs to move up tiers and unlock higher rates.',
     img: 'EARNINGS STRIPE CHART',
   },
 ];

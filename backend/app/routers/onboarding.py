@@ -21,11 +21,11 @@ ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 # Version tracks the text revision so we can re-prompt if terms materially change.
-_IC_AGREEMENT_VERSION = "1.3"
-_IC_AGREEMENT_EFFECTIVE_DATE = "2026-08-27"
+_IC_AGREEMENT_VERSION = "1.4"
+_IC_AGREEMENT_EFFECTIVE_DATE = "2026-09-04"
 _IC_AGREEMENT_TEXT = """
-BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.3
-Effective: August 27, 2026
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.4
+Effective: September 4, 2026
 Contracting party: Bricks Group ("Bricks")
 Governing law: Ontario, Canada
 
@@ -74,7 +74,7 @@ Premium — under 2,000 $209.65 / $269.55 / $329.45; 2,000–3,499 $262.15 / $33
 Luxury — under 2,000 $402.15 / $517.05 / $631.95; 2,000–3,499 $419.65 / $539.55 / $659.45; 3,500–4,999 $524.65 / $674.55 / $824.45; 5,000+ $664.65 / $854.55 / $1,044.45
 Estate — $874.65 / $1,124.55 / $1,374.45 flat
 
-Add-on payouts use your tier percentage of the add-on rack amount: Tier C 35%, Tier B 45%, Tier A 55%.
+Add-on payouts are fixed published dollar amounts from the add-on rate card for your tier — not a percentage of rack.
 
 Tier is assigned by Bricks based on quality, reliability, volume, and compliance. Tier C is the starting tier. Bricks may change your tier on notice. Payouts are via Stripe Connect within 7 business days of client acceptance of deliverables, or within 14 days of shoot completion if the client has not acted. Raise payout disputes in writing to booking@brxs.ca within 30 days of the payment date.
 

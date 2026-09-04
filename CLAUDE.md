@@ -136,14 +136,14 @@ pick_vendor_rule_based(job, vendors)
 - `min_tier_required` on job is a hard gate — never assigned below it
 
 ## Vendor Model: Snappr/Homejab IC Model
-- IC agreement **v1.3** (effective 2026-08-27) — source of truth is `_IC_AGREEMENT_TEXT` in `backend/app/routers/onboarding.py`. Do not restore v1.1 clauses.
+- IC agreement **v1.4** (effective 2026-09-04) — source of truth is `_IC_AGREEMENT_TEXT` in `backend/app/routers/onboarding.py`. Do not restore v1.1 clauses or % of rack add-on language.
 - Contracting party: **Bricks Group**. Contact: `booking@brxs.ca` (no legal@ mailbox).
 - Insurance/WSIB **required before first dispatched job** (CGL $2M naming Bricks Group additional insured, drone aviation $1M if drone jobs, auto liability, WSIB clearance or exemption declaration). Lapsed coverage = automatic dispatch suspension.
-- Payouts are a **fixed vendor rate card** by package / sqft band / tier, not a % of what the client was charged. Add-on payouts: Tier C 35% / B 45% / A 55% of add-on rack.
+- Payouts are a **fixed vendor rate card** by package / sqft band / tier, not a % of what the client was charged. Add-ons are also fixed published dollar amounts by tier (never % of rack).
 - No binding arbitration; Ontario courts. Either party may terminate on written notice (email is enough).
-- `GET /api/onboarding/ic-agreement` — `{ version: "1.3", effective_date: "2026-08-27", text }` — live photographer apply form on www.brxs.ca binds applicants to this JSON.
-- Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`. `/apply` stamps the live server version (`1.3`), not a stale client default.
-- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.3"`
+- `GET /api/onboarding/ic-agreement` — `{ version: "1.4", effective_date: "2026-09-04", text }` — live photographer apply form on www.brxs.ca binds applicants to this JSON.
+- Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`. `/apply` stamps the live server version (`1.4`), not a stale client default.
+- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.4"`
 - `ic_agreement_version='0.0'` = pre-dates new agreement; re-prompt on next login
 - `REQUIRE_VENDOR_COMPLIANCE` remains absent from dispatch scoring code; the contract itself now requires proof before first job.
 
