@@ -15,9 +15,11 @@ from .capture_layout import (
     parse_station_index_from_path,
     role_from_path,
     roomplan_json_path,
+    select_rebuild_stations,
     session_manifest_path,
     station_manifest_path,
     stations_have_compile_input,
+    stations_have_stored_equirects,
 )
 from .equirect_stitcher import (
     StitchError,
@@ -199,25 +201,52 @@ async def _attach_floorplan_media(db, job: dict, storage_path: str, session_id: 
         logger.warning("media_files floor_plan insert skipped: %s", e)
 
 
-async def compile_tour(db, job: dict, session: dict, stations: list[dict]) -> str:
+def _compiled_station(st: dict, jpeg: bytes | None = None) -> dict:
+    idx = int(st.get("station_index") if st.get("station_index") is not None else 0)
+    scene_rel = st.get("file") or st.get("panorama") or f"scenes/{idx}.jpg"
+    if "/" not in str(scene_rel):
+        scene_rel = f"scenes/{scene_rel}"
+    if not str(scene_rel).startswith("scenes/"):
+        # hosted tour.json already uses scenes/n.jpg
+        pass
+    return {
+        "id": st.get("id") or f"station-{idx}",
+        "station_index": idx,
+        "room": st.get("room") or st.get("title") or "Room",
+        "label": st.get("label") or st.get("title") or st.get("room") or f"Station {idx}",
+        "heading": st.get("heading"),
+        "file": scene_rel,
+        "bytes": jpeg if jpeg is not None else st.get("bytes") or st.get("equirect_bytes"),
+    }
+
+
+def rebuild_tour_payload(stations, *, address="", title="3D tour") -> tuple[str, str]:
+    """Rewrite tour HTML/JSON from already-compiled station dicts. Never stitches."""
+    ready = select_rebuild_stations(stations)
+    if not ready:
+        raise CaptureWorkerError(
+            "Rebuild needs stored equirects — recapture stations or retry compile from pans"
+        )
+    compiled = [_compiled_station(st) for st in ready]
+    try:
+        html = build_tour_html(compiled, address=address or "", title=title or "3D tour")
+        meta = build_tour_json(compiled)
+    except TourBuildError as e:
+        raise CaptureWorkerError(str(e)) from e
+    return html, meta
+
+
+async def _publish_tour_player(
+    job: dict,
+    session: dict,
+    compiled: list[dict],
+    *,
+    upload_scenes: bool,
+) -> str:
     job_id = job["id"]
     sid = session["id"]
-    compiled = []
-    for st in stations:
-        jpeg = await ensure_station_equirect(sid, st)
-        idx = st["station_index"]
-        scene_rel = f"scenes/{idx}.jpg"
-        compiled.append({
-            "id": f"station-{idx}",
-            "station_index": idx,
-            "room": st.get("room") or "Room",
-            "label": st.get("room") or f"Station {idx}",
-            "heading": st.get("heading"),
-            "file": scene_rel,
-            "bytes": jpeg,
-        })
     if not compiled:
-        raise CaptureWorkerError("No equirect stations after stitch")
+        raise CaptureWorkerError("No equirect stations to publish")
     try:
         html = build_tour_html(compiled, address=(job.get("address") or "").strip(), title="3D tour")
         meta = build_tour_json(compiled)
@@ -233,8 +262,12 @@ async def compile_tour(db, job: dict, session: dict, stations: list[dict]) -> st
         "stations": [{"index": c["station_index"], "room": c["room"], "file": c["file"]} for c in compiled],
     }
     await upload_bytes(session_manifest_path(sid), json.dumps(man).encode(), "application/json", upsert=True)
-    for c in compiled:
-        await upload_bytes(f"{prefix}/{c['file']}", c["bytes"], "image/jpeg", upsert=True)
+    if upload_scenes:
+        for c in compiled:
+            raw = c.get("bytes")
+            if not raw:
+                continue
+            await upload_bytes(f"{prefix}/{c['file']}", raw, "image/jpeg", upsert=True)
     embed = public_tour_embed_url(job_id, sid)
     try:
         from .client_comms import register_property_visit
@@ -248,6 +281,99 @@ async def compile_tour(db, job: dict, session: dict, stations: list[dict]) -> st
     except Exception as e:
         logger.error("visit-ready for tour session %s failed: %s", sid, e)
     return index_path
+
+
+async def load_existing_equirect(session_id: str, station: dict, *, job_id: str | None = None) -> bytes | None:
+    """Return stored equirect JPEG bytes. Never stitches pans."""
+    if station.get("equirect_bytes"):
+        raw = station["equirect_bytes"]
+        if raw and is_equirect_image(raw):
+            return raw
+    path = station.get("equirect_path")
+    if path:
+        raw = await download_bytes(path)
+        if raw and is_equirect_image(raw):
+            station["equirect_bytes"] = raw
+            return raw
+    if job_id is not None:
+        idx = station.get("station_index")
+        file = station.get("file") or station.get("panorama") or (f"scenes/{idx}.jpg" if idx is not None else None)
+        if file:
+            raw = await download_bytes(f"tours/{job_id}/{session_id}/{file}")
+            if raw and is_equirect_image(raw):
+                station["equirect_bytes"] = raw
+                return raw
+    return None
+
+
+async def _load_hosted_tour_scenes(job_id: str, session_id: str) -> list[dict]:
+    """Rebuild source: already-hosted tour.json + scene JPEGs."""
+    raw = await download_bytes(f"tours/{job_id}/{session_id}/tour.json")
+    if not raw:
+        return []
+    try:
+        meta = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return []
+    scenes = meta.get("scenes") or []
+    out = []
+    for i, sc in enumerate(scenes):
+        file = sc.get("panorama") or sc.get("file") or f"scenes/{i}.jpg"
+        jpeg = await download_bytes(f"tours/{job_id}/{session_id}/{file}")
+        if jpeg and not is_equirect_image(jpeg):
+            jpeg = None
+        idx = sc.get("station_index", i)
+        out.append({
+            "id": sc.get("id") or f"station-{idx}",
+            "station_index": idx,
+            "room": sc.get("room") or sc.get("title") or "Room",
+            "label": sc.get("title") or sc.get("room") or f"Station {idx}",
+            "heading": sc.get("heading"),
+            "file": file,
+            "bytes": jpeg if jpeg and is_equirect_image(jpeg) else None,
+            "equirect_path": f"tours/{job_id}/{session_id}/{file}",
+        })
+    return out
+
+
+async def compile_tour(db, job: dict, session: dict, stations: list[dict]) -> str:
+    compiled = []
+    sid = session["id"]
+    for st in stations:
+        jpeg = await ensure_station_equirect(sid, st)
+        compiled.append(_compiled_station(st, jpeg))
+    if not compiled:
+        raise CaptureWorkerError("No equirect stations after stitch")
+    return await _publish_tour_player(job, session, compiled, upload_scenes=True)
+
+
+async def rebuild_tour_from_equirects(db, job: dict, session: dict) -> str:
+    """Refresh hosted tour HTML/JSON from stored 360s. Does not recapture or stitch."""
+    sid = session["id"]
+    job_id = job["id"]
+    compiled = await _load_hosted_tour_scenes(job_id, sid)
+    if not compiled:
+        stations = await load_station_records(db, sid)
+        ok, reason = stations_have_stored_equirects(stations)
+        if not ok:
+            raise CaptureWorkerError(
+                "Rebuild needs stored equirects — recapture stations or retry compile from pans"
+                if reason != "no_stations"
+                else "Rebuild needs at least one stored 360 station"
+            )
+        compiled = []
+        for st in select_rebuild_stations(stations):
+            jpeg = await load_existing_equirect(sid, st, job_id=job_id)
+            if not jpeg:
+                continue
+            compiled.append(_compiled_station(st, jpeg))
+        if not compiled:
+            raise CaptureWorkerError(
+                "Rebuild needs stored equirects — recapture stations or retry compile from pans"
+            )
+        return await _publish_tour_player(job, session, compiled, upload_scenes=True)
+    # Hosted scenes already exist — rewrite player HTML/JSON only.
+    return await _publish_tour_player(job, session, [_compiled_station(st) for st in compiled], upload_scenes=False)
 
 
 async def compile_floorplan(db, job: dict, session: dict, stations: list[dict]) -> str:

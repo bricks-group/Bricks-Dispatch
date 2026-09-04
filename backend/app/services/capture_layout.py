@@ -99,3 +99,21 @@ def stations_have_compile_input(stations: list[dict], *, kind: str, has_roomplan
         if len(pans) >= MIN_PANS_FOR_SUBMIT:
             return True, "pan_burst"
     return False, "no_equirects"
+
+def select_rebuild_stations(stations: list[dict]) -> list[dict]:
+    """Stations that already have a stored equirect. Pans-only rows are skipped."""
+    out = []
+    for st in stations or []:
+        if st.get("equirect_bytes") or st.get("equirect_path") or st.get("file"):
+            out.append(st)
+    return out
+
+
+def stations_have_stored_equirects(stations: list[dict]) -> tuple[bool, str]:
+    """Rebuild gate: needs at least one stored 360. Never treats pans as enough."""
+    if not stations:
+        return False, "no_stations"
+    ready = select_rebuild_stations(stations)
+    if not ready:
+        return False, "no_equirects"
+    return True, "equirect"

@@ -324,3 +324,43 @@ export async function uploadCaptureFrameBlob(
     return { ok: false, error: String(e?.message ?? e) };
   }
 }
+
+export async function rebuildTourPlayer(
+  jobId: string,
+  kind: CaptureKind = 'splat',
+  sessionId?: string | null,
+): Promise<{ ok: boolean; rebuilt?: boolean; stitched?: boolean; error?: string; session?: CaptureSession }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
+  if (kind !== 'splat') return { ok: false, error: 'Rebuild tour player is for 3D tours, not floor plans' };
+  try {
+    const headers = await authHeaders({ 'Content-Type': 'application/json' });
+    const path = sessionId
+      ? `${API_BASE}/api/capture/sessions/${encodeURIComponent(sessionId)}/rebuild-tour`
+      : `${API_BASE}/api/capture/rebuild-tour`;
+    const res = await fetch(path, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ job_id: jobId, kind, session_id: sessionId || undefined }),
+    });
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    const body = await res.json();
+    const session = _asSession(body.session ?? body, kind);
+    if (body && body.ok === false) {
+      return {
+        ok: false,
+        rebuilt: false,
+        stitched: false,
+        error: String(body.error || body.detail || 'Rebuild failed'),
+        session,
+      };
+    }
+    return {
+      ok: true,
+      rebuilt: body.rebuilt !== false,
+      stitched: body.stitched === true,
+      session,
+    };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}

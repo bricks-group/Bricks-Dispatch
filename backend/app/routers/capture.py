@@ -38,6 +38,7 @@ from ..services.capture_worker import (
     CaptureWorkerError,
     load_station_records,
     process_capture_session,
+    rebuild_tour_from_equirects,
     stations_have_compile_input,
 )
 from ..services.storage import STORAGE_BUCKET, create_signed_upload_url, upload_bytes
@@ -860,13 +861,94 @@ async def submit_session(
         raise
 
 
+async def _session_by_id(db, session_id: str) -> Optional[dict]:
+    res = await db.table("capture_sessions").select("*").eq("id", session_id).maybe_single().execute()
+    return res.data or None
+
+
+async def _run_rebuild_tour(db, job: dict, session: dict) -> dict:
+    """Rewrite hosted tour HTML/JSON from stored 360s. No recapture, no stitch."""
+    kind = session.get("kind") or "splat"
+    if kind != "splat":
+        api_error(400, "Rebuild tour player is for 3D tours, not floor plans", "not_a_tour")
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        output = await rebuild_tour_from_equirects(db, job, session)
+    except CaptureWorkerError as e:
+        bundle = await _load_session_bundle(db, job["id"], session, job)
+        return {"ok": False, "rebuilt": False, "stitched": False, "error": str(e), "session": bundle}
+    session["output_storage_path"] = output
+    if session.get("status") != "delivered":
+        await _deliver_session(db, session["id"], output, "splat", now)
+        session["status"] = "delivered"
+    else:
+        await db.table("capture_sessions").update({
+            "output_storage_path": output,
+            "updated_at": now,
+        }).eq("id", session["id"]).execute()
+    bundle = await _load_session_bundle(db, job["id"], session, job)
+    return {
+        "ok": True,
+        "rebuilt": True,
+        "stitched": False,
+        "outputStoragePath": output,
+        "session": bundle,
+    }
+
+
+@router.post("/sessions/{session_id}/rebuild-tour")
+async def rebuild_tour_for_session(
+    session_id: str,
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Refresh a compiled 3D tour player from stored equirects. Does not recapture.
+
+    Idempotent: rewrites tours/{job}/{session}/index.html and tour.json. Scene
+    JPEGs and the public embed URL stay the same. Photographers use this after
+    a player HTML change (in-panorama hotspots) so listing embeds pick it up.
+    """
+    db = await get_db()
+    session = await _session_by_id(db, session_id)
+    if not session:
+        api_error(409, "No capture session", "session_not_found")
+    job_id = session.get("job_id") or (payload or {}).get("job_id") or ""
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    if session.get("job_id") and session["job_id"] != job["id"]:
+        api_error(404, "Job not found", "job_not_found")
+    return await _run_rebuild_tour(db, job, session)
+
+
+@router.post("/rebuild-tour")
+async def rebuild_tour_for_job(
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Job-scoped rebuild. Same as POST /sessions/{id}/rebuild-tour."""
+    job_id = (payload or {}).get("job_id") or ""
+    kind = _normalize_kind((payload or {}).get("kind") or "splat")
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    db = await get_db()
+    session_id = (payload or {}).get("session_id") or (payload or {}).get("sessionId")
+    session = await _session_by_id(db, session_id) if session_id else None
+    if session and session.get("job_id") and session["job_id"] != job["id"]:
+        api_error(404, "Job not found", "job_not_found")
+    if not session:
+        session = await _latest_session(db, job_id, kind)
+    if not session:
+        api_error(409, "No capture session", "session_not_found")
+    return await _run_rebuild_tour(db, job, session)
+
+
 @router.post("/process")
 async def process_session(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """Retry compile for submitted/tracing/splatting/failed sessions."""
+    """Retry compile. Delivered 3D tours rebuild the player from stored equirects."""
     job_id = (payload or {}).get("job_id") or ""
     kind = _normalize_kind((payload or {}).get("kind"))
     _, job = await _actor_and_job(authorization, x_user_id, job_id)
@@ -875,11 +957,17 @@ async def process_session(
     if not session:
         api_error(409, "No capture session", "session_not_found")
     if session.get("status") == "delivered" and session.get("output_storage_path"):
-        return {"ok": True, "session": await _load_session_bundle(db, job_id, session, job)}
+        if kind == "splat" or session.get("kind") == "splat":
+            return await _run_rebuild_tour(db, job, session)
+        return {
+            "ok": True,
+            "rebuilt": False,
+            "session": await _load_session_bundle(db, job_id, session, job),
+        }
     now = datetime.now(timezone.utc).isoformat()
     try:
         await _compile_or_fail(db, job, session, kind, now)
-        return {"ok": True, "session": await _load_session_bundle(db, job_id, session, job)}
+        return {"ok": True, "rebuilt": True, "session": await _load_session_bundle(db, job_id, session, job)}
     except CaptureWorkerError as e:
         bundle = await _load_session_bundle(db, job_id, await _latest_session(db, job_id, kind) or session, job)
         return {"ok": False, "error": str(e), "session": bundle}

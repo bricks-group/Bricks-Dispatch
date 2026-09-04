@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, AuthMember, Job, ListingHit, PaginatedJobsResponse, PaginatedTeamResponse, TeamMember, me } from '../lib/api';
-import { getCaptureSession } from '../lib/capture-api';
+import { getCaptureSession, rebuildTourPlayer } from '../lib/capture-api';
 import type { CaptureKind } from '../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
@@ -456,25 +456,36 @@ function CaptureStatusBlock({ job }: { job: Job }) {
   const kinds: CaptureKind[] = [];
   if (flags.tour) kinds.push('splat');
   if (flags.floorplan) kinds.push('floorplan');
-  const [rows, setRows] = useState<{ kind: CaptureKind; status: string; line: string }[]>([]);
+  const [rows, setRows] = useState<{ kind: CaptureKind; status: string; line: string; sessionId?: string | null }[]>([]);
+  const [rebuildState, setRebuildState] = useState<{ busy?: boolean; msg?: string; error?: string }>({});
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (kinds.length === 0) { setRows([]); return; }
-      const next: { kind: CaptureKind; status: string; line: string }[] = [];
+      const next: { kind: CaptureKind; status: string; line: string; sessionId?: string | null }[] = [];
       for (const kind of kinds) {
         const s = await getCaptureSession(job.id, kind);
         const status = (s.status || '').toLowerCase();
         if (!status || status === 'in_progress' && (s.frameCount || 0) === 0) continue;
         const line = captureStatusCopy(status, kind);
         if (!line && !status) continue;
-        next.push({ kind, status, line: line || status });
+        next.push({ kind, status, line: line || status, sessionId: s.sessionId });
       }
       if (!cancelled) setRows(next);
     })();
     return () => { cancelled = true; };
   }, [job.id, flags.tour, flags.floorplan]);
+
+  const handleRebuild = async (sessionId?: string | null) => {
+    setRebuildState({ busy: true });
+    const result = await rebuildTourPlayer(job.id, 'splat', sessionId);
+    if (!result.ok) {
+      setRebuildState({ error: result.error ?? 'Rebuild failed' });
+      return;
+    }
+    setRebuildState({ msg: 'Tour player rebuilt from existing 360s. Hard-refresh the listing iframe — no recapture.' });
+  };
 
   if (rows.length === 0) return null;
   return (
@@ -489,12 +500,21 @@ function CaptureStatusBlock({ job }: { job: Job }) {
           return (
             <div key={r.kind} className={`capture-status-row ${cls}`}>
               <span>{r.line}</span>
-              <Link to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>
-                {failed ? 'Review / retry' : 'Open review'}
-              </Link>
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                {ready && r.kind === 'splat' ? (
+                  <button type="button" disabled={rebuildState.busy} onClick={() => handleRebuild(r.sessionId)}>
+                    {rebuildState.busy ? 'Rebuilding…' : 'Rebuild tour player'}
+                  </button>
+                ) : null}
+                <Link to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>
+                  {failed ? 'Review / retry' : 'Open review'}
+                </Link>
+              </div>
             </div>
           );
         })}
+        {rebuildState.error ? <p className="error" style={{ padding: 0, margin: 0 }}>{rebuildState.error}</p> : null}
+        {rebuildState.msg ? <p className="muted" style={{ padding: 0, margin: 0 }}>{rebuildState.msg}</p> : null}
       </div>
     </div>
   );

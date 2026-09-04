@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { getCaptureSession, submitCaptureSession } from '../lib/capture-api';
+import { getCaptureSession, rebuildTourPlayer, submitCaptureSession } from '../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../lib/capture-api';
 import { captureStatusCopy } from '../lib/capture-modes';
 
@@ -14,6 +14,8 @@ export function CaptureReviewPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMsg, setRebuildMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,6 +47,21 @@ export function CaptureReviewPage() {
       return;
     }
     setSubmitted(true);
+  };
+
+  const handleRebuild = async () => {
+    if (!jobId || kind !== 'splat') return;
+    setRebuilding(true);
+    setRebuildMsg(null);
+    setSubmitError(null);
+    const result = await rebuildTourPlayer(jobId, kind, session?.sessionId);
+    setRebuilding(false);
+    if (result.session) setSession(result.session);
+    if (!result.ok) {
+      setRebuildMsg(result.error ?? 'Rebuild failed');
+      return;
+    }
+    setRebuildMsg('Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see in-scene hotspots.');
   };
 
   const rooms = session?.rooms ?? [];
@@ -93,9 +110,10 @@ export function CaptureReviewPage() {
               {failed
                 ? (submitError || statusLine || 'Compile failed — try again from review or recapture stations.')
                 : (statusLine || (ready
-                  ? `${kindLabel === 'FLOOR PLAN' ? 'Floor plan' : '3D tour'} is ready on the job.`
+                  ? `${kindLabel === 'FLOOR PLAN' ? 'Floor plan' : '3D tour'} is ready on the job.${kind === 'splat' ? ' Rebuild tour player refreshes hosted HTML from existing 360s — no recapture.' : ''}`
                   : `${kindLabel === 'FLOOR PLAN' ? 'Floor plan' : '3D tour'} is compiling. This usually takes a few minutes.`))}
             </p>
+            {rebuildMsg ? <p className={rebuildMsg.startsWith('Tour player rebuilt') ? undefined : 'error'} style={{ margin: 0, padding: 0 }}>{rebuildMsg}</p> : null}
             <div className="row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
               <Link className="btn-capture" to={jobHref}>Back to job</Link>
               {failed ? (
@@ -105,6 +123,15 @@ export function CaptureReviewPage() {
                   onClick={handleSubmit}
                 >
                   {submitting ? 'Retrying…' : 'Retry compile'}
+                </button>
+              ) : null}
+              {ready && kind === 'splat' ? (
+                <button
+                  type="button"
+                  disabled={rebuilding}
+                  onClick={handleRebuild}
+                >
+                  {rebuilding ? 'Rebuilding…' : 'Rebuild tour player'}
                 </button>
               ) : null}
               <Link to={`/capture?jobId=${encodeURIComponent(jobId)}&kind=${kind}`}>
