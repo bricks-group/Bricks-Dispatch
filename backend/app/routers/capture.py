@@ -775,7 +775,69 @@ async def _fail_session(db, sid: str, stage_title: str, error: str, now: str) ->
     }).eq("session_id", sid).eq("title", stage_title).execute()
 
 
-async def _deliver_session(db, sid: str, output_path: str, kind: str, now: str) -> None:
+_PRODUCT_LABEL = {"splat": "3D tour", "floorplan": "Floor plan"}
+
+
+async def _first_delivered_of_kind(db, job_id: str, kind: str) -> bool:
+    """True when this job has exactly one delivered session of `kind` (the one just marked)."""
+    try:
+        res = await db.table("capture_sessions").select("id").eq("job_id", job_id).eq(
+            "kind", kind
+        ).eq("status", "delivered").execute()
+        rows = getattr(res, "data", None) or []
+        return len(rows) <= 1
+    except Exception:
+        return True
+
+
+async def _notify_capture_session_delivered(db, job: dict, sid: str, kind: str, output_path: str) -> None:
+    """Best-effort agent email on first successful compile deliver of this kind."""
+    job_id = job.get("id") or ""
+    if not job_id:
+        return
+    if not await _first_delivered_of_kind(db, job_id, kind):
+        return
+    product = _PRODUCT_LABEL.get(kind, kind)
+    delivery_urls = []
+    try:
+        if kind == "splat":
+            from ..services.capture_worker import public_tour_embed_url
+            url = public_tour_embed_url(job_id, sid)
+            if url:
+                delivery_urls.append({"url": url, "filename": "3D tour"})
+        elif kind == "floorplan" and output_path:
+            from ..services.storage import get_signed_download_url
+            signed = await get_signed_download_url(output_path, expiry=60 * 60 * 24)
+            if signed:
+                delivery_urls.append({"url": signed, "filename": "Floor plan"})
+    except Exception:
+        delivery_urls = []
+    try:
+        from ..services.client_comms import notify_capture_delivered
+        await notify_capture_delivered(
+            job_id,
+            products=[product],
+            address=(job.get("address") or ""),
+            booking_id=(job.get("booking_id") or ""),
+            delivery_urls=delivery_urls,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            "Job %s: capture delivery notification failed: %s", job_id, e
+        )
+
+
+async def _deliver_session(
+    db,
+    sid: str,
+    output_path: str,
+    kind: str,
+    now: str,
+    *,
+    job: dict | None = None,
+    notify: bool = False,
+) -> None:
     await db.table("capture_sessions").update({
         "status": "delivered",
         "output_storage_path": output_path,
@@ -794,6 +856,9 @@ async def _deliver_session(db, sid: str, output_path: str, kind: str, now: str) 
             "status": "done",
             "detail": detail,
         }).eq("session_id", sid).eq("title", title).execute()
+    # Agent email only on submit/compile first deliver — never on rebuild (avoid spam).
+    if notify and job is not None:
+        await _notify_capture_session_delivered(db, job, sid, kind, output_path)
 
 
 async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
@@ -826,7 +891,10 @@ async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
     except Exception as e:
         await _fail_session(db, sid, stage, str(e), datetime.now(timezone.utc).isoformat())
         raise CaptureWorkerError(str(e)) from e
-    await _deliver_session(db, sid, output, kind, datetime.now(timezone.utc).isoformat())
+    await _deliver_session(
+        db, sid, output, kind, datetime.now(timezone.utc).isoformat(),
+        job=job, notify=True,
+    )
     session["status"] = "delivered"
     session["output_storage_path"] = output
     return output

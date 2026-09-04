@@ -171,3 +171,49 @@ async def notify_photographer_en_route(job_id: str) -> None:
         "time_window_start": job.get("time_window_start", ""),
     })
     logger.info(f"En-route comms dispatched for job {job_id} (booking {booking_id})")
+
+
+async def notify_capture_delivered(
+    job_id: str,
+    *,
+    products: list[str],
+    address: str = "",
+    booking_id: str = "",
+    delivery_urls: list | None = None,
+) -> bool:
+    """Notify the booking agent that a 3D tour and/or floor plan landed on the listing file.
+
+    Reuses Companion POST /api/internal/comms/job-delivered with `products` so the
+    email names what landed (not "photos"). Best-effort — same keys as photo delivery.
+    """
+    if not products:
+        return False
+    from ..shared.database import get_db
+    db = await get_db()
+
+    bid = (booking_id or "").strip()
+    addr = (address or "").strip()
+    if not bid or not addr:
+        res_job = await db.table("jobs").select("booking_id, address").eq("id", job_id).maybe_single().execute()
+        if not res_job.data:
+            logger.warning(f"Job {job_id}: missing job — skipping capture delivery notification")
+            return False
+        bid = bid or (res_job.data.get("booking_id") or "")
+        addr = addr or (res_job.data.get("address") or "")
+    if not bid:
+        logger.warning(f"Job {job_id}: no booking_id — skipping capture delivery notification")
+        return False
+
+    urls = delivery_urls or []
+    ok = await _call_booking_comms("/api/internal/comms/job-delivered", {
+        "booking_id": bid,
+        "job_id": job_id,
+        "address": addr,
+        "delivery_count": max(len(urls), len(products), 1),
+        "delivery_urls": urls[:5],
+        "products": products,
+        "splat_pending": False,
+    })
+    if ok:
+        logger.info(f"Job {job_id}: capture delivery notification sent products={products!r}")
+    return ok

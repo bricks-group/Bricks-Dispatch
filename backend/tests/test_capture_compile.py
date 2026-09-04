@@ -691,3 +691,75 @@ def test_floorplan_roomplan_path_still_works_without_stations():
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
     src = (ROOT / "app/services/floorplan_tracer.py").read_text()
     assert "from_roomplan" in src
+
+
+def test_deliver_session_notifies_on_compile_not_rebuild():
+    """First compile deliver emails the agent; rebuild never does."""
+    src = (ROOT / "app/routers/capture.py").read_text()
+    assert "_notify_capture_session_delivered" in src
+    assert "notify_capture_delivered" in src
+    assert "notify=True" in src
+    # Rebuild helpers call _deliver_session without notify=True
+    rebuild_tour = src.split("async def _run_rebuild_tour")[1].split("async def _run_rebuild_floorplan")[0]
+    rebuild_fp = src.split("async def _run_rebuild_floorplan")[1].split("@router.get")[0]
+    assert "_deliver_session" in rebuild_tour
+    assert "notify=True" not in rebuild_tour
+    assert "_deliver_session" in rebuild_fp
+    assert "notify=True" not in rebuild_fp
+    # Compile path opts in
+    compile = src.split("async def _compile_or_fail")[1].split("async def submit_session")[0]
+    assert "notify=True" in compile
+    assert "job=job" in compile
+
+
+def test_notify_capture_delivered_reuses_job_delivered():
+    src = (ROOT / "app/services/client_comms.py").read_text()
+    assert "async def notify_capture_delivered" in src
+    assert "/api/internal/comms/job-delivered" in src
+    assert '"products"' in src or "'products'" in src
+    # Same BOOKING path as photo delivery
+    assert "_call_booking_comms" in src
+
+
+def test_deliver_session_calls_notify_only_when_flagged():
+    """_deliver_session gates email on notify=True (compile); rebuild omits it."""
+    src = (ROOT / "app/routers/capture.py").read_text()
+    body = src.split("async def _deliver_session")[1].split("async def _compile_or_fail")[0]
+    assert "if notify and job is not None:" in body
+    assert "_notify_capture_session_delivered" in body
+    # Default notify=False in signature
+    assert "notify: bool = False" in body
+
+
+def test_notify_skips_when_not_first_of_kind_in_source():
+    src = (ROOT / "app/routers/capture.py").read_text()
+    fn = src.split("async def _notify_capture_session_delivered")[1].split("async def _deliver_session")[0]
+    assert "_first_delivered_of_kind" in fn
+    assert "notify_capture_delivered" in fn
+    assert 'products=[product]' in fn
+    first = src.split("async def _first_delivered_of_kind")[1].split("async def _notify_capture_session_delivered")[0]
+    assert 'eq("status", "delivered")' in first
+    assert "len(rows) <= 1" in first
+
+
+def test_notify_capture_delivered_posts_products_shape():
+    """Payload shape for Companion job-delivered (products + address)."""
+    src = (ROOT / "app/services/client_comms.py").read_text()
+    fn = src.split("async def notify_capture_delivered")[1]
+    assert '"products": products' in fn or "'products': products" in fn
+    assert '"address": addr' in fn or "'address': addr" in fn
+    assert '"booking_id": bid' in fn or "'booking_id': bid" in fn
+    assert "delivery_urls" in fn
+    assert "if not products:" in fn
+    assert "return False" in fn.split("if not products:")[1][:80]
+
+
+def test_companion_job_delivered_handles_products():
+    """Companion email names tour/floor plan when products are set (not photos)."""
+    companion = Path("/workspace/Bricks-Companion-repo/backend/server.py")
+    if not companion.exists():
+        return
+    src = companion.read_text()
+    assert "products: list = []" in src or "products: list[" in src
+    assert "is on the listing file" in src or "on the listing file" in src
+    assert "Your photos are ready" in src  # photo path preserved
