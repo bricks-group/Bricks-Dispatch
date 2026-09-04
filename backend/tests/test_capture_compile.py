@@ -20,7 +20,13 @@ from app.services.equirect_stitcher import (
     stitch_pan_to_equirect,
     yaw_span_deg,
 )
-from app.services.floorplan_tracer import derive_floorplan, infer_station_poses, stations_to_rooms
+from app.services.floorplan_tracer import (
+    FloorplanError,
+    derive_floorplan,
+    infer_station_poses,
+    stations_poses_inferred,
+    stations_to_rooms,
+)
 from app.services.tour_builder import (
     TourBuildError,
     build_tour_html,
@@ -528,3 +534,56 @@ def test_router_has_tag_endpoints():
     assert "Add tag" in web_editor.read_text()
     assert "TourTagEditor" in (ROOT.parent / "web/src/pages/CaptureReviewPage.tsx").read_text()
     assert "Feature tags" in web_editor.read_text()
+
+
+def test_floorplan_empty_stations_raises():
+    try:
+        derive_floorplan([])
+        assert False, "expected FloorplanError"
+    except FloorplanError as e:
+        assert "station" in str(e).lower() or "RoomPlan" in str(e)
+
+
+def test_floorplan_inferred_marks_and_honesty_in_source():
+    posed = infer_station_poses([
+        {"station_index": 0, "room": "Kitchen", "heading": 90},
+        {"station_index": 1, "room": "Hall", "heading": 0},
+    ])
+    assert stations_poses_inferred(posed) is True
+    assert posed[0]["pose_inferred"] is True
+    png = derive_floorplan([
+        {"station_index": 0, "room": "Kitchen", "heading": 90},
+        {"station_index": 1, "room": "Hall", "heading": 0},
+    ])
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    img = Image.open(io.BytesIO(png))
+    assert img.size == (1600, 1100)
+    src = (ROOT / "app/services/floorplan_tracer.py").read_text()
+    assert "_draw_north_arrow" in src
+    assert "_draw_scale_bar" in src
+    assert "layout inferred" in src
+    assert "not lidar" in src.lower() or "not lidar" in src
+    # Must not claim Matterport lidar precision for inferred layouts.
+    assert "Matterport lidar" not in src
+    assert "surveyed precision" in src or "not lidar" in src
+
+
+def test_floorplan_provided_poses_not_marked_inferred():
+    stations = [
+        {"station_index": 0, "room": "Kitchen", "pose_x": 0, "pose_y": 0, "heading": 90},
+        {"station_index": 1, "room": "Hall", "pose_x": 4, "pose_y": 0, "heading": 0},
+    ]
+    posed = infer_station_poses(stations)
+    assert stations_poses_inferred(posed) is False
+    png = derive_floorplan(stations)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_floorplan_roomplan_path_still_works_without_stations():
+    png = derive_floorplan([], roomplan={"rooms": [
+        {"name": "Kitchen", "x": 0, "y": 0, "w": 12, "h": 10},
+        {"name": "Bath", "x": 12, "y": 0, "w": 6, "h": 8},
+    ]})
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    src = (ROOT / "app/services/floorplan_tracer.py").read_text()
+    assert "from_roomplan" in src
