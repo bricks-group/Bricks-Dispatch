@@ -75,9 +75,17 @@ MIN_PANS_FOR_SUBMIT = 8
 
 
 def stations_have_compile_input(stations: list[dict], *, kind: str, has_roomplan: bool) -> tuple[bool, str]:
-    """Submit gate. Refuses a walkthrough compiled from casual stills."""
-    if kind == "floorplan" and has_roomplan:
-        return True, "roomplan"
+    """Submit gate. Refuses a walkthrough compiled from casual stills.
+
+    Floor plan is derived from aligned stations (or RoomPlan). Essentials
+    jobs capture 4 room corners, not a 360 dome — do not demand equirects.
+    """
+    if kind == "floorplan":
+        if has_roomplan:
+            return True, "roomplan"
+        if stations:
+            return True, "stations"
+        return False, "no_stations"
     if not stations:
         return False, "no_stations"
     for st in stations:

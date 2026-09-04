@@ -25,7 +25,7 @@ from .equirect_stitcher import (
     station_is_stitchable,
     stitch_pan_to_equirect,
 )
-from .floorplan_tracer import FloorplanError, derive_floorplan, parse_roomplan_json
+from .floorplan_tracer import FloorplanError, derive_floorplan, infer_station_poses, parse_roomplan_json
 from .storage import download_bytes, get_signed_download_url, upload_bytes
 from .tour_builder import TourBuildError, build_tour_html, build_tour_json
 
@@ -254,14 +254,13 @@ async def compile_floorplan(db, job: dict, session: dict, stations: list[dict]) 
     sid = session["id"]
     job_id = job["id"]
     roomplan = await load_roomplan(sid)
-    # Stitch so plan is derived from aligned 360s, not stills — also fills equirects.
+    # Best-effort stitch. Plan still compiles from station poses when corners are not a full 360.
     for st in stations:
         try:
             await ensure_station_equirect(sid, st)
         except CaptureWorkerError as e:
-            if not roomplan:
-                raise
             logger.warning("station %s stitch skipped for plan: %s", st.get("station_index"), e)
+    stations = infer_station_poses(stations)
     try:
         png = derive_floorplan(stations, address=(job.get("address") or "").strip(), roomplan=roomplan)
     except FloorplanError as e:

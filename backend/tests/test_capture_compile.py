@@ -18,7 +18,7 @@ from app.services.equirect_stitcher import (
     stitch_pan_to_equirect,
     yaw_span_deg,
 )
-from app.services.floorplan_tracer import derive_floorplan, stations_to_rooms
+from app.services.floorplan_tracer import derive_floorplan, infer_station_poses, stations_to_rooms
 from app.services.tour_builder import build_tour_html, build_tour_json, TourBuildError
 
 
@@ -204,4 +204,36 @@ def test_public_tour_embed_defaults_os_api_url(monkeypatch):
         "https://bricks-brokerage-api.vercel.app/"
     )
     assert public_tour_embed_url("", "sess-1") is None
+
+def test_floorplan_gate_accepts_four_corner_station():
+    pans = [{"storage_path": f"p{i}"} for i in range(4)]
+    ok, reason = stations_have_compile_input(
+        [{"station_index": 0, "pans": pans, "equirect_path": None}],
+        kind="floorplan",
+        has_roomplan=False,
+    )
+    assert ok is True and reason == "stations"
+
+
+def test_tour_gate_still_refuses_four_frames():
+    pans = [{"storage_path": f"p{i}"} for i in range(4)]
+    ok, reason = stations_have_compile_input(
+        [{"station_index": 0, "pans": pans, "equirect_path": None}],
+        kind="splat",
+        has_roomplan=False,
+    )
+    assert ok is False and reason == "no_equirects"
+
+
+def test_infer_station_poses_walks_heading():
+    posed = infer_station_poses([
+        {"station_index": 0, "room": "Kitchen", "heading": 90},
+        {"station_index": 1, "room": "Hall", "heading": 90},
+        {"station_index": 2, "room": "Bed"},
+    ])
+    assert posed[0]["pose_x"] == 0.0
+    assert posed[1]["pose_x"] > 2.0
+    assert posed[2]["pose_x"] > posed[1]["pose_x"]
+    rooms = stations_to_rooms(posed)
+    assert [r["name"] for r in rooms] == ["Kitchen", "Hall", "Bed"]
 

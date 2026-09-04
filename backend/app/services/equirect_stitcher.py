@@ -15,8 +15,8 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-EQUIRECT_W = 4096
-EQUIRECT_H = 2048
+EQUIRECT_W = 2048
+EQUIRECT_H = 1024
 MIN_PAN_FRAMES = 8
 MIN_YAW_SPAN = 270.0
 PHONE_HFOV = 70.0
@@ -186,17 +186,9 @@ def stitch_pan_to_equirect(pans: list[dict]) -> bytes:
             f"Station pan is not a 360 sweep ({len(usable)} frames, "
             f"yaw span {yaw_span_deg(yaws):.0f}°). Fill the coverage dome."
         )
-    images = []
+    # Yaw-blend first: OpenCV stitch of 24 HD frames times out on Vercel.
     ordered = sorted(usable, key=lambda p: (p.get("yaw") is None, float(p.get("yaw") or 0)))
-    for p in ordered:
-        img = _decode_bgr(p["bytes"])
-        if img is not None:
-            images.append(img)
-    pano = _opencv_stitch(images) if len(images) >= MIN_PAN_FRAMES else None
-    if pano is None:
-        pano = _yaw_blend(ordered)
-    else:
-        pano = _letterbox_equirect(pano)
+    pano = _yaw_blend(ordered)
     h, w = pano.shape[:2]
     if w / float(h) < 1.6:
         pano = _letterbox_equirect(pano)

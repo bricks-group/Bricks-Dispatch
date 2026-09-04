@@ -60,12 +60,11 @@ async def register_property_visit(
     Same INTERNAL_API_KEYS / X-Internal-Api-Key convention as _call_booking_comms.
     """
     api_key = get_own_internal_api_key()
-    os_url = os.environ.get("BRICKS_OS_API_URL")
+    os_url = (os.environ.get("BRICKS_OS_API_URL") or "").strip().rstrip("/")
+    if not os_url:
+        os_url = "https://bricks-brokerage-api.vercel.app"
     if not api_key:
         logger.warning("INTERNAL_API_KEYS not set — skipping visit-ready call")
-        return False
-    if not os_url:
-        logger.warning("BRICKS_OS_API_URL not set — skipping visit-ready call")
         return False
     body = {"property_id": property_id, "title": title}
     if storage_path:

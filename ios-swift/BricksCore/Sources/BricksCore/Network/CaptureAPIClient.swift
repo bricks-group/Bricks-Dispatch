@@ -121,7 +121,8 @@ public struct GOCaptureSession: Sendable, Hashable {
     }
 
     public var thinStations: [CaptureStationInfo] {
-        stations.filter { !$0.hasEquirect && $0.panCount < 8 }
+        let minPans = kind == .floorplan ? 4 : 8
+        return stations.filter { !$0.hasEquirect && $0.panCount < minPans }
     }
 
     public var canSubmit: Bool {

@@ -74,7 +74,8 @@ export default function ReviewScreen() {
   const meta = session?.meta || '';
   const coveredCount = rooms.filter(r => r.n > 0).length;
   const totalCount = rooms.length;
-  const thinStations = stations.filter(s => !s.hasEquirect && (s.panCount ?? 0) < 8);
+  const minPans = kind === 'floorplan' ? 4 : 8;
+  const thinStations = stations.filter(s => !s.hasEquirect && (s.panCount ?? 0) < minPans);
   const canSubmit = pipeline.length > 0 && stationCount > 0 && thinStations.length === 0;
   const status = (session?.status || '').toLowerCase();
   const statusLine = captureStatusCopy(status, kind);
@@ -193,8 +194,12 @@ export default function ReviewScreen() {
             <View style={styles.warnBanner}>
               <Text style={styles.warnText}>
                 {stationCount === 0
-                  ? 'Submit needs at least one 360 station (coverage dome), not snapshot stills.'
-                  : `Station ${thinStations[0].station_index} sweep is thin — fill the dome (8+ overlapping pans) or capture an equirect.`}
+                  ? (kind === 'floorplan'
+                    ? 'Submit needs at least one station with room corners, not snapshot stills.'
+                    : 'Submit needs at least one 360 station (coverage dome), not snapshot stills.')
+                  : (kind === 'floorplan'
+                    ? `Station ${thinStations[0].station_index} needs more corners — capture 4 corners of the room.`
+                    : `Station ${thinStations[0].station_index} sweep is thin — fill the dome (8+ overlapping pans) or capture an equirect.`)}
               </Text>
             </View>
           )}

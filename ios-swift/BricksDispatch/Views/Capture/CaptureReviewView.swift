@@ -320,10 +320,14 @@ struct CaptureReviewView: View {
 
     private var thinCopy: String {
         if flow.session.stationCount == 0 {
-            return "Submit needs at least one 360 station (coverage dome), not snapshot stills."
+            return flow.kind == .floorplan
+                ? "Submit needs at least one station with room corners, not snapshot stills."
+                : "Submit needs at least one 360 station (coverage dome), not snapshot stills."
         }
         if let first = flow.session.thinStations.first {
-            return "Station \(first.stationIndex) sweep is thin — fill the dome (8+ overlapping pans) or capture an equirect."
+            return flow.kind == .floorplan
+                ? "Station \(first.stationIndex) needs more corners — capture 4 corners of the room."
+                : "Station \(first.stationIndex) sweep is thin — fill the dome (8+ overlapping pans) or capture an equirect."
         }
         return "Coverage is thin."
     }

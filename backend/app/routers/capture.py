@@ -12,6 +12,7 @@ Tables live in Bricks-OS (capture_sessions / rooms / pipeline / frames) and
 are service-role-only, same as jobs/uploads.
 """
 import json
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -480,13 +481,32 @@ async def ensure_station(
             idx = int((payload or {}).get("station_index") or 0)
         room_id = (payload or {}).get("room_id")
         heading = (payload or {}).get("heading")
+        pose_x = (payload or {}).get("pose_x")
+        pose_y = (payload or {}).get("pose_y")
+        if pose_x is None or pose_y is None:
+            if recs:
+                prev = recs[-1]
+                try:
+                    ph = float(prev.get("heading")) if prev.get("heading") is not None else 90.0
+                except (TypeError, ValueError):
+                    ph = 90.0
+                rad = math.radians(ph)
+                px = float(prev.get("pose_x") or 0.0)
+                py = float(prev.get("pose_y") or 0.0)
+                if want_new:
+                    pose_x = px + 3.0 * math.sin(rad)
+                    pose_y = py - 3.0 * math.cos(rad)
+                else:
+                    pose_x, pose_y = px, py
+            else:
+                pose_x, pose_y = 0.0, 0.0
         meta = {
             "station_index": idx,
             "room_id": room_id,
             "room": (payload or {}).get("room") or (payload or {}).get("room_name"),
             "heading": heading,
-            "pose_x": (payload or {}).get("pose_x"),
-            "pose_y": (payload or {}).get("pose_y"),
+            "pose_x": pose_x,
+            "pose_y": pose_y,
             "yaws": [],
             "content_type": "pan_burst",
         }
@@ -807,7 +827,12 @@ async def submit_session(
         ok, reason = stations_have_compile_input(stations, kind=kind, has_roomplan=bool(roomplan))
         if not ok:
             if reason == "no_stations":
-                api_error(400, "Submit needs at least one 360 station", "no_stations")
+                msg = (
+                    "Submit needs at least one station (or a RoomPlan)"
+                    if kind == "floorplan"
+                    else "Submit needs at least one 360 station"
+                )
+                api_error(400, msg, "no_stations")
             api_error(400, "Submit needs equirects or a stitchable 360 pan at each station", "no_equirects")
 
         n = int(session.get("frame_count") or 0)

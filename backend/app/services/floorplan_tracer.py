@@ -19,6 +19,43 @@ CANVAS_H = 1100
 MARGIN = 90
 
 
+
+STEP_M = 3.0
+
+
+def infer_station_poses(stations: list[dict]) -> list[dict]:
+    """Fill missing pose_x/y by walking along each prior station heading.
+
+    Phone capture (web/Expo) rarely sends lidar poses. Without this, plans
+    render as a row of identical 10 ft boxes instead of a path.
+    Heading 0 = north. Step is ~3 m along the look direction.
+    """
+    if not stations:
+        return []
+    out: list[dict] = []
+    for i, raw in enumerate(stations):
+        st = dict(raw)
+        px, py = st.get("pose_x"), st.get("pose_y")
+        if px is not None and py is not None:
+            out.append(st)
+            continue
+        if i == 0:
+            st["pose_x"] = 0.0
+            st["pose_y"] = 0.0
+        else:
+            prev = out[i - 1]
+            heading = prev.get("heading")
+            try:
+                heading = float(heading) if heading is not None else 90.0
+            except (TypeError, ValueError):
+                heading = 90.0
+            rad = math.radians(heading)
+            st["pose_x"] = float(prev.get("pose_x") or 0.0) + STEP_M * math.sin(rad)
+            st["pose_y"] = float(prev.get("pose_y") or 0.0) - STEP_M * math.cos(rad)
+        out.append(st)
+    return out
+
+
 class FloorplanError(RuntimeError):
     """Honest failure — caller must mark the session failed, never Delivered."""
 
@@ -172,6 +209,7 @@ def derive_floorplan(stations: list[dict], address: str = "", roomplan: Optional
             return render_plan_png(mapped, title=title)
     if not stations:
         raise FloorplanError("No aligned stations (or RoomPlan) to derive a floor plan from")
+    stations = infer_station_poses(stations)
     rooms = stations_to_rooms(stations)
     title = f"{address} — floor plan" if address else "Floor plan"
     return render_plan_png(rooms, title=title)
