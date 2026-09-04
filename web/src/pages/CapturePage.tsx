@@ -304,13 +304,21 @@ export function CapturePage() {
               <CoverageDome captured={ticks} total={kind === 'floorplan' ? CORNER_TOTAL : DOME_TOTAL} headingTick={aimTick} />
               <div className="capture-dome-center">
                 <div className="capture-dome-pct">{kind === 'floorplan' ? `${Math.min(roomFrames, CORNER_TOTAL)}/${CORNER_TOTAL}` : `${pct}%`}</div>
-                <div className="capture-dome-label">Station {stationIndex} sweep</div>
+                <div className="capture-dome-label">{kind === 'floorplan' ? `Room corners · station ${stationIndex}` : `Station ${stationIndex} sweep`}</div>
               </div>
             </div>
 
             <div className="capture-guidance">
-              <strong>{session?.guidance ? `360 station · ${session.guidance.room}` : 'Stand still · pan slowly through 360'}</strong>
-              <div>{session?.guidance?.message ?? 'Fill the coverage dome for this station, then walk to the next. Server stitches the pan into a 360.'}</div>
+              <strong>
+                {kind === 'floorplan'
+                  ? (session?.guidance ? `Floor plan · ${session.guidance.room}` : 'Four corners · same spot on the floor')
+                  : (session?.guidance ? `360 station · ${session.guidance.room}` : 'Stand still · pan slowly through 360')}
+              </strong>
+              <div>
+                {kind === 'floorplan'
+                  ? (session?.guidance?.message ?? 'Shoot each corner of this room (4). Add a room, walk, repeat. Server compiles the plan — not a 360 dome.')
+                  : (session?.guidance?.message ?? 'Fill the coverage dome for this station, then walk to the next. Server stitches the pan into a 360.')}
+              </div>
             </div>
 
             {kind === 'floorplan' && (

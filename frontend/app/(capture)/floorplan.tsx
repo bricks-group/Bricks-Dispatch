@@ -13,10 +13,10 @@ const KIND = 'floorplan' as const;
 const CORNER_TOTAL = 4;
 
 const CUES = [
-  { title: 'Station 360', body: 'Stand in the middle of this room. Pan slowly and fire at each tick of the ring. The server derives the plan from aligned stations — not from snapshot guesses.' },
-  { title: 'Keep panning', body: 'Overlap each frame. Fill the dome, then add the next room / next station.' },
-  { title: 'Openings', body: 'Include doors and openings in the sweep so rooms connect on the compiled plan.' },
-  { title: 'Next room', body: 'When this station is full, add a room and walk there. One station per room is the Matterport pattern.' },
+  { title: 'Corner 1 of 4', body: 'Stand near the middle. Point at one corner of this room and fire. Essentials floor plans need four corners — not a 360 dome.' },
+  { title: 'Corner 2 of 4', body: 'Turn to the next corner. Keep the same spot on the floor so the server can pose the room.' },
+  { title: 'Corner 3 of 4', body: 'Third corner. Include the doorway edge if you see one so rooms connect on the plan.' },
+  { title: 'Corner 4 · next room', body: 'Last corner for this room. Add a room name, walk there, and shoot its four corners. Server compiles the plan.' },
 ];
 
 function CornerBox({ captured, total }: { captured: number; total: number }) {
@@ -90,7 +90,7 @@ export default function FloorPlanCaptureScreen() {
   if (!permission.granted) {
     return (
       <SafeAreaView style={[styles.dark, styles.permWrap]}>
-        <Text style={styles.permText}>Bricks needs camera access to capture 360 stations for the floor plan.</Text>
+        <Text style={styles.permText}>Bricks needs camera access to capture room corners for the floor plan.</Text>
         <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
           <Text style={styles.permBtnText}>Allow camera</Text>
         </TouchableOpacity>
@@ -204,7 +204,7 @@ export default function FloorPlanCaptureScreen() {
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <CornerBox captured={roomFrames} total={CORNER_TOTAL} />
           <Text style={styles.domePct}>{roomFrames} / {CORNER_TOTAL}</Text>
-          <Text style={styles.domeLabel}>Station frames this room</Text>
+          <Text style={styles.domeLabel}>Corners this room</Text>
         </View>
 
         <View style={styles.guidance}>
@@ -212,7 +212,7 @@ export default function FloorPlanCaptureScreen() {
           <Text style={styles.guidanceBody}>{cue.body}</Text>
         </View>
 
-        <Text style={styles.pill}>{frameCount} station frames · compiled on server</Text>
+        <Text style={styles.pill}>{frameCount} corner frames · compiled on server</Text>
 
         {captureError ? (
           <Text style={styles.errorText}>{captureError}</Text>

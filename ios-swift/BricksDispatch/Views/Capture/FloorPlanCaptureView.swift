@@ -9,10 +9,10 @@ struct FloorPlanCaptureView: View {
     @StateObject private var flow: CaptureFlowModel
 
     private let cues: [(title: String, body: String)] = [
-        ("Station 360", "Stand in the middle of this room. Pan slowly and fire at each tick of the ring. The server derives the plan from aligned stations — not from snapshot guesses."),
-        ("Keep panning", "Overlap each frame. Fill the dome, then add the next room / next station."),
-        ("Openings", "Include doors and openings in the sweep so rooms connect on the compiled plan."),
-        ("Next room", "When this station is full, add a room and walk there. One station per room is the Matterport pattern."),
+        ("Corner 1 of 4", "Stand near the middle. Point at one corner of this room and fire. Essentials floor plans need four corners — not a 360 dome."),
+        ("Corner 2 of 4", "Turn to the next corner. Keep the same spot on the floor so the server can pose the room."),
+        ("Corner 3 of 4", "Third corner. Include the doorway edge if you see one so rooms connect on the plan."),
+        ("Corner 4 · next room", "Last corner for this room. Add a room name, walk there, and shoot its four corners. Server compiles the plan."),
     ]
 
     init(job: DispatchJob) {
@@ -37,7 +37,7 @@ struct FloorPlanCaptureView: View {
             switch flow.hardware.cameraStatus {
             case .denied:
                 CapturePermGate(
-                    message: "Bricks needs camera access to capture 360 stations for the floor plan.",
+                    message: "Bricks needs camera access to capture room corners for the floor plan.",
                     onAllow: { Task { await flow.hardware.requestCameraAccess() } },
                     onClose: { dismiss() }
                 )
@@ -130,7 +130,7 @@ struct FloorPlanCaptureView: View {
                 .font(BricksFont.mono(22))
                 .foregroundStyle(CaptureChrome.moon)
                 .padding(.top, 4)
-            Text("Station frames this room")
+            Text("Corners this room")
                 .font(BricksFont.mono(9))
                 .tracking(1.5)
                 .textCase(.uppercase)

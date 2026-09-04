@@ -340,18 +340,10 @@ async def _publish_tour_player(
             if not raw:
                 continue
             await upload_bytes(f"{prefix}/{c['file']}", raw, "image/jpeg", upsert=True)
-    embed = public_tour_embed_url(job_id, sid)
-    try:
-        from .client_comms import register_property_visit
-        await register_property_visit(
-            job_id,
-            storage_path=index_path,
-            title="3D tour",
-            embed_url=embed,
-            visit_type="url",
-        )
-    except Exception as e:
-        logger.error("visit-ready for tour session %s failed: %s", sid, e)
+    # Listing CaptureCard reads capture_sessions + /api/public/tours/{job}/{session}.
+    # Do not register phone tours into property_visits — that table is Virtual Visit
+    # only (Polycam URL / .ply/.splat). Mixing them made VisitViewer show tours as visits.
+    _ = public_tour_embed_url(job_id, sid)
     return index_path
 
 
