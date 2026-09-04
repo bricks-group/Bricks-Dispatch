@@ -791,12 +791,26 @@ async def _first_delivered_of_kind(db, job_id: str, kind: str) -> bool:
 
 
 async def _notify_capture_session_delivered(db, job: dict, sid: str, kind: str, output_path: str) -> None:
-    """Best-effort agent email on first successful compile deliver of this kind."""
+    """Best-effort agent email on first successful compile deliver of this kind.
+
+    Also bumps jobs.updated_at so the OS listing file feels fresh when GO
+    capture lands (Activity + desk sort). Skip when not the first of kind.
+    """
     job_id = job.get("id") or ""
     if not job_id:
         return
     if not await _first_delivered_of_kind(db, job_id, kind):
         return
+    # Touch the job so OS living-file Activity / freshness pick up the deliver.
+    try:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Job %s: capture deliver updated_at bump failed: %s", job_id, e
+        )
     product = _PRODUCT_LABEL.get(kind, kind)
     delivery_urls = []
     try:

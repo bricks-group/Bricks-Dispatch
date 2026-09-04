@@ -737,6 +737,9 @@ def test_notify_skips_when_not_first_of_kind_in_source():
     assert "_first_delivered_of_kind" in fn
     assert "notify_capture_delivered" in fn
     assert 'products=[product]' in fn
+    # First-of-kind also bumps jobs.updated_at for OS living-file freshness.
+    assert 'table("jobs").update({"updated_at": now})' in fn or 'table("jobs").update' in fn
+    assert '"updated_at"' in fn
     first = src.split("async def _first_delivered_of_kind")[1].split("async def _notify_capture_session_delivered")[0]
     assert 'eq("status", "delivered")' in first
     assert "len(rows) <= 1" in first
