@@ -186,3 +186,22 @@ def test_no_gemini_in_floorplan_tracer():
     src = (ROOT / "app/services/floorplan_tracer.py").read_text()
     assert "generate_from_images" not in src
     assert "GEMINI" not in src
+
+def test_public_tour_embed_defaults_os_api_url(monkeypatch):
+    from app.services.capture_worker import public_tour_embed_url
+
+    monkeypatch.delenv("BRICKS_OS_API_URL", raising=False)
+    url = public_tour_embed_url("job-1", "sess-1")
+    assert url == "https://bricks-brokerage-api.vercel.app/api/public/tours/job-1/sess-1"
+
+    monkeypatch.setenv("BRICKS_OS_API_URL", "https://custom.example")
+    assert public_tour_embed_url("job-1", "sess-1") == (
+        "https://custom.example/api/public/tours/job-1/sess-1"
+    )
+
+    monkeypatch.setenv("BRICKS_OS_API_URL", "  ")
+    assert public_tour_embed_url("job-1", "sess-1").startswith(
+        "https://bricks-brokerage-api.vercel.app/"
+    )
+    assert public_tour_embed_url("", "sess-1") is None
+

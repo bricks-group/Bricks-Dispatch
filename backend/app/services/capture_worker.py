@@ -36,9 +36,16 @@ class CaptureWorkerError(RuntimeError):
     pass
 
 
+# Live OS API host. api.brxs.ca does not resolve — do not use it for embeds.
+_DEFAULT_OS_API_URL = "https://bricks-brokerage-api.vercel.app"
+
+
 def public_tour_embed_url(job_id: str, session_id: str) -> Optional[str]:
-    os_url = (os.environ.get("BRICKS_OS_API_URL") or "").rstrip("/")
-    if not os_url or not job_id or not session_id:
+    """Public tour iframe URL on the OS API. Defaults when BRICKS_OS_API_URL is unset."""
+    os_url = (os.environ.get("BRICKS_OS_API_URL") or "").strip().rstrip("/")
+    if not os_url:
+        os_url = _DEFAULT_OS_API_URL
+    if not job_id or not session_id:
         return None
     return f"{os_url}/api/public/tours/{job_id}/{session_id}"
 
