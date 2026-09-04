@@ -17,10 +17,12 @@ from .capture_layout import (
     roomplan_json_path,
     select_rebuild_stations,
     session_manifest_path,
+    session_tags_path,
     station_manifest_path,
     stations_have_compile_input,
     stations_have_stored_equirects,
 )
+from .tour_builder import TourBuildError, build_tour_html, build_tour_json, normalize_tag, normalize_tags
 from .equirect_stitcher import (
     StitchError,
     is_equirect_image,
@@ -29,7 +31,6 @@ from .equirect_stitcher import (
 )
 from .floorplan_tracer import FloorplanError, derive_floorplan, infer_station_poses, parse_roomplan_json
 from .storage import download_bytes, get_signed_download_url, upload_bytes
-from .tour_builder import TourBuildError, build_tour_html, build_tour_json
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,7 @@ async def load_station_records(db, session_id: str, rooms: list[dict] | None = N
                 elif isinstance(yaw_list, list) and i < len(st["pans"]):
                     pass
             st["yaws"] = yaw_list
+            st["tags"] = normalize_tags(meta.get("tags"), station_index=idx)
     return [stations[k] for k in sorted(stations)]
 
 
@@ -201,6 +203,75 @@ async def _attach_floorplan_media(db, job: dict, storage_path: str, session_id: 
         logger.warning("media_files floor_plan insert skipped: %s", e)
 
 
+
+async def load_session_tags(session_id: str) -> list[dict] | None:
+    """Session-level amenity tags. None = no tags.json yet (keep station tags)."""
+    raw = await download_bytes(session_tags_path(session_id))
+    if not raw:
+        return None
+    try:
+        meta = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+    by_id = {}
+    for t in normalize_tags(meta.get("tags") if isinstance(meta, dict) else meta):
+        by_id[t["id"]] = t
+    return list(by_id.values())
+
+
+async def save_session_tags(session_id: str, tags: list[dict]) -> list[dict]:
+    clean = normalize_tags(tags)
+    payload = json.dumps({"version": 1, "tags": clean}, indent=2).encode("utf-8")
+    ok = await upload_bytes(session_tags_path(session_id), payload, "application/json", upsert=True)
+    if not ok:
+        raise CaptureWorkerError("Could not store amenity tags")
+    grouped: dict[int, list] = {}
+    for t in clean:
+        idx = t.get("station_index")
+        if idx is None:
+            continue
+        grouped.setdefault(int(idx), []).append(t)
+    for idx, group in grouped.items():
+        man_path = station_manifest_path(session_id, idx)
+        raw = await download_bytes(man_path)
+        meta = {}
+        if raw:
+            try:
+                meta = json.loads(raw.decode("utf-8"))
+            except Exception:
+                meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["station_index"] = idx
+        meta["tags"] = group
+        await upload_bytes(man_path, json.dumps(meta).encode("utf-8"), "application/json", upsert=True)
+    return clean
+
+
+def attach_tags_to_stations(stations: list[dict], tags: list[dict] | None) -> list[dict]:
+    """Overlay tags.json onto compiled stations. None keeps per-station tags; [] clears."""
+    if tags is None:
+        out = []
+        for st in stations:
+            row = dict(st)
+            idx = int(row.get("station_index") if row.get("station_index") is not None else 0)
+            row["tags"] = normalize_tags(row.get("tags"), station_index=idx)
+            out.append(row)
+        return out
+    by_idx: dict[int, list] = {}
+    for t in normalize_tags(tags):
+        idx = t.get("station_index")
+        if idx is None:
+            continue
+        by_idx.setdefault(int(idx), []).append(t)
+    out = []
+    for st in stations:
+        row = dict(st)
+        idx = int(row.get("station_index") if row.get("station_index") is not None else 0)
+        row["tags"] = by_idx.get(idx, [])
+        out.append(row)
+    return out
+
 def _compiled_station(st: dict, jpeg: bytes | None = None) -> dict:
     idx = int(st.get("station_index") if st.get("station_index") is not None else 0)
     scene_rel = st.get("file") or st.get("panorama") or f"scenes/{idx}.jpg"
@@ -217,6 +288,7 @@ def _compiled_station(st: dict, jpeg: bytes | None = None) -> dict:
         "heading": st.get("heading"),
         "file": scene_rel,
         "bytes": jpeg if jpeg is not None else st.get("bytes") or st.get("equirect_bytes"),
+        "tags": normalize_tags(st.get("tags"), station_index=idx),
     }
 
 
@@ -332,6 +404,7 @@ async def _load_hosted_tour_scenes(job_id: str, session_id: str) -> list[dict]:
             "file": file,
             "bytes": jpeg if jpeg and is_equirect_image(jpeg) else None,
             "equirect_path": f"tours/{job_id}/{session_id}/{file}",
+            "tags": normalize_tags(sc.get("tags"), station_index=idx),
         })
     return out
 
@@ -344,6 +417,7 @@ async def compile_tour(db, job: dict, session: dict, stations: list[dict]) -> st
         compiled.append(_compiled_station(st, jpeg))
     if not compiled:
         raise CaptureWorkerError("No equirect stations after stitch")
+    compiled = attach_tags_to_stations(compiled, await load_session_tags(sid))
     return await _publish_tour_player(job, session, compiled, upload_scenes=True)
 
 
@@ -371,9 +445,14 @@ async def rebuild_tour_from_equirects(db, job: dict, session: dict) -> str:
             raise CaptureWorkerError(
                 "Rebuild needs stored equirects — recapture stations or retry compile from pans"
             )
+        compiled = attach_tags_to_stations(compiled, await load_session_tags(sid))
         return await _publish_tour_player(job, session, compiled, upload_scenes=True)
     # Hosted scenes already exist — rewrite player HTML/JSON only.
-    return await _publish_tour_player(job, session, [_compiled_station(st) for st in compiled], upload_scenes=False)
+    compiled = attach_tags_to_stations(
+        [_compiled_station(st) for st in compiled],
+        await load_session_tags(sid),
+    )
+    return await _publish_tour_player(job, session, compiled, upload_scenes=False)
 
 
 async def compile_floorplan(db, job: dict, session: dict, stations: list[dict]) -> str:

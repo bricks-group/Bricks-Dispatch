@@ -36,12 +36,15 @@ from ..services.capture_layout import (
 )
 from ..services.capture_worker import (
     CaptureWorkerError,
+    load_session_tags,
     load_station_records,
     process_capture_session,
     rebuild_tour_from_equirects,
+    save_session_tags,
     stations_have_compile_input,
 )
-from ..services.storage import STORAGE_BUCKET, create_signed_upload_url, upload_bytes
+from ..services.storage import STORAGE_BUCKET, create_signed_upload_url, get_signed_download_url, upload_bytes
+from ..services.tour_builder import normalize_tag, normalize_tags
 from ..shared.auth import get_vendor_member, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.database import get_db
 from ..shared.errors import api_error
@@ -152,6 +155,7 @@ def _empty_session(job: Optional[dict] = None, kind: str = "splat") -> dict:
         "stationCount": 0,
         "currentStationIndex": 0,
         "stations": [],
+        "tags": [],
         "capture": job_capture_entitlements(job or {}),
     }
 
@@ -239,6 +243,7 @@ def _station_public(st: dict) -> dict:
         "hasEquirect": bool(st.get("equirect_path") or st.get("equirect_bytes")),
         "heading": st.get("heading"),
         "content_type": "equirect" if (st.get("equirect_path") or st.get("equirect_bytes")) else "pan_burst",
+        "tags": normalize_tags(st.get("tags"), station_index=st.get("station_index")),
     }
 
 
@@ -260,7 +265,25 @@ async def _load_session_bundle(
         stations_pub = [_station_public(s) for s in raw]
     except Exception:
         stations_pub = []
-    return _shape_session(job, session, rooms.data or [], pipeline.data or [], preferred_room_id, stations_pub)
+    payload = _shape_session(job, session, rooms.data or [], pipeline.data or [], preferred_room_id, stations_pub)
+    try:
+        loaded = await load_session_tags(sid)
+        tags = loaded if loaded is not None else []
+    except Exception:
+        tags = []
+    payload["tags"] = tags
+    if tags:
+        by_idx = {}
+        for tg in tags:
+            idx = tg.get("station_index")
+            if idx is None:
+                continue
+            by_idx.setdefault(int(idx), []).append(tg)
+        for st in payload.get("stations") or []:
+            idx = st.get("station_index")
+            if idx is not None and int(idx) in by_idx:
+                st["tags"] = by_idx[int(idx)]
+    return payload
 
 
 async def _latest_session(db, job_id: str, kind: str) -> Optional[dict]:
@@ -896,6 +919,91 @@ async def _run_rebuild_tour(db, job: dict, session: dict) -> dict:
     }
 
 
+
+
+@router.get("/sessions/{session_id}/scenes/{station_index}/url")
+async def scene_signed_url(
+    session_id: str,
+    station_index: int,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Signed GET for a stored 360 so GO can place tags at the current look."""
+    db = await get_db()
+    session = await _session_by_id(db, session_id)
+    if not session:
+        api_error(409, "No capture session", "session_not_found")
+    job_id = session.get("job_id") or ""
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    idx = int(station_index)
+    paths = [
+        f"tours/{job['id']}/{session_id}/scenes/{idx}.jpg",
+        f"capture/{session_id}/stations/{idx}/equirect.jpg",
+    ]
+    url = None
+    path = None
+    for cand in paths:
+        url = await get_signed_download_url(cand, expiry=60 * 30)
+        if url:
+            path = cand
+            break
+    if not url:
+        api_error(404, "No stored 360 for that station", "no_equirects")
+    return {"url": url, "path": path, "station_index": idx, "session_id": session_id}
+
+
+@router.post("/sessions/{session_id}/tags")
+async def add_tour_tag(
+    session_id: str,
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Add an amenity/feature tag at a yaw/pitch on a stored 360. Rebuilds the player."""
+    db = await get_db()
+    session = await _session_by_id(db, session_id)
+    if not session:
+        api_error(409, "No capture session", "session_not_found")
+    job_id = session.get("job_id") or (payload or {}).get("job_id") or ""
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    tag = normalize_tag(payload or {}, station_index=(payload or {}).get("station_index"), mint_id=True)
+    if not tag:
+        api_error(400, "Tag needs a label", "missing_tag_label")
+    if tag.get("station_index") is None:
+        api_error(400, "station_index is required", "missing_station_index")
+    existing = await load_session_tags(session_id) or []
+    existing.append(tag)
+    saved = await save_session_tags(session_id, existing)
+    result = await _run_rebuild_tour(db, job, session)
+    result["tag"] = tag
+    result["tags"] = saved
+    return result
+
+
+@router.delete("/sessions/{session_id}/tags/{tag_id}")
+async def delete_tour_tag(
+    session_id: str,
+    tag_id: str,
+    job_id: Optional[str] = Query(default=None),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    db = await get_db()
+    session = await _session_by_id(db, session_id)
+    if not session:
+        api_error(409, "No capture session", "session_not_found")
+    job_id = session.get("job_id") or job_id or ""
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    existing = await load_session_tags(session_id) or []
+    kept = [t for t in existing if t.get("id") != tag_id]
+    if len(kept) == len(existing):
+        api_error(404, "Tag not found", "tag_not_found")
+    saved = await save_session_tags(session_id, kept)
+    result = await _run_rebuild_tour(db, job, session)
+    result["tags"] = saved
+    return result
+
+
 @router.post("/sessions/{session_id}/rebuild-tour")
 async def rebuild_tour_for_session(
     session_id: str,
@@ -919,6 +1027,25 @@ async def rebuild_tour_for_session(
         api_error(404, "Job not found", "job_not_found")
     return await _run_rebuild_tour(db, job, session)
 
+
+
+@router.post("/tags")
+async def add_tour_tag_for_job(
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Job-scoped add tag. Same as POST /sessions/{id}/tags."""
+    job_id = (payload or {}).get("job_id") or ""
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    db = await get_db()
+    session_id = (payload or {}).get("session_id") or (payload or {}).get("sessionId")
+    session = await _session_by_id(db, session_id) if session_id else None
+    if not session:
+        session = await _latest_session(db, job_id, "splat")
+    if not session:
+        api_error(409, "No capture session", "session_not_found")
+    return await add_tour_tag(session["id"], payload, authorization, x_user_id)
 
 @router.post("/rebuild-tour")
 async def rebuild_tour_for_job(

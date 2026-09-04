@@ -21,7 +21,13 @@ from app.services.equirect_stitcher import (
     yaw_span_deg,
 )
 from app.services.floorplan_tracer import derive_floorplan, infer_station_poses, stations_to_rooms
-from app.services.tour_builder import build_tour_html, build_tour_json, TourBuildError
+from app.services.tour_builder import (
+    TourBuildError,
+    build_tour_html,
+    build_tour_json,
+    normalize_tag,
+    normalize_tags,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -417,3 +423,82 @@ def test_router_rebuild_tour_endpoint_is_honest():
     assert "Rebuild tour player" in web_review.read_text()
     assert "Rebuild tour player" in web_jobs.read_text()
     assert "rebuild-tour" in web_api.read_text()
+
+
+def test_normalize_tag_refuses_empty_label():
+    assert normalize_tag({}) is None
+    assert normalize_tag({"label": "  "}) is None
+    assert normalize_tags([{"label": ""}, None, "x"]) == []
+    tag = normalize_tag({"label": "Chef\u2019s kitchen", "yaw": 400, "pitch": -12, "note": "Wolf range"}, station_index=0)
+    assert tag["label"].startswith("Chef")
+    assert tag["note"] == "Wolf range"
+    assert tag["station_index"] == 0
+    assert -180 <= tag["yaw"] <= 180
+    assert tag["pitch"] == -12
+
+
+def test_tour_json_includes_tags_without_inventing():
+    stations = [
+        {"id": "station-0", "room": "Kitchen", "file": "scenes/0.jpg", "station_index": 0},
+        {"id": "station-1", "room": "Living", "file": "scenes/1.jpg", "station_index": 1, "tags": [
+            {"id": "tag-abc", "label": "Walk-in closet", "yaw": 40, "pitch": -5}
+        ]},
+    ]
+    meta = build_tour_json(stations)
+    assert '"tags": []' in meta
+    assert "Walk-in closet" in meta
+    assert "Chef" not in meta
+    html = build_tour_html(stations, address="10 Main")
+    assert 'id="taglayer"' in html
+    assert "placeTags" in html
+    assert "showCall" in html
+    assert "Walk-in closet" in html
+    assert "class=\"tg\"" in html or "className=\"tg\"" in html or ".tg{" in html
+    empty_html = build_tour_html([
+        {"id": "station-0", "room": "Kitchen", "file": "scenes/0.jpg", "station_index": 0},
+    ])
+    assert "Walk-in closet" not in empty_html
+    assert "Chef" not in empty_html
+
+
+def test_rebuild_payload_keeps_amenity_tags():
+    from app.services.capture_worker import rebuild_tour_payload
+    html, meta = rebuild_tour_payload([
+        {
+            "id": "station-0",
+            "room": "Kitchen",
+            "file": "scenes/0.jpg",
+            "station_index": 0,
+            "equirect_path": "capture/s/stations/0/equirect.jpg",
+            "tags": [{"id": "tag-1", "label": "Island", "yaw": 15, "pitch": 0}],
+        }
+    ])
+    assert "Island" in html and "Island" in meta
+    assert "placeTags" in html
+
+
+def test_attach_tags_overlays_session_tags():
+    from app.services.capture_worker import attach_tags_to_stations
+    stations = [
+        {"station_index": 0, "room": "Kitchen", "file": "scenes/0.jpg", "tags": []},
+        {"station_index": 1, "room": "Bed", "file": "scenes/1.jpg"},
+    ]
+    tagged = attach_tags_to_stations(stations, [
+        {"id": "tag-1", "label": "Soaker tub", "yaw": 90, "pitch": -8, "station_index": 1},
+    ])
+    assert tagged[0]["tags"] == []
+    assert tagged[1]["tags"][0]["label"] == "Soaker tub"
+
+
+def test_router_has_tag_endpoints():
+    src = (ROOT / "app/routers/capture.py").read_text()
+    assert "/sessions/{session_id}/tags" in src
+    assert "save_session_tags" in src
+    assert "missing_tag_label" in src
+    web_api = (ROOT.parent / "web/src/lib/capture-api.ts").read_text()
+    web_editor = ROOT.parent / "web/src/components/TourTagEditor.tsx"
+    assert "addTourTag" in web_api
+    assert web_editor.exists()
+    assert "Add tag" in web_editor.read_text()
+    assert "TourTagEditor" in (ROOT.parent / "web/src/pages/CaptureReviewPage.tsx").read_text()
+    assert "Feature tags" in web_editor.read_text()

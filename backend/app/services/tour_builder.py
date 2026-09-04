@@ -2,14 +2,71 @@
 from __future__ import annotations
 import json
 from html import escape as html_escape
+from uuid import uuid4
 
 class TourBuildError(RuntimeError):
     pass
 
 
+def normalize_tag(raw, *, station_index=None, mint_id=False):
+    """Amenity/feature tag. Empty label → None (never invent amenities)."""
+    if not isinstance(raw, dict):
+        return None
+    label = str(raw.get("label") or raw.get("title") or "").strip()
+    if not label:
+        return None
+    note = str(raw.get("note") or raw.get("description") or "").strip()
+    try:
+        yaw = float(raw["yaw"]) if raw.get("yaw") is not None and raw.get("yaw") != "" else 0.0
+    except (TypeError, ValueError):
+        yaw = 0.0
+    try:
+        pitch = float(raw["pitch"]) if raw.get("pitch") is not None and raw.get("pitch") != "" else 0.0
+    except (TypeError, ValueError):
+        pitch = 0.0
+    while yaw > 180:
+        yaw -= 360
+    while yaw < -180:
+        yaw += 360
+    pitch = max(-80.0, min(80.0, pitch))
+    tid = str(raw.get("id") or "").strip()
+    if not tid or mint_id:
+        tid = "tag-" + uuid4().hex[:10]
+    idx = raw.get("station_index") if raw.get("station_index") is not None else station_index
+    out = {
+        "id": tid[:40],
+        "label": label[:80],
+        "yaw": round(yaw, 2),
+        "pitch": round(pitch, 2),
+    }
+    if note:
+        out["note"] = note[:240]
+    if idx is not None:
+        try:
+            out["station_index"] = int(idx)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def normalize_tags(raw, *, station_index=None):
+    if not isinstance(raw, list):
+        return []
+    out = []
+    seen = set()
+    for item in raw:
+        tag = normalize_tag(item, station_index=station_index)
+        if not tag or tag["id"] in seen:
+            continue
+        seen.add(tag["id"])
+        out.append(tag)
+    return out
+
+
 def _scenes(stations):
     scenes = []
     for i, st in enumerate(stations):
+        idx = st.get("station_index", i)
         scenes.append({
             "id": st["id"],
             "title": st.get("label") or st.get("room") or ("Station %s" % i),
@@ -18,13 +75,14 @@ def _scenes(stations):
             "heading": st.get("heading"),
             "next": stations[i + 1]["id"] if i + 1 < len(stations) else None,
             "prev": stations[i - 1]["id"] if i > 0 else None,
-            "station_index": st.get("station_index", i),
+            "station_index": idx,
+            "tags": normalize_tags(st.get("tags"), station_index=idx),
         })
     return scenes
 
 
 def build_tour_json(stations):
-    return json.dumps({"version": 1, "kind": "equirect-walkthrough", "scenes": _scenes(stations)}, indent=2)
+    return json.dumps({"version": 2, "kind": "equirect-walkthrough", "scenes": _scenes(stations)}, indent=2)
 
 
 _TOUR_HTML = """<!DOCTYPE html>
@@ -51,6 +109,16 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .hs-lab{font:500 12px/1.2 Georgia,serif;color:#fafaf9;background:rgba(12,10,9,.72);padding:5px 10px;border-radius:2px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
 .hs.pulse .hs-disc{animation:hsPulse 1.8s ease-in-out infinite}
 @keyframes hsPulse{0%,100%{box-shadow:0 0 0 0 rgba(250,250,249,.35)}50%{box-shadow:0 0 0 10px rgba(250,250,249,0)}}
+.tg{position:absolute;z-index:5;transform:translate(-50%,-50%);border:0;padding:0;background:transparent;cursor:pointer;display:none;flex-direction:column;align-items:center;gap:4px;filter:drop-shadow(0 6px 14px rgba(0,0,0,.45));opacity:0;pointer-events:none;-webkit-tap-highlight-color:transparent}
+.tg.on{display:flex;opacity:1;pointer-events:auto}
+.tg-dot{width:18px;height:18px;border-radius:50%;background:#8B3A2A;border:2px solid #fafaf9;box-shadow:0 0 0 1px rgba(12,10,9,.35)}
+.tg-lab{font:500 11px/1.2 Georgia,serif;color:#fafaf9;background:rgba(12,10,9,.78);padding:3px 8px;border-radius:2px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis}
+.callout{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:6;min-width:180px;max-width:min(320px,calc(100% - 24px));background:rgba(12,10,9,.92);border:1px solid #44403c;border-radius:2px;padding:12px 14px;display:none}
+.callout.on{display:block}
+.call-k{font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.16em;color:#a8a29e;text-transform:uppercase}
+.call-lab{margin:6px 0 0;font-size:16px}
+.call-note{margin:6px 0 0;font-size:13px;color:#d6d3d1}
+.call-x{margin-top:10px;border:1px solid #44403c;background:transparent;color:#fafaf9;font:500 12px/1 Georgia,serif;padding:6px 10px;cursor:pointer;border-radius:2px}
 .bar{flex-shrink:0;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 16px}
 .cap{font-size:15px}
 .nav{display:flex;gap:8px}
@@ -70,10 +138,17 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 <span class="hs-disc" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v12M6 12l6 6 6-6" stroke="#8B3A2A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
 <span class="hs-lab" id="hslab">Next station</span>
 </button>
+<div id="taglayer"></div>
+<div id="callout" class="callout" hidden>
+<div class="call-k">Feature</div>
+<div class="call-lab" id="callab"></div>
+<div class="call-note" id="callnote"></div>
+<button type="button" class="call-x" id="callx">Close</button>
+</div>
 </div>
 <div class="bar"><div class="cap" id="cap"></div><div class="nav"><button type="button" class="btn" id="prev">Previous</button><button type="button" class="btn go" id="next">Next station</button></div></div>
 <div class="dots" id="dots"></div>
-<div class="hint">Path-confined 360 stations · drag to look · tap the in-scene hotspot or ←/→ for the next station along the capture path</div>
+<div class="hint">Path-confined 360 stations · drag to look · tap a feature tag for the amenity · tap the hotspot or ←/→ for the next station</div>
 <script>
 (function(){
 var S=__SCENES__,i=0,yaw=0,pitch=0,drag=0,lx=0,ly=0,texs=[],off=0,mode="gl",fw=0,gl=null,moved=0;
@@ -88,6 +163,12 @@ var dots=document.getElementById("dots");
 var stage=document.getElementById("stage");
 var hs=document.getElementById("hs");
 var hslab=document.getElementById("hslab");
+var taglayer=document.getElementById("taglayer");
+var callout=document.getElementById("callout");
+var callab=document.getElementById("callab");
+var callnote=document.getElementById("callnote");
+var callx=document.getElementById("callx");
+
 var HALF=80*Math.PI/360;
 function heading(s){var h=s&&s.heading;if(h==null||h==="")return 0;var n=Number(h);return isFinite(n)?n*Math.PI/180:0}
 function wrap(a){while(a>Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;return a}
@@ -134,15 +215,16 @@ function go(n){
     hslab.textContent=lab;
     hs.setAttribute("aria-label","Go to next station: "+lab);
   }
+  hideCall();
   if(mode==="gl")bind();else setFb();
   placeHs();
 }
-function placeHs(){
-  var ni=nextIdx();
-  if(ni<0){hs.classList.remove("on");return}
+function tagsOf(){return (S[i]&&S[i].tags)||[]}
+function tagYaw(t){var n=Number(t&&t.yaw);return isFinite(n)?n*Math.PI/180:0}
+function tagPitch(t){var n=Number(t&&t.pitch);return isFinite(n)?n*Math.PI/180:0}
+function project(hy,hp){
   var w=stage.clientWidth||1,h=stage.clientHeight||1,nx,ny,vis=false;
   if(mode==="gl"){
-    var hy=hotYaw(),hp=-0.22;
     var dy=wrap(hy-yaw),dp=hp-pitch;
     var th=Math.tan(HALF),aspect=w/h;
     var cz=Math.cos(dp)*Math.cos(dy);
@@ -154,23 +236,76 @@ function placeHs(){
   }else{
     if(!fw){var fh=fb.clientHeight||1,nh=img.naturalHeight||1;fw=img.naturalWidth*(fh/nh)}
     if(fw){
-      var hx=((hotYaw()/(2*Math.PI))*fw+fw)%fw;
+      var hx=((hy/(2*Math.PI))*fw+fw)%fw;
       var cx=(off+w/2+fw)%fw;
       var dx=((hx-cx+fw/2)%fw)-fw/2;
       nx=dx/(w/2);
-      ny=0.28;
-      if(Math.abs(nx)<1.2)vis=true;
+      ny=hp?-(hp)/1.2:0.28;
+      if(Math.abs(nx)<1.2&&Math.abs(ny)<1.25)vis=true;
     }
   }
-  if(!vis){hs.classList.remove("on");return}
-  var px=(nx*0.5+0.5)*w,py=(ny*0.5+0.5)*h;
-  hs.style.left=px+"px";hs.style.top=py+"px";
-  hs.classList.add("on");
+  if(!vis)return null;
+  return {x:(nx*0.5+0.5)*w,y:(ny*0.5+0.5)*h};
+}
+function hideCall(){callout.hidden=true;callout.classList.remove("on")}
+function showCall(t){
+  callab.textContent=t.label||"Feature";
+  callnote.textContent=t.note||"";
+  callnote.hidden=!t.note;
+  callout.hidden=false;callout.classList.add("on");
+}
+function syncTags(){
+  var list=tagsOf();
+  var existing=taglayer.querySelectorAll(".tg");
+  if(existing.length!==list.length){
+    taglayer.innerHTML="";
+    list.forEach(function(t,n){
+      var b=document.createElement("button");
+      b.type="button";b.className="tg";b.dataset.n=String(n);
+      b.setAttribute("aria-label",t.label||"Feature");
+      b.innerHTML='<span class="tg-dot" aria-hidden="true"></span><span class="tg-lab"></span>';
+      b.querySelector(".tg-lab").textContent=t.label||"Feature";
+      b.addEventListener("pointerdown",function(e){e.stopPropagation()});
+      b.onclick=function(e){e.preventDefault();e.stopPropagation();showCall(t)};
+      taglayer.appendChild(b);
+    });
+  }else{
+    list.forEach(function(t,n){
+      var b=existing[n];
+      b.setAttribute("aria-label",t.label||"Feature");
+      var lab=b.querySelector(".tg-lab");
+      if(lab)lab.textContent=t.label||"Feature";
+      b.onclick=function(e){e.preventDefault();e.stopPropagation();showCall(t)};
+    });
+  }
+}
+function placeTags(){
+  syncTags();
+  var list=tagsOf();
+  var nodes=taglayer.querySelectorAll(".tg");
+  for(var n=0;n<nodes.length;n++){
+    var t=list[n],pt=t?project(tagYaw(t),tagPitch(t)):null;
+    if(!pt){nodes[n].classList.remove("on");continue}
+    nodes[n].style.left=pt.x+"px";nodes[n].style.top=pt.y+"px";
+    nodes[n].classList.add("on");
+  }
+}
+function placeHs(){
+  var ni=nextIdx();
+  if(ni<0){hs.classList.remove("on")}
+  else{
+    var pt=project(hotYaw(),-0.22);
+    if(!pt){hs.classList.remove("on")}
+    else{hs.style.left=pt.x+"px";hs.style.top=pt.y+"px";hs.classList.add("on")}
+  }
+  placeTags();
 }
 prev.onclick=function(){if(i>0)go(i-1)};
 next.onclick=function(){if(i<S.length-1)go(i+1)};
 hs.addEventListener("pointerdown",function(e){e.stopPropagation()});
 hs.onclick=function(e){e.preventDefault();e.stopPropagation();if(i<S.length-1)go(i+1)};
+callout.addEventListener("pointerdown",function(e){e.stopPropagation()});
+callx.onclick=function(e){e.preventDefault();e.stopPropagation();hideCall()};
 document.addEventListener("keydown",function(e){
   if(e.target&&(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"))return;
   if(e.key==="ArrowRight"||e.key==="."){e.preventDefault();if(i<S.length-1)go(i+1)}

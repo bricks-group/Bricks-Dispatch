@@ -34,6 +34,10 @@ def session_manifest_path(session_id: str) -> str:
     return f"capture/{session_id}/manifest.json"
 
 
+def session_tags_path(session_id: str) -> str:
+    return f"capture/{session_id}/tags.json"
+
+
 def roomplan_json_path(session_id: str) -> str:
     return f"capture/{session_id}/roomplan.json"
 

@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { getCaptureSession, rebuildTourPlayer, submitCaptureSession } from '../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../lib/capture-api';
 import { captureStatusCopy } from '../lib/capture-modes';
+import { TourTagEditor } from '../components/TourTagEditor';
 
 export function CaptureReviewPage() {
   const [params] = useSearchParams();
@@ -140,6 +141,9 @@ export function CaptureReviewPage() {
             </div>
           </div>
         </section>
+        {kind === 'splat' && session ? (
+          <TourTagEditor jobId={jobId} session={session} onSession={setSession} />
+        ) : null}
       </div>
     );
   }
