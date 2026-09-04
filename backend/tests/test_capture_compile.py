@@ -127,6 +127,10 @@ def test_tour_html_is_equirect_walkthrough():
     assert "drag" in low
     assert "previous" in low
     assert "next station" in low
+    assert 'id="hs"' in html or "id='hs'" in html
+    assert "aria-label" in low and "next station" in low
+    assert "placeHs" in html or "hotspot" in low or 'class="hs' in low
+    assert "ArrowRight" in html
     assert "kitchen" in low
     assert "living" in low
     assert "bricks" in low and "3d tour" in low

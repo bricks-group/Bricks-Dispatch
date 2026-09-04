@@ -37,12 +37,20 @@ body{display:flex;flex-direction:column}
 header{display:flex;justify-content:space-between;align-items:baseline;padding:12px 16px;border-bottom:1px solid #292524;flex-shrink:0}
 .kicker{font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.16em;color:#a8a29e}
 h1{margin:4px 0 0;font-size:18px;font-weight:500}
-.stage{flex:1;min-height:0;position:relative;background:#000;touch-action:none;cursor:grab}
+.stage{flex:1;min-height:0;position:relative;background:#000;touch-action:none;cursor:grab;overflow:hidden}
 .stage:active{cursor:grabbing}
 canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .fb{position:absolute;inset:0;overflow:hidden}
 .strip{position:relative;height:100%;width:100%;overflow:hidden}
 .strip img{position:absolute;top:0;left:0;height:100%;width:auto;max-width:none;display:block;user-select:none;-webkit-user-drag:none}
+.hs{position:absolute;left:50%;top:58%;transform:translate(-50%,-50%) scale(.92);z-index:4;border:0;padding:0;background:transparent;cursor:pointer;display:none;flex-direction:column;align-items:center;gap:6px;filter:drop-shadow(0 8px 18px rgba(0,0,0,.45));transition:opacity .15s,transform .15s;opacity:0;pointer-events:none;-webkit-tap-highlight-color:transparent}
+.hs.on{display:flex;opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+.hs:focus-visible{outline:2px solid #fafaf9;outline-offset:4px}
+.hs-disc{width:52px;height:52px;border-radius:50%;background:rgba(250,250,249,.92);border:2px solid rgba(255,255,255,.95);display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1px rgba(139,58,42,.35)}
+.hs-disc svg{width:22px;height:22px;display:block}
+.hs-lab{font:500 12px/1.2 Georgia,serif;color:#fafaf9;background:rgba(12,10,9,.72);padding:5px 10px;border-radius:2px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
+.hs.pulse .hs-disc{animation:hsPulse 1.8s ease-in-out infinite}
+@keyframes hsPulse{0%,100%{box-shadow:0 0 0 0 rgba(250,250,249,.35)}50%{box-shadow:0 0 0 10px rgba(250,250,249,0)}}
 .bar{flex-shrink:0;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 16px}
 .cap{font-size:15px}
 .nav{display:flex;gap:8px}
@@ -58,13 +66,17 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 <div class="stage" id="stage">
 <canvas id="view"></canvas>
 <div id="fb" class="fb" hidden><div class="strip"><img id="fbimg" alt="360 panorama"/><img id="fbimg2" alt="" aria-hidden="true"/></div></div>
+<button type="button" class="hs pulse" id="hs" aria-label="Go to next station" hidden>
+<span class="hs-disc" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v12M6 12l6 6 6-6" stroke="#8B3A2A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+<span class="hs-lab" id="hslab">Next station</span>
+</button>
 </div>
 <div class="bar"><div class="cap" id="cap"></div><div class="nav"><button type="button" class="btn" id="prev">Previous</button><button type="button" class="btn go" id="next">Next station</button></div></div>
 <div class="dots" id="dots"></div>
-<div class="hint">Path-confined 360 stations · drag to look around · next station follows the capture path</div>
+<div class="hint">Path-confined 360 stations · drag to look · tap the in-scene hotspot or ←/→ for the next station along the capture path</div>
 <script>
 (function(){
-var S=__SCENES__,i=0,yaw=0,pitch=0,drag=0,lx=0,ly=0,texs=[],off=0,mode="gl",fw=0,gl=null;
+var S=__SCENES__,i=0,yaw=0,pitch=0,drag=0,lx=0,ly=0,texs=[],off=0,mode="gl",fw=0,gl=null,moved=0;
 var cv=document.getElementById("view");
 var fb=document.getElementById("fb");
 var img=document.getElementById("fbimg");
@@ -74,9 +86,15 @@ var prev=document.getElementById("prev");
 var next=document.getElementById("next");
 var dots=document.getElementById("dots");
 var stage=document.getElementById("stage");
+var hs=document.getElementById("hs");
+var hslab=document.getElementById("hslab");
+var HALF=80*Math.PI/360;
 function heading(s){var h=s&&s.heading;if(h==null||h==="")return 0;var n=Number(h);return isFinite(n)?n*Math.PI/180:0}
+function wrap(a){while(a>Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;return a}
+function nextIdx(){return i<S.length-1?i+1:-1}
+function hotYaw(){return heading(S[i])}
 function fallback(){
-  mode="fb";cv.hidden=true;fb.hidden=false;setFb();
+  mode="fb";cv.hidden=true;fb.hidden=false;setFb();placeHs();
 }
 function setFb(){
   var src=S[i].panorama;
@@ -87,6 +105,7 @@ function setFb(){
     fw=img.naturalWidth*(h/nh);
     img.style.transform="translateX("+(-off)+"px)";
     img2.style.transform="translateX("+(-off+fw)+"px)";
+    placeHs();
   }
   img.onload=place;place();
 }
@@ -96,6 +115,7 @@ function panFb(dx){
   off=((off-dx)%fw+fw)%fw;
   img.style.transform="translateX("+(-off)+"px)";
   img2.style.transform="translateX("+(-off+fw)+"px)";
+  placeHs();
 }
 function bind(){if(gl&&texs[i])gl.bindTexture(gl.TEXTURE_2D,texs[i])}
 function go(n){
@@ -106,10 +126,56 @@ function go(n){
   next.className="btn go"+(i<S.length-1?"":" off");next.disabled=i>=S.length-1;
   var ds=dots.children;
   for(var k=0;k<ds.length;k++)ds[k].className="dot"+(k===i?" on":"");
+  var ni=nextIdx();
+  if(ni<0){hs.hidden=true;hs.classList.remove("on")}
+  else{
+    hs.hidden=false;
+    var lab=(S[ni].title||S[ni].room||("Station "+ni));
+    hslab.textContent=lab;
+    hs.setAttribute("aria-label","Go to next station: "+lab);
+  }
   if(mode==="gl")bind();else setFb();
+  placeHs();
+}
+function placeHs(){
+  var ni=nextIdx();
+  if(ni<0){hs.classList.remove("on");return}
+  var w=stage.clientWidth||1,h=stage.clientHeight||1,nx,ny,vis=false;
+  if(mode==="gl"){
+    var hy=hotYaw(),hp=-0.22;
+    var dy=wrap(hy-yaw),dp=hp-pitch;
+    var th=Math.tan(HALF),aspect=w/h;
+    var cz=Math.cos(dp)*Math.cos(dy);
+    if(cz>0.12){
+      nx=(Math.cos(dp)*Math.sin(dy))/(cz*th*aspect);
+      ny=-(Math.sin(dp))/(cz*th);
+      if(nx>-1.15&&nx<1.15&&ny>-1.25&&ny<1.25)vis=true;
+    }
+  }else{
+    if(!fw){var fh=fb.clientHeight||1,nh=img.naturalHeight||1;fw=img.naturalWidth*(fh/nh)}
+    if(fw){
+      var hx=((hotYaw()/(2*Math.PI))*fw+fw)%fw;
+      var cx=(off+w/2+fw)%fw;
+      var dx=((hx-cx+fw/2)%fw)-fw/2;
+      nx=dx/(w/2);
+      ny=0.28;
+      if(Math.abs(nx)<1.2)vis=true;
+    }
+  }
+  if(!vis){hs.classList.remove("on");return}
+  var px=(nx*0.5+0.5)*w,py=(ny*0.5+0.5)*h;
+  hs.style.left=px+"px";hs.style.top=py+"px";
+  hs.classList.add("on");
 }
 prev.onclick=function(){if(i>0)go(i-1)};
 next.onclick=function(){if(i<S.length-1)go(i+1)};
+hs.addEventListener("pointerdown",function(e){e.stopPropagation()});
+hs.onclick=function(e){e.preventDefault();e.stopPropagation();if(i<S.length-1)go(i+1)};
+document.addEventListener("keydown",function(e){
+  if(e.target&&(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"))return;
+  if(e.key==="ArrowRight"||e.key==="."){e.preventDefault();if(i<S.length-1)go(i+1)}
+  else if(e.key==="ArrowLeft"||e.key===","){e.preventDefault();if(i>0)go(i-1)}
+});
 S.forEach(function(s,k){
   var b=document.createElement("button");
   b.type="button";b.className="dot"+(k?"":" on");
@@ -166,25 +232,28 @@ try{
     var d=Math.min(window.devicePixelRatio||1,2);
     var w=cv.clientWidth,h=cv.clientHeight;
     if(cv.width!==(w*d|0)||cv.height!==(h*d|0)){cv.width=w*d;cv.height=h*d;gl.viewport(0,0,cv.width,cv.height)}
-    gl.uniform2f(ufa,Math.tan(80*Math.PI/360),(w||1)/(h||1));
+    gl.uniform2f(ufa,Math.tan(HALF),(w||1)/(h||1));
   }
   function draw(){
     if(mode!=="gl")return;
     size();gl.uniform2f(uyp,yaw,pitch);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    placeHs();
     requestAnimationFrame(draw);
   }
   requestAnimationFrame(draw);
 }catch(err){fallback()}
-stage.addEventListener("pointerdown",function(e){drag=1;lx=e.clientX;ly=e.clientY;try{stage.setPointerCapture(e.pointerId)}catch(x){}});
+stage.addEventListener("pointerdown",function(e){drag=1;moved=0;lx=e.clientX;ly=e.clientY;try{stage.setPointerCapture(e.pointerId)}catch(x){}});
 stage.addEventListener("pointerup",function(){drag=0});
 stage.addEventListener("pointercancel",function(){drag=0});
 stage.addEventListener("pointermove",function(e){
   if(!drag)return;
   var dx=e.clientX-lx,dy=e.clientY-ly;lx=e.clientX;ly=e.clientY;
-  if(mode==="gl"){yaw+=dx*0.005;pitch-=dy*0.005;pitch=Math.max(-1.2,Math.min(1.2,pitch))}
+  moved+=Math.abs(dx)+Math.abs(dy);
+  if(mode==="gl"){yaw+=dx*0.005;pitch-=dy*0.005;pitch=Math.max(-1.2,Math.min(1.2,pitch));placeHs()}
   else panFb(dx);
 });
 stage.addEventListener("contextmenu",function(e){e.preventDefault()});
+window.addEventListener("resize",function(){placeHs()});
 go(0);
 })();
 </script>
