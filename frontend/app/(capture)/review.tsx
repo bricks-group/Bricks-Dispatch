@@ -3,9 +3,10 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
-import { getCaptureSession, submitCaptureSession } from '../../lib/capture-api';
+import { getCaptureSession, rebuildTourPlayer, submitCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
 import { captureStatusCopy } from '../../lib/capture-modes';
+import { TourTagEditor } from '../../components/TourTagEditor';
 
 const TONE_COLOR: Record<string, string> = { ok: COLORS.ok, warn: COLORS.warn, bad: COLORS.bad };
 
@@ -19,6 +20,8 @@ export default function ReviewScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMsg, setRebuildMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +53,21 @@ export default function ReviewScreen() {
       return;
     }
     setSubmitted(true);
+  };
+
+  const handleRebuild = async () => {
+    if (!jobId || kind !== 'splat') return;
+    setRebuilding(true);
+    setRebuildMsg(null);
+    setSubmitError(null);
+    const result = await rebuildTourPlayer(jobId, kind, session?.sessionId);
+    setRebuilding(false);
+    if (result.session) setSession(result.session);
+    if (!result.ok) {
+      setRebuildMsg(result.error ?? 'Rebuild failed');
+      return;
+    }
+    setRebuildMsg('Tour player rebuilt from existing 360 stations. Listing embed URL is unchanged — hard-refresh the listing iframe to see tags.');
   };
 
   const goBackToJob = () => {
@@ -123,6 +141,11 @@ export default function ReviewScreen() {
             <View style={[styles.resultCard, resultTone]}>
               <Text style={styles.resultTitle}>{title}</Text>
               <Text style={styles.resultBody}>{body}</Text>
+              {rebuildMsg ? (
+                <Text style={[styles.rebuildMsg, rebuildMsg.startsWith('Tour player rebuilt') ? styles.rebuildOk : styles.rebuildErr]}>
+                  {rebuildMsg}
+                </Text>
+              ) : null}
               <View style={styles.resultActions}>
                 <TouchableOpacity style={styles.resultBtn} onPress={goBackToJob}>
                   <Text style={styles.resultBtnText}>Back to job</Text>
@@ -138,6 +161,17 @@ export default function ReviewScreen() {
                     </Text>
                   </TouchableOpacity>
                 ) : null}
+                {ready && kind === 'splat' ? (
+                  <TouchableOpacity
+                    style={[styles.resultBtn, rebuilding && { opacity: 0.5 }]}
+                    onPress={handleRebuild}
+                    disabled={rebuilding}
+                  >
+                    <Text style={styles.resultBtnText}>
+                      {rebuilding ? 'Rebuilding…' : 'Rebuild tour player'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity style={styles.resultLink} onPress={goRecapture}>
                   <Text style={styles.resultLinkText}>
                     {failed ? 'Recapture' : 'Continue capture'}
@@ -145,6 +179,9 @@ export default function ReviewScreen() {
                 </TouchableOpacity>
               </View>
             </View>
+            {kind === 'splat' && session ? (
+              <TourTagEditor jobId={jobId} session={session} onSession={setSession} />
+            ) : null}
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -312,4 +349,7 @@ const styles = StyleSheet.create({
   resultBtnPrimaryText: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#fff' },
   resultLink: { paddingHorizontal: 8, paddingVertical: 10 },
   resultLinkText: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.brick },
+  rebuildMsg: { fontFamily: FONTS.body, fontSize: 12, lineHeight: 17 },
+  rebuildOk: { color: COLORS.ok },
+  rebuildErr: { color: COLORS.bad },
 });

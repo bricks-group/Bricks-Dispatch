@@ -23,6 +23,25 @@ export interface PipelineStage {
   status: 'done' | 'active' | 'todo';
 }
 
+export interface TourTag {
+  id: string;
+  label: string;
+  note?: string;
+  yaw: number;
+  pitch: number;
+  station_index?: number;
+}
+
+export interface CaptureStation {
+  station_index: number;
+  room?: string;
+  panCount?: number;
+  hasEquirect?: boolean;
+  heading?: number | null;
+  content_type?: string;
+  tags?: TourTag[];
+}
+
 export interface CaptureSession {
   sessionId?: string | null;
   currentRoomId?: string | null;
@@ -39,15 +58,7 @@ export interface CaptureSession {
   stationCount?: number;
   currentStationIndex?: number;
   stations?: CaptureStation[];
-}
-
-export interface CaptureStation {
-  station_index: number;
-  room?: string;
-  panCount?: number;
-  hasEquirect?: boolean;
-  heading?: number | null;
-  content_type?: string;
+  tags?: TourTag[];
 }
 
 export type CaptureRole = 'pan' | 'equirect' | 'usdz' | 'roomplan';
@@ -117,6 +128,7 @@ function _asSession(raw: any, fallbackKind: CaptureKind = 'splat'): CaptureSessi
     stationCount: Number(raw.stationCount ?? raw.station_count ?? 0) || 0,
     currentStationIndex: Number(raw.currentStationIndex ?? raw.current_station_index ?? 0) || 0,
     stations: Array.isArray(raw.stations) ? raw.stations : [],
+    tags: Array.isArray(raw.tags) ? raw.tags : [],
   };
 }
 
@@ -318,6 +330,121 @@ export async function uploadCaptureFrame(
     if (!commitRes.ok) return { ok: false, error: await _readError(commitRes) };
     const session = _asSession(await commitRes.json(), kind);
     return { ok: true, session, frameCount: session.frameCount };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+export async function rebuildTourPlayer(
+  jobId: string,
+  kind: CaptureKind = 'splat',
+  sessionId?: string | null,
+): Promise<{ ok: boolean; rebuilt?: boolean; stitched?: boolean; error?: string; session?: CaptureSession }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
+  if (kind !== 'splat') return { ok: false, error: 'Rebuild tour player is for 3D tours, not floor plans' };
+  try {
+    const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+    const path = sessionId
+      ? `${API_BASE}/api/capture/sessions/${encodeURIComponent(sessionId)}/rebuild-tour`
+      : `${API_BASE}/api/capture/rebuild-tour`;
+    const res = await fetch(path, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ job_id: jobId, kind, session_id: sessionId || undefined }),
+    });
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    const body = await res.json();
+    const session = _asSession(body.session ?? body, kind);
+    if (body && body.ok === false) {
+      return {
+        ok: false,
+        rebuilt: false,
+        stitched: false,
+        error: String(body.error || body.detail || 'Rebuild failed'),
+        session,
+      };
+    }
+    return {
+      ok: true,
+      rebuilt: body.rebuilt !== false,
+      stitched: body.stitched === true,
+      session,
+    };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+export async function getSceneLookUrl(
+  sessionId: string,
+  stationIndex: number,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  if (!sessionId) return { ok: false, error: 'Missing session' };
+  try {
+    const headers = await actorHeaders();
+    const res = await fetch(
+      `${API_BASE}/api/capture/sessions/${encodeURIComponent(sessionId)}/scenes/${encodeURIComponent(String(stationIndex))}/url`,
+      { headers },
+    );
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    const body = await res.json();
+    if (!body?.url) return { ok: false, error: 'No stored 360 for that station' };
+    return { ok: true, url: body.url };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+export async function addTourTag(
+  jobId: string,
+  sessionId: string | null | undefined,
+  tag: { station_index: number; label: string; note?: string; yaw: number; pitch: number },
+): Promise<{ ok: boolean; error?: string; session?: CaptureSession; rebuilt?: boolean }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
+  if (!String(tag.label || '').trim()) return { ok: false, error: 'Tag needs a label' };
+  try {
+    const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+    const path = sessionId
+      ? `${API_BASE}/api/capture/sessions/${encodeURIComponent(sessionId)}/tags`
+      : `${API_BASE}/api/capture/tags`;
+    const res = await fetch(path, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ job_id: jobId, session_id: sessionId || undefined, ...tag }),
+    });
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    const body = await res.json();
+    const session = _asSession(body.session ?? body, 'splat');
+    if (Array.isArray(body.tags)) session.tags = body.tags;
+    if (body && body.ok === false) {
+      return { ok: false, error: String(body.error || 'Tag saved but player rebuild failed'), session, rebuilt: false };
+    }
+    return { ok: true, session, rebuilt: body.rebuilt !== false };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+export async function deleteTourTag(
+  jobId: string,
+  sessionId: string,
+  tagId: string,
+): Promise<{ ok: boolean; error?: string; session?: CaptureSession }> {
+  if (!sessionId || !tagId) return { ok: false, error: 'Missing tag' };
+  try {
+    const headers = await actorHeaders();
+    const res = await fetch(
+      `${API_BASE}/api/capture/sessions/${encodeURIComponent(sessionId)}/tags/${encodeURIComponent(tagId)}?job_id=${encodeURIComponent(jobId)}`,
+      { method: 'DELETE', headers },
+    );
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    const body = await res.json();
+    const session = _asSession(body.session ?? body, 'splat');
+    if (Array.isArray(body.tags)) session.tags = body.tags;
+    if (body && body.ok === false) {
+      return { ok: false, error: String(body.error || 'Delete failed'), session };
+    }
+    return { ok: true, session };
   } catch (e: any) {
     return { ok: false, error: String(e?.message ?? e) };
   }
