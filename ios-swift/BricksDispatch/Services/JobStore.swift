@@ -225,6 +225,10 @@ final class JobStore: ObservableObject {
             lng: incoming.lng == 0 ? existing.lng : incoming.lng,
             timeWindowStart: incoming.timeWindowStart.isEmpty ? existing.timeWindowStart : incoming.timeWindowStart,
             timeWindowEnd: incoming.timeWindowEnd.isEmpty ? existing.timeWindowEnd : incoming.timeWindowEnd,
+            preferredWindow: {
+                let p = (incoming.preferredWindow ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return p.isEmpty ? existing.preferredWindow : incoming.preferredWindow
+            }(),
             scheduledDate: incoming.scheduledDate.isEmpty ? existing.scheduledDate : incoming.scheduledDate,
             jobType: incoming.jobType.isEmpty ? existing.jobType : incoming.jobType,
             status: incoming.status,

@@ -12,6 +12,7 @@ import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
 import { getCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind } from '../../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../../lib/capture-modes';
+import { formatShootWindow } from '../../lib/shoot-window';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
@@ -22,7 +23,9 @@ type ChecklistItem = { id: string; label: string; completed: boolean };
 type ListingHit = { id: string; address: string; city?: string; deal_type?: string | null };
 type Job = {
   id: string; address: string; city: string; state: string;
-  time_window_start: string; job_type: string; status: string;
+  time_window_start: string; time_window_end?: string | null;
+  preferred_window?: string | null;
+  job_type: string; status: string;
   scheduled_date: string; package_name: string | null; package_price: number | null;
   agent_name: string | null; agent_phone: string | null;
   client_instructions: string | null;
@@ -47,12 +50,6 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
   const a = Math.sin(dLat / 2) ** 2
     + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.asin(Math.sqrt(a));
-}
-
-function fmtTime(iso: string) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
 function fmtDate(s: string) {
@@ -445,7 +442,7 @@ export default function JobDetailScreen() {
           <View style={s.divider} />
           <InfoRow icon={<Clock size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="SCHEDULED">
             <Text style={s.infoValue}>{fmtDate(job.scheduled_date)}</Text>
-            <Text style={s.infoSub}>{fmtTime(job.time_window_start)}</Text>
+            <Text style={s.infoSub}>{formatShootWindow(job)}</Text>
           </InfoRow>
           {job.agent_name && (
             <>

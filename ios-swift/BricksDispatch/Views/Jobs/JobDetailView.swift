@@ -142,11 +142,7 @@ struct JobDetailView: View {
     }
 
     private var scheduledLabel: String {
-        guard let dt = live.scheduledDateTime else { return "\(live.scheduledDate) \(live.timeWindowStart)" }
-        let fmt = DateFormatter()
-        fmt.dateStyle = .short
-        fmt.timeStyle = .short
-        return fmt.string(from: dt)
+        live.formattedShootWhen
     }
 
     // MARK: — Assigned to (Owner picker / IC name only)

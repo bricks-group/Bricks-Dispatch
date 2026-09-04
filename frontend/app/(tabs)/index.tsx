@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, Navigation, Phone, Check } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
+import { formatShootWindow, minutesUntilShoot } from '../../lib/shoot-window';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
@@ -16,7 +17,9 @@ const VENDOR_RATE = 0.62;
 type ChecklistItem = { id: string; label: string; completed: boolean };
 type Job = {
   id: string; address: string; city: string; state: string;
-  time_window_start: string; job_type: string; status: string;
+  time_window_start: string; time_window_end?: string | null;
+  preferred_window?: string | null;
+  job_type: string; status: string;
   scheduled_date: string; package_name: string | null; package_price: number | null;
   agent_name: string | null; client_instructions: string | null;
   checklist: ChecklistItem[];
@@ -28,19 +31,6 @@ type Job = {
 
 function todayISO() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
-}
-
-function fmtTime(iso: string) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-}
-
-function minutesUntil(iso: string) {
-  if (!iso) return null;
-  const diff = new Date(iso).getTime() - Date.now();
-  if (diff <= 0) return null;
-  return Math.round(diff / 60000);
 }
 
 function fmtMoney(amount: number) {
@@ -123,7 +113,7 @@ export default function TodayScreen() {
   const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
   const nextJob = jobs.find(j => j.status !== 'completed');
   const laterJobs = nextJob ? jobs.filter(j => j.id !== nextJob.id) : [];
-  const minsUntil = nextJob ? minutesUntil(nextJob.time_window_start) : null;
+  const minsUntil = nextJob ? minutesUntilShoot(nextJob) : null;
 
   const openMaps = (job: Job) => {
     const addr = encodeURIComponent(`${job.address}, ${job.city}, ${job.state}`);
@@ -192,7 +182,7 @@ export default function TodayScreen() {
                   {/* Info grid */}
                   <View style={s.nextGrid}>
                     {[
-                      ['ARRIVE', fmtTime(nextJob.time_window_start)],
+                      ['WINDOW', formatShootWindow(nextJob)],
                       ['AGENT', nextJob.agent_name ? initials(nextJob.agent_name) : '—'],
                       ['PACKAGE', nextJob.package_name || '—'],
                     ].map(([label, value], i) => (
@@ -259,7 +249,7 @@ export default function TodayScreen() {
                           onPress={() => router.push(`/job/${job.id}`)}
                           activeOpacity={0.7}
                         >
-                          <Text style={s.laterTime}>{fmtTime(job.time_window_start)}</Text>
+                          <Text style={s.laterTime} numberOfLines={2}>{formatShootWindow(job)}</Text>
                           <View style={s.laterDivider} />
                           <View style={s.laterInfo}>
                             <Text style={s.laterAddress}>{job.address.toLowerCase()}</Text>
@@ -312,7 +302,7 @@ const s = StyleSheet.create({
   nextGridCell: { flex: 1, padding: 10 },
   nextGridDivider: { borderLeftWidth: 1, borderLeftColor: TOKENS.nightHair },
   nextGridLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 8, color: TOKENS.moonFaint, letterSpacing: 1.4, marginBottom: 5 },
-  nextGridValue: { fontFamily: TYPOGRAPHY.mono, fontSize: 13, color: TOKENS.moon },
+  nextGridValue: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moon, lineHeight: 15 },
 
   nextActions: { flexDirection: 'row', gap: 8 },
   accentBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: TOKENS.brick, paddingVertical: 12, borderRadius: 2 },
@@ -330,7 +320,7 @@ const s = StyleSheet.create({
   laterList: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
   laterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 14 },
   laterRowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  laterTime: { fontFamily: TYPOGRAPHY.mono, fontSize: 13, color: TOKENS.moon, width: 52 },
+  laterTime: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moon, width: 92, lineHeight: 14 },
   laterDivider: { width: 1, height: 28, backgroundColor: TOKENS.nightHair },
   laterInfo: { flex: 1, paddingLeft: 4 },
   laterAddress: { fontFamily: TYPOGRAPHY.heading, fontSize: 14, color: TOKENS.moon, marginBottom: 2 },

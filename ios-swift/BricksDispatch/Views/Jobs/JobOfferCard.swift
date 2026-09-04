@@ -95,7 +95,7 @@ struct JobOfferCard: View {
                 InfoCell(
                     icon: "clock.fill",
                     label: "Window",
-                    value: "\(job.timeWindowStart) – \(job.timeWindowEnd)"
+                    value: job.formattedShootWindow
                 )
                 Divider().frame(width: 1, height: 48).background(.white.opacity(0.12))
                 InfoCell(

@@ -33,6 +33,8 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     // Stored as "HH:MM" — always combine with scheduledDate before Date math
     public let timeWindowStart: String
     public let timeWindowEnd: String
+    /// Paid /book window: morning | afternoon | evening (optional).
+    public let preferredWindow: String?
     public let scheduledDate: String         // "YYYY-MM-DD"
     public let jobType: String               // "photo" | "drone" | "video"
     public var status: JobStatus
@@ -61,11 +63,13 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         checklist: [ChecklistItem], complexityScore: Int?, createdAt: String, updatedAt: String,
         assigneeId: String? = nil, assigneeName: String? = nil,
         transactionId: String? = nil, listingAddress: String? = nil,
+        preferredWindow: String? = nil,
         capture: CaptureEntitlements? = nil
     ) {
         self.id = id; self.bookingId = bookingId; self.address = address; self.city = city
         self.state = state; self.zipCode = zipCode; self.lat = lat; self.lng = lng
         self.timeWindowStart = timeWindowStart; self.timeWindowEnd = timeWindowEnd
+        self.preferredWindow = preferredWindow
         self.scheduledDate = scheduledDate; self.jobType = jobType; self.status = status
         self.packageName = packageName; self.packagePrice = packagePrice; self.vendorPayout = vendorPayout
         self.agentName = agentName; self.agentPhone = agentPhone; self.agentEmail = agentEmail
@@ -78,7 +82,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, bookingId, address, city, state, zipCode, lat, lng
-        case timeWindowStart, timeWindowEnd, scheduledDate, jobType, status
+        case timeWindowStart, timeWindowEnd, preferredWindow, scheduledDate, jobType, status
         case packageName, packagePrice, vendorPayout
         case agentName, agentPhone, agentEmail, clientInstructions
         case checklist, complexityScore, createdAt, updatedAt
@@ -100,6 +104,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         lng = Self.decodeDouble(c, .lng)
         timeWindowStart = try c.decodeIfPresent(String.self, forKey: .timeWindowStart) ?? ""
         timeWindowEnd = try c.decodeIfPresent(String.self, forKey: .timeWindowEnd) ?? ""
+        preferredWindow = try c.decodeIfPresent(String.self, forKey: .preferredWindow)
         let rawDate = try c.decodeIfPresent(String.self, forKey: .scheduledDate) ?? ""
         scheduledDate = String(rawDate.prefix(10))
         jobType = try c.decodeIfPresent(String.self, forKey: .jobType) ?? "photo"
@@ -204,6 +209,27 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         fmt.timeZone = TimeZone(identifier: "America/Toronto")
         fmt.dateFormat = "yyyy-MM-dd"
         return fmt.string(from: now)
+    }
+
+
+    /// Clear shoot window for Today / job detail — e.g. "Afternoon · 12:00–16:00 ET".
+    /// Honest when fields are missing — never invent times.
+    public var formattedShootWindow: String {
+        ShootWindow.format(
+            preferredWindow: preferredWindow,
+            timeWindowStart: timeWindowStart,
+            timeWindowEnd: timeWindowEnd
+        )
+    }
+
+    /// Date + window when both useful.
+    public var formattedShootWhen: String {
+        ShootWindow.formatWhen(
+            scheduledDate: scheduledDate,
+            preferredWindow: preferredWindow,
+            timeWindowStart: timeWindowStart,
+            timeWindowEnd: timeWindowEnd
+        )
     }
 
     public func applyingAssignment(from other: DispatchJob) -> DispatchJob {

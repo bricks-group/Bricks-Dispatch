@@ -136,10 +136,7 @@ struct JobRowView: View {
     }
 
     private var timeLabel: String {
-        guard let dt = job.scheduledDateTime else { return job.timeWindowStart }
-        let fmt = DateFormatter()
-        fmt.dateFormat = "h:mm a"
-        return fmt.string(from: dt)
+        job.formattedShootWindow
     }
 
     private var statusDot: some View {

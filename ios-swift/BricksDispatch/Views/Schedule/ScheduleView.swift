@@ -240,11 +240,7 @@ private struct TimelineRow: View {
     }
 
     private var shortTime: String {
-        let parts = job.timeWindowStart.split(separator: ":").map(String.init)
-        guard parts.count >= 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return job.timeWindowStart }
-        let ampm = h >= 12 ? "PM" : "AM"
-        let h12 = h == 0 ? 12 : h > 12 ? h - 12 : h
-        return m == 0 ? "\(h12)\(ampm)" : "\(h12):\(parts[1])\(ampm)"
+        job.formattedShootWindow
     }
 
     private var statusDotColor: Color {

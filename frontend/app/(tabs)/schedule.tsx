@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { formatShootWindow } from '../../lib/shoot-window';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
@@ -12,7 +13,9 @@ const DAY_LABELS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
 type Job = {
   id: string; address: string; city: string; state: string;
-  time_window_start: string; job_type: string; status: string; scheduled_date: string;
+  time_window_start: string; time_window_end?: string | null;
+  preferred_window?: string | null;
+  job_type: string; status: string; scheduled_date: string;
 };
 
 function getWeekNumber(d: Date) {
@@ -34,15 +37,6 @@ function getMondayOf(date: Date) {
 
 function toISO(d: Date) {
   return d.toISOString().slice(0, 10);
-}
-
-function fmtTime(iso: string) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const h = d.getHours().toString().padStart(2, '0');
-  const m = d.getMinutes().toString().padStart(2, '0');
-  return `${h}:${m}`;
 }
 
 function pillForStatus(status: string): { label: string; bg: string; fg: string; dot: string } {
@@ -184,7 +178,7 @@ export default function ScheduleScreen() {
                   onPress={() => router.push(`/job/${job.id}`)}
                   activeOpacity={0.7}
                 >
-                  <Text style={s.timelineTime}>{fmtTime(job.time_window_start)}</Text>
+                  <Text style={s.timelineTime} numberOfLines={3}>{formatShootWindow(job)}</Text>
                   <View style={s.timelineLine}>
                     <View style={[s.timelineDot, { backgroundColor: pill.dot }]} />
                   </View>
@@ -235,7 +229,7 @@ const s = StyleSheet.create({
   timeline: { paddingHorizontal: 24 },
   timelineRow: { flexDirection: 'row', gap: 14, paddingVertical: 16 },
   timelineRowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  timelineTime: { fontFamily: TYPOGRAPHY.mono, fontSize: 12, color: TOKENS.moonFaint, width: 44, paddingTop: 2 },
+  timelineTime: { fontFamily: TYPOGRAPHY.mono, fontSize: 10, color: TOKENS.moonFaint, width: 88, paddingTop: 2, lineHeight: 13 },
   timelineLine: { width: 1, backgroundColor: TOKENS.nightHair, position: 'relative' },
   timelineDot: { position: 'absolute', top: 6, left: -3, width: 7, height: 7, borderRadius: 4 },
   timelineInfo: { flex: 1, paddingLeft: 8 },
