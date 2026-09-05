@@ -71,6 +71,12 @@ class JobListingUpdate(BaseModel):
     transaction_id: Optional[str] = None
 
 
+
+class ConfirmArriveRequest(BaseModel):
+    """Photographer confirms exact arrive clock within the paid /book window."""
+    arrive_at: str  # HH:MM America/Toronto
+
+
 def _is_uuid(value: Optional[str]) -> bool:
     return bool(value and _UUID_RE.match(str(value).strip()))
 
@@ -129,6 +135,71 @@ async def check_in_job(
 ):
     payload = JobStatusUpdate(status="in_progress")
     return await update_vendor_job_status(job_id, payload, authorization, x_user_id)
+
+
+
+@router.post("/jobs/{job_id}/confirm-arrive")
+async def confirm_job_arrive_time(
+    job_id: str,
+    payload: ConfirmArriveRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Assigned photographer sets exact arrive HH:MM; emails the booking agent."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    ensure_assigned_to_actor(job, actor_id, actor_member)
+
+    raw = (payload.arrive_at or "").strip()
+    m = re.match(r"^(\d{1,2}):(\d{2})$", raw)
+    if not m:
+        raise HTTPException(status_code=400, detail="arrive_at must be HH:MM")
+    hour, minute = int(m.group(1)), int(m.group(2))
+    if hour > 23 or minute > 59:
+        raise HTTPException(status_code=400, detail="arrive_at must be a real clock time")
+    arrive = f"{hour:02d}:{minute:02d}"
+
+    win_start = (job.get("time_window_start") or "").strip()[:5]
+    win_end = (job.get("time_window_end") or "").strip()[:5]
+    # Prefer canonical window from preferred_window when present
+    preferred = (job.get("preferred_window") or "").strip().lower()
+    canonical = {
+        "morning": ("09:00", "12:00"),
+        "afternoon": ("12:00", "16:00"),
+        "evening": ("16:00", "19:00"),
+    }
+    if preferred in canonical:
+        win_start, win_end = canonical[preferred]
+    if win_start and win_end and not (win_start <= arrive <= win_end):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Arrive time must fall inside the shoot window ({win_start}–{win_end} ET)",
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    update = {
+        "confirmed_arrive_at": arrive,
+        "updated_at": now,
+    }
+    # Keep window bounds; narrow displayed start to the confirmed arrive for countdowns.
+    if win_end:
+        update["time_window_start"] = arrive
+        update["time_window_end"] = win_end
+    if preferred:
+        update["preferred_window"] = preferred
+
+    await db.table("jobs").update(update).eq("id", job_id).execute()
+    refreshed = {**job, **update}
+
+    try:
+        from ..services.notifications import notify_arrive_confirmed
+        await notify_arrive_confirmed(refreshed, actor_member)
+    except Exception:
+        logger.exception("Arrive-confirm agent notify failed for job %s", job_id)
+
+    return stamp_capture(refreshed)
 
 
 @router.get("/overview")

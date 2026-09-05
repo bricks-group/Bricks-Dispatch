@@ -25,6 +25,7 @@ type Job = {
   id: string; address: string; city: string; state: string;
   time_window_start: string; time_window_end?: string | null;
   preferred_window?: string | null;
+  confirmed_arrive_at?: string | null;
   job_type: string; status: string;
   scheduled_date: string; package_name: string | null; package_price: number | null;
   agent_name: string | null; agent_phone: string | null;
@@ -77,6 +78,8 @@ export default function JobDetailScreen() {
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(true);
   const [actioning, setActioning] = useState(false);
+  const [arriveAt, setArriveAt] = useState('');
+  const [confirmingArrive, setConfirmingArrive] = useState(false);
   const [escalating, setEscalating] = useState(false);
   const [escalationSentAt, setEscalationSentAt] = useState<number | null>(null);
   const [escalationWaitSecs, setEscalationWaitSecs] = useState(0);
@@ -257,6 +260,45 @@ export default function JobDetailScreen() {
       setListingError(e.message || 'Could not attach listing.');
     } finally {
       setListingSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (job) setArriveAt((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
+  }, [job?.id, job?.confirmed_arrive_at, job?.time_window_start]);
+
+  const confirmArrive = async () => {
+    if (!job || confirmingArrive) return;
+    const clock = (arriveAt || '').trim().slice(0, 5);
+    if (!/^\d{1,2}:\d{2}$/.test(clock)) {
+      Alert.alert('Arrive time', 'Enter a time like 10:30');
+      return;
+    }
+    setConfirmingArrive(true);
+    try {
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/confirm-arrive`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ arrive_at: clock }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail?.message || err.detail || `HTTP ${res.status}`);
+      }
+      const updated = await res.json();
+      setJob(prev => prev ? {
+        ...prev,
+        confirmed_arrive_at: updated.confirmed_arrive_at ?? clock,
+        time_window_start: updated.time_window_start ?? prev.time_window_start,
+        time_window_end: updated.time_window_end ?? prev.time_window_end,
+        preferred_window: updated.preferred_window ?? prev.preferred_window,
+      } : prev);
+      Alert.alert('Sent', 'Agent emailed with your arrive time.');
+    } catch (e: any) {
+      Alert.alert('Could not confirm', e.message || 'Try again.');
+    } finally {
+      setConfirmingArrive(false);
     }
   };
 
@@ -444,6 +486,53 @@ export default function JobDetailScreen() {
             <Text style={s.infoValue}>{fmtDate(job.scheduled_date)}</Text>
             <Text style={s.infoSub}>{formatShootWindow(job)}</Text>
           </InfoRow>
+          {['assigned', 'in_progress', 'pending_assignment'].includes(job.status) ? (
+            <>
+              <View style={s.divider} />
+              <InfoRow icon={<Clock size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="CONFIRM ARRIVE">
+                <TextInput
+                  value={arriveAt}
+                  onChangeText={setArriveAt}
+                  placeholder="10:30"
+                  placeholderTextColor={TOKENS.moonMute}
+                  keyboardType="numbers-and-punctuation"
+                  style={{
+                    marginTop: 6,
+                    borderWidth: 1,
+                    borderColor: '#E5E0D8',
+                    borderRadius: 2,
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    color: TOKENS.moon,
+                    fontSize: 16,
+                  }}
+                />
+                <TouchableOpacity
+                  onPress={confirmArrive}
+                  disabled={confirmingArrive}
+                  style={{
+                    marginTop: 8,
+                    backgroundColor: TOKENS.brick,
+                    borderRadius: 2,
+                    paddingVertical: 10,
+                    alignItems: 'center',
+                    opacity: confirmingArrive ? 0.6 : 1,
+                  }}
+                >
+                  {confirmingArrive ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={{ color: '#fff', fontWeight: '600' }}>
+                      {job.confirmed_arrive_at ? 'Update agent' : 'Tell agent'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+                <Text style={[s.infoSub, { marginTop: 6 }]}>
+                  Exact time inside the window — we email the agent.
+                </Text>
+              </InfoRow>
+            </>
+          ) : null}
           {job.agent_name && (
             <>
               <View style={s.divider} />

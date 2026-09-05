@@ -154,6 +154,7 @@ export type Job = {
   time_window_start: string;
   time_window_end: string;
   preferred_window?: string | null;
+  confirmed_arrive_at?: string | null;
   status: string;
   assignee_id?: string | null;
   assignee_name?: string;

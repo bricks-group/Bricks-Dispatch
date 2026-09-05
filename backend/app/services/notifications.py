@@ -54,6 +54,14 @@ def format_shoot_window(job: dict | None) -> str:
     elif preferred:
         label = preferred[:1].upper() + preferred[1:]
 
+    confirmed = _clock_hhmm(job.get("confirmed_arrive_at"))
+    if confirmed:
+        if label and end:
+            return f"{label} · arrives ~{confirmed} ET (until {end})"
+        if label:
+            return f"{label} · arrives ~{confirmed} ET"
+        return f"Arrives ~{confirmed} ET"
+
     if start and end:
         rng = f"{start}–{end} ET"
         return f"{label} · {rng}" if label else rng
@@ -66,6 +74,74 @@ def format_shoot_window(job: dict | None) -> str:
     if label:
         return f"{label} · times not set"
     return "Shoot window not set"
+
+
+
+
+def _arrive_confirm_email_html(agent_name: str, photographer: str, address: str, when_line: str, arrive: str) -> str:
+    who = (agent_name or "").strip() or "there"
+    photo = (photographer or "").strip() or "Your Bricks photographer"
+    addr = (address or "").strip() or "your property"
+    when = (when_line or "").strip()
+    arrive_s = (arrive or "").strip()
+    when_p = f'<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Window: {when}</p>' if when else ""
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px">
+<div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
+<tr>
+<td width="16" height="16" style="width:16px;height:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
+<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
+<td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
+</tr>
+</table>
+<div style="background:#d2542b;padding:16px 24px;margin-top:12px">
+<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">Arrive time confirmed</h1>
+</div>
+<div style="padding:24px">
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {who},</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0"><strong>{photo}</strong> will arrive around <strong>{arrive_s} ET</strong> at <strong>{addr}</strong>.</p>
+{when_p}
+<p style="margin-top:24px;font-size:13px;color:#999;line-height:1.5">Bricks · brxs.ca</p>
+</div>
+</div></body></html>"""
+
+
+async def notify_arrive_confirmed(job: dict, photographer: dict | None = None) -> dict:
+    """Email the booking agent the photographer's exact arrive time. Never raises."""
+    result = {"email": False}
+    job = job or {}
+    to_email = (job.get("agent_email") or "").strip()
+    if not to_email:
+        logger.info("Arrive confirm: no agent_email on job %s — skip email", job.get("id"))
+        return result
+    arrive = _clock_hhmm(job.get("confirmed_arrive_at")) or _clock_hhmm(job.get("time_window_start"))
+    if not arrive:
+        return result
+    window = format_shoot_window(job)
+    date = (job.get("scheduled_date") or "")[:10]
+    when_bits = [b for b in (date, window if window != "Shoot window not set" else "") if b]
+    when_line = " · ".join(when_bits)
+    photo_name = ((photographer or {}).get("name") or "").strip() or "Your Bricks photographer"
+    try:
+        html = _arrive_confirm_email_html(
+            job.get("agent_name") or "",
+            photo_name,
+            job.get("address") or "",
+            when_line,
+            arrive,
+        )
+        result["email"] = bool(
+            await send_email_via_resend(
+                to_email,
+                f"Photographer arriving ~{arrive} ET — {job.get('address') or 'your shoot'}",
+                html,
+            )
+        )
+    except Exception as exc:
+        logger.error("Arrive confirm email failed for job %s: %s", job.get("id"), exc)
+    return result
 
 
 def _assignment_email_html(name: str, address: str, when_line: str, go_url: str) -> str:

@@ -205,10 +205,12 @@ function JobListingPanel({
   const [uploads, setUploads] = useState<{ id: string; filename: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const [pick, setPick] = useState(job.assignee_id || '');
+  const [arriveAt, setArriveAt] = useState((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
 
   useEffect(() => {
     setPick(job.assignee_id || '');
-  }, [job.id, job.assignee_id]);
+    setArriveAt((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
+  }, [job.id, job.assignee_id, job.confirmed_arrive_at, job.time_window_start]);
 
   useEffect(() => {
     api.get<{ items?: { id: string; filename: string }[]; data?: { id: string; filename: string }[] } | { id: string; filename: string }[]>(
@@ -226,6 +228,27 @@ function JobListingPanel({
     try {
       await api.post(`/api/vendor-os/jobs/${job.id}/check-in`);
       onPatched({ ...job, status: 'in_progress' });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmArrive = async (event?: FormEvent) => {
+    event?.preventDefault();
+    const clock = (arriveAt || '').trim().slice(0, 5);
+    if (!/^\d{1,2}:\d{2}$/.test(clock)) {
+      setErr('Pick an arrive time (HH:MM).');
+      return;
+    }
+    setBusy(true);
+    setErr('');
+    try {
+      const updated = await api.post<Job>(`/api/vendor-os/jobs/${job.id}/confirm-arrive`, {
+        arrive_at: clock,
+      });
+      onPatched({ ...job, ...updated });
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -326,6 +349,30 @@ function JobListingPanel({
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>SHOOT WINDOW</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{formatShootWhen(job)}</p>
+          {['assigned', 'in_progress', 'pending_assignment'].includes(job.status) ? (
+            <form className="row" onSubmit={confirmArrive} style={{ marginTop: 8, gap: 8, alignItems: 'center' }}>
+              <label className="muted" style={{ margin: 0 }}>Confirm arrive</label>
+              <input
+                type="time"
+                value={arriveAt}
+                onChange={(e) => setArriveAt(e.target.value)}
+                style={{ width: 140 }}
+                required
+              />
+              <button type="submit" disabled={busy}>
+                {job.confirmed_arrive_at ? 'Update agent' : 'Tell agent'}
+              </button>
+            </form>
+          ) : null}
+          {job.confirmed_arrive_at ? (
+            <p className="muted" style={{ padding: 0, margin: '6px 0 0' }}>
+              Agent emailed · arrives ~{String(job.confirmed_arrive_at).slice(0, 5)} ET
+            </p>
+          ) : (
+            <p className="muted" style={{ padding: 0, margin: '6px 0 0' }}>
+              Pick your exact arrive time inside the window — we email the agent.
+            </p>
+          )}
         </div>
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>LISTING</p>

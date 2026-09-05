@@ -9,6 +9,7 @@ export type ShootWindowFields = {
   preferred_window?: string | null;
   time_window_start?: string | null;
   time_window_end?: string | null;
+  confirmed_arrive_at?: string | null;
   scheduled_date?: string | null;
 };
 
@@ -51,7 +52,14 @@ function windowLabel(preferred?: string | null, start?: string, end?: string): s
 export function formatShootWindow(job: ShootWindowFields): string {
   const start = clock(job.time_window_start);
   const end = clock(job.time_window_end);
+  const confirmed = clock(job.confirmed_arrive_at);
   const label = windowLabel(job.preferred_window, start, end);
+
+  if (confirmed) {
+    if (label && end) return `${label} · arrives ~${confirmed} ET (until ${end})`;
+    if (label) return `${label} · arrives ~${confirmed} ET`;
+    return `Arrives ~${confirmed} ET`;
+  }
 
   if (start && end) {
     const range = `${start}–${end} ET`;

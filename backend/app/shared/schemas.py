@@ -26,6 +26,8 @@ class Job(BaseModel):
     lng: Optional[float] = None
     time_window_start: str
     time_window_end: str = ""
+    preferred_window: Optional[str] = None  # morning|afternoon|evening from /book
+    confirmed_arrive_at: Optional[str] = None  # photographer HH:MM Toronto
     job_type: str
     status: str = "assigned"
     priority: str = "normal"
@@ -91,6 +93,8 @@ class JobIntakeRequest(BaseModel):
     lng: Optional[float] = None
     time_window_start: str
     time_window_end: str = ""
+    preferred_window: Optional[str] = None
+    confirmed_arrive_at: Optional[str] = None
     job_type: str
     priority: str = "normal"
     property_details: str = ""
