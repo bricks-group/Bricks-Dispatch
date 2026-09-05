@@ -16,6 +16,9 @@ struct JobDetailView: View {
     @State private var showCaptureReview = false
     @State private var reviewKind: CaptureKind = .splat
     @State private var captureStatusRows: [CaptureStatusRow] = []
+    @State private var arriveAt = ""
+    @State private var confirmingArrive = false
+    @State private var arriveMsg: String?
 
     init(job: DispatchJob) {
         self.job = job
@@ -74,7 +77,7 @@ struct JobDetailView: View {
                     // Details grid
                     detailsGrid
 
-                    Divider()
+                    confirmArriveSection
 
                     assignedSection
 
@@ -104,8 +107,12 @@ struct JobDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             pick = live.assigneeId ?? ""
+            arriveAt = ShootWindow.clock(live.confirmedArriveAt ?? live.timeWindowStart)
             await store.loadTeam()
             await refreshCaptureStatus()
+        }
+        .onChange(of: live.confirmedArriveAt) { _, _ in
+            arriveAt = ShootWindow.clock(live.confirmedArriveAt ?? live.timeWindowStart)
         }
         .onChange(of: live.assigneeId) { _, new in
             pick = new ?? ""
@@ -143,6 +150,64 @@ struct JobDetailView: View {
 
     private var scheduledLabel: String {
         live.formattedShootWhen
+    }
+
+    private var canConfirmArrive: Bool {
+        switch live.status {
+        case .assigned, .inProgress, .pending, .pendingAssignment: return true
+        default: return false
+        }
+    }
+
+    private var confirmArriveSection: some View {
+        Group {
+            if canConfirmArrive {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("CONFIRM ARRIVE")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    Text(live.formattedShootWindow)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        TextField("HH:MM", text: $arriveAt)
+                            .keyboardType(.numbersAndPunctuation)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .padding(10)
+                            .background(Color(.secondarySystemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 2))
+                        Button {
+                            Task {
+                                confirmingArrive = true
+                                arriveMsg = nil
+                                let ok = await store.confirmArrive(jobId: live.id, arriveAt: arriveAt)
+                                confirmingArrive = false
+                                if ok {
+                                    arriveMsg = "Agent emailed with your arrive time."
+                                } else {
+                                    arriveMsg = store.error ?? "Could not confirm."
+                                }
+                            }
+                        } label: {
+                            if confirmingArrive {
+                                ProgressView().tint(.white)
+                            } else {
+                                Text(live.confirmedArriveAt == nil ? "Tell agent" : "Update agent")
+                            }
+                        }
+                        .buttonStyle(SharpControlButton(filled: true))
+                        .disabled(confirmingArrive)
+                    }
+                    if let arriveMsg {
+                        Text(arriveMsg)
+                            .font(.caption)
+                            .foregroundStyle(store.error != nil && arriveMsg == store.error ? .red : .secondary)
+                    }
+                }
+                Divider()
+            }
+        }
     }
 
     // MARK: — Assigned to (Owner picker / IC name only)

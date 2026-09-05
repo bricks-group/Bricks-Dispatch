@@ -134,6 +134,37 @@ final class JobStore: ObservableObject {
         }
     }
 
+    /// Photographer sets exact arrive HH:MM inside the paid /book window; emails the agent.
+    func confirmArrive(jobId: String, arriveAt: String) async -> Bool {
+        struct Body: Encodable { let arriveAt: String }
+        let clock = ShootWindow.clock(arriveAt)
+        guard clock.count == 5 else {
+            self.error = "Enter a time like 10:30"
+            return false
+        }
+        do {
+            let updated: DispatchJob = try await api.post(
+                "/api/vendor-os/jobs/\(jobId)/confirm-arrive",
+                body: Body(arriveAt: clock)
+            )
+            if let existing = todayJobs.first(where: { $0.id == jobId }) {
+                let merged = existing.applyingArrive(from: updated)
+                if let idx = todayJobs.firstIndex(where: { $0.id == jobId }) {
+                    todayJobs[idx] = merged
+                }
+            } else {
+                upsertTodayJob(updated, replacing: jobId)
+            }
+            syncToWatch()
+            syncToWidget()
+            self.error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
     // MARK: — Offer accept / decline (called from JobOfferCard)
 
     func acceptOffer(_ job: DispatchJob) async {
@@ -228,6 +259,10 @@ final class JobStore: ObservableObject {
             preferredWindow: {
                 let p = (incoming.preferredWindow ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 return p.isEmpty ? existing.preferredWindow : incoming.preferredWindow
+            }(),
+            confirmedArriveAt: {
+                let c = (incoming.confirmedArriveAt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return c.isEmpty ? existing.confirmedArriveAt : incoming.confirmedArriveAt
             }(),
             scheduledDate: incoming.scheduledDate.isEmpty ? existing.scheduledDate : incoming.scheduledDate,
             jobType: incoming.jobType.isEmpty ? existing.jobType : incoming.jobType,

@@ -168,6 +168,28 @@ final class BricksCoreTests: XCTestCase {
         XCTAssertEqual(s, "Shoot window not set")
     }
 
+
+    func testShootWindowConfirmedArrive() {
+        let s = ShootWindow.format(
+            preferredWindow: "afternoon",
+            timeWindowStart: "12:00",
+            timeWindowEnd: "16:00",
+            confirmedArriveAt: "13:30"
+        )
+        XCTAssertEqual(s, "Afternoon · arrives ~13:30 ET (until 16:00)")
+    }
+
+    func testJobDecodesConfirmedArrive() throws {
+        let json = """
+        {"id":"job-a","preferred_window":"morning","time_window_start":"09:00","time_window_end":"12:00","confirmed_arrive_at":"10:15","status":"assigned"}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let job = try decoder.decode(DispatchJob.self, from: json)
+        XCTAssertEqual(job.confirmedArriveAt, "10:15")
+        XCTAssertEqual(job.formattedShootWindow, "Morning · arrives ~10:15 ET (until 12:00)")
+    }
+
     func testJobDecodesPreferredWindow() throws {
         let json = """
         {"id":"job-w","preferred_window":"evening","time_window_start":"16:00","time_window_end":"19:00","status":"assigned"}

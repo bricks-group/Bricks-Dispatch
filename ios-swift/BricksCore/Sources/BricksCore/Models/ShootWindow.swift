@@ -50,11 +50,23 @@ public enum ShootWindow {
     public static func format(
         preferredWindow: String?,
         timeWindowStart: String?,
-        timeWindowEnd: String?
+        timeWindowEnd: String?,
+        confirmedArriveAt: String? = nil
     ) -> String {
         let start = clock(timeWindowStart)
         let end = clock(timeWindowEnd)
+        let confirmed = clock(confirmedArriveAt)
         let label = windowLabel(preferred: preferredWindow, start: start, end: end)
+
+        if !confirmed.isEmpty {
+            if !label.isEmpty && !end.isEmpty {
+                return "\(label) · arrives ~\(confirmed) ET (until \(end))"
+            }
+            if !label.isEmpty {
+                return "\(label) · arrives ~\(confirmed) ET"
+            }
+            return "Arrives ~\(confirmed) ET"
+        }
 
         if !start.isEmpty && !end.isEmpty {
             let range = "\(start)–\(end) ET"
@@ -76,13 +88,15 @@ public enum ShootWindow {
         scheduledDate: String?,
         preferredWindow: String?,
         timeWindowStart: String?,
-        timeWindowEnd: String?
+        timeWindowEnd: String?,
+        confirmedArriveAt: String? = nil
     ) -> String {
         let date = String((scheduledDate ?? "").prefix(10))
         let window = format(
             preferredWindow: preferredWindow,
             timeWindowStart: timeWindowStart,
-            timeWindowEnd: timeWindowEnd
+            timeWindowEnd: timeWindowEnd,
+            confirmedArriveAt: confirmedArriveAt
         )
         if !date.isEmpty && window != "Shoot window not set" { return "\(date) · \(window)" }
         if !date.isEmpty { return "\(date) · Shoot window not set" }

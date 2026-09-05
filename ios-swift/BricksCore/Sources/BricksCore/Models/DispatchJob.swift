@@ -35,6 +35,8 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     public let timeWindowEnd: String
     /// Paid /book window: morning | afternoon | evening (optional).
     public let preferredWindow: String?
+    /// Exact arrive HH:MM (America/Toronto) after photographer confirms on GO.
+    public let confirmedArriveAt: String?
     public let scheduledDate: String         // "YYYY-MM-DD"
     public let jobType: String               // "photo" | "drone" | "video"
     public var status: JobStatus
@@ -64,12 +66,14 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         assigneeId: String? = nil, assigneeName: String? = nil,
         transactionId: String? = nil, listingAddress: String? = nil,
         preferredWindow: String? = nil,
+        confirmedArriveAt: String? = nil,
         capture: CaptureEntitlements? = nil
     ) {
         self.id = id; self.bookingId = bookingId; self.address = address; self.city = city
         self.state = state; self.zipCode = zipCode; self.lat = lat; self.lng = lng
         self.timeWindowStart = timeWindowStart; self.timeWindowEnd = timeWindowEnd
         self.preferredWindow = preferredWindow
+        self.confirmedArriveAt = confirmedArriveAt
         self.scheduledDate = scheduledDate; self.jobType = jobType; self.status = status
         self.packageName = packageName; self.packagePrice = packagePrice; self.vendorPayout = vendorPayout
         self.agentName = agentName; self.agentPhone = agentPhone; self.agentEmail = agentEmail
@@ -82,7 +86,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, bookingId, address, city, state, zipCode, lat, lng
-        case timeWindowStart, timeWindowEnd, preferredWindow, scheduledDate, jobType, status
+        case timeWindowStart, timeWindowEnd, preferredWindow, confirmedArriveAt, scheduledDate, jobType, status
         case packageName, packagePrice, vendorPayout
         case agentName, agentPhone, agentEmail, clientInstructions
         case checklist, complexityScore, createdAt, updatedAt
@@ -105,6 +109,11 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         timeWindowStart = try c.decodeIfPresent(String.self, forKey: .timeWindowStart) ?? ""
         timeWindowEnd = try c.decodeIfPresent(String.self, forKey: .timeWindowEnd) ?? ""
         preferredWindow = try c.decodeIfPresent(String.self, forKey: .preferredWindow)
+        let rawArrive = try c.decodeIfPresent(String.self, forKey: .confirmedArriveAt)
+        confirmedArriveAt = {
+            let s = (rawArrive ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return s.isEmpty ? nil : ShootWindow.clock(s)
+        }()
         let rawDate = try c.decodeIfPresent(String.self, forKey: .scheduledDate) ?? ""
         scheduledDate = String(rawDate.prefix(10))
         jobType = try c.decodeIfPresent(String.self, forKey: .jobType) ?? "photo"
@@ -218,7 +227,8 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         ShootWindow.format(
             preferredWindow: preferredWindow,
             timeWindowStart: timeWindowStart,
-            timeWindowEnd: timeWindowEnd
+            timeWindowEnd: timeWindowEnd,
+            confirmedArriveAt: confirmedArriveAt
         )
     }
 
@@ -228,7 +238,47 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
             scheduledDate: scheduledDate,
             preferredWindow: preferredWindow,
             timeWindowStart: timeWindowStart,
-            timeWindowEnd: timeWindowEnd
+            timeWindowEnd: timeWindowEnd,
+            confirmedArriveAt: confirmedArriveAt
+        )
+    }
+
+    public func applyingArrive(from other: DispatchJob) -> DispatchJob {
+        return DispatchJob(
+            id: id,
+            bookingId: bookingId,
+            address: address,
+            city: city,
+            state: state,
+            zipCode: zipCode,
+            lat: lat,
+            lng: lng,
+            timeWindowStart: other.timeWindowStart.isEmpty ? timeWindowStart : other.timeWindowStart,
+            timeWindowEnd: other.timeWindowEnd.isEmpty ? timeWindowEnd : other.timeWindowEnd,
+            scheduledDate: scheduledDate,
+            jobType: jobType,
+            status: status,
+            packageName: packageName,
+            packagePrice: packagePrice,
+            vendorPayout: vendorPayout,
+            agentName: agentName,
+            agentPhone: agentPhone,
+            agentEmail: agentEmail,
+            clientInstructions: clientInstructions,
+            checklist: checklist,
+            complexityScore: complexityScore,
+            createdAt: createdAt,
+            updatedAt: other.updatedAt.isEmpty ? updatedAt : other.updatedAt,
+            assigneeId: assigneeId,
+            assigneeName: assigneeName,
+            transactionId: transactionId,
+            listingAddress: listingAddress,
+            preferredWindow: {
+                let p = (other.preferredWindow ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return p.isEmpty ? preferredWindow : other.preferredWindow
+            }(),
+            confirmedArriveAt: other.confirmedArriveAt ?? confirmedArriveAt,
+            capture: capture
         )
     }
 
