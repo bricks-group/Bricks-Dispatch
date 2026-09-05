@@ -19,6 +19,87 @@ _EMAIL_FONT_STACK = "'General Sans','Inter',-apple-system,BlinkMacSystemFont,'Se
 _EMAIL_LOGO_URL = "https://www.brxs.ca/bricks-mark.png"
 
 
+_GO_WEB_URL = os.environ.get("GO_WEB_URL", "https://bricks-dispatch-web.vercel.app").rstrip("/")
+
+_CANONICAL_WINDOWS = {
+    "morning": ("09:00", "12:00", "Morning"),
+    "afternoon": ("12:00", "16:00", "Afternoon"),
+    "evening": ("16:00", "19:00", "Evening"),
+}
+
+
+def _clock_hhmm(raw) -> str:
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if len(s) >= 5 and s[2] == ":":
+        return s[:5]
+    return s[:5] if s else ""
+
+
+def format_shoot_window(job: dict | None) -> str:
+    """Match GO web shoot-window.ts. Never invent times."""
+    job = job or {}
+    start = _clock_hhmm(job.get("time_window_start"))
+    end = _clock_hhmm(job.get("time_window_end"))
+    preferred = (job.get("preferred_window") or "").strip().lower()
+    label = ""
+    if preferred in _CANONICAL_WINDOWS:
+        label = _CANONICAL_WINDOWS[preferred][2]
+    elif start and end:
+        for _k, (s, e, lab) in _CANONICAL_WINDOWS.items():
+            if s == start and e == end:
+                label = lab
+                break
+    elif preferred:
+        label = preferred[:1].upper() + preferred[1:]
+
+    if start and end:
+        rng = f"{start}–{end} ET"
+        return f"{label} · {rng}" if label else rng
+    if start and not end:
+        rng = f"{start} ET"
+        return f"{label} · from {rng}" if label else f"From {rng}"
+    if not start and end:
+        rng = f"{end} ET"
+        return f"{label} · until {rng}" if label else f"Until {rng}"
+    if label:
+        return f"{label} · times not set"
+    return "Shoot window not set"
+
+
+def _assignment_email_html(name: str, address: str, when_line: str, go_url: str) -> str:
+    who = (name or "").strip() or "there"
+    addr = (address or "").strip() or "a property"
+    when = (when_line or "").strip()
+    when_p = f'<p style="color:#555;line-height:1.6;margin:0 0 12px 0">{when}</p>' if when else ""
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px">
+<div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
+<tr>
+<td width="16" height="16" style="width:16px;height:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
+<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
+<td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
+</tr>
+</table>
+<div style="background:#d2542b;padding:16px 24px;margin-top:12px">
+<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">New job on Bricks GO</h1>
+</div>
+<div style="padding:24px">
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {who},</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">A shoot just landed on your Today list: <strong>{addr}</strong>.</p>
+{when_p}
+<a href="{go_url}" style="display:inline-block;margin-top:8px;padding:12px 24px;background:#d2542b;color:#fff;text-decoration:none;border-radius:2px;font-weight:500">Open Bricks GO</a>
+<p style="margin-top:24px;font-size:13px;color:#999;line-height:1.5">Or go to <a href="{go_url}" style="color:#d2542b">{go_url}</a></p>
+</div>
+<div style="padding:12px 24px;border-top:1px solid #eee;font-size:12px;color:#888;font-family:{_EMAIL_FONT_STACK}">
+<p style="margin:0">Bricks · brxs.ca</p></div>
+</div></body></html>"""
+
+
+
 def _build_html_email(title: str, body: str) -> str:
     return f"""<!DOCTYPE html>
 <html>
@@ -318,8 +399,8 @@ async def create_notification(
 
 
 async def notify_assignment(job: dict, member_id: str) -> dict:
-    """SMS + push + in-app after assign. Never raises. Never claims sent if env missing."""
-    result = {"sms": False, "push": False, "in_app": False}
+    """SMS + push + in-app + email after assign. Never raises. Never claims sent if env missing."""
+    result = {"sms": False, "push": False, "in_app": False, "email": False}
     if not member_id:
         return result
     job = job or {}
@@ -338,6 +419,8 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
         "address": job.get("address") or "",
         "scheduled_date": job.get("scheduled_date") or "",
         "time_window_start": job.get("time_window_start") or "",
+        "time_window_end": job.get("time_window_end") or "",
+        "preferred_window": job.get("preferred_window") or "",
     }
     try:
         from ..notifications import notify_job_assigned_to_vendor
@@ -345,11 +428,16 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
     except Exception as exc:
         logger.error("Assignment SMS failed for job %s: %s", job.get("id"), exc)
 
+    window = format_shoot_window(details)
+    date = (details["scheduled_date"] or "")[:10]
+    when_bits = [b for b in (date, window if window != "Shoot window not set" else "") if b]
+    when_line = " · ".join(when_bits)
+
     title = "New job assigned"
     address = details["address"] or "a property"
     body = address
-    if details["scheduled_date"]:
-        body += f" · {details['scheduled_date']}"
+    if when_line:
+        body += f" · {when_line}"
     data = {"type": "job_assigned", "job_id": job.get("id")}
 
     try:
@@ -362,5 +450,25 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
         result["in_app"] = True
     except Exception as exc:
         logger.error("Assignment in-app notification failed for job %s: %s", job.get("id"), exc)
+
+    # Email the photographer — push tokens are often missing on first booking.
+    to_email = (member.get("email") or "").strip()
+    if to_email:
+        try:
+            html = _assignment_email_html(
+                member.get("name") or "",
+                address,
+                when_line,
+                _GO_WEB_URL,
+            )
+            result["email"] = bool(
+                await send_email_via_resend(
+                    to_email,
+                    f"New job on Bricks GO — {address}",
+                    html,
+                )
+            )
+        except Exception as exc:
+            logger.error("Assignment email failed for job %s: %s", job.get("id"), exc)
 
     return result

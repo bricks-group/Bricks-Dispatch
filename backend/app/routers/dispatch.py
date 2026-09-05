@@ -2,7 +2,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Header, HTTPException
 from ..shared.schemas import JobIntakeRequest, Job, JobStatusUpdate
 from ..shared.database import get_db
 from ..services.vendor_selection import assign_vendor_for_job
@@ -21,7 +21,6 @@ async def dispatch_root():
 @router.post("/jobs", summary="Create a new dispatch job")
 async def create_dispatch_job(
     payload: JobIntakeRequest,
-    background_tasks: BackgroundTasks,
     x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """
@@ -73,21 +72,30 @@ async def create_dispatch_job(
         except Exception:
             logger.exception("Sync vendor assign failed for job %s", job_id)
 
-        background_tasks.add_task(
-            create_notification,
-            title="New paid booking",
-            body=(
-                f"New job from Booking.\n"
-                f"Address: {job_data.get('address', 'n/a')}\n"
-                f"Package: {job_data.get('package_name', 'n/a')} (${job_data.get('package_price', 'n/a')})\n"
-                f"Scheduled: {job_data.get('scheduled_date', 'n/a')}\n"
-                f"Booking ID: {job_data.get('booking_id', 'n/a')}"
-            ),
-            ntype="new_booking",
-            data={"job_id": job_id, "assignee_id": assignee_id or ""},
-            email_to=ADMIN_NOTIFICATION_EMAIL,
-            email_subject=f"New paid booking: {job_data.get('address', job_id)}",
-        )
+        # Await notify — Vercel serverless drops FastAPI BackgroundTasks after response
+        # (same class of bug as pending_assignment with empty assignee_id).
+        try:
+            from ..services.notifications import format_shoot_window
+            window = format_shoot_window(job_data)
+            sched = (job_data.get("scheduled_date") or "n/a")
+            when = f"{sched} · {window}" if window else str(sched)
+            await create_notification(
+                title="New paid booking",
+                body=(
+                    f"New job from Booking.\n"
+                    f"Address: {job_data.get('address', 'n/a')}\n"
+                    f"Package: {job_data.get('package_name', 'n/a')} (${job_data.get('package_price', 'n/a')})\n"
+                    f"When: {when}\n"
+                    f"Assignee: {assignee_id or 'unassigned'}\n"
+                    f"Booking ID: {job_data.get('booking_id', 'n/a')}"
+                ),
+                ntype="new_booking",
+                data={"job_id": job_id, "assignee_id": assignee_id or ""},
+                email_to=ADMIN_NOTIFICATION_EMAIL,
+                email_subject=f"New paid booking: {job_data.get('address', job_id)}",
+            )
+        except Exception:
+            logger.exception("Admin new-booking notify failed for job %s", job_id)
 
         return {
             "job_id": job_id,

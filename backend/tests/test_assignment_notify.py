@@ -55,3 +55,39 @@ def test_apns_skips_when_env_missing():
     src = (ROOT / "app/services/notifications.py").read_text()
     assert "APNs env missing" in src
     assert "never fakes" in src.lower() or "Never fakes" in src or "Never claims sent" in src
+
+
+def test_intake_awaits_admin_notify_not_background_tasks():
+    src = (ROOT / "app/routers/dispatch.py").read_text()
+    assert "await create_notification" in src
+    assert "background_tasks.add_task" not in src
+    assert "BackgroundTasks" not in src or "BackgroundTasks" in src and "drops FastAPI BackgroundTasks" in src
+
+
+def test_format_shoot_window_matches_go_web():
+    # Source-level: full package import needs pydantic on CI/dev without venv.
+    src = (ROOT / "app/services/notifications.py").read_text()
+    assert "def format_shoot_window" in src
+    assert '"afternoon": ("12:00", "16:00", "Afternoon")' in src
+    assert "Shoot window not set" in src
+    # Exec just the pure helper body (no Supabase/pydantic).
+    start = src.index("def _clock_hhmm")
+    end = src.index("def _assignment_email_html")
+    ns = {}
+    exec("_CANONICAL_WINDOWS = " + src[src.index("_CANONICAL_WINDOWS = "):src.index("def _clock_hhmm")], ns)
+    exec(src[start:end], ns)
+    assert ns["format_shoot_window"]({
+        "preferred_window": "afternoon",
+        "time_window_start": "12:00",
+        "time_window_end": "16:00",
+    }) == "Afternoon · 12:00–16:00 ET"
+    assert ns["format_shoot_window"]({}) == "Shoot window not set"
+    assert ns["format_shoot_window"]({"time_window_start": "09:00", "time_window_end": "12:00"}) == "Morning · 09:00–12:00 ET"
+
+
+def test_notify_assignment_emails_photographer():
+    src = (ROOT / "app/services/notifications.py").read_text()
+    assert "_assignment_email_html" in src
+    assert "Open Bricks GO" in src
+    assert 'result["email"]' in src
+    assert "format_shoot_window" in src
