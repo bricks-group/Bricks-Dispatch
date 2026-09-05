@@ -237,3 +237,26 @@ def test_floorplan_capture_submitted_note_is_not_a_purchase_line():
         checklist=[{"label": "Floor plan capture submitted", "completed": True}],
     )
     assert f["floorplan"] is False
+
+
+def test_visit_kind_purchased():
+    job = {
+        "package_id": "essentials",
+        "package_name": "Essentials",
+        "job_type": "drone",
+        "add_ons": [{"key": "drone", "included": True}, {"key": "visit", "included": True}],
+    }
+    assert flags(**job)["visit"] is True
+    assert kind_purchased(job, "visit")
+    assert not kind_purchased(job, "splat")
+    assert kind_purchased(job, "floorplan")
+
+
+def test_visit_only_job_grants_visit_kind():
+    job = {
+        "package_name": "Virtual visit (quoted by sqft)",
+        "job_type": "visit",
+        "add_ons": [{"key": "virtual_visit", "included": True}],
+    }
+    assert flags(**job)["visit"] is True
+    assert kind_purchased(job, "visit")

@@ -42,9 +42,9 @@ function initials(name: string | null) {
   return name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
 }
 
-function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' | 'floorplan' | 'mode') => void }) {
+function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' | 'floorplan' | 'visit' | 'mode') => void }) {
   const flags = jobCaptureModes(job);
-  const hasMode = flags.tour || flags.floorplan;
+  const hasMode = flags.tour || flags.floorplan || flags.visit;
   if (!hasMode) {
     return (
       <View style={s.todayCaptureNone}>
@@ -52,14 +52,33 @@ function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' 
       </View>
     );
   }
-  if (flags.tour && flags.floorplan) {
+  const modes = [flags.tour, flags.floorplan, flags.visit].filter(Boolean).length;
+  if (modes > 1) {
     return (
       <View style={s.todayCaptureRow}>
-        <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('splat')} activeOpacity={0.8}>
-          <Text style={s.todayCaptureBtnText}>Start Capture · 3D tour</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('floorplan')} activeOpacity={0.8}>
-          <Text style={s.todayCaptureBtnText}>Start Capture · Floor plan</Text>
+        {flags.tour ? (
+          <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('splat')} activeOpacity={0.8}>
+            <Text style={s.todayCaptureBtnText}>Start Capture · 3D tour</Text>
+          </TouchableOpacity>
+        ) : null}
+        {flags.floorplan ? (
+          <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('floorplan')} activeOpacity={0.8}>
+            <Text style={s.todayCaptureBtnText}>Start Capture · Floor plan</Text>
+          </TouchableOpacity>
+        ) : null}
+        {flags.visit ? (
+          <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('visit')} activeOpacity={0.8}>
+            <Text style={s.todayCaptureBtnText}>Deliver Visit</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    );
+  }
+  if (flags.visit) {
+    return (
+      <View style={s.todayCaptureRow}>
+        <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('visit')} activeOpacity={0.8}>
+          <Text style={s.todayCaptureBtnText}>Deliver Visit</Text>
         </TouchableOpacity>
       </View>
     );
@@ -122,9 +141,13 @@ export default function TodayScreen() {
     );
   };
 
-  const openCapture = (job: Job, kind?: 'splat' | 'floorplan' | 'mode') => {
+  const openCapture = (job: Job, kind?: 'splat' | 'floorplan' | 'visit' | 'mode') => {
     if (kind === 'mode' || !kind) {
       router.push({ pathname: '/(capture)/mode', params: { jobId: job.id } } as any);
+      return;
+    }
+    if (kind === 'visit') {
+      router.push({ pathname: '/(capture)/visit', params: { jobId: job.id } } as any);
       return;
     }
     const pathname = kind === 'floorplan' ? '/(capture)/floorplan' : '/(capture)/capture';

@@ -6,7 +6,8 @@ capture/{session}/stations/{n}/ via signed PUT.
 
 kind=splat     — path-confined 3D tour (360 stations, compiled on our server).
 kind=floorplan — 2D plan derived from those aligned stations (or RoomPlan JSON).
-Virtual visit (Gaussian splat) is not this shutter. No Luma, no BoxBrownie.
+kind=visit     — Virtual Visit add-on: Polycam URL or .ply/.splat onto the listing
+                 (owned GPU cook later). No Luma, no BoxBrownie. HDR stills stay camera-only.
 
 Tables live in Bricks-OS (capture_sessions / rooms / pipeline / frames) and
 are service-role-only, same as jobs/uploads.
@@ -775,7 +776,7 @@ async def _fail_session(db, sid: str, stage_title: str, error: str, now: str) ->
     }).eq("session_id", sid).eq("title", stage_title).execute()
 
 
-_PRODUCT_LABEL = {"splat": "3D tour", "floorplan": "Floor plan"}
+_PRODUCT_LABEL = {"splat": "3D tour", "floorplan": "Floor plan", "visit": "Virtual Visit"}
 
 
 async def _first_delivered_of_kind(db, job_id: str, kind: str) -> bool:
@@ -1275,3 +1276,148 @@ async def process_session(
     except CaptureWorkerError as e:
         bundle = await _load_session_bundle(db, job_id, await _latest_session(db, job_id, kind) or session, job)
         return {"ok": False, "error": str(e), "session": bundle}
+
+def _normalize_visit_url(raw: str) -> str:
+    url = (raw or "").strip()
+    if not url:
+        return ""
+    lower = url.lower()
+    if not (lower.startswith("https://") or lower.startswith("http://")):
+        api_error(400, "Virtual Visit URL must start with https://", "bad_visit_url")
+    # Prefer https for Polycam / share links
+    if lower.startswith("http://"):
+        url = "https://" + url[7:]
+    return url
+
+
+def _visit_ext(filename: str) -> str:
+    name = (filename or "").strip()
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in ("splat", "ply", "spz"):
+        api_error(400, "Only .splat, .ply, or .spz files are supported", "bad_visit_file")
+    return ext
+
+
+@router.post("/visit/sign")
+async def sign_visit_upload(
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Signed PUT for a .ply/.splat/.spz Virtual Visit file (bypasses 4.5MB Vercel body)."""
+    import uuid as _uuid
+
+    job_id = (payload or {}).get("job_id") or ""
+    filename = str((payload or {}).get("filename") or "visit.splat")
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    flags = job_capture_entitlements(job)
+    if not kind_purchased(job, "visit"):
+        api_error(403, capture_forbidden_message("visit", flags), "capture_kind_not_purchased")
+    ext = _visit_ext(filename)
+    visit_id = str(_uuid.uuid4())
+    storage_path = f"visits/{job_id}/{visit_id}.{ext}"
+    signed = await create_signed_upload_url(storage_path)
+    if not signed or not signed.get("signed_url"):
+        api_error(502, "Could not mint visit upload URL", "visit_sign_failed")
+    return {
+        "ok": True,
+        "storage_path": storage_path,
+        "signed_url": signed.get("signed_url"),
+        "token": signed.get("token"),
+        "path": signed.get("path") or storage_path,
+        "content_type": "application/octet-stream",
+    }
+
+
+@router.post("/visit/deliver")
+async def deliver_virtual_visit(
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Vendor delivers Virtual Visit from GO onto the listing file.
+
+    Body: job_id + either polycam_url / embed_url OR storage_path from /visit/sign.
+    Bridge until owned GPU cook: Polycam share URL or uploaded .ply/.splat/.spz.
+    """
+    job_id = (payload or {}).get("job_id") or ""
+    title = str((payload or {}).get("title") or "Virtual Visit").strip() or "Virtual Visit"
+    polycam_url = _normalize_visit_url(
+        str((payload or {}).get("polycam_url") or (payload or {}).get("embed_url") or "")
+    )
+    storage_path = str((payload or {}).get("storage_path") or "").strip()
+    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    flags = job_capture_entitlements(job)
+    if not kind_purchased(job, "visit"):
+        api_error(403, capture_forbidden_message("visit", flags), "capture_kind_not_purchased")
+    if not polycam_url and not storage_path:
+        api_error(400, "Provide a Polycam URL or a storage_path from /visit/sign", "missing_visit_payload")
+    if polycam_url and storage_path:
+        api_error(400, "Send either a Polycam URL or a file path, not both", "ambiguous_visit_payload")
+    if storage_path:
+        if not storage_path.startswith(f"visits/{job_id}/"):
+            api_error(400, "storage_path must be under visits/{job_id}/", "bad_visit_path")
+        ext = storage_path.rsplit(".", 1)[-1].lower()
+        if ext not in ("splat", "ply", "spz"):
+            api_error(400, "Visit file must be .splat, .ply, or .spz", "bad_visit_file")
+
+    from ..services.client_comms import notify_capture_delivered, register_property_visit
+
+    if polycam_url:
+        ok = await register_property_visit(
+            job_id,
+            title=title,
+            embed_url=polycam_url,
+            visit_type="url",
+        )
+        # type=url is also used for hosted tours; title Virtual Visit keeps VisitViewer honest.
+        delivery_urls = [{"url": polycam_url, "filename": "Virtual Visit"}]
+        output = polycam_url
+    else:
+        ok = await register_property_visit(
+            job_id,
+            storage_path=storage_path,
+            title=title,
+            visit_type="file",
+        )
+        delivery_urls = []
+        try:
+            signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24)
+            if signed:
+                delivery_urls.append({"url": signed, "filename": "Virtual Visit"})
+        except Exception:
+            pass
+        output = storage_path
+
+    if not ok:
+        api_error(502, "Could not register Virtual Visit on the listing file", "visit_register_failed")
+
+    # Freshness for OS listing + agent email (best-effort).
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+    except Exception:
+        pass
+    try:
+        await notify_capture_delivered(
+            job_id,
+            products=["Virtual Visit"],
+            address=(job.get("address") or ""),
+            booking_id=(job.get("booking_id") or ""),
+            delivery_urls=delivery_urls,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            "Job %s: Virtual Visit delivery notification failed: %s", job_id, e
+        )
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "kind": "visit",
+        "title": title,
+        "output": output,
+        "mode": "url" if polycam_url else "file",
+    }

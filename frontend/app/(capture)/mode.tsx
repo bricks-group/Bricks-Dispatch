@@ -27,13 +27,20 @@ export default function CaptureModeScreen() {
         const job = res.ok ? await res.json() : {};
         if (cancelled) return;
         const next = jobCaptureModes(job);
-        if (next.tour && !next.floorplan) {
-          router.replace({ pathname: '/(capture)/capture', params: { jobId, kind: 'splat' } } as any);
-          return;
-        }
-        if (next.floorplan && !next.tour) {
-          router.replace({ pathname: '/(capture)/floorplan', params: { jobId, kind: 'floorplan' } } as any);
-          return;
+        const modes = [next.tour, next.floorplan, next.visit].filter(Boolean).length;
+        if (modes === 1) {
+          if (next.tour) {
+            router.replace({ pathname: '/(capture)/capture', params: { jobId, kind: 'splat' } } as any);
+            return;
+          }
+          if (next.floorplan) {
+            router.replace({ pathname: '/(capture)/floorplan', params: { jobId, kind: 'floorplan' } } as any);
+            return;
+          }
+          if (next.visit) {
+            router.replace({ pathname: '/(capture)/visit', params: { jobId } } as any);
+            return;
+          }
         }
         setFlags(next);
       } catch {
@@ -43,7 +50,11 @@ export default function CaptureModeScreen() {
     return () => { cancelled = true; };
   }, [jobId]);
 
-  const go = (kind: 'splat' | 'floorplan') => {
+  const go = (kind: 'splat' | 'floorplan' | 'visit') => {
+    if (kind === 'visit') {
+      router.replace({ pathname: '/(capture)/visit', params: { jobId } } as any);
+      return;
+    }
     const pathname = kind === 'floorplan' ? '/(capture)/floorplan' : '/(capture)/capture';
     router.replace({ pathname, params: { jobId, kind } } as any);
   };
@@ -56,7 +67,7 @@ export default function CaptureModeScreen() {
     );
   }
 
-  if (!flags.tour && !flags.floorplan) {
+  if (!flags.tour && !flags.floorplan && !flags.visit) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.top}>
@@ -87,9 +98,10 @@ export default function CaptureModeScreen() {
       <View style={styles.body}>
         <Text style={styles.title}>What are you capturing?</Text>
         <Text style={styles.sub}>
-          This job purchased both. Professional HDR stills stay on the camera — not here. Virtual visit is not this shutter.
+          Pick what this job purchased. Professional HDR stills stay on the camera — not here.
         </Text>
 
+        {flags.tour ? (
         <TouchableOpacity style={styles.card} onPress={() => go('splat')} activeOpacity={0.85}>
           <Text style={styles.cardKicker}>3D TOUR</Text>
           <Text style={styles.cardTitle}>Path-confined walkthrough</Text>
@@ -97,7 +109,9 @@ export default function CaptureModeScreen() {
             Pan slowly around each room. This is the virtual tour you stay on the path for — not a free-roam virtual visit.
           </Text>
         </TouchableOpacity>
+        ) : null}
 
+        {flags.floorplan ? (
         <TouchableOpacity style={styles.card} onPress={() => go('floorplan')} activeOpacity={0.85}>
           <Text style={styles.cardKicker}>FLOOR PLAN</Text>
           <Text style={styles.cardTitle}>Room-by-room corners</Text>
@@ -105,6 +119,17 @@ export default function CaptureModeScreen() {
             Walk each room. Photograph corners, walls, and openings for tracing. Not HDR stills. Not BoxBrownie.
           </Text>
         </TouchableOpacity>
+        ) : null}
+
+        {flags.visit ? (
+        <TouchableOpacity style={styles.card} onPress={() => go('visit')} activeOpacity={0.85}>
+          <Text style={styles.cardKicker}>VIRTUAL VISIT</Text>
+          <Text style={styles.cardTitle}>Free-roam splat</Text>
+          <Text style={styles.cardBody}>
+            Paste a Polycam share URL (or upload .ply/.splat on GO web). Not the path-confined tour.
+          </Text>
+        </TouchableOpacity>
+        ) : null}
       </View>
     </SafeAreaView>
   );

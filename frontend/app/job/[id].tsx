@@ -418,24 +418,32 @@ export default function JobDetailScreen() {
   const isComplete = job.status === 'completed';
   const isActive = ['assigned', 'in_progress'].includes(job.status);
   const captureFlags = jobCaptureModes(job);
-  const hasCaptureMode = captureFlags.tour || captureFlags.floorplan;
-  const openCapture = (kind: CaptureKind) => {
+  const hasCaptureMode = captureFlags.tour || captureFlags.floorplan || captureFlags.visit;
+  const openCapture = (kind: CaptureKind | 'visit') => {
+    if (kind === 'visit') {
+      router.push({ pathname: '/(capture)/visit', params: { jobId: id } } as any);
+      return;
+    }
     const pathname = kind === 'floorplan' ? '/(capture)/floorplan' : '/(capture)/capture';
     router.push({ pathname, params: { jobId: id, kind } } as any);
   };
   const startCapture = () => {
-    if (captureFlags.tour && captureFlags.floorplan) {
+    const modes = [captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length;
+    if (modes > 1) {
       router.push({ pathname: '/(capture)/mode', params: { jobId: id } } as any);
       return;
     }
     if (captureFlags.tour) { openCapture('splat'); return; }
-    if (captureFlags.floorplan) { openCapture('floorplan'); }
+    if (captureFlags.floorplan) { openCapture('floorplan'); return; }
+    if (captureFlags.visit) { openCapture('visit'); }
   };
-  const captureStartLabel = captureFlags.tour && captureFlags.floorplan
+  const captureStartLabel = ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1)
     ? 'Start Capture'
-    : captureFlags.tour
-      ? 'Start Capture'
-      : 'Start Capture · Floor plan';
+    : captureFlags.visit && !captureFlags.tour && !captureFlags.floorplan
+      ? 'Deliver Visit'
+      : captureFlags.tour
+        ? 'Start Capture'
+        : 'Start Capture · Floor plan';
   const canReportNoShow = isActive && (() => {
     // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
     // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
@@ -713,14 +721,23 @@ export default function JobDetailScreen() {
           </View>
         )}
 
-        {['assigned', 'in_progress'].includes(job.status) && hasCaptureMode && captureFlags.tour && captureFlags.floorplan ? (
+        {['assigned', 'in_progress'].includes(job.status) && hasCaptureMode && ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1) ? (
           <View style={s.captureStartBlock}>
-            <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('splat')} activeOpacity={0.8}>
-              <Text style={s.captureStartChipText}>Start Capture · 3D tour</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('floorplan')} activeOpacity={0.8}>
-              <Text style={s.captureStartChipText}>Start Capture · Floor plan</Text>
-            </TouchableOpacity>
+            {captureFlags.tour ? (
+              <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('splat')} activeOpacity={0.8}>
+                <Text style={s.captureStartChipText}>Start Capture · 3D tour</Text>
+              </TouchableOpacity>
+            ) : null}
+            {captureFlags.floorplan ? (
+              <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('floorplan')} activeOpacity={0.8}>
+                <Text style={s.captureStartChipText}>Start Capture · Floor plan</Text>
+              </TouchableOpacity>
+            ) : null}
+            {captureFlags.visit ? (
+              <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('visit')} activeOpacity={0.8}>
+                <Text style={s.captureStartChipText}>Deliver Visit</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : null}
         {captureStatusRows.length > 0 ? (

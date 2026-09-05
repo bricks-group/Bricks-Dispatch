@@ -1,6 +1,6 @@
-// In-app GO capture is only for a purchased 3D tour (path-confined) and/or
-// a purchased floor plan. Virtual visit (Gaussian splat / SuperSplat) is
-// NOT this shutter. HDR stills stay on the vendor camera.
+// In-app GO capture: purchased 3D tour (path-confined), floor plan, and/or
+// Virtual Visit add-on (Polycam URL / .ply / .splat bridge). HDR stills stay
+// on the vendor camera.
 //
 // Prefer the server `job.capture` block (authoritative). Fallback infers
 // from real jobs columns: package_id, package_name, job_type, add_ons,
@@ -168,14 +168,18 @@ export function jobCaptureModes(job: CaptureJobLike | null | undefined): Capture
 }
 
 export function captureNeitherCopy(flags: CaptureFlags): string {
-  if (flags.visit && !flags.tour) {
-    return 'Virtual visit is not captured in GO. Use the Polycam URL / .ply / .splat upload path. HDR stills stay on the camera.';
+  if (flags.visit && !flags.tour && !flags.floorplan) {
+    return 'This job has Virtual Visit only — open Deliver Visit to paste a Polycam URL or upload a .ply / .splat. HDR stills stay on the camera.';
   }
-  return 'This job has no in-app 3D tour or floor plan. HDR stills stay on the camera.';
+  return 'This job has no in-app 3D tour, floor plan, or Virtual Visit. HDR stills stay on the camera.';
 }
 
-export function captureStatusCopy(status: string | null | undefined, kind: 'splat' | 'floorplan' = 'splat'): string {
-  const label = kind === 'floorplan' ? 'Floor plan' : '3D tour';
+export function hasAnyCaptureMode(flags: CaptureFlags): boolean {
+  return !!(flags.tour || flags.floorplan || flags.visit);
+}
+
+export function captureStatusCopy(status: string | null | undefined, kind: 'splat' | 'floorplan' | 'visit' = 'splat'): string {
+  const label = kind === 'floorplan' ? 'Floor plan' : kind === 'visit' ? 'Virtual Visit' : '3D tour';
   switch ((status || '').toLowerCase()) {
     case 'delivered':
       return `${label} ready.`;

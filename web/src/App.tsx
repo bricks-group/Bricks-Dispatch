@@ -14,6 +14,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { TeamPage } from './pages/TeamPage';
 import { CapturePage } from './pages/CapturePage';
 import { CaptureReviewPage } from './pages/CaptureReviewPage';
+import { VisitCapturePage } from './pages/VisitCapturePage';
 
 function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
   const now = new Date();
@@ -94,6 +95,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/capture" element={<CaptureGate><CapturePage /></CaptureGate>} />
       <Route path="/capture/review" element={<CaptureGate><CaptureReviewPage /></CaptureGate>} />
+      <Route path="/capture/visit" element={<CaptureGate><VisitCapturePage /></CaptureGate>} />
       <Route path="/*"     element={<ProtectedLayout />} />
     </Routes>
   );

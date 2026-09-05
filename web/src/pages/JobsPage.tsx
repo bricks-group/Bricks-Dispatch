@@ -472,7 +472,7 @@ function JobListingPanel({
 
 function CaptureStartBlock({ job }: { job: Job }) {
   const flags = jobCaptureModes(job);
-  const hasMode = flags.tour || flags.floorplan;
+  const hasMode = flags.tour || flags.floorplan || flags.visit;
   if (!hasMode) {
     return (
       <div className="capture-none">
@@ -480,19 +480,25 @@ function CaptureStartBlock({ job }: { job: Job }) {
       </div>
     );
   }
-  if (flags.tour && flags.floorplan) {
-    return (
-      <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
-        <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=splat`}>Start Capture · 3D tour</Link>
-        <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=floorplan`}>Start Capture · Floor plan</Link>
-      </div>
+  const links = [];
+  if (flags.tour) {
+    links.push(
+      <Link key="tour" className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=splat`}>Start Capture · 3D tour</Link>
     );
   }
-  const kind = flags.tour ? 'splat' : 'floorplan';
-  const label = flags.tour ? 'Start Capture' : 'Start Capture · Floor plan';
+  if (flags.floorplan) {
+    links.push(
+      <Link key="fp" className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=floorplan`}>Start Capture · Floor plan</Link>
+    );
+  }
+  if (flags.visit) {
+    links.push(
+      <Link key="visit" className="btn-capture" to={`/capture/visit?jobId=${encodeURIComponent(job.id)}`}>Deliver Visit</Link>
+    );
+  }
   return (
-    <div className="row">
-      <Link className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=${kind}`}>{label}</Link>
+    <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+      {links}
     </div>
   );
 }

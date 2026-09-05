@@ -1,11 +1,11 @@
 """Which GO in-app capture modes a job actually purchased.
 
-Phone shutter (Start Capture) is only for:
+GO capture modes:
   - 3D tour — path-confined walkthrough. API kind stays ``splat``.
   - Floor plan — room-corner tracing frames.
+  - Virtual visit — free-roam Gaussian splat add-on. Vendors deliver via
+    Polycam URL or .ply/.splat upload in GO (owned GPU cook later).
 
-Virtual visit (Gaussian splat / SuperSplat free-roam) is NOT a phone
-capture mode. It stays on the Polycam URL / .ply / .splat upload path.
 Professional HDR stills stay on the vendor camera.
 
 Detection uses real ``jobs`` columns: package_id, package_name, job_type,
@@ -18,9 +18,11 @@ import re
 from typing import Any
 
 # Capture API kind=splat is the path-confined 3D tour session. UX copy says
-# "3D tour", never "virtual visit".
+# "3D tour", never "virtual visit". kind=visit is the free-roam Virtual Visit
+# add-on (Polycam / .ply / .splat bridge until owned GPU cook).
 KIND_TOUR = "splat"
 KIND_FLOORPLAN = "floorplan"
+KIND_VISIT = "visit"
 
 # Current www packages that include a floor plan (photo + drone standard
 # tiers). Photos-only explicitly drops it. Legacy Standard+ also included it.
@@ -291,7 +293,7 @@ def job_capture_entitlements(job: dict | None) -> dict[str, bool]:
 
     ``tour`` — path-confined 3D tour (API kind=splat). Not virtual visit.
     ``floorplan`` — in-app floor plan capture.
-    ``visit`` — virtual visit was purchased; not a phone shutter mode.
+    ``visit`` — virtual visit add-on purchased; deliver via GO Polycam/.ply/.splat.
     """
     job = job or {}
     addons = _addon_records(job.get("add_ons"))
@@ -328,6 +330,8 @@ def kind_purchased(job: dict | None, kind: str) -> bool:
         return flags["floorplan"]
     if kind == KIND_TOUR:
         return flags["tour"]
+    if kind == KIND_VISIT:
+        return flags["visit"]
     return False
 
 
@@ -338,10 +342,12 @@ def capture_forbidden_message(kind: str, flags: dict[str, bool] | None = None) -
     if kind == KIND_TOUR:
         if flags.get("visit") and not flags.get("tour"):
             return (
-                "This job has no 3D tour. Virtual visit is not captured in GO — "
-                "use the Polycam URL / .ply / .splat upload path."
+                "This job has no 3D tour. Open Virtual Visit in GO to paste a Polycam URL "
+                "or upload a .ply / .splat."
             )
         return "This job has no 3D tour. Start Capture does not shoot a tour that was not purchased."
+    if kind == KIND_VISIT:
+        return "This job has no Virtual Visit add-on. Free-roam Visit is only for jobs that purchased it."
     return "That capture mode is not on this job."
 
 
