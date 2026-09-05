@@ -31,6 +31,16 @@ _EMAIL_LOGO_URL = "https://www.brxs.ca/bricks-mark.png"
 _OS_DESK_URL = (os.environ.get("OS_WEB_URL") or "https://app.brxs.ca").rstrip("/")
 
 
+def _listing_desk_url(job_id: str | None) -> str:
+    """Deep link to the listing file (property_id == jobs.id). Never invent a path."""
+    jid = (job_id or "").strip()
+    if not jid:
+        return f"{_OS_DESK_URL}/properties"
+    return f"{_OS_DESK_URL}/properties/{jid}"
+
+
+
+
 def _branded_card(title: str, body_inner: str) -> str:
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
@@ -207,7 +217,7 @@ async def notify_booking_confirmed(job_id: str) -> None:
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">Your shoot is confirmed. A photographer is on it in Bricks GO.</p>
 <table style="border-collapse:collapse;font-size:14px;width:100%">{rows}</table>
 <p style="margin-top:16px;font-size:13px;color:#888;line-height:1.5">
-  Open the listing on your desk: <a href="{_OS_DESK_URL}/properties" style="color:#d2542b">{_OS_DESK_URL}/properties</a>
+  Open this listing on your desk: <a href="{_listing_desk_url(job_id)}" style="color:#d2542b">{_listing_desk_url(job_id)}</a>
 </p>
 <p style="font-size:13px;color:#888;line-height:1.5">
   Need to reschedule? Reply to this email or write booking@brxs.ca.
@@ -359,13 +369,14 @@ async def notify_capture_delivered(
     )
 
     if agent_email:
-        desk = f"{_OS_DESK_URL}/properties"
+        desk = _listing_desk_url(job_id)
         body = f"""
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {_html.escape(agent_name)},</p>
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">
   {ready_phrase} for <strong>{_html.escape(addr)}</strong> {verb} on the listing file.
   {open_it} on your desk
   {'or via the link(s) below' if links else ''}.
+  From the listing, use <strong>Copy client link</strong> to share with your seller.
 </p>
 {links}
 <p style="margin-top:16px;font-size:13px;color:#888;line-height:1.5">
