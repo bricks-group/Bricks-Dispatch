@@ -1,6 +1,6 @@
 """Photographer job list at GET /api/jobs.
 
-Expo schedule + uploads and Swift UploadsView expect a JSON array.
+Expo schedule + uploads, Swift Schedule + UploadsView expect a JSON array.
 Optional ?status= filter matches historical tests.
 Scoped to the caller's assigned jobs (Owner aliases include 0c3fa7c2).
 """

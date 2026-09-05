@@ -281,10 +281,10 @@ final class ScheduleStore: ObservableObject {
 
     func loadAllJobs() async {
         do {
-            struct JobsWrapper: Decodable { let jobs: [DispatchJob] }
-            let res: JobsWrapper = try await api.get("/api/jobs")
+            // GET /api/jobs returns a bare JSON array (same as Expo + UploadsView).
+            let jobs: [DispatchJob] = try await api.get("/api/jobs")
             var map: [String: [DispatchJob]] = [:]
-            for job in res.jobs {
+            for job in jobs {
                 map[job.scheduledDate, default: []].append(job)
             }
             for key in map.keys {

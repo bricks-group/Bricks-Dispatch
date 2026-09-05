@@ -1,7 +1,7 @@
 {
   "name": "bricks GO",
   "short_name": "GO",
-  "description": "bricks GO — capture and dispatch (preview)",
+  "description": "bricks GO — capture and dispatch",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
