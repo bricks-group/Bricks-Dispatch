@@ -62,6 +62,11 @@ def test_intake_awaits_admin_notify_not_background_tasks():
     assert "await create_notification" in src
     assert "background_tasks.add_task" not in src
     assert "BackgroundTasks" not in src or "BackgroundTasks" in src and "drops FastAPI BackgroundTasks" in src
+    assert "paid_booking_admin_subject" in src
+    assert "email_html=" in src
+    assert "_paid_booking_admin_email_html" in src
+    assert "New paid booking:" not in src
+    assert "job_data.get('address', job_id)" not in src
 
 
 def test_format_shoot_window_matches_go_web():

@@ -1,5 +1,7 @@
+import html as _html
 import logging
 import os
+import re
 from ..shared.database import get_db
 from ..shared.schemas import NotificationRecord
 
@@ -177,6 +179,8 @@ def _assignment_email_html(name: str, address: str, when_line: str, go_url: str)
 
 
 def _build_html_email(title: str, body: str) -> str:
+    safe_title = _html.escape(title or "")
+    safe_body = _html.escape(body or "").replace("\n", "<br>")
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
@@ -190,11 +194,102 @@ def _build_html_email(title: str, body: str) -> str:
 </tr>
 </table>
 <div style="background:#d2542b;padding:16px 24px;margin-top:12px">
-<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">{title}</h1>
+<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">{safe_title}</h1>
 </div>
-<div style="padding:24px"><p style="color:#333;font-size:15px;line-height:1.5;margin:0;font-family:{_EMAIL_FONT_STACK}">{body}</p></div>
+<div style="padding:24px"><p style="color:#333;font-size:15px;line-height:1.5;margin:0;font-family:{_EMAIL_FONT_STACK}">{safe_body}</p></div>
 <div style="padding:12px 24px;border-top:1px solid #eee;font-size:12px;color:#888;font-family:{_EMAIL_FONT_STACK}">
 <p style="margin:0">Bricks &middot; brxs.ca</p></div>
+</div></body></html>"""
+
+
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _looks_like_uuid(value: str | None) -> bool:
+    return bool(_UUID_RE.match((value or "").strip()))
+
+
+def short_booking_ref(booking_id: str | None) -> str:
+    """First 8 characters of a booking id. Never return a full UUID."""
+    raw = (booking_id or "").strip()
+    if not raw:
+        return "n/a"
+    return raw[:8]
+
+
+def _truncate_clean(text: str, max_len: int = 60) -> str:
+    """Truncate on a word/punctuation boundary. Never mid-word."""
+    text = " ".join((text or "").split())
+    if len(text) <= max_len:
+        return text
+    slice_ = text[:max_len]
+    cut = -1
+    for sep in (" ", ",", "·"):
+        idx = slice_.rfind(sep)
+        if idx > cut:
+            cut = idx
+    if cut >= max(12, max_len // 3):
+        slice_ = slice_[:cut]
+    return slice_.rstrip(" ,;·-") + "…"
+
+
+def paid_booking_admin_subject(address: str | None) -> str:
+    """Inbox subject: no emoji, no raw UUID, address truncated ~60 chars."""
+    addr = (address or "").strip()
+    if not addr or _looks_like_uuid(addr):
+        return "New booking paid"
+    return f"New booking paid · {_truncate_clean(addr, 60)}"
+
+
+def _email_kv_row(label: str, value: str) -> str:
+    return (
+        f'<tr>'
+        f'<td style="padding:6px 0;color:#888;width:110px;vertical-align:top;'
+        f'font-family:{_EMAIL_FONT_STACK}">{_html.escape(label)}</td>'
+        f'<td style="padding:6px 0;color:#333;font-family:{_EMAIL_FONT_STACK}">'
+        f'{_html.escape(value)}</td>'
+        f'</tr>'
+    )
+
+
+def _paid_booking_admin_email_html(
+    *,
+    address: str,
+    package: str,
+    when: str,
+    assignee: str,
+    booking_ref: str,
+) -> str:
+    """Branded admin card for a newly paid Booking intake job."""
+    rows = "".join([
+        _email_kv_row("Address", address or "n/a"),
+        _email_kv_row("Package", package or "n/a"),
+        _email_kv_row("When", when or "n/a"),
+        _email_kv_row("Assignee", assignee or "unassigned"),
+        _email_kv_row("Booking ref", booking_ref or "n/a"),
+    ])
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px">
+<div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
+<tr>
+<td width="16" height="16" style="width:16px;height:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
+<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
+<td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
+</tr>
+</table>
+<div style="background:#D2542B;padding:16px 24px;margin-top:12px">
+<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">New booking paid</h1>
+</div>
+<div style="padding:24px">
+<p style="color:#555;line-height:1.6;margin:0 0 16px 0;font-family:{_EMAIL_FONT_STACK}">A paid shoot just landed from Booking.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;font-size:14px;width:100%;font-family:{_EMAIL_FONT_STACK}">{rows}</table>
+</div>
+<div style="padding:12px 24px;border-top:1px solid #eee;font-size:12px;color:#888;font-family:{_EMAIL_FONT_STACK}">
+<p style="margin:0">Bricks · brxs.ca</p></div>
 </div></body></html>"""
 
 
@@ -444,6 +539,7 @@ async def create_notification(
     *,
     email_to: str | None = None,
     email_subject: str | None = None,
+    email_html: str | None = None,
     member_id: str | None = None,
     send_push: bool = True,
 ):
@@ -469,7 +565,7 @@ async def create_notification(
         await send_email_via_resend(
             to=email_to,
             subject=email_subject or title,
-            html=_build_html_email(title, body),
+            html=email_html or _build_html_email(title, body),
         )
     return notif_dict
 

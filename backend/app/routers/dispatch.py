@@ -6,7 +6,12 @@ from fastapi import APIRouter, Header, HTTPException
 from ..shared.schemas import JobIntakeRequest, Job, JobStatusUpdate
 from ..shared.database import get_db
 from ..services.vendor_selection import assign_vendor_for_job
-from ..services.notifications import create_notification
+from ..services.notifications import (
+    create_notification,
+    paid_booking_admin_subject,
+    short_booking_ref,
+    _paid_booking_admin_email_html,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,20 +84,33 @@ async def create_dispatch_job(
             window = format_shoot_window(job_data)
             sched = (job_data.get("scheduled_date") or "n/a")
             when = f"{sched} · {window}" if window else str(sched)
+            address = (job_data.get("address") or "").strip() or "n/a"
+            pkg_name = (job_data.get("package_name") or "").strip() or "n/a"
+            pkg_price = job_data.get("package_price")
+            package = f"{pkg_name} (${pkg_price})" if pkg_price is not None else pkg_name
+            assignee = assignee_id or "unassigned"
+            booking_ref = short_booking_ref(job_data.get("booking_id"))
             await create_notification(
                 title="New paid booking",
                 body=(
                     f"New job from Booking.\n"
-                    f"Address: {job_data.get('address', 'n/a')}\n"
-                    f"Package: {job_data.get('package_name', 'n/a')} (${job_data.get('package_price', 'n/a')})\n"
+                    f"Address: {address}\n"
+                    f"Package: {package}\n"
                     f"When: {when}\n"
-                    f"Assignee: {assignee_id or 'unassigned'}\n"
-                    f"Booking ID: {job_data.get('booking_id', 'n/a')}"
+                    f"Assignee: {assignee}\n"
+                    f"Booking ref: {booking_ref}"
                 ),
                 ntype="new_booking",
                 data={"job_id": job_id, "assignee_id": assignee_id or ""},
                 email_to=ADMIN_NOTIFICATION_EMAIL,
-                email_subject=f"New paid booking: {job_data.get('address', job_id)}",
+                email_subject=paid_booking_admin_subject(job_data.get("address")),
+                email_html=_paid_booking_admin_email_html(
+                    address=address,
+                    package=package,
+                    when=when,
+                    assignee=assignee,
+                    booking_ref=booking_ref,
+                ),
             )
         except Exception:
             logger.exception("Admin new-booking notify failed for job %s", job_id)
