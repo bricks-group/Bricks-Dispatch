@@ -39,8 +39,39 @@ def _clock_hhmm(raw) -> str:
     return s[:5] if s else ""
 
 
+_PACKAGE_LINES: dict[str, tuple[str, str]] = {
+    "photos_only": ("Photos only", "HDR photo"),
+    "photosonly": ("Photos only", "HDR photo"),
+    "essentials": ("Essentials", "HDR photo + Drone + Floor plan"),
+    "story": ("Story", "HDR photo + Drone + Cinematic reel + Floor plan"),
+    "showcase": ("Showcase", "HDR photo + Drone + Cinematic reel + Virtual tour + Floor plan"),
+    "suite": ("Full suite", "HDR photo + Drone + Cinematic reel + Virtual tour + Twilight + Floor plan"),
+    "full": ("Full suite", "HDR photo + Drone + Cinematic reel + Virtual tour + Twilight + Floor plan"),
+}
+
+
+def format_package_line(package_name: str | None, package_id: str | None = None) -> str:
+    """Expand bare Showcase → Showcase — inclusions (matches /book servicesSummary)."""
+    raw = (package_name or "").strip()
+    if " — " in raw or " – " in raw:
+        return raw
+    key = (package_id or "").strip().lower().replace("-", "_")
+    if not key and raw:
+        key = raw.lower().replace(" ", "_").replace("-", "_")
+    if key not in _PACKAGE_LINES:
+        low = raw.lower()
+        for token in ("photos_only", "photos only", "essentials", "story", "showcase", "suite", "full"):
+            if token == low or token.replace("_", " ") == low or token in low:
+                key = token.replace(" ", "_")
+                break
+    if key in _PACKAGE_LINES:
+        label, bits = _PACKAGE_LINES[key]
+        return f"{label} — {bits}"
+    return raw or "Listing media"
+
+
 def format_shoot_window(job: dict | None) -> str:
-    """Match GO web shoot-window.ts. Never invent times."""
+    """Match GO web shoot-window.ts. Prefer stored clocks; fill from preferred_window."""
     job = job or {}
     start = _clock_hhmm(job.get("time_window_start"))
     end = _clock_hhmm(job.get("time_window_end"))
@@ -48,6 +79,12 @@ def format_shoot_window(job: dict | None) -> str:
     label = ""
     if preferred in _CANONICAL_WINDOWS:
         label = _CANONICAL_WINDOWS[preferred][2]
+        # Preferred morning/afternoon/evening always maps to a known ET range —
+        # never leave the email as label-only ("Afternoon").
+        if not start:
+            start = _CANONICAL_WINDOWS[preferred][0]
+        if not end:
+            end = _CANONICAL_WINDOWS[preferred][1]
     elif start and end:
         for _k, (s, e, lab) in _CANONICAL_WINDOWS.items():
             if s == start and e == end:

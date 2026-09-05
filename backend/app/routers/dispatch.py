@@ -80,12 +80,22 @@ async def create_dispatch_job(
         # Await notify — Vercel serverless drops FastAPI BackgroundTasks after response
         # (same class of bug as pending_assignment with empty assignee_id).
         try:
-            from ..services.notifications import format_shoot_window
+            from ..services.notifications import format_shoot_window, format_package_line
             window = format_shoot_window(job_data)
             sched = (job_data.get("scheduled_date") or "n/a")
+            # Prefer human date when YMD
+            if isinstance(sched, str) and len(sched) >= 10 and sched[4] == "-":
+                try:
+                    from datetime import date as _date
+                    sched = _date.fromisoformat(sched[:10]).strftime("%a, %b %d, %Y").replace(" 0", " ")
+                except Exception:
+                    sched = sched[:10]
             when = f"{sched} · {window}" if window else str(sched)
             address = (job_data.get("address") or "").strip() or "n/a"
-            pkg_name = (job_data.get("package_name") or "").strip() or "n/a"
+            pkg_name = format_package_line(
+                job_data.get("package_name"),
+                job_data.get("package_id"),
+            )
             pkg_price = job_data.get("package_price")
             package = f"{pkg_name} (${pkg_price})" if pkg_price is not None else pkg_name
             assignee = assignee_id or "unassigned"
