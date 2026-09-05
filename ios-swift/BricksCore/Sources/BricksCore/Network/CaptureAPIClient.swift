@@ -560,6 +560,127 @@ public final class CaptureAPIClient: @unchecked Sendable {
         }
     }
 
+    // MARK: — Virtual Visit (deliver path, not shutter)
+
+    public struct VisitSignPayload: Sendable {
+        public var storagePath: String
+        public var signedURL: String
+        public var contentType: String
+    }
+
+    public struct VisitDeliverResult: Sendable {
+        public var ok: Bool
+        public var message: String?
+        public var error: String?
+        public var code: String?
+
+        public static func failure(_ error: String, code: String? = nil) -> VisitDeliverResult {
+            VisitDeliverResult(ok: false, message: nil, error: error, code: code)
+        }
+
+        public static func success(_ message: String? = nil) -> VisitDeliverResult {
+            VisitDeliverResult(ok: true, message: message, error: nil, code: nil)
+        }
+    }
+
+    /// Mint a signed PUT for .ply / .splat / .spz — same as web `/api/capture/visit/sign`.
+    public func signVisitUpload(jobId: String, filename: String) async -> Result<VisitSignPayload, String> {
+        guard !jobId.isEmpty else { return .failure("Missing job") }
+        do {
+            let url = BricksAPIURL.make(base: baseURL, path: "/api/capture/visit/sign")
+            let (data, http) = try await jsonRequest(url: url, method: "POST", body: [
+                "job_id": jobId,
+                "filename": filename,
+            ])
+            if http.statusCode < 200 || http.statusCode >= 300 {
+                let fail = Self.fail(data, fallback: "HTTP \(http.statusCode)")
+                return .failure(fail.error ?? "Could not start visit upload")
+            }
+            guard let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                return .failure("Bad visit sign response")
+            }
+            let storage = Self.string(dict["storage_path"] ?? dict["storagePath"] ?? dict["path"]) ?? ""
+            let signed = Self.string(dict["signed_url"] ?? dict["signedUrl"]) ?? ""
+            guard !storage.isEmpty, !signed.isEmpty else {
+                return .failure("No signed upload URL")
+            }
+            let ct = Self.string(dict["content_type"] ?? dict["contentType"]) ?? "application/octet-stream"
+            return .success(VisitSignPayload(storagePath: storage, signedURL: signed, contentType: ct))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    /// Deliver Polycam URL or previously-signed storage_path onto the listing file.
+    public func deliverVisit(
+        jobId: String,
+        polycamURL: String? = nil,
+        storagePath: String? = nil,
+        title: String = "Virtual Visit"
+    ) async -> VisitDeliverResult {
+        guard !jobId.isEmpty else { return .failure("Missing job") }
+        let urlTrim = (polycamURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let pathTrim = (storagePath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if urlTrim.isEmpty && pathTrim.isEmpty {
+            return .failure("Provide a Polycam URL or a visit file")
+        }
+        if !urlTrim.isEmpty && !pathTrim.isEmpty {
+            return .failure("Send either a Polycam URL or a file path, not both")
+        }
+        do {
+            var body: [String: Any] = [
+                "job_id": jobId,
+                "title": title,
+            ]
+            if !urlTrim.isEmpty { body["polycam_url"] = urlTrim }
+            if !pathTrim.isEmpty { body["storage_path"] = pathTrim }
+
+            let url = BricksAPIURL.make(base: baseURL, path: "/api/capture/visit/deliver")
+            let (data, http) = try await jsonRequest(url: url, method: "POST", body: body)
+            if http.statusCode < 200 || http.statusCode >= 300 {
+                let fail = Self.fail(data, fallback: "HTTP \(http.statusCode)")
+                return .failure(fail.error ?? "Could not deliver visit", code: fail.code)
+            }
+            let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let msg = Self.string(dict?["message"])
+            return .success(msg)
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    /// Sign → PUT bytes → deliver. Mirrors GO web VisitCapturePage file path.
+    public func uploadAndDeliverVisitFile(
+        jobId: String,
+        filename: String,
+        fileData: Data,
+        title: String = "Virtual Visit"
+    ) async -> VisitDeliverResult {
+        guard !fileData.isEmpty else { return .failure("Missing visit file") }
+        switch await signVisitUpload(jobId: jobId, filename: filename) {
+        case .failure(let err):
+            return .failure(err)
+        case .success(let signed):
+            guard let putURL = URL(string: signed.signedURL) else {
+                return .failure("No signed upload URL")
+            }
+            do {
+                var put = URLRequest(url: putURL)
+                put.httpMethod = "PUT"
+                put.setValue(signed.contentType, forHTTPHeaderField: "Content-Type")
+                put.httpBody = fileData
+                let (_, putResp) = try await urlSession.data(for: put)
+                let putHTTP = putResp as! HTTPURLResponse
+                if putHTTP.statusCode < 200 || putHTTP.statusCode >= 300 {
+                    return .failure("Visit file upload failed (\(putHTTP.statusCode))")
+                }
+                return await deliverVisit(jobId: jobId, storagePath: signed.storagePath, title: title)
+            } catch {
+                return .failure(error.localizedDescription)
+            }
+        }
+    }
+
     // MARK: — HTTP
 
     private func jsonRequest(url: URL, method: String, body: [String: Any]?) async throws -> (Data, HTTPURLResponse) {

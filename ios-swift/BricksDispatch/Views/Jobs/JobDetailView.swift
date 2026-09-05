@@ -13,6 +13,7 @@ struct JobDetailView: View {
     @State private var listingBusy = false
     @State private var showFloorPlanCapture = false
     @State private var showSplatCapture = false
+    @State private var showVisitDeliver = false
     @State private var showCaptureReview = false
     @State private var reviewKind: CaptureKind = .splat
     @State private var captureStatusRows: [CaptureStatusRow] = []
@@ -131,6 +132,9 @@ struct JobDetailView: View {
         }
         .fullScreenCover(isPresented: $showSplatCapture) {
             TourCaptureView(job: live)
+        }
+        .fullScreenCover(isPresented: $showVisitDeliver) {
+            VisitDeliverView(job: live)
         }
         .fullScreenCover(isPresented: $showCaptureReview) {
             CaptureReviewHost(job: live, kind: reviewKind)
@@ -489,7 +493,14 @@ struct JobDetailView: View {
                 }
                 .buttonStyle(BricksSecondaryButton())
             }
-            if !modes.hasPhoneMode {
+            if modes.visit {
+                Button { showVisitDeliver = true } label: {
+                    Label("Deliver Visit", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(BricksSecondaryButton())
+            }
+            if !modes.hasGOAction {
                 Text(modes.neitherCopy)
                     .font(.footnote)
                     .foregroundStyle(.secondary)

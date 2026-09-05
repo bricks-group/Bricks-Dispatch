@@ -13,11 +13,14 @@ public struct CaptureEntitlements: Codable, Sendable, Hashable {
 
     public var hasPhoneMode: Bool { tour || floorplan }
 
+    /// True when GO has any deliver/capture action for this job (shutter or Visit deliver).
+    public var hasGOAction: Bool { tour || floorplan || visit }
+
     public var neitherCopy: String {
-        if visit && !tour {
-            return "Virtual visit is not captured in GO. Use the Polycam URL / .ply / .splat upload path. HDR stills stay on the camera."
+        if visit && !tour && !floorplan {
+            return "This job has Virtual Visit only — open Deliver Visit to paste a Polycam URL or upload a .ply / .splat. HDR stills stay on the camera."
         }
-        return "This job has no in-app 3D tour or floor plan. HDR stills stay on the camera."
+        return "This job has no in-app 3D tour, floor plan, or Virtual Visit. HDR stills stay on the camera."
     }
 }
 
