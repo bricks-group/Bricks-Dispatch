@@ -716,9 +716,11 @@ def test_notify_capture_delivered_reuses_job_delivered():
     src = (ROOT / "app/services/client_comms.py").read_text()
     assert "async def notify_capture_delivered" in src
     assert "/api/internal/comms/job-delivered" in src
-    assert '"products"' in src or "'products'" in src
-    # Same BOOKING path as photo delivery
+    assert '"products"' in src or "'products'" in src or "clean_products" in src
+    # Companion Book fallback still wired; www uses agent_email Resend.
     assert "_call_booking_comms" in src
+    assert "agent_email" in src
+    assert "_email_agent_direct" in src
 
 
 def test_deliver_session_calls_notify_only_when_flagged():
@@ -746,15 +748,17 @@ def test_notify_skips_when_not_first_of_kind_in_source():
 
 
 def test_notify_capture_delivered_posts_products_shape():
-    """Payload shape for Companion job-delivered (products + address)."""
+    """Payload shape for Companion job-delivered (products + address) + www agent_email."""
     src = (ROOT / "app/services/client_comms.py").read_text()
     fn = src.split("async def notify_capture_delivered")[1]
-    assert '"products": products' in fn or "'products': products" in fn
+    assert '"products": clean_products' in fn or "'products': clean_products" in fn
     assert '"address": addr' in fn or "'address': addr" in fn
     assert '"booking_id": bid' in fn or "'booking_id': bid" in fn
     assert "delivery_urls" in fn
     assert "if not products:" in fn
     assert "return False" in fn.split("if not products:")[1][:80]
+    assert "agent_email" in fn
+    assert "_email_agent_direct" in fn
 
 
 def test_companion_job_delivered_handles_products():
