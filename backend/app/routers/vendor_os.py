@@ -7,7 +7,7 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException
 from pydantic import BaseModel
 
 from ..services.capture_entitlements import stamp_capture
@@ -596,10 +596,29 @@ async def create_job(
         "created_at": now_iso,
         "updated_at": now_iso,
     }
+    from ..services.visit_checklist import ensure_visit_checklist
+    from ..services.shoot_duration import estimate_shoot_duration_minutes
+    job_row["checklist"] = ensure_visit_checklist(job_row)
+    job_row["estimated_duration_min"] = estimate_shoot_duration_minutes(job_row)
 
     try:
-        result = await (await get_db()).table("jobs").insert(job_row).execute()
-        return {"id": job_id, **job_row}
+        from ..services.vendor_profile import _missing_column
+        insert_row = dict(job_row)
+        result = None
+        last_err = None
+        for _ in range(6):
+            try:
+                result = await (await get_db()).table("jobs").insert(insert_row).execute()
+                break
+            except Exception as e:
+                last_err = e
+                miss = _missing_column(str(e), list(insert_row.keys()))
+                if not miss:
+                    raise
+                insert_row.pop(miss, None)
+        if result is None:
+            raise last_err or RuntimeError("insert failed")
+        return {"id": job_id, **insert_row}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create job: {type(e).__name__}: {str(e)}")
 
@@ -733,6 +752,209 @@ async def update_vendor_availability(
     await write_audit_event(actor_id, "availability", actor_id, "update", vendor_id=vendor_id, details=update_data)
     res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
     return res.data
+
+
+
+
+@router.get("/calendars")
+async def list_vendor_calendars(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """List calendar connection status for the actor — honest Connected only."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    from ..services.vendor_calendars import list_vendor_calendar_status, google_oauth_configured, microsoft_oauth_configured
+    db = await get_db()
+    statuses = await list_vendor_calendar_status(db, actor_id)
+    return {
+        "connections": statuses,
+        "oauth": {
+            "google_configured": google_oauth_configured(),
+            "microsoft_configured": microsoft_oauth_configured(),
+        },
+        "copy": (
+            "Connecting a calendar tells Bricks when you’re free so auto-assign "
+            "only offers jobs that fit your real schedule. Busy on any connected "
+            "calendar = you won’t get that slot. Manual hours still apply if no "
+            "calendar is connected."
+        ),
+    }
+
+
+@router.post("/calendars/{provider}/connect")
+async def connect_vendor_calendar(
+    provider: str,
+    payload: dict | None = Body(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Start OAuth or save CalDAV/ICS credentials. Never fakes Connected."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    vendor_id = member.get("vendor_id", "default_vendor")
+    provider = (provider or "").strip().lower()
+    payload = payload or {}
+    from ..services.vendor_calendars import (
+        google_oauth_configured,
+        microsoft_oauth_configured,
+        connection_status,
+        PROVIDERS,
+    )
+    if provider not in PROVIDERS:
+        api_error(400, "Unknown calendar provider", "invalid_provider")
+
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    if provider == "google":
+        if not google_oauth_configured():
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "Google OAuth client id/secret not configured. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET, then retry.",
+                "oauth_url": None,
+            }
+        client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID") or os.environ.get("GOOGLE_CLIENT_ID") or os.environ.get("GOOGLE_CALENDAR_CLIENT_ID")
+        redirect = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI") or os.environ.get("VENDOR_CALENDAR_OAUTH_REDIRECT") or ""
+        if not redirect:
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "GOOGLE_OAUTH_REDIRECT_URI is not set — cannot start Google OAuth.",
+                "oauth_url": None,
+            }
+        scope = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.freebusy"
+        oauth_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth"
+            f"?client_id={client_id}&redirect_uri={redirect}&response_type=code"
+            f"&scope={scope.replace(' ', '%20')}&access_type=offline&prompt=consent"
+            f"&state={actor_id}"
+        )
+        # Persist placeholder row only when a token is supplied (callback). Honest: not Connected yet.
+        if payload.get("access_token"):
+            row = {
+                "member_id": actor_id,
+                "vendor_id": vendor_id,
+                "provider": "google",
+                "access_token": payload.get("access_token"),
+                "refresh_token": payload.get("refresh_token"),
+                "updated_at": now,
+                "created_at": now,
+            }
+            try:
+                await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
+            except Exception as e:
+                logger.warning("calendar upsert soft-fail: %s", e)
+            return connection_status(row)
+        return {"connected": False, "status": "oauth_ready", "detail": "Open Google OAuth to connect", "oauth_url": oauth_url}
+
+    if provider == "microsoft":
+        if not microsoft_oauth_configured():
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "Microsoft OAuth client id/secret not configured. Set MICROSOFT_OAUTH_CLIENT_ID / AZURE_AD_CLIENT_ID, then retry.",
+                "oauth_url": None,
+            }
+        client_id = (
+            os.environ.get("MICROSOFT_OAUTH_CLIENT_ID")
+            or os.environ.get("AZURE_AD_CLIENT_ID")
+            or os.environ.get("MS_GRAPH_CLIENT_ID")
+        )
+        redirect = os.environ.get("MICROSOFT_OAUTH_REDIRECT_URI") or os.environ.get("VENDOR_CALENDAR_OAUTH_REDIRECT") or ""
+        if not redirect:
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "MICROSOFT_OAUTH_REDIRECT_URI is not set — cannot start Outlook OAuth.",
+                "oauth_url": None,
+            }
+        oauth_url = (
+            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+            f"?client_id={client_id}&response_type=code&redirect_uri={redirect}"
+            "&scope=Calendars.Read%20offline_access%20User.Read"
+            f"&state={actor_id}"
+        )
+        if payload.get("access_token"):
+            row = {
+                "member_id": actor_id,
+                "vendor_id": vendor_id,
+                "provider": "microsoft",
+                "access_token": payload.get("access_token"),
+                "refresh_token": payload.get("refresh_token"),
+                "updated_at": now,
+                "created_at": now,
+            }
+            try:
+                await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
+            except Exception as e:
+                logger.warning("calendar upsert soft-fail: %s", e)
+            return connection_status(row)
+        return {"connected": False, "status": "oauth_ready", "detail": "Open Microsoft OAuth to connect", "oauth_url": oauth_url}
+
+    if provider == "apple":
+        caldav_url = (payload.get("caldav_url") or "").strip()
+        password = (payload.get("app_password") or payload.get("caldav_password") or "").strip()
+        username = (payload.get("username") or member.get("email") or "").strip()
+        if not caldav_url or not password:
+            return {
+                "connected": False,
+                "status": "needs_app_password",
+                "detail": "Apple Calendar needs an iCloud CalDAV URL and an app-specific password. Connected is only shown after both are saved.",
+            }
+        row = {
+            "member_id": actor_id,
+            "vendor_id": vendor_id,
+            "provider": "apple",
+            "caldav_url": caldav_url,
+            "caldav_password": password,
+            "caldav_username": username,
+            "updated_at": now,
+            "created_at": now,
+        }
+        try:
+            await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
+        except Exception as e:
+            logger.warning("calendar upsert soft-fail: %s", e)
+            return {"connected": False, "status": "error", "detail": f"Could not save CalDAV connection: {e}"}
+        return connection_status(row)
+
+    if provider == "ics":
+        ics_url = (payload.get("ics_url") or "").strip()
+        if not ics_url:
+            return {"connected": False, "status": "not_connected", "detail": "Paste a public ICS calendar URL"}
+        row = {
+            "member_id": actor_id,
+            "vendor_id": vendor_id,
+            "provider": "ics",
+            "ics_url": ics_url,
+            "updated_at": now,
+            "created_at": now,
+        }
+        try:
+            await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
+        except Exception as e:
+            logger.warning("calendar upsert soft-fail: %s", e)
+            return {"connected": False, "status": "error", "detail": f"Could not save ICS URL: {e}"}
+        return connection_status(row)
+
+    api_error(400, "Unsupported provider", "invalid_provider")
+
+
+@router.delete("/calendars/{provider}")
+async def disconnect_vendor_calendar(
+    provider: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    provider = (provider or "").strip().lower()
+    db = await get_db()
+    try:
+        await db.table("vendor_calendar_connections").delete().eq("member_id", actor_id).eq("provider", provider).execute()
+    except Exception as e:
+        logger.warning("calendar disconnect soft-fail: %s", e)
+    return {"connected": False, "provider": provider, "status": "not_connected", "detail": "Disconnected"}
 
 
 @router.get("/performance")

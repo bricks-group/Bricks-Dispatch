@@ -17,7 +17,7 @@ const SLIDES = [
   {
     eye: 'Auto-dispatch',
     head: 'Jobs come to you.',
-    body: 'No bidding, no DMs. Every shoot is confirmed, timed, and routed before it reaches your phone.',
+    body: 'No bidding, no DMs. Connect a calendar on Availability so auto-assign only offers slots that fit your real schedule.',
     img: 'JOB OFFER CARD',
   },
   {

@@ -106,8 +106,33 @@ async def update_applicant_status(
     
     if not res.data:
         api_error(404, "Applicant not found", "applicant_not_found")
-        
-    return res.data[0]
+
+    approved_row = res.data[0]
+    if update_data.get("onboarding_status") == "approved":
+        try:
+            email = (approved_row.get("email") or "").strip()
+            if email:
+                from ..services.notifications import create_notification
+                await create_notification(
+                    title="Welcome to Bricks GO",
+                    body=(
+                        "You’re approved. Connect a calendar on Availability so auto-assign "
+                        "only offers jobs that fit your real schedule."
+                    ),
+                    ntype="onboarding_approved",
+                    data={"member_id": member_id},
+                    email_to=email,
+                    email_subject="You’re approved — connect your calendar",
+                    email_html=(
+                        "<p>You’re approved on Bricks GO.</p>"
+                        "<p>Connect a calendar on <b>Availability</b> so auto-assign only "
+                        "offers jobs that fit your real schedule. Busy on any connected "
+                        "calendar = you won’t get that slot.</p>"
+                    ),
+                )
+        except Exception:
+            pass
+    return approved_row
 
 async def _require_applicant_in_own_vendor(db, member_id: str, vendor_id: str):
     """IDOR guard (fixed 2026-08-15): list_applicants/update_applicant_status both

@@ -102,6 +102,7 @@ export function OverviewPage() {
                       {['assigned', 'in_progress'].includes(job.status || '') ? (
                         <TodayCaptureEntry job={job} />
                       ) : null}
+                      <ShootChecklist job={job} />
                     </li>
                   ))}
                 </ul>
@@ -131,6 +132,36 @@ export function OverviewPage() {
       )}
 
       {!data && !error && <p className="muted">Loading…</p>}
+    </div>
+  );
+}
+
+
+function checklistItems(job: Job): Array<{ id?: string; label: string; completed?: boolean }> {
+  const raw = job.checklist;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item: any, i: number) =>
+    typeof item === 'string'
+      ? { id: String(i), label: item, completed: false }
+      : { id: item?.id || String(i), label: String(item?.label || ''), completed: !!item?.completed }
+  ).filter((x) => x.label);
+}
+
+function ShootChecklist({ job }: { job: Job }) {
+  const items = checklistItems(job);
+  if (!items.length) return null;
+  return (
+    <div className="today-checklist" style={{ width: '100%', marginTop: 8 }}>
+      <p className="muted" style={{ margin: 0, padding: 0, fontSize: 11, letterSpacing: '0.06em' }}>
+        SHOOT CHECKLIST · ONE VISIT
+      </p>
+      <ol style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+        {items.map((item) => (
+          <li key={item.id} className={item.completed ? 'muted' : undefined} style={{ marginBottom: 2 }}>
+            {item.label.replace(/^\d+\.\s*/, '')}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

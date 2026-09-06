@@ -429,6 +429,7 @@ function JobListingPanel({
         {['assigned', 'in_progress'].includes(job.status) ? (
           <CaptureStartBlock job={job} />
         ) : null}
+        <JobShootChecklist job={job} />
         <CaptureStatusBlock job={job} />
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS</p>
@@ -466,6 +467,31 @@ function JobListingPanel({
         )}
       </div>
     </section>
+  );
+}
+
+
+function JobShootChecklist({ job }: { job: Job }) {
+  const raw = job.checklist;
+  const items = Array.isArray(raw)
+    ? raw.map((item: any, i: number) =>
+        typeof item === 'string'
+          ? { id: String(i), label: item, completed: false }
+          : { id: item?.id || String(i), label: String(item?.label || ''), completed: !!item?.completed }
+      ).filter((x: any) => x.label)
+    : [];
+  if (!items.length) return null;
+  return (
+    <div>
+      <p className="muted" style={{ padding: 0, margin: 0, fontSize: 11, letterSpacing: '0.06em' }}>
+        SHOOT CHECKLIST · ONE VISIT
+      </p>
+      <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+        {items.map((item: any) => (
+          <li key={item.id} className={item.completed ? 'muted' : undefined}>{item.label}</li>
+        ))}
+      </ol>
+    </div>
   );
 }
 

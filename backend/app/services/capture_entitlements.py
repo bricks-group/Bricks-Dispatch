@@ -374,8 +374,25 @@ def capture_forbidden_message(kind: str, flags: dict[str, bool] | None = None) -
 
 
 def stamp_capture(job: dict | None) -> dict:
-    """Attach a ``capture`` block onto a job payload (mutates and returns)."""
+    """Attach a ``capture`` block onto a job payload (mutates and returns).
+
+    Also ensures a one-visit shoot checklist is present for Today / job UIs.
+    """
     row = job or {}
     flags = job_capture_entitlements(row)
     row["capture"] = flags
+    try:
+        from .visit_checklist import ensure_visit_checklist
+        existing = row.get("checklist") or []
+        if not existing:
+            row["checklist"] = ensure_visit_checklist(row)
+        else:
+            # Reseed only if legacy return-visit wording
+            labels = " ".join(
+                str(i.get("label") if isinstance(i, dict) else i).lower() for i in existing
+            )
+            if "return visit" in labels or "twilight return" in labels or "second appointment" in labels:
+                row["checklist"] = ensure_visit_checklist(row)
+    except Exception:
+        pass
     return row

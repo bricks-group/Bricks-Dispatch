@@ -673,7 +673,7 @@ export default function JobDetailScreen() {
 
         {job.checklist?.length > 0 ? (
           <View style={s.card}>
-            <Text style={s.sectionEye}>SHOOT CHECKLIST</Text>
+            <Text style={s.sectionEye}>SHOOT CHECKLIST · ONE VISIT</Text>
             {job.checklist.map((item) => (
               <View key={item.id} style={s.checkRow}>
                 <CheckCircle

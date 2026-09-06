@@ -18,7 +18,15 @@ from .vendor_profile import (
     min_tier_for_job,
     ORG_VENDOR_ID,
     preferred_tier_for_job,
+    travel_within_cap,
     vendor_skills,
+    _missing_column,
+)
+from .shoot_duration import (
+    estimate_shoot_duration_minutes,
+    previous_job_coords,
+    vendor_slot_conflicts,
+    _slot_bounds,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +76,94 @@ async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: s
 
 
 
-def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[str]:
+
+async def load_occupied_jobs_by_vendor(
+    db,
+    vendor_member_ids: List[str],
+    scheduled_date: str | None = None,
+) -> dict[str, list[dict]]:
+    """Jobs already on each vendor's book for conflict / travel chaining."""
+    occupied: dict[str, list[dict]] = {vid: [] for vid in vendor_member_ids}
+    ids = [i for i in vendor_member_ids if i]
+    if not ids:
+        return occupied
+    try:
+        q = (
+            db.table("jobs")
+            .select(
+                "id, assignee_id, scheduled_date, time_window_start, time_window_end, "
+                "confirmed_arrive_at, selected_slot_start, selected_slot_end, "
+                "estimated_duration_min, lat, lng, status, address, city"
+            )
+            .in_("assignee_id", ids[:80])
+            .in_("status", ["assigned", "in_progress", "pending_assignment", "completed"])
+        )
+        if scheduled_date:
+            q = q.eq("scheduled_date", str(scheduled_date)[:10])
+        res = await q.limit(400).execute()
+        for row in res.data or []:
+            aid = row.get("assignee_id")
+            if aid in occupied:
+                occupied[aid].append(row)
+            elif aid:
+                occupied.setdefault(aid, []).append(row)
+    except Exception as e:
+        # Soft-drop missing columns (selected_slot_*, estimated_duration_min)
+        msg = str(e)
+        miss = _missing_column(msg, [
+            "selected_slot_start", "selected_slot_end", "estimated_duration_min", "confirmed_arrive_at"
+        ])
+        if miss:
+            try:
+                q = (
+                    db.table("jobs")
+                    .select(
+                        "id, assignee_id, scheduled_date, time_window_start, time_window_end, "
+                        "lat, lng, status, address, city"
+                    )
+                    .in_("assignee_id", ids[:80])
+                    .in_("status", ["assigned", "in_progress", "pending_assignment", "completed"])
+                )
+                if scheduled_date:
+                    q = q.eq("scheduled_date", str(scheduled_date)[:10])
+                res = await q.limit(400).execute()
+                for row in res.data or []:
+                    aid = row.get("assignee_id")
+                    if aid:
+                        occupied.setdefault(aid, []).append(row)
+            except Exception as e2:
+                logger.warning("load_occupied_jobs_by_vendor fallback failed: %s", e2)
+        else:
+            logger.warning("load_occupied_jobs_by_vendor failed: %s", e)
+    return occupied
+
+
+def filter_assignable_vendors(
+    job: Job,
+    vendors: List[VendorMember],
+    occupied_by_vendor: Optional[dict] = None,
+) -> List[VendorMember]:
+    """Apply eligibility + same-day slot conflict + travel-from-previous hard gates."""
+    occupied_by_vendor = occupied_by_vendor or {}
+    out: List[VendorMember] = []
+    for v in vendors:
+        if not member_eligible_for_job(v, job):
+            continue
+        occupied = occupied_by_vendor.get(v.id) or []
+        if vendor_slot_conflicts(job, occupied):
+            logger.info("Vendor %s excluded: slot conflict for job %s", v.id, job.id)
+            continue
+        origin = previous_job_coords(job, occupied)
+        if origin is not None:
+            cap = travel_within_cap(v, job, origin=origin)
+            if cap is False:
+                logger.info("Vendor %s excluded: over travel cap from previous job for %s", v.id, job.id)
+                continue
+        out.append(v)
+    return out
+
+
+def pick_vendor_rule_based(job: Job, vendors: List[VendorMember], occupied_by_vendor: Optional[dict] = None) -> Optional[str]:
     """
     Deterministic vendor selection for paid /book and Dispatch.
     Hard gates: approved+active (Aman/pending never), location, package min-tier,
@@ -79,7 +174,7 @@ def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[st
     preferred_tier = preferred_tier_for_job(job)
     drone_job = _is_drone_job(job)
 
-    eligible = [v for v in vendors if member_eligible_for_job(v, job)]
+    eligible = filter_assignable_vendors(job, vendors, occupied_by_vendor=occupied_by_vendor)
 
     candidates = [v for v in eligible if v.status == "available"] or eligible
 
@@ -131,13 +226,35 @@ def pick_vendor_rule_based(job: Job, vendors: List[VendorMember]) -> Optional[st
     return chosen.id
 
 
-async def _update_job_assignee(job_id: str, member_id: str):
+async def _patch_job_assign(job_id: str, patch: dict) -> None:
+    """Update job assign fields; soft-drop columns PostgREST says are missing."""
+    data = dict(patch)
+    last = None
+    db = await get_db()
+    for _ in range(8):
+        try:
+            await db.table("jobs").update(data).eq("id", job_id).execute()
+            return
+        except Exception as e:
+            last = e
+            miss = _missing_column(str(e), list(data.keys()))
+            if not miss:
+                raise
+            data.pop(miss, None)
+    if last:
+        raise last
+
+
+async def _update_job_assignee(job_id: str, member_id: str, estimated_duration_min: Optional[int] = None):
     now = datetime.now(timezone.utc).isoformat()
-    await (await get_db()).table("jobs").update({
+    patch = {
         "assignee_id": member_id,
         "status": "assigned",
         "updated_at": now,
-    }).eq("id", job_id).execute()
+    }
+    if estimated_duration_min is not None:
+        patch["estimated_duration_min"] = int(estimated_duration_min)
+    await _patch_job_assign(job_id, patch)
 
     try:
         from .client_comms import notify_booking_confirmed
@@ -215,18 +332,39 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             await _escalate_no_vendor(job, 0, f"drone weather check failed — dispatch blocked: {_we}")
             return None
 
+    duration_min = estimate_shoot_duration_minutes(job)
+    occupied_by_vendor = await load_occupied_jobs_by_vendor(
+        db, [v.id for v in vendors], scheduled_date=job.scheduled_date or None
+    )
+
+    # Calendar FreeBusy hard gate (busy=True excludes; None/False continue)
+    try:
+        from .vendor_calendars import vendor_is_busy
+        bounds = _slot_bounds(job, duration_min)
+        if bounds:
+            filtered = []
+            for v in vendors:
+                busy = await vendor_is_busy(v, bounds[0], bounds[1], db=db)
+                if busy is True:
+                    logger.info("Vendor %s excluded: calendar busy for job %s", v.id, job_id)
+                    continue
+                filtered.append(v)
+            vendors = filtered
+    except Exception as e:
+        logger.debug("Calendar busy gate skipped: %s", e)
+
     min_tier = min_tier_for_job(job)
-    eligible_ids = {v.id for v in vendors if member_eligible_for_job(v, job)}
+    eligible_ids = {v.id for v in filter_assignable_vendors(job, vendors, occupied_by_vendor)}
 
     actual_attempts = 0
     for attempt in range(1, _MAX_ASSIGNMENT_ATTEMPTS + 1):
         actual_attempts = attempt
         _had_exception = False
         try:
-            chosen_id = await bricks_smart_assign(job, vendors)
+            chosen_id = await bricks_smart_assign(job, vendors, occupied_by_vendor=occupied_by_vendor)
             if chosen_id and chosen_id in eligible_ids:
                 logger.info(f"Job {job_id} assigned via Bricks AI to {chosen_id} (attempt {attempt})")
-                await _update_job_assignee(job_id, chosen_id)
+                await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min)
                 return chosen_id
             if chosen_id:
                 logger.warning(
@@ -237,10 +375,10 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             _had_exception = True
             logger.exception(f"Bricks AI assignment failed for job {job_id} (attempt {attempt})")
 
-        chosen_id = pick_vendor_rule_based(job, vendors)
+        chosen_id = pick_vendor_rule_based(job, vendors, occupied_by_vendor=occupied_by_vendor)
         if chosen_id is not None:
             logger.info(f"Job {job.id} assigned via rule-based fallback to {chosen_id} (attempt {attempt})")
-            await _update_job_assignee(job_id, chosen_id)
+            await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min)
             return chosen_id
 
         logger.warning(f"No vendor assigned for job {job_id} (attempt {attempt}/{_MAX_ASSIGNMENT_ATTEMPTS}).")

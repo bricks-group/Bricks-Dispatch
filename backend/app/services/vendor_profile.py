@@ -27,6 +27,28 @@ GTA_TOKENS = {
     "ajax", "pickering", "whitby", "oshawa", "vaughan", "caledon", "newmarket",
 }
 
+# Canada province aliases — job.state / service_areas may use either form.
+PROVINCE_ALIASES = {
+    "ab": {"ab", "alberta"},
+    "bc": {"bc", "british columbia"},
+    "mb": {"mb", "manitoba"},
+    "nb": {"nb", "new brunswick"},
+    "nl": {"nl", "newfoundland", "newfoundland and labrador", "labrador"},
+    "ns": {"ns", "nova scotia"},
+    "nt": {"nt", "northwest territories"},
+    "nu": {"nu", "nunavut"},
+    "on": {"on", "ontario"},
+    "pe": {"pe", "pei", "prince edward island"},
+    "qc": {"qc", "quebec", "québec"},
+    "sk": {"sk", "saskatchewan"},
+    "yt": {"yt", "yukon", "yukon territory"},
+}
+
+_PROVINCE_LOOKUP: dict[str, str] = {}
+for _code, _names in PROVINCE_ALIASES.items():
+    for _n in _names:
+        _PROVINCE_LOOKUP[_n] = _code
+
 
 def _as_dict(member: Any) -> dict:
     if member is None:
@@ -168,7 +190,74 @@ def preferred_tier_for_job(job: Any) -> int:
     return min_tier_for_job(j)
 
 
+def _normalize_province(raw: Any) -> Optional[str]:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return None
+    if text in _PROVINCE_LOOKUP:
+        return _PROVINCE_LOOKUP[text]
+    # "Calgary, AB" / "AB Canada"
+    for token in text.replace(",", " ").split():
+        if token in _PROVINCE_LOOKUP:
+            return _PROVINCE_LOOKUP[token]
+    return None
+
+
+def travel_within_cap(member: Any, job: Any, origin: Optional[tuple[float, float]] = None) -> Optional[bool]:
+    """Hard travel gate when coordinates are known.
+
+    Returns True within cap, False over cap, None when coords missing
+    (caller should fall through to area/text matching).
+    ``origin`` overrides vendor home (same-day previous job for travel chaining).
+    """
+    m = _as_dict(member)
+    j = _as_dict(job)
+    try:
+        if origin is not None:
+            vlat, vlng = float(origin[0]), float(origin[1])
+        else:
+            vlat, vlng = m.get("home_lat"), m.get("home_lng")
+            if vlat is None or vlng is None:
+                return None
+            vlat, vlng = float(vlat), float(vlng)
+        jlat, jlng = j.get("lat"), j.get("lng")
+        if jlat is None or jlng is None:
+            return None
+        cap = int(m.get("max_travel_km") or 50)
+        return haversine_km(vlat, vlng, float(jlat), float(jlng)) <= cap
+    except (TypeError, ValueError):
+        return None
+
+
+def _areas_match_job(areas: list[str], hay: str, job_province: Optional[str]) -> bool:
+    if any(a and a in hay for a in areas):
+        return True
+    # Province-level service areas (Calgary/Alberta vendors without GTA tokens)
+    vendor_provinces = set()
+    for a in areas:
+        code = _normalize_province(a)
+        if code:
+            vendor_provinces.add(code)
+        # City tokens already covered by substring; also match bare city names
+        if a and len(a) >= 3 and a in hay:
+            return True
+    if job_province and job_province in vendor_provinces:
+        return True
+    vendor_gta = any(
+        a in GTA_TOKENS or "gta" in a or "toronto" in a or "mississauga" in a for a in areas
+    )
+    job_gta = any(tok in hay for tok in GTA_TOKENS)
+    if vendor_gta and (job_gta or not hay.strip()):
+        return True
+    return False
+
+
 def location_matches(member: Any, job: Any) -> bool:
+    """Coords + travel cap are primary. Over-cap is a hard miss even with empty areas.
+
+    Empty service_areas fail-open ONLY when job/vendor coords are unavailable.
+    Canada-wide: city / province aliases match without requiring GTA tokens.
+    """
     m = _as_dict(member)
     j = _as_dict(job)
     hay = " ".join(
@@ -178,22 +267,19 @@ def location_matches(member: Any, job: Any) -> bool:
     home_city = str(m.get("home_city") or "").strip().lower()
     if home_city:
         areas.append(home_city)
-    try:
-        vlat, vlng = m.get("home_lat"), m.get("home_lng")
-        jlat, jlng = j.get("lat"), j.get("lng")
-        if vlat is not None and vlng is not None and jlat is not None and jlng is not None:
-            cap = int(m.get("max_travel_km") or 50)
-            if haversine_km(float(vlat), float(vlng), float(jlat), float(jlng)) <= cap:
-                return True
-    except (TypeError, ValueError):
-        pass
-    if any(a and a in hay for a in areas):
+    job_province = _normalize_province(j.get("state")) or _normalize_province(hay)
+
+    cap_hit = travel_within_cap(m, j)
+    if cap_hit is True:
         return True
-    vendor_gta = any(a in GTA_TOKENS or "gta" in a or "toronto" in a or "mississauga" in a for a in areas)
-    job_gta = any(tok in hay for tok in GTA_TOKENS)
-    if vendor_gta and (job_gta or not hay.strip()):
+    if cap_hit is False:
+        # Hard gate: known over-cap never rescued by empty/missing service_areas.
+        return False
+
+    if _areas_match_job(areas, hay, job_province):
         return True
-    # No coverage polygon/cities on the member: don't block assignment.
+
+    # No coords and no coverage polygon/cities: don't block assignment.
     if not areas:
         return True
     return False

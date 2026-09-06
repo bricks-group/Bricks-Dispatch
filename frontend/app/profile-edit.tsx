@@ -327,6 +327,9 @@ export default function ProfileEditScreen() {
             <Text style={s.sectionLabel}>SERVICE AREA</Text>
             <View style={s.toggleRow}>
               <Text style={s.toggleLabel}>Available for assignments</Text>
+              <Text style={{ color: TOKENS.moonMute, fontSize: 12, marginTop: 8, lineHeight: 16 }}>
+                Connect Google, Outlook, Apple, or an ICS calendar on web Availability so auto-assign only offers jobs that fit your real schedule.
+              </Text>
               <Switch
                 value={availability}
                 onValueChange={setAvailability}
