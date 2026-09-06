@@ -11,6 +11,7 @@ from slowapi.middleware import SlowAPIMiddleware
 # Import routers
 from app.routers import dispatch, notifications, payouts, post_production, vendor_os, onboarding, admin_ops, uploads, auth, jobs, capture
 from app.routers.stripe_connect_status import router as stripe_connect_status_router
+from app.routers.stripe_connect_webhook import router as stripe_connect_webhook_router
 
 limiter = Limiter(key_func=get_remote_address, default_limits=['100/minute'])
 
@@ -63,8 +64,9 @@ app.include_router(payouts.router, tags=["payouts"])
 app.include_router(notifications.router, tags=["notifications"])
 app.include_router(jobs.router, tags=["jobs"])
 app.include_router(post_production.router, tags=["post-production"])
-app.include_router(stripe_connect_status_router, tags=["vendor-os"])  # honest Connected before hollow vendor_os status
+app.include_router(stripe_connect_status_router, tags=["vendor-os"])  # honest Connected (sole status route)
 app.include_router(vendor_os.router, tags=["vendor-os"])
+app.include_router(stripe_connect_webhook_router, tags=["stripe-connect"])
 app.include_router(onboarding.router, tags=["onboarding"])
 app.include_router(admin_ops.router, tags=["admin"])
 # Mounted 2026-07-27: both carry their own /api/* prefix internally, real
