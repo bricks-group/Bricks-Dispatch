@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import { startGoogleCalendarOAuth } from '../lib/googleCalendarConnect';
 
 type Availability = {
   work_start: string;
@@ -18,7 +19,7 @@ type CalStatus = {
 
 type CalResponse = {
   connections: CalStatus[];
-  oauth: { google_configured: boolean; microsoft_configured: boolean };
+  oauth: { google_configured: boolean; microsoft_configured: boolean; google_connect_via?: string | null };
   copy: string;
 };
 
@@ -46,6 +47,30 @@ export function AvailabilityPage() {
 
   useEffect(() => { load(); }, []);
 
+  // Surface OAuth callback query params (calendar_connected / calendar_error)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const connected = params.get('calendar_connected');
+      const calErr = params.get('calendar_error');
+      if (calErr) {
+        setErr(calErr);
+      } else if (connected) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 4000);
+        load();
+      }
+      if (connected || calErr) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('calendar_connected');
+        url.searchParams.delete('calendar_error');
+        window.history.replaceState({}, '', url.pathname + (url.search || '') + url.hash);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const save = async () => {
     if (!data) return;
     await api.put('/api/vendor-os/availability', data);
@@ -62,11 +87,20 @@ export function AvailabilityPage() {
         status?: string;
         detail?: string;
         oauth_url?: string | null;
+        mode?: string | null;
+        connect_via?: string | null;
+        redirect_uri?: string | null;
+        scope?: string | null;
+        query_params?: Record<string, string>;
       }>(`/api/vendor-os/calendars/${provider}/connect`, body || {});
-      if (res.oauth_url) {
+      if (provider === 'google' && (res.mode === 'supabase' || res.connect_via === 'supabase' || res.oauth_url)) {
+        const started = await startGoogleCalendarOAuth(res);
+        if (started.error) setErr(started.error);
+        if (started.redirected) return; // navigating away
+      } else if (res.oauth_url) {
         window.open(res.oauth_url, '_blank', 'noopener,noreferrer');
       }
-      if (res.status === 'needs_env' || res.status === 'needs_app_password') {
+      if (res.status === 'needs_env' || res.status === 'needs_app_password' || res.status === 'noscope') {
         setErr(res.detail || 'Not connected');
       }
       load();

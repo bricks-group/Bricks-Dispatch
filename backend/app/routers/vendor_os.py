@@ -8,6 +8,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from ..services.capture_entitlements import stamp_capture
@@ -766,11 +767,14 @@ async def list_vendor_calendars(
     from ..services.vendor_calendars import list_vendor_calendar_status, google_oauth_configured, microsoft_oauth_configured
     db = await get_db()
     statuses = await list_vendor_calendar_status(db, actor_id)
+    from ..services.vendor_calendars import google_connect_via, google_direct_oauth
     return {
         "connections": statuses,
         "oauth": {
             "google_configured": google_oauth_configured(),
             "microsoft_configured": microsoft_oauth_configured(),
+            "google_connect_via": google_connect_via(),
+            "google_direct_oauth": google_direct_oauth(),
         },
         "copy": (
             "Connecting a calendar tells Bricks when you’re free so auto-assign "
@@ -807,30 +811,26 @@ async def connect_vendor_calendar(
     now = datetime.now(timezone.utc).isoformat()
 
     if provider == "google":
+        from ..services.vendor_calendars import (
+            google_redirect_uri,
+            build_google_authorize_url,
+            build_google_supabase_connect_payload,
+            google_connect_via,
+            google_direct_oauth,
+            google_calendar_ping,
+            upsert_oauth_connection,
+            GOOGLE_CAL_SCOPE,
+        )
         if not google_oauth_configured():
             return {
                 "connected": False,
                 "status": "needs_env",
-                "detail": "Google OAuth client id/secret not configured. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET, then retry.",
+                "detail": "Google OAuth client id not configured (needs GOOGLE_CLIENT_ID plus Supabase or a client secret).",
                 "oauth_url": None,
+                "mode": None,
+                "connect_via": None,
             }
-        client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID") or os.environ.get("GOOGLE_CLIENT_ID") or os.environ.get("GOOGLE_CALENDAR_CLIENT_ID")
-        redirect = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI") or os.environ.get("VENDOR_CALENDAR_OAUTH_REDIRECT") or ""
-        if not redirect:
-            return {
-                "connected": False,
-                "status": "needs_env",
-                "detail": "GOOGLE_OAUTH_REDIRECT_URI is not set — cannot start Google OAuth.",
-                "oauth_url": None,
-            }
-        scope = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.freebusy"
-        oauth_url = (
-            "https://accounts.google.com/o/oauth2/v2/auth"
-            f"?client_id={client_id}&redirect_uri={redirect}&response_type=code"
-            f"&scope={scope.replace(' ', '%20')}&access_type=offline&prompt=consent"
-            f"&state={actor_id}"
-        )
-        # Persist placeholder row only when a token is supplied (callback). Honest: not Connected yet.
+        # Persist tokens only when supplied — Connected only after real tokens (and ping on complete-session).
         if payload.get("access_token"):
             row = {
                 "member_id": actor_id,
@@ -846,7 +846,40 @@ async def connect_vendor_calendar(
             except Exception as e:
                 logger.warning("calendar upsert soft-fail: %s", e)
             return connection_status(row)
-        return {"connected": False, "status": "oauth_ready", "detail": "Open Google OAuth to connect", "oauth_url": oauth_url}
+
+        via = google_connect_via()
+        # Default: Supabase-mediated Google OAuth (secret lives in Supabase).
+        if via == "supabase":
+            body = build_google_supabase_connect_payload()
+            return {
+                "connected": False,
+                "status": "oauth_ready",
+                "detail": "Continue with Google to grant calendar access (via Supabase).",
+                "oauth_url": None,
+                **body,
+            }
+        # Optional direct Google authorize URL when client secret is on Vercel.
+        redirect = google_redirect_uri()
+        if not redirect:
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "GOOGLE_OAUTH_REDIRECT_URI is not set — cannot start direct Google OAuth.",
+                "oauth_url": None,
+                "mode": None,
+                "connect_via": "direct" if google_direct_oauth() else None,
+            }
+        oauth_url = build_google_authorize_url(actor_id)
+        return {
+            "connected": False,
+            "status": "oauth_ready",
+            "detail": "Open Google OAuth to connect",
+            "oauth_url": oauth_url,
+            "mode": "direct",
+            "connect_via": "direct",
+            "scope": GOOGLE_CAL_SCOPE,
+            "redirect_uri": redirect,
+        }
 
     if provider == "microsoft":
         if not microsoft_oauth_configured():
@@ -856,12 +889,8 @@ async def connect_vendor_calendar(
                 "detail": "Microsoft OAuth client id/secret not configured. Set MICROSOFT_OAUTH_CLIENT_ID / AZURE_AD_CLIENT_ID, then retry.",
                 "oauth_url": None,
             }
-        client_id = (
-            os.environ.get("MICROSOFT_OAUTH_CLIENT_ID")
-            or os.environ.get("AZURE_AD_CLIENT_ID")
-            or os.environ.get("MS_GRAPH_CLIENT_ID")
-        )
-        redirect = os.environ.get("MICROSOFT_OAUTH_REDIRECT_URI") or os.environ.get("VENDOR_CALENDAR_OAUTH_REDIRECT") or ""
+        from ..services.vendor_calendars import microsoft_redirect_uri, build_microsoft_authorize_url
+        redirect = microsoft_redirect_uri()
         if not redirect:
             return {
                 "connected": False,
@@ -869,12 +898,7 @@ async def connect_vendor_calendar(
                 "detail": "MICROSOFT_OAUTH_REDIRECT_URI is not set — cannot start Outlook OAuth.",
                 "oauth_url": None,
             }
-        oauth_url = (
-            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
-            f"?client_id={client_id}&response_type=code&redirect_uri={redirect}"
-            "&scope=Calendars.Read%20offline_access%20User.Read"
-            f"&state={actor_id}"
-        )
+        oauth_url = build_microsoft_authorize_url(actor_id)
         if payload.get("access_token"):
             row = {
                 "member_id": actor_id,
@@ -939,6 +963,219 @@ async def connect_vendor_calendar(
         return connection_status(row)
 
     api_error(400, "Unsupported provider", "invalid_provider")
+
+
+class GoogleCalendarSessionComplete(BaseModel):
+    provider_token: Optional[str] = None
+    provider_refresh_token: Optional[str] = None
+    scope: Optional[str] = None
+
+
+@router.post("/calendars/google/complete-session")
+async def google_calendar_complete_session(
+    body: GoogleCalendarSessionComplete,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Persist Google tokens from a Supabase OAuth session.
+
+    Never mark Connected without a refresh token + successful Calendar ping.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    member = await get_vendor_member(actor_id)
+    vendor_id = member.get("vendor_id", "default_vendor")
+    from ..services.vendor_calendars import (
+        google_calendar_ping,
+        upsert_oauth_connection,
+        connection_status,
+        GOOGLE_CAL_SCOPE,
+    )
+
+    access = (body.provider_token or "").strip()
+    refresh = (body.provider_refresh_token or "").strip()
+    scope = (body.scope or "").strip()
+    if not refresh:
+        return {
+            "connected": False,
+            "status": "noscope",
+            "detail": "Google Calendar permission is required (missing refresh token). Try Connect again and approve calendar access.",
+        }
+    if not access:
+        return {
+            "connected": False,
+            "status": "error",
+            "detail": "Could not connect Google Calendar (missing access token).",
+        }
+    if scope and "calendar" not in scope:
+        return {
+            "connected": False,
+            "status": "noscope",
+            "detail": "Google Calendar permission is required. Approve calendar access and retry.",
+        }
+    ping = await google_calendar_ping(access)
+    if not ping.get("ok"):
+        logger.warning("Google complete-session ping failed (%s via %s)", ping.get("status"), ping.get("via"))
+        if ping.get("status") in (401, 403):
+            return {
+                "connected": False,
+                "status": "noscope",
+                "detail": "Google Calendar permission is required. Approve calendar access and retry.",
+            }
+        return {
+            "connected": False,
+            "status": "error",
+            "detail": "Could not verify Google Calendar access. Try again.",
+        }
+
+    db = await get_db()
+    try:
+        row = await upsert_oauth_connection(
+            db,
+            member_id=actor_id,
+            vendor_id=vendor_id,
+            provider="google",
+            token_payload={
+                "access_token": access,
+                "refresh_token": refresh,
+                "expires_in": 3600,
+                "scope": scope or GOOGLE_CAL_SCOPE,
+            },
+        )
+    except Exception as e:
+        logger.warning("Google complete-session upsert failed: %s", e)
+        return {"connected": False, "status": "error", "detail": f"Could not save calendar connection: {e}"}
+    status = connection_status(row)
+    status["ping"] = ping.get("via")
+    status["connect_via"] = "supabase"
+    return status
+
+
+@router.get("/calendars/google/callback")
+async def google_calendar_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    """Google OAuth redirect — exchange code for tokens, then send browser to Availability."""
+    from urllib.parse import urlencode
+    from ..services.vendor_calendars import (
+        calendar_success_redirect_base,
+        exchange_google_code,
+        google_direct_oauth,
+        upsert_oauth_connection,
+    )
+
+    base = calendar_success_redirect_base()
+
+    def _ok() -> RedirectResponse:
+        return RedirectResponse(f"{base}?{urlencode({'calendar_connected': 'google'})}", status_code=302)
+
+    def _err(msg: str) -> RedirectResponse:
+        return RedirectResponse(f"{base}?{urlencode({'calendar_error': msg[:240]})}", status_code=302)
+
+    if error:
+        return _err(error_description or error)
+    if not code or not state:
+        return _err("Missing OAuth code or state (member id)")
+    if not google_direct_oauth():
+        return _err("Direct Google OAuth requires GOOGLE_CLIENT_SECRET on the API (use Supabase Connect instead)")
+
+    try:
+        tokens = await exchange_google_code(code)
+    except Exception as e:
+        logger.warning("Google calendar OAuth exchange failed: %s", e)
+        return _err(str(e) or "Google token exchange failed")
+
+    member_id = str(state).strip()
+    vendor_id = "default_vendor"
+    db = await get_db()
+    try:
+        row = await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
+        if not (row and row.data):
+            return _err("Unknown vendor member in OAuth state")
+        vendor_id = row.data.get("vendor_id") or vendor_id
+    except Exception as e:
+        logger.warning("OAuth member lookup failed: %s", e)
+        return _err("Could not resolve vendor member for OAuth state")
+    from ..services.vendor_calendars import google_calendar_ping
+    ping = await google_calendar_ping(tokens.get("access_token") or "")
+    if not ping.get("ok"):
+        return _err("Google Calendar permission could not be verified after OAuth")
+    try:
+        await upsert_oauth_connection(
+            db,
+            member_id=member_id,
+            vendor_id=vendor_id,
+            provider="google",
+            token_payload=tokens,
+        )
+    except Exception as e:
+        logger.warning("Google calendar upsert failed: %s", e)
+        return _err(f"Connected tokens could not be saved: {e}")
+    return _ok()
+
+
+@router.get("/calendars/microsoft/callback")
+async def microsoft_calendar_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    """Microsoft OAuth redirect — exchange code for tokens, then send browser to Availability."""
+    from urllib.parse import urlencode
+    from ..services.vendor_calendars import (
+        calendar_success_redirect_base,
+        exchange_microsoft_code,
+        microsoft_oauth_configured,
+        upsert_oauth_connection,
+    )
+
+    base = calendar_success_redirect_base()
+
+    def _ok() -> RedirectResponse:
+        return RedirectResponse(f"{base}?{urlencode({'calendar_connected': 'microsoft'})}", status_code=302)
+
+    def _err(msg: str) -> RedirectResponse:
+        return RedirectResponse(f"{base}?{urlencode({'calendar_error': msg[:240]})}", status_code=302)
+
+    if error:
+        return _err(error_description or error)
+    if not code or not state:
+        return _err("Missing OAuth code or state (member id)")
+    if not microsoft_oauth_configured():
+        return _err("Microsoft OAuth client id/secret not configured on this environment")
+
+    try:
+        tokens = await exchange_microsoft_code(code)
+    except Exception as e:
+        logger.warning("Microsoft calendar OAuth exchange failed: %s", e)
+        return _err(str(e) or "Microsoft token exchange failed")
+
+    member_id = str(state).strip()
+    vendor_id = "default_vendor"
+    db = await get_db()
+    try:
+        row = await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
+        if not (row and row.data):
+            return _err("Unknown vendor member in OAuth state")
+        vendor_id = row.data.get("vendor_id") or vendor_id
+    except Exception as e:
+        logger.warning("OAuth member lookup failed: %s", e)
+        return _err("Could not resolve vendor member for OAuth state")
+    try:
+        await upsert_oauth_connection(
+            db,
+            member_id=member_id,
+            vendor_id=vendor_id,
+            provider="microsoft",
+            token_payload=tokens,
+        )
+    except Exception as e:
+        logger.warning("Microsoft calendar upsert failed: %s", e)
+        return _err(f"Connected tokens could not be saved: {e}")
+    return _ok()
 
 
 @router.delete("/calendars/{provider}")

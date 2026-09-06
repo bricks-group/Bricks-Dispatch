@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from urllib.parse import urlencode
 from xml.etree import ElementTree as ET
 
 import httpx
@@ -38,20 +39,300 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def google_oauth_configured() -> bool:
-    return bool(
+def google_client_id() -> str:
+    return (
         os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
         or os.environ.get("GOOGLE_CLIENT_ID")
         or os.environ.get("GOOGLE_CALENDAR_CLIENT_ID")
-    )
+        or ""
+    ).strip()
 
 
-def microsoft_oauth_configured() -> bool:
-    return bool(
+def google_client_secret() -> str:
+    return (
+        os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
+        or os.environ.get("GOOGLE_CLIENT_SECRET")
+        or ""
+    ).strip()
+
+
+def google_redirect_uri() -> str:
+    return (
+        os.environ.get("GOOGLE_OAUTH_REDIRECT_URI")
+        or os.environ.get("VENDOR_CALENDAR_OAUTH_REDIRECT")
+        or ""
+    ).strip()
+
+
+def microsoft_client_id() -> str:
+    return (
         os.environ.get("MICROSOFT_OAUTH_CLIENT_ID")
         or os.environ.get("AZURE_AD_CLIENT_ID")
         or os.environ.get("MS_GRAPH_CLIENT_ID")
-    )
+        or ""
+    ).strip()
+
+
+def microsoft_client_secret() -> str:
+    return (
+        os.environ.get("MICROSOFT_OAUTH_CLIENT_SECRET")
+        or os.environ.get("AZURE_AD_CLIENT_SECRET")
+        or os.environ.get("MS_GRAPH_CLIENT_SECRET")
+        or ""
+    ).strip()
+
+
+def microsoft_redirect_uri() -> str:
+    return (
+        os.environ.get("MICROSOFT_OAUTH_REDIRECT_URI")
+        or os.environ.get("VENDOR_CALENDAR_OAUTH_REDIRECT")
+        or ""
+    ).strip()
+
+
+GOOGLE_CAL_SCOPE = (
+    "https://www.googleapis.com/auth/calendar.readonly "
+    "https://www.googleapis.com/auth/calendar.freebusy"
+)
+# Fallback scope used by OS Calendar Connect when freebusy isn't granted via Supabase.
+GOOGLE_CAL_SCOPE_EVENTS = "https://www.googleapis.com/auth/calendar.events"
+
+
+def supabase_configured() -> bool:
+    """Same Supabase project that already holds the Google OAuth client secret."""
+    url = (os.environ.get("SUPABASE_URL") or "").strip()
+    key = (
+        os.environ.get("SUPABASE_ANON_KEY")
+        or os.environ.get("SUPABASE_KEY")
+        or os.environ.get("SUPABASE_SERVICE_KEY")
+        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or ""
+    ).strip()
+    return bool(url and key)
+
+
+def google_direct_oauth() -> bool:
+    """Token exchange against Google's token endpoint needs the client secret on Vercel."""
+    return bool(google_client_id() and google_client_secret())
+
+
+def google_oauth_configured() -> bool:
+    """Ready to start Connect — never needs_env solely for a missing Vercel secret.
+
+    Prefer Supabase-mediated Google OAuth (secret lives in Supabase). Direct OAuth
+    is optional when GOOGLE_CLIENT_SECRET is also present on the API.
+    """
+    if not google_client_id():
+        return False
+    return supabase_configured() or google_direct_oauth()
+
+
+def google_connect_via() -> Optional[str]:
+    """Default path is supabase; direct only when secret is present and Supabase is not."""
+    if not google_oauth_configured():
+        return None
+    if supabase_configured():
+        return "supabase"
+    if google_direct_oauth():
+        return "direct"
+    return None
+
+
+def microsoft_oauth_configured() -> bool:
+    """Microsoft still needs client id + secret on Vercel (honest needs_env otherwise)."""
+    return bool(microsoft_client_id() and microsoft_client_secret())
+
+
+def calendar_success_redirect_base() -> str:
+    """Browser landing page after OAuth — live GO Availability on go.brxs.ca."""
+    return (
+        os.environ.get("VENDOR_CALENDAR_SUCCESS_REDIRECT")
+        or "https://go.brxs.ca/availability"
+    ).strip().rstrip("/")
+
+
+def google_supabase_redirect_uri() -> str:
+    """SPA callback for Supabase Google Calendar scope grant."""
+    return (
+        os.environ.get("GOOGLE_SUPABASE_CALENDAR_REDIRECT")
+        or "https://go.brxs.ca/auth/google-calendar"
+    ).strip()
+
+
+def build_google_authorize_url(member_id: str) -> str:
+    params = {
+        "client_id": google_client_id(),
+        "redirect_uri": google_redirect_uri(),
+        "response_type": "code",
+        "scope": GOOGLE_CAL_SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true",
+        "state": member_id,
+    }
+    return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+
+
+def build_google_supabase_connect_payload() -> dict:
+    """Frontend uses supabase.auth.signInWithOAuth with these fields (OS pattern)."""
+    return {
+        "mode": "supabase",
+        "connect_via": "supabase",
+        "redirect_uri": google_supabase_redirect_uri(),
+        "scope": GOOGLE_CAL_SCOPE,
+        "query_params": {"access_type": "offline", "prompt": "consent"},
+    }
+
+
+async def google_calendar_ping(access_token: str) -> dict:
+    """Verify calendar scope before marking Connected. Prefer FreeBusy; fall back to events."""
+    if not access_token:
+        return {"ok": False, "status": 0, "via": None}
+    headers = {"Authorization": f"Bearer {access_token}"}
+    now = datetime.now(timezone.utc)
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(
+                "https://www.googleapis.com/calendar/v3/freeBusy",
+                headers=headers,
+                json={
+                    "timeMin": _iso(now),
+                    "timeMax": _iso(now + timedelta(minutes=30)),
+                    "items": [{"id": "primary"}],
+                },
+            )
+            if resp.status_code < 400:
+                return {"ok": True, "status": resp.status_code, "via": "freebusy"}
+            if resp.status_code in (401, 403):
+                # calendar.events may be granted without freebusy — try events list
+                ev = await client.get(
+                    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                    params={"maxResults": 1, "singleEvents": "true"},
+                    headers=headers,
+                )
+                if ev.status_code < 400:
+                    return {"ok": True, "status": ev.status_code, "via": "events"}
+                return {"ok": False, "status": ev.status_code, "via": "events"}
+            return {"ok": False, "status": resp.status_code, "via": "freebusy"}
+    except Exception as e:
+        logger.warning("Google Calendar ping error: %s", e)
+        return {"ok": False, "status": 0, "via": None}
+
+
+def build_microsoft_authorize_url(member_id: str) -> str:
+    params = {
+        "client_id": microsoft_client_id(),
+        "response_type": "code",
+        "redirect_uri": microsoft_redirect_uri(),
+        "scope": "Calendars.Read offline_access User.Read",
+        "state": member_id,
+    }
+    return "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?" + urlencode(params)
+
+
+def _expires_at_iso(expires_in: Any) -> Optional[str]:
+    try:
+        seconds = int(expires_in)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+async def exchange_google_code(code: str) -> dict:
+    """Exchange authorization code for Google tokens. Raises on HTTP/token errors."""
+    client_id = google_client_id()
+    client_secret = google_client_secret()
+    redirect_uri = google_redirect_uri()
+    if not (client_id and client_secret and redirect_uri):
+        raise RuntimeError("Google OAuth client id/secret/redirect not configured")
+    data = {
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post("https://oauth2.googleapis.com/token", data=data)
+    payload = {}
+    try:
+        payload = resp.json() if hasattr(resp, "json") else {}
+        if callable(payload):
+            payload = payload()
+    except Exception:
+        payload = {}
+    if getattr(resp, "status_code", 500) >= 400 or not isinstance(payload, dict):
+        err = ""
+        if isinstance(payload, dict):
+            err = str(payload.get("error_description") or payload.get("error") or "")
+        raise RuntimeError(err or f"Google token exchange HTTP {getattr(resp, 'status_code', '?')}")
+    if not payload.get("access_token"):
+        raise RuntimeError("Google did not return an access_token")
+    return payload
+
+
+async def exchange_microsoft_code(code: str) -> dict:
+    """Exchange authorization code for Microsoft tokens. Raises on HTTP/token errors."""
+    client_id = microsoft_client_id()
+    client_secret = microsoft_client_secret()
+    redirect_uri = microsoft_redirect_uri()
+    if not (client_id and client_secret and redirect_uri):
+        raise RuntimeError("Microsoft OAuth client id/secret/redirect not configured")
+    data = {
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+        "scope": "Calendars.Read offline_access User.Read",
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    payload = {}
+    try:
+        payload = resp.json() if hasattr(resp, "json") else {}
+        if callable(payload):
+            payload = payload()
+    except Exception:
+        payload = {}
+    if getattr(resp, "status_code", 500) >= 400 or not isinstance(payload, dict):
+        err = ""
+        if isinstance(payload, dict):
+            err = str(payload.get("error_description") or payload.get("error") or "")
+        raise RuntimeError(err or f"Microsoft token exchange HTTP {getattr(resp, 'status_code', '?')}")
+    if not payload.get("access_token"):
+        raise RuntimeError("Microsoft did not return an access_token")
+    return payload
+
+
+async def upsert_oauth_connection(
+    db,
+    *,
+    member_id: str,
+    vendor_id: str,
+    provider: str,
+    token_payload: dict,
+) -> dict:
+    """Persist OAuth tokens. Returns the row used for honest connection_status."""
+    now = datetime.now(timezone.utc).isoformat()
+    row = {
+        "member_id": member_id,
+        "vendor_id": vendor_id or "default_vendor",
+        "provider": provider,
+        "access_token": token_payload.get("access_token"),
+        "refresh_token": token_payload.get("refresh_token"),
+        "token_expires_at": _expires_at_iso(token_payload.get("expires_in")),
+        "updated_at": now,
+        "created_at": now,
+    }
+    await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
+    return row
 
 
 def connection_status(conn: dict | None) -> dict:
@@ -71,7 +352,7 @@ def connection_status(conn: dict | None) -> dict:
                 "provider": "google",
                 "connected": False,
                 "status": "needs_env",
-                "detail": "Google OAuth client id/secret not configured on this environment",
+                "detail": "Google OAuth client id (and Supabase or client secret) not configured on this environment",
             }
         return {"provider": "google", "connected": False, "status": "not_connected", "detail": "Connect Google Calendar"}
 
