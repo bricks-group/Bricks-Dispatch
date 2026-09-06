@@ -38,11 +38,16 @@ _PHOTO_PACKAGES_WITH_FLOORPLAN = {
     "estate",
 }
 
-# Showcase / Full suite include a path-confined virtual tour.
+# Path-confined 3D tour packages.
+# Legacy Showcase/Full suite; live booking-api ladder Premium+ (Standard is
+# photo+drone+floor plan only). Visit/Gaussian is never granted by package id.
 _PACKAGES_WITH_TOUR = {
     "showcase",
     "suite",
     "full",
+    "premium",
+    "luxury",
+    "estate",
 }
 
 _TOUR_ADDON_KEYS = {
@@ -237,6 +242,19 @@ def _is_non_photo_standalone(job: dict, blob: str, addons: list[dict[str, str]])
     return bool(standalone) and not photoish
 
 
+
+def _legacy_gaussian_visit_copy(blob: str) -> bool:
+    """True when copy still describes old Premium as Gaussian Visit, not path tour."""
+    if "path confined" in blob or "pathconfined" in blob.replace(" ", ""):
+        return False
+    return (
+        "gaussian" in blob
+        or "supersplat" in blob
+        or "free roam" in blob
+        or "free-roam" in blob
+    )
+
+
 def _has_tour_line(addons: list[dict[str, str]], labels: list[str], blob: str, job: dict) -> bool:
     if _job_type(job) in _TOUR_JOB_TYPES:
         return True
@@ -249,10 +267,14 @@ def _has_tour_line(addons: list[dict[str, str]], labels: list[str], blob: str, j
         if "virtual tour" in text or text.replace(" ", "") in {"3dtour", "tour"}:
             return True
     pid = _package_id(job)
-    if pid in _PACKAGES_WITH_TOUR:
+    legacy_visit = _legacy_gaussian_visit_copy(blob)
+    if pid in _PACKAGES_WITH_TOUR and not legacy_visit:
         return True
     name = _package_name(job)
-    if "showcase" in name.split() or "suite" in name.split() or name.startswith("full suite"):
+    name_tokens = set(name.split())
+    if name_tokens & {"showcase", "suite", "premium", "luxury", "estate"} and not legacy_visit:
+        return True
+    if name.startswith("full suite") and not legacy_visit:
         return True
     for label in labels:
         if "virtual visit" in label or "gaussian" in label:

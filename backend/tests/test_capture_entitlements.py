@@ -173,19 +173,24 @@ def test_visit_with_essentials_opens_floorplan_not_tour():
     assert f["visit"] is True
 
 
-def test_legacy_premium_gaussian_is_visit_not_phone_tour():
-    """Old Premium included a Gaussian splat — that is virtual visit, not path-confined tour."""
-    f = flags(
-        package_id="premium",
-        package_name="Premium",
-        job_type="video",
-        add_ons=[],
-    )
-    assert f["floorplan"] is True  # photo package still includes floor plan
+def test_live_premium_luxury_estate_include_path_tour():
+    """Live booking-api ladder: Premium+ include path-confined 3D tour + floor plan."""
+    for pid, name in (
+        ("premium", "Premium"),
+        ("luxury", "Luxury"),
+        ("estate", "Estate"),
+    ):
+        f = flags(package_id=pid, package_name=name, job_type="photo", add_ons=[])
+        assert f["floorplan"] is True, pid
+        assert f["tour"] is True, pid
+        assert f["visit"] is False, pid
+    f = flags(package_id="standard", package_name="Standard", job_type="photo", add_ons=[])
+    assert f["floorplan"] is True
     assert f["tour"] is False
 
 
-def test_legacy_premium_feature_string_does_not_grant_tour():
+def test_legacy_premium_gaussian_copy_is_visit_not_phone_tour():
+    """Old Premium rows that still say Gaussian Visit must not open tour shutter."""
     f = flags(
         package_id="premium",
         package_name="Premium — Gaussian splat 3D virtual tour",
@@ -193,6 +198,7 @@ def test_legacy_premium_feature_string_does_not_grant_tour():
     )
     assert f["tour"] is False
     assert f["visit"] is True
+    assert f["floorplan"] is True
 
 
 def test_disabled_tour_addon_does_not_grant():
