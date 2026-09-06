@@ -16,7 +16,7 @@ const PHOTO_PACKAGES_WITH_FLOORPLAN = new Set([
   'essentials', 'story', 'showcase', 'suite', 'full',
   'standard', 'premium', 'luxury', 'estate',
 ]);
-const PACKAGES_WITH_TOUR = new Set(['showcase', 'suite', 'full']);
+const PACKAGES_WITH_TOUR = new Set(['showcase', 'suite', 'full', 'premium', 'luxury', 'estate']);
 const TOUR_ADDON_KEYS = new Set(['tour', 'virtual_tour', 'virtualtour', '3d_tour', '3dtour', 'path_tour']);
 const FLOORPLAN_ADDON_KEYS = new Set([
   'floorplan', 'floorplan_2d', 'floor_plan', 'floor_plan_only', '2d_floor_plan', 'floorplans',
@@ -118,6 +118,9 @@ function infer(job: CaptureJobLike): CaptureFlags {
   const tourFromPkg = PACKAGES_WITH_TOUR.has(packageId)
     || packageName.split(' ').includes('showcase')
     || packageName.split(' ').includes('suite')
+    || packageName.split(' ').includes('premium')
+    || packageName.split(' ').includes('luxury')
+    || packageName.split(' ').includes('estate')
     || packageName.startsWith('full suite');
   const tourFromType = TOUR_JOB_TYPES.has(jobType);
   const tourFromLabel = labels.some((l) => {
