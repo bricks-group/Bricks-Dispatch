@@ -44,63 +44,132 @@ def test_pick_vendor_onboarding_guard():
     # No match → unassigned (never default_user, never pending applicants)
     assert chosen_id is None
 
+def _supabase_style_db(job_doc, members):
+    """Minimal async chain mock for get_db().table(...).select(...).eq(...).execute()."""
+    mock_db = MagicMock()
+
+    class Result:
+        def __init__(self, data):
+            self.data = data
+
+    def table(name):
+        chain = MagicMock()
+
+        async def execute():
+            if name == "jobs":
+                # Distinguish select-one vs update vs select occupied
+                return Result(job_doc if isinstance(job_doc, dict) else job_doc)
+            if name == "vendor_members":
+                return Result(members)
+            if name == "ops_escalations":
+                return Result([])
+            return Result([])
+
+        # Make every chained method return the same chain; terminal execute is async
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.in_.return_value = chain
+        chain.maybe_single.return_value = chain
+        chain.update.return_value = chain
+        chain.insert.return_value = chain
+        chain.limit.return_value = chain
+        chain.execute = execute
+
+        # For jobs.maybe_single path — return job; for list path return members
+        async def execute_jobs():
+            # Heuristic: if maybe_single was used in this chain, return single job
+            return Result(job_doc)
+
+        async def execute_members():
+            return Result(members)
+
+        if name == "jobs":
+            chain.execute = execute_jobs
+        elif name == "vendor_members":
+            chain.execute = execute_members
+        return chain
+
+    mock_db.table.side_effect = table
+    return mock_db
+
+
 @pytest.mark.asyncio
 async def test_assign_vendor_for_job_fallback(monkeypatch):
-    # Mock DB
-    mock_db = MagicMock()
-    
-    async def mock_find_one(query, projection=None):
-        if "id" in query and query["id"] == "job_123":
-            return {"id": "job_123", "address": "123 Main St", "job_type": "photo", "vendor_id": "default_vendor", "time_window_start": "09:00"}
-        return None
+    job_doc = {
+        "id": "job_123",
+        "address": "123 Main St",
+        "city": "Mississauga",
+        "job_type": "photo",
+        "vendor_id": "default_vendor",
+        "time_window_start": "09:00",
+        "scheduled_date": "2026-09-10",
+        "status": "pending_assignment",
+    }
+    members = [
+        {
+            "id": "v1",
+            "name": "Vendor 1",
+            "email": "v1@test.com",
+            "is_active": True,
+            "status": "available",
+            "vendor_id": "default_vendor",
+            "specialty": "photo",
+            "onboarding_status": "approved",
+            "skills": ["photo"],
+            "service_areas": ["Mississauga", "GTA"],
+            "tier": 1,
+        }
+    ]
+    mock_db = _supabase_style_db(job_doc, members)
+    monkeypatch.setenv("USE_AI_DISPATCH", "false")
 
-    class MockCursor:
-        async def to_list(self, length):
-            return [
-                {"id": "v1", "name": "Vendor 1", "email": "v1@test.com", "is_active": True, "status": "available", "vendor_id": "default_vendor", "specialty": "photo", "onboarding_status": "approved"}
-            ]
+    with patch("app.services.vendor_selection.get_db", AsyncMock(return_value=mock_db)):
+        with patch("app.services.vendor_selection.bricks_smart_assign", AsyncMock(return_value=None)):
+            with patch("app.services.vendor_selection.load_occupied_jobs_by_vendor", AsyncMock(return_value={})):
+                with patch("app.services.vendor_selection._update_job_assignee", AsyncMock()) as upd:
+                    chosen_id = await assign_vendor_for_job("job_123")
+                    assert chosen_id == "v1"
+                    assert upd.called
 
-    def mock_find(query):
-        return MockCursor()
-
-    mock_db.jobs.find_one = AsyncMock(side_effect=mock_find_one)
-    mock_db.jobs.update_one = AsyncMock()
-    mock_db.vendor_members.find = mock_find
-    
-    with patch("app.services.vendor_selection.db", mock_db):
-        # Disable AI
-        monkeypatch.setenv("USE_AI_DISPATCH", "false")
-        
-        chosen_id = await assign_vendor_for_job("job_123")
-        assert chosen_id == "v1"
-        assert mock_db.jobs.update_one.called
 
 @pytest.mark.asyncio
 async def test_assign_vendor_for_job_ai_success(monkeypatch):
-    # Mock DB
-    mock_db = MagicMock()
-    
-    async def mock_find_one(query, projection=None):
-        return {"id": "job_123", "address": "123 Main St", "job_type": "photo", "vendor_id": "default_vendor", "time_window_start": "09:00"}
+    job_doc = {
+        "id": "job_123",
+        "address": "123 Main St",
+        "city": "Mississauga",
+        "job_type": "photo",
+        "vendor_id": "default_vendor",
+        "time_window_start": "09:00",
+        "scheduled_date": "2026-09-10",
+        "status": "pending_assignment",
+    }
+    members = [
+        {
+            "id": "v_ai",
+            "name": "AI Vendor",
+            "email": "ai@test.com",
+            "is_active": True,
+            "status": "available",
+            "vendor_id": "default_vendor",
+            "specialty": "photo",
+            "onboarding_status": "approved",
+            "skills": ["photo"],
+            "service_areas": ["Mississauga", "GTA"],
+            "tier": 1,
+        }
+    ]
+    mock_db = _supabase_style_db(job_doc, members)
+    monkeypatch.setenv("USE_AI_DISPATCH", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake_key")
 
-    class MockCursor:
-        async def to_list(self, length):
-            return [
-                {"id": "v_ai", "name": "AI Vendor", "email": "ai@test.com", "is_active": True, "status": "available", "vendor_id": "default_vendor", "specialty": "photo", "onboarding_status": "approved"}
-            ]
-
-    mock_db.jobs.find_one = AsyncMock(side_effect=mock_find_one)
-    mock_db.jobs.update_one = AsyncMock()
-    mock_db.vendor_members.find = lambda q: MockCursor()
-    
-    with patch("app.services.vendor_selection.db", mock_db):
-        with patch("app.services.vendor_selection.bricks_smart_assign", return_value="v_ai"):
-            monkeypatch.setenv("USE_AI_DISPATCH", "true")
-            monkeypatch.setenv("GEMINI_API_KEY", "fake_key")
-            
-            chosen_id = await assign_vendor_for_job("job_123")
-            assert chosen_id == "v_ai"
-            assert mock_db.jobs.update_one.called
+    with patch("app.services.vendor_selection.get_db", AsyncMock(return_value=mock_db)):
+        with patch("app.services.vendor_selection.bricks_smart_assign", AsyncMock(return_value="v_ai")):
+            with patch("app.services.vendor_selection.load_occupied_jobs_by_vendor", AsyncMock(return_value={})):
+                with patch("app.services.vendor_selection._update_job_assignee", AsyncMock()) as upd:
+                    chosen_id = await assign_vendor_for_job("job_123")
+                    assert chosen_id == "v_ai"
+                    assert upd.called
 
 
 from app.services.vendor_profile import KAM_MEMBER_ID
@@ -173,3 +242,248 @@ def test_null_insurance_expiry_does_not_block():
     no_date_on_file = _approved(id="nodate", name="No Date On File", email="nd@test.com", tier=1,
                                  skills=["photo"], service_areas=["GTA"])
     assert pick_vendor_rule_based(job, [no_date_on_file]) == "nodate"
+
+
+# ── Auto-assign strengthen: duration, overlap, travel hard-gate, Canada ──────
+
+from app.services.shoot_duration import (
+    estimate_shoot_duration_minutes,
+    vendor_slot_conflicts,
+    previous_job_coords,
+)
+from app.services.vendor_profile import location_matches, travel_within_cap
+from app.services.visit_checklist import seed_visit_checklist, ensure_visit_checklist
+from app.services.vendor_selection import filter_assignable_vendors, pick_vendor_rule_based
+import asyncio
+from unittest.mock import AsyncMock, patch
+
+
+def test_estimate_shoot_duration_photo_sqft_and_addons():
+    base = Job(address="1 Main", job_type="photo", time_window_start="10:00", sqft=2000)
+    assert estimate_shoot_duration_minutes(base) == 60
+    small = Job(address="1 Main", job_type="photo", time_window_start="10:00", sqft=1200)
+    assert estimate_shoot_duration_minutes(small) == 45
+    full = Job(
+        address="1 Main",
+        job_type="photo",
+        time_window_start="10:00",
+        sqft=3000,
+        package_name="Premium",
+        add_ons=[{"key": "drone"}, {"key": "reel"}, {"key": "tour"}, {"key": "twilight"}],
+    )
+    mins = estimate_shoot_duration_minutes(full)
+    assert mins >= 60 + 25 + 30 + 35 + 35
+    assert mins <= 300
+
+
+def test_vendor_slot_conflicts_overlap():
+    job = Job(
+        id="a",
+        address="1 Main",
+        job_type="photo",
+        scheduled_date="2026-09-10",
+        time_window_start="10:00",
+        time_window_end="11:00",
+        estimated_duration_min=60,
+    )
+    occupied = [
+        {
+            "id": "b",
+            "scheduled_date": "2026-09-10",
+            "time_window_start": "10:30",
+            "time_window_end": "11:30",
+            "status": "assigned",
+            "estimated_duration_min": 60,
+        }
+    ]
+    assert vendor_slot_conflicts(job, occupied) is True
+    free = [
+        {
+            "id": "c",
+            "scheduled_date": "2026-09-10",
+            "time_window_start": "13:00",
+            "time_window_end": "14:00",
+            "status": "assigned",
+            "estimated_duration_min": 60,
+        }
+    ]
+    assert vendor_slot_conflicts(job, free) is False
+
+
+def test_filter_assignable_excludes_slot_conflict():
+    job = Job(
+        id="new",
+        address="10 King St Mississauga",
+        city="Mississauga",
+        job_type="photo",
+        scheduled_date="2026-09-10",
+        time_window_start="10:00",
+        time_window_end="11:00",
+    )
+    v = _approved(id="v1", name="V", email="v@test.com", skills=["photo"], service_areas=["GTA"])
+    occupied = {
+        "v1": [
+            {
+                "id": "old",
+                "scheduled_date": "2026-09-10",
+                "time_window_start": "09:30",
+                "time_window_end": "11:00",
+                "status": "assigned",
+            }
+        ]
+    }
+    assert filter_assignable_vendors(job, [v], occupied_by_vendor=occupied) == []
+    assert pick_vendor_rule_based(job, [v], occupied_by_vendor=occupied) is None
+
+
+def test_travel_hard_gate_over_cap_even_empty_areas():
+    # Coords known + over cap → miss even with empty service_areas (fail-closed on distance)
+    member = _approved(
+        id="far",
+        name="Far",
+        email="f@test.com",
+        skills=["photo"],
+        service_areas=[],
+        home_lat=43.65,
+        home_lng=-79.38,
+        max_travel_km=30,
+    )
+    job = Job(
+        address="Calgary downtown",
+        city="Calgary",
+        state="AB",
+        job_type="photo",
+        time_window_start="10:00",
+        lat=51.0447,
+        lng=-114.0719,
+    )
+    assert travel_within_cap(member, job) is False
+    assert location_matches(member, job) is False
+
+
+def test_calgary_alberta_without_gta():
+    member = _approved(
+        id="ab1",
+        name="Calgary Photog",
+        email="c@test.com",
+        skills=["photo"],
+        service_areas=["Calgary", "Alberta"],
+        home_city="Calgary",
+    )
+    job = Job(
+        address="12 8 Ave SW",
+        city="Calgary",
+        state="AB",
+        job_type="photo",
+        time_window_start="10:00",
+    )
+    assert location_matches(member, job) is True
+    assert pick_vendor_rule_based(job, [member]) == "ab1"
+
+    gta_only = _approved(
+        id="gta",
+        name="GTA",
+        email="g@test.com",
+        skills=["photo"],
+        service_areas=["Mississauga", "GTA"],
+        home_city="Mississauga",
+    )
+    assert location_matches(gta_only, job) is False
+    assert pick_vendor_rule_based(job, [gta_only]) is None
+
+
+def test_visit_checklist_one_visit_no_return():
+    job = {
+        "job_type": "photo",
+        "package_id": "premium",
+        "package_name": "Premium",
+        "add_ons": [{"key": "drone"}, {"key": "twilight"}, {"key": "reel"}],
+    }
+    items = seed_visit_checklist(job)
+    labels = " | ".join(i["label"].lower() for i in items)
+    assert "arrive" in labels
+    assert "hdr" in labels
+    assert "drone" in labels
+    assert "twilight" in labels and "same visit" in labels
+    assert "return visit" not in labels
+    assert "second appointment" not in labels
+    assert "submit" in labels or "deliver" in labels
+    # ensure reseeds legacy return wording
+    legacy = [{"id": "1", "label": "Twilight return visit tomorrow", "completed": False}]
+    fixed = ensure_visit_checklist({**job, "checklist": legacy})
+    assert all("return visit" not in i["label"].lower() for i in fixed)
+
+
+@pytest.mark.asyncio
+async def test_vendor_is_busy_freebusy_mock():
+    from datetime import datetime, timezone
+    from app.services.vendor_calendars import vendor_is_busy, _google_freebusy
+
+    start = datetime(2026, 9, 10, 14, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 10, 15, 0, tzinfo=timezone.utc)
+
+    class FakeResp:
+        def __init__(self, status, data):
+            self.status_code = status
+            self._data = data
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError("http")
+        def json(self):
+            return self._data
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, headers=None, json=None):
+            busy = [{"start": "2026-09-10T14:00:00Z", "end": "2026-09-10T14:30:00Z"}]
+            return FakeResp(200, {"calendars": {"primary": {"busy": busy}}})
+
+    with patch("app.services.vendor_calendars.httpx.AsyncClient", FakeClient):
+        assert await _google_freebusy("tok", start, end) is True
+
+    class FreeClient(FakeClient):
+        async def post(self, url, headers=None, json=None):
+            return FakeResp(200, {"calendars": {"primary": {"busy": []}}})
+
+    with patch("app.services.vendor_calendars.httpx.AsyncClient", FreeClient):
+        assert await _google_freebusy("tok", start, end) is False
+
+    member = {"id": "m1", "email": "m@test.com", "google_calendar_token": "tok"}
+    with patch("app.services.vendor_calendars.httpx.AsyncClient", FakeClient):
+        assert await vendor_is_busy(member, start, end) is True
+    with patch("app.services.vendor_calendars.httpx.AsyncClient", FreeClient):
+        assert await vendor_is_busy(member, start, end) is False
+    # No calendar → unknown
+    assert await vendor_is_busy({"id": "m2"}, start, end) is None
+
+
+def test_previous_job_coords_same_day():
+    job = Job(
+        id="n",
+        address="B",
+        job_type="photo",
+        scheduled_date="2026-09-10",
+        time_window_start="14:00",
+        time_window_end="15:00",
+        lat=43.7,
+        lng=-79.4,
+    )
+    occupied = [
+        {
+            "id": "earlier",
+            "scheduled_date": "2026-09-10",
+            "time_window_start": "10:00",
+            "time_window_end": "11:00",
+            "status": "assigned",
+            "lat": 43.65,
+            "lng": -79.38,
+        }
+    ]
+    coords = previous_job_coords(job, occupied)
+    assert coords is not None
+    assert abs(coords[0] - 43.65) < 0.01

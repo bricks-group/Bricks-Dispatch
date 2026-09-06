@@ -28,6 +28,9 @@ class Job(BaseModel):
     time_window_end: str = ""
     preferred_window: Optional[str] = None  # morning|afternoon|evening from /book
     confirmed_arrive_at: Optional[str] = None  # photographer HH:MM in job timezone
+    selected_slot_start: Optional[str] = None  # ISO start of booked clock (one visit)
+    selected_slot_end: Optional[str] = None  # ISO end of booked clock
+    estimated_duration_min: Optional[int] = None  # on-site minutes for full package
     timezone: Optional[str] = None  # IANA, e.g. America/Vancouver. Missing → resolve from province.
     job_type: str
     status: str = "assigned"
@@ -96,6 +99,9 @@ class JobIntakeRequest(BaseModel):
     time_window_end: str = ""
     preferred_window: Optional[str] = None
     confirmed_arrive_at: Optional[str] = None
+    selected_slot_start: Optional[str] = None
+    selected_slot_end: Optional[str] = None
+    estimated_duration_min: Optional[int] = None
     timezone: Optional[str] = None  # IANA from OS / Stripe metadata; province fallback
     job_type: str
     priority: str = "normal"
@@ -307,6 +313,7 @@ class VendorMember(BaseModel):
     max_travel_km: int = 50
     tier: int = 1
     drone_certified: bool = False
+    rpas_advanced: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced"
     # Gaussian splat Virtual Visit is included on every package tier (Standard and up,

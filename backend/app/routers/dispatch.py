@@ -63,17 +63,34 @@ async def create_dispatch_job(
         if _norm:
             job_data[_k] = _norm
     
-    # Ensure checklist items have IDs
-    for item in job_data.get("checklist", []):
-        if "id" not in item:
-            item["id"] = str(uuid.uuid4())
+    # One-visit shoot checklist (Arrive → modes → Submit). No return visits.
+    from ..services.visit_checklist import ensure_visit_checklist
+    from ..services.shoot_duration import estimate_shoot_duration_minutes
+    job_data["checklist"] = ensure_visit_checklist(job_data)
+    if job_data.get("estimated_duration_min") is None:
+        job_data["estimated_duration_min"] = estimate_shoot_duration_minutes(job_data)
 
     try:
         # jobs.timezone is not a live column yet (DDL lives in Bricks OS).
         # Keep IANA on job_data for the admin when-line; persist province via state.
         insert_data = {k: v for k, v in job_data.items() if k != "timezone"}
-        res = await db.table("jobs").insert(insert_data).execute()
-        if not res.data:
+        # Soft-drop columns that may not exist yet (duration / slot clocks).
+        from ..services.vendor_profile import _missing_column
+        res = None
+        last_err = None
+        for _ in range(6):
+            try:
+                res = await db.table("jobs").insert(insert_data).execute()
+                break
+            except Exception as e:
+                last_err = e
+                miss = _missing_column(str(e), list(insert_data.keys()))
+                if not miss:
+                    raise
+                insert_data.pop(miss, None)
+        if res is None or not res.data:
+            if last_err:
+                raise last_err
             raise HTTPException(status_code=500, detail="Failed to persist job")
 
         # Assign synchronously before responding. Dispatch API runs on Vercel

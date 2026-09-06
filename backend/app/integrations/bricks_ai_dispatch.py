@@ -23,7 +23,8 @@ from typing import List, Optional
 import httpx
 from ..shared.schemas import Job, VendorMember
 from ..shared.geospatial import haversine_km as _haversine_km
-from ..services.vendor_profile import member_eligible_for_job
+from ..services.vendor_profile import member_eligible_for_job, travel_within_cap
+from ..services.shoot_duration import previous_job_coords, vendor_slot_conflicts
 
 logger = logging.getLogger(__name__)
 
@@ -301,10 +302,36 @@ async def _save_dispatch_explanation(job: Job, vendor: VendorMember, score: floa
 # Public entry point
 # ---------------------------------------------------------------------------
 
-async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional[str]:
+def _filter_with_occupied(
+    job: Job,
+    vendors: List[VendorMember],
+    occupied_by_vendor: Optional[dict] = None,
+) -> List[VendorMember]:
+    """Same slot/travel filters as rule-based path (avoids circular import)."""
+    occupied_by_vendor = occupied_by_vendor or {}
+    out: List[VendorMember] = []
+    for v in vendors:
+        if not member_eligible_for_job(v, job):
+            continue
+        occupied = occupied_by_vendor.get(v.id) or []
+        if vendor_slot_conflicts(job, occupied):
+            continue
+        origin = previous_job_coords(job, occupied)
+        if origin is not None and travel_within_cap(v, job, origin=origin) is False:
+            continue
+        out.append(v)
+    return out
+
+
+async def bricks_smart_assign(
+    job: Job,
+    vendors: List[VendorMember],
+    occupied_by_vendor: Optional[dict] = None,
+) -> Optional[str]:
     """
     Select the best vendor for a job using deterministic weighted scoring.
     Drone jobs enforce drone_certified=True as a hard gate.
+    Accepts occupied_by_vendor for same-day slot + travel chaining filters.
     Returns the chosen vendor member id, or None if no eligible candidates.
     """
     min_tier = job.min_tier_required or 1
@@ -338,7 +365,8 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
     # Filter eligible candidates — prefer available but fall back to all active/approved
     # so the scorer behaves consistently with pick_vendor_rule_based rather than hard-blocking
     # on status and forcing every unavailable-pool job through the rule-based path.
-    eligible = [v for v in vendors if member_eligible_for_job(v, job)]
+    # Same slot/travel filters as rule-based when occupied_by_vendor is provided.
+    eligible = _filter_with_occupied(job, vendors, occupied_by_vendor=occupied_by_vendor)
     candidates = [v for v in eligible if v.status == "available"] or eligible
 
     if not eligible:

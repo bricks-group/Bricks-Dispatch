@@ -243,9 +243,9 @@ export default function TodayScreen() {
             {/* Pre-shoot checklist for next job */}
             {nextJob && (nextJob.checklist?.length ?? 0) > 0 && (
               <View style={s.section}>
-                <Text style={s.sectionLabel}>PRE-SHOOT CHECKLIST</Text>
+                <Text style={s.sectionLabel}>SHOOT CHECKLIST · ONE VISIT</Text>
                 <View style={s.checkCard}>
-                  {(nextJob.checklist || []).slice(0, 5).map((item, i, arr) => (
+                  {(nextJob.checklist || []).slice(0, 12).map((item, i, arr) => (
                     <View key={item.id} style={[s.checkRow, i < arr.length - 1 && s.checkRowBorder]}>
                       <View style={item.completed ? s.chkFilled : s.chkEmpty}>
                         {item.completed && <Check size={9} color="#FFF" strokeWidth={3} />}
