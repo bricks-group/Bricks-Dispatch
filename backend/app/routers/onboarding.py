@@ -211,7 +211,7 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
 async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
     Photographer application. Requires acceptance of the current IC agreement.
-    Records ic_agreement_version as the live server version (currently 1.3).
+    Records ic_agreement_version as the live server version (currently 1.4).
     """
     if not application.accepted_terms:
         raise HTTPException(status_code=400, detail="You must accept the Bricks Contractor Agreement to apply.")
