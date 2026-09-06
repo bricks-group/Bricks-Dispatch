@@ -800,7 +800,6 @@ async def connect_vendor_calendar(
     payload = payload or {}
     from ..services.vendor_calendars import (
         google_oauth_configured,
-        microsoft_oauth_configured,
         connection_status,
         PROVIDERS,
     )
@@ -882,39 +881,14 @@ async def connect_vendor_calendar(
         }
 
     if provider == "microsoft":
-        if not microsoft_oauth_configured():
-            return {
-                "connected": False,
-                "status": "needs_env",
-                "detail": "Microsoft OAuth client id/secret not configured. Set MICROSOFT_OAUTH_CLIENT_ID / AZURE_AD_CLIENT_ID, then retry.",
-                "oauth_url": None,
-            }
-        from ..services.vendor_calendars import microsoft_redirect_uri, build_microsoft_authorize_url
-        redirect = microsoft_redirect_uri()
-        if not redirect:
-            return {
-                "connected": False,
-                "status": "needs_env",
-                "detail": "MICROSOFT_OAUTH_REDIRECT_URI is not set — cannot start Outlook OAuth.",
-                "oauth_url": None,
-            }
-        oauth_url = build_microsoft_authorize_url(actor_id)
-        if payload.get("access_token"):
-            row = {
-                "member_id": actor_id,
-                "vendor_id": vendor_id,
-                "provider": "microsoft",
-                "access_token": payload.get("access_token"),
-                "refresh_token": payload.get("refresh_token"),
-                "updated_at": now,
-                "created_at": now,
-            }
-            try:
-                await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
-            except Exception as e:
-                logger.warning("calendar upsert soft-fail: %s", e)
-            return connection_status(row)
-        return {"connected": False, "status": "oauth_ready", "detail": "Open Microsoft OAuth to connect", "oauth_url": oauth_url}
+        # Outlook Connect not offered to vendors (Azure/M365 free signup requires a card).
+        # FreeBusy + disconnect paths remain for any legacy connection.
+        return {
+            "connected": False,
+            "status": "unavailable",
+            "detail": "Outlook Connect isn’t offered without an Azure directory (no card). Use Google, Apple, or an ICS feed.",
+            "oauth_url": None,
+        }
 
     if provider == "apple":
         caldav_url = (payload.get("caldav_url") or "").strip()
