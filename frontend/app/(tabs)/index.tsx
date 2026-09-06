@@ -17,6 +17,8 @@ const VENDOR_RATE = 0.62;
 type ChecklistItem = { id: string; label: string; completed: boolean };
 type Job = {
   id: string; address: string; city: string; state: string;
+  timezone?: string | null;
+  zip_code?: string | null;
   time_window_start: string; time_window_end?: string | null;
   preferred_window?: string | null;
   job_type: string; status: string;
@@ -30,7 +32,7 @@ type Job = {
 };
 
 function todayISO() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
+  return new Date().toLocaleDateString('en-CA');
 }
 
 function fmtMoney(amount: number) {

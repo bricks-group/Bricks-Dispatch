@@ -1,4 +1,6 @@
-/** Booked clock times (America/Toronto). No Cal.com — HH:MM on the job. */
+/** Booked clock times in the property timezone. No Cal.com — HH:MM on the job. */
+
+import { resolveJobIana, tzAbbrev, type JobTzFields } from './job-timezone';
 
 const CANONICAL: Record<string, { start: string }> = {
   morning: { start: '09:00' },
@@ -8,7 +10,7 @@ const CANONICAL: Record<string, { start: string }> = {
 
 const UNSET = 'Shoot time not set';
 
-export type ShootWindowFields = {
+export type ShootWindowFields = JobTzFields & {
   preferred_window?: string | null;
   time_window_start?: string | null;
   time_window_end?: string | null;
@@ -16,17 +18,18 @@ export type ShootWindowFields = {
   scheduled_date?: string | null;
 };
 
-function clock(raw?: string | null): string {
+function clock(raw?: string | null, job?: ShootWindowFields): string {
   const s = (raw || '').trim();
   if (!s) return '';
-  // HH:MM or HH:MM:SS — keep HH:MM
+  // HH:MM or HH:MM:SS — keep HH:MM (already property-local)
   const m = s.match(/^(\d{1,2}):(\d{2})/);
-  if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
-  // ISO datetime → clock in Toronto
+  if (m && !s.includes('T') && !s.includes('-')) {
+    return `${m[1].padStart(2, '0')}:${m[2]}`;
+  }
   const d = new Date(s);
   if (!Number.isNaN(d.getTime())) {
     return d.toLocaleTimeString('en-GB', {
-      timeZone: 'America/Toronto',
+      timeZone: resolveJobIana(job),
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
@@ -48,9 +51,9 @@ function clock12(hhmm: string): string {
 
 /** confirmed_arrive_at, else time_window_start, else preferred_window start (legacy). */
 function bookedClock(job: ShootWindowFields): string {
-  const confirmed = clock(job.confirmed_arrive_at);
+  const confirmed = clock(job.confirmed_arrive_at, job);
   if (confirmed) return confirmed;
-  const start = clock(job.time_window_start);
+  const start = clock(job.time_window_start, job);
   if (start) return start;
   const key = (job.preferred_window || '').trim().toLowerCase();
   if (CANONICAL[key]) return CANONICAL[key].start;
@@ -59,13 +62,14 @@ function bookedClock(job: ShootWindowFields): string {
 
 /**
  * Booked arrive/start for GO Today / job detail.
- * e.g. "2:00 PM ET" — never a window label or 12:00–16:00 range.
+ * e.g. "2:00 PM PT" — never a window label or 12:00–16:00 range.
  */
 export function formatShootWindow(job: ShootWindowFields): string {
   const hhmm = bookedClock(job);
   if (!hhmm) return UNSET;
   const pretty = clock12(hhmm);
-  return pretty ? `${pretty} ET` : `${hhmm} ET`;
+  const abbrev = tzAbbrev(job);
+  return pretty ? `${pretty} ${abbrev}` : `${hhmm} ${abbrev}`;
 }
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -85,7 +89,7 @@ export function formatShootDate(scheduled_date?: string | null): string {
   return `${DOW[dt.getDay()]}, ${MON[m - 1]} ${d}`;
 }
 
-/** Date + booked clock: "Fri, Sep 25 · 2:00 PM ET". */
+/** Date + booked clock: "Fri, Sep 25 · 2:00 PM PT". */
 export function formatShootWhen(job: ShootWindowFields): string {
   const date = formatShootDate(job.scheduled_date);
   const window = formatShootWindow(job);

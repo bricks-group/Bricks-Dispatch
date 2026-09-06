@@ -23,6 +23,8 @@ type ChecklistItem = { id: string; label: string; completed: boolean };
 type ListingHit = { id: string; address: string; city?: string; deal_type?: string | null };
 type Job = {
   id: string; address: string; city: string; state: string;
+  timezone?: string | null;
+  zip_code?: string | null;
   time_window_start: string; time_window_end?: string | null;
   preferred_window?: string | null;
   confirmed_arrive_at?: string | null;

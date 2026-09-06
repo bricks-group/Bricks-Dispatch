@@ -69,7 +69,7 @@ def _job(assignee_id="member_1", status="in_progress", shoot_offset_min=0):
     """Return a minimal job dict. shoot_offset_min: negative = future, positive = past.
 
     Uses the canonical DB format: scheduled_date (YYYY-MM-DD) + time_window_start (HH:MM).
-    time_window_start is stored in Ontario local time (America/Toronto), matching production.
+    time_window_start is stored as a property-local HH:MM (province timezone).
     """
     from zoneinfo import ZoneInfo
     _tz = ZoneInfo("America/Toronto")

@@ -199,7 +199,10 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
     # has no weather awareness, so we must short-circuit before the retry loop.
     if _is_drone_job(job) and job.lat and job.lng and job.scheduled_date:
         try:
-            _weather = await _get_weather_context(job.lat, job.lng, job.scheduled_date)
+            from ..shared.job_timezone import resolve_job_iana
+            _weather = await _get_weather_context(
+                job.lat, job.lng, job.scheduled_date, resolve_job_iana(job_doc)
+            )
             if _weather and _weather.get("drone_unsafe"):
                 logger.warning(
                     f"Job {job_id}: drone_unsafe weather ({_weather.get('condition')}, "

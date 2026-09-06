@@ -27,7 +27,8 @@ class Job(BaseModel):
     time_window_start: str
     time_window_end: str = ""
     preferred_window: Optional[str] = None  # morning|afternoon|evening from /book
-    confirmed_arrive_at: Optional[str] = None  # photographer HH:MM Toronto
+    confirmed_arrive_at: Optional[str] = None  # photographer HH:MM in job timezone
+    timezone: Optional[str] = None  # IANA, e.g. America/Vancouver. Missing → resolve from province.
     job_type: str
     status: str = "assigned"
     priority: str = "normal"
@@ -95,6 +96,7 @@ class JobIntakeRequest(BaseModel):
     time_window_end: str = ""
     preferred_window: Optional[str] = None
     confirmed_arrive_at: Optional[str] = None
+    timezone: Optional[str] = None  # IANA from OS / Stripe metadata; province fallback
     job_type: str
     priority: str = "normal"
     property_details: str = ""

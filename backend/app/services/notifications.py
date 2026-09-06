@@ -3,7 +3,9 @@ import logging
 import os
 import re
 from datetime import date as _date
+from zoneinfo import ZoneInfo
 from ..shared.database import get_db
+from ..shared.job_timezone import resolve_job_iana, tz_abbrev
 from ..shared.schemas import NotificationRecord
 
 logger = logging.getLogger(__name__)
@@ -37,11 +39,11 @@ _MON_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct
 _SHOOT_TIME_UNSET = "Shoot time not set"
 
 
-def _clock_hhmm(raw) -> str:
-    """Normalize HH:MM in America/Toronto.
+def _clock_hhmm(raw, job: dict | None = None) -> str:
+    """Normalize HH:MM in the job's property timezone.
 
-    Bare HH:MM / HH:MM:SS stay as local clocks. ISO datetimes (T or space,
-    with Z/offset) convert to Toronto — never slice the UTC hour as if it
+    Bare HH:MM / HH:MM:SS stay as local wall clocks. ISO datetimes (T or space,
+    with Z/offset) convert to the job IANA — never slice the UTC hour as if it
     were Eastern (13:00Z is 9:00 AM ET in September, not 1:00 PM).
     """
     s = (raw or "").strip()
@@ -53,11 +55,11 @@ def _clock_hhmm(raw) -> str:
     if "T" in s or (s[0].isdigit() and s.count("-") >= 2):
         try:
             from datetime import datetime
-            from zoneinfo import ZoneInfo
+            iana = resolve_job_iana(job)
             d = datetime.fromisoformat(s.replace("Z", "+00:00"))
             if d.tzinfo is None:
-                d = d.replace(tzinfo=ZoneInfo("America/Toronto"))
-            return d.astimezone(ZoneInfo("America/Toronto")).strftime("%H:%M")
+                d = d.replace(tzinfo=ZoneInfo(iana))
+            return d.astimezone(ZoneInfo(iana)).strftime("%H:%M")
         except Exception:
             return ""
     return ""
@@ -82,10 +84,10 @@ def _format_clock_12h(hhmm: str) -> str:
 def _booked_clock_hhmm(job: dict | None) -> str:
     """Booked arrive/start: confirmed_arrive_at, else time_window_start, else preferred_window start."""
     job = job or {}
-    confirmed = _clock_hhmm(job.get("confirmed_arrive_at"))
+    confirmed = _clock_hhmm(job.get("confirmed_arrive_at"), job)
     if confirmed:
         return confirmed
-    start = _clock_hhmm(job.get("time_window_start"))
+    start = _clock_hhmm(job.get("time_window_start"), job)
     if start:
         return start
     preferred = (job.get("preferred_window") or "").strip().lower()
@@ -146,16 +148,18 @@ def format_package_line(package_name: str | None, package_id: str | None = None)
 
 
 def format_shoot_window(job: dict | None) -> str:
-    """Booked arrive/start clock: '2:00 PM ET'. Not a window label or range."""
+    """Booked arrive/start clock: '2:00 PM PT'. Not a window label or range."""
+    job = job or {}
     hhmm = _booked_clock_hhmm(job)
     if not hhmm:
         return _SHOOT_TIME_UNSET
     pretty = _format_clock_12h(hhmm)
-    return f"{pretty} ET" if pretty else f"{hhmm} ET"
+    abbrev = tz_abbrev(job)
+    return f"{pretty} {abbrev}" if pretty else f"{hhmm} {abbrev}"
 
 
 def format_when_line(job: dict | None) -> str:
-    """Vendor/admin when-line: 'Fri, Sep 25 · 2:00 PM ET'."""
+    """Vendor/admin when-line: 'Fri, Sep 25 · 2:00 PM PT'."""
     job = job or {}
     day = format_shoot_date(job.get("scheduled_date"))
     clock = format_shoot_window(job)
@@ -168,12 +172,14 @@ def format_when_line(job: dict | None) -> str:
 
 
 
-def _arrive_confirm_email_html(agent_name: str, photographer: str, address: str, when_line: str, arrive: str) -> str:
+def _arrive_confirm_email_html(agent_name: str, photographer: str, address: str, when_line: str, arrive: str, abbrev: str = "") -> str:
     who = (agent_name or "").strip() or "there"
     photo = (photographer or "").strip() or "Your Bricks photographer"
     addr = (address or "").strip() or "your property"
     when = (when_line or "").strip()
     arrive_s = (arrive or "").strip()
+    zone = (abbrev or "").strip()
+    arrive_label = f"{arrive_s} {zone}".strip()
     when_p = f'<p style="color:#555;line-height:1.6;margin:0 0 12px 0">{when}</p>' if when else ""
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
@@ -191,7 +197,7 @@ def _arrive_confirm_email_html(agent_name: str, photographer: str, address: str,
 </div>
 <div style="padding:24px">
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {who},</p>
-<p style="color:#555;line-height:1.6;margin:0 0 12px 0"><strong>{photo}</strong> will arrive around <strong>{arrive_s} ET</strong> at <strong>{addr}</strong>.</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0"><strong>{photo}</strong> will arrive around <strong>{arrive_label}</strong> at <strong>{addr}</strong>.</p>
 {when_p}
 <p style="margin-top:24px;font-size:13px;color:#999;line-height:1.5">Bricks · brxs.ca</p>
 </div>
@@ -206,10 +212,11 @@ async def notify_arrive_confirmed(job: dict, photographer: dict | None = None) -
     if not to_email:
         logger.info("Arrive confirm: no agent_email on job %s — skip email", job.get("id"))
         return result
-    arrive = _clock_hhmm(job.get("confirmed_arrive_at")) or _clock_hhmm(job.get("time_window_start"))
+    arrive = _clock_hhmm(job.get("confirmed_arrive_at"), job) or _clock_hhmm(job.get("time_window_start"), job)
     if not arrive:
         return result
     arrive_display = _format_clock_12h(arrive) or arrive
+    abbrev = tz_abbrev(job)
     when_line = format_when_line(job)
     if when_line == _SHOOT_TIME_UNSET:
         when_line = ""
@@ -221,11 +228,12 @@ async def notify_arrive_confirmed(job: dict, photographer: dict | None = None) -
             job.get("address") or "",
             when_line,
             arrive_display,
+            abbrev,
         )
         result["email"] = bool(
             await send_email_via_resend(
                 to_email,
-                f"Photographer arriving ~{arrive_display} ET — {job.get('address') or 'your shoot'}",
+                f"Photographer arriving ~{arrive_display} {abbrev} — {job.get('address') or 'your shoot'}",
                 html,
             )
         )
@@ -682,6 +690,9 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
         "time_window_end": job.get("time_window_end") or "",
         "preferred_window": job.get("preferred_window") or "",
         "confirmed_arrive_at": job.get("confirmed_arrive_at") or "",
+        "timezone": job.get("timezone") or job.get("time_zone") or "",
+        "state": job.get("state") or job.get("province") or "",
+        "zip_code": job.get("zip_code") or job.get("postal_code") or "",
     }
     try:
         from ..notifications import notify_job_assigned_to_vendor

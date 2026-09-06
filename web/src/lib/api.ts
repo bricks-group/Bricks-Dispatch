@@ -151,6 +151,11 @@ export type ListingHit = {
 export type Job = {
   id: string;
   address: string;
+  city?: string;
+  state?: string | null;
+  timezone?: string | null;
+  zip_code?: string | null;
+  postal_code?: string | null;
   time_window_start: string;
   time_window_end: string;
   preferred_window?: string | null;
