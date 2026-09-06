@@ -91,7 +91,11 @@ export default function SettingsScreen() {
                       ? (stripeErr || 'Status unavailable')
                       : stripe.connected
                         ? 'Connected — job payouts go to this account.'
-                        : 'Not connected. Owner payouts are the full package with $0 deduction.'}
+                        : stripe.connect_status === 'pending'
+                          ? 'Pending — finish Stripe setup to receive job payouts.'
+                          : stripe.connect_status === 'restricted'
+                            ? 'Restricted — open Stripe to fix requirements before payouts.'
+                            : 'Not connected. Owner payouts are the full package with $0 deduction.'}
                   </Text>
                 </View>
               </View>
@@ -104,7 +108,11 @@ export default function SettingsScreen() {
                 {stripeBusy
                   ? <ActivityIndicator size="small" color={TOKENS.brick} />
                   : <Text style={[s.rowLabel, { color: TOKENS.brick }]}>
-                      {stripe?.connected ? 'Update Stripe account' : 'Connect Stripe'}
+                      {stripe?.connected
+                        ? 'Update Stripe account'
+                        : stripe?.connect_status === 'pending' || stripe?.connect_status === 'restricted'
+                          ? 'Finish Stripe setup'
+                          : 'Connect Stripe'}
                     </Text>}
               </TouchableOpacity>
             </View>
