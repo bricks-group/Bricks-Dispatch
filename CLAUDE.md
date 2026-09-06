@@ -272,6 +272,7 @@ pick_vendor_rule_based(job, vendors)
 - `TWILIO_ACCOUNT_SID` ✅ (set)
 - `TWILIO_AUTH_TOKEN` ✅ (set)
 - `TWILIO_FROM_NUMBER` ✅ (set)
+- `CALENDAR_TOKEN_ENCRYPTION_KEY` — app-level Fernet (or any secret) for encrypting `vendor_calendar_connections` OAuth/CalDAV secrets at rest; fail-soft if unset (FreeBusy → unknown). See `memory/calendar-token-encryption.md`
 
 **Ops tasks (pre-launch):**
 - [ ] **Ontario employment lawyer review of IC agreement** — budget $2-4K (non-negotiable)

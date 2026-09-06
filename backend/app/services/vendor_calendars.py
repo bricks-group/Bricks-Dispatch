@@ -322,7 +322,12 @@ async def upsert_oauth_connection(
     provider: str,
     token_payload: dict,
 ) -> dict:
-    """Persist OAuth tokens. Returns the row used for honest connection_status."""
+    """Persist OAuth tokens (encrypted at rest when CALENDAR_TOKEN_ENCRYPTION_KEY is set).
+
+    Returns a row suitable for honest connection_status (ciphertext still counts as present).
+    """
+    from .calendar_token_crypto import encrypt_connection_secrets
+
     now = datetime.now(timezone.utc).isoformat()
     row = {
         "member_id": member_id,
@@ -334,8 +339,9 @@ async def upsert_oauth_connection(
         "updated_at": now,
         "created_at": now,
     }
-    await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
-    return row
+    stored = encrypt_connection_secrets(row)
+    await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
+    return stored
 
 
 def connection_status(conn: dict | None) -> dict:
@@ -389,11 +395,35 @@ def connection_status(conn: dict | None) -> dict:
     return {"provider": provider or "unknown", "connected": False, "status": "not_connected", "detail": "Not connected"}
 
 
-async def _load_connections(db, member_id: str) -> list[dict]:
+async def _load_connections(db, member_id: str, *, decrypt: bool = True) -> list[dict]:
+    """Load calendar connections. When decrypt=True (FreeBusy), secrets are plaintext.
+
+    Encrypt-on-read backfill: if a key is configured and a row still has plaintext
+    secrets, re-upsert encrypted (best-effort, soft-fail).
+    """
+    from .calendar_token_crypto import (
+        decrypt_connection_secrets,
+        encrypt_connection_secrets,
+        needs_reencrypt,
+    )
+
     rows: list[dict] = []
     try:
         res = await db.table("vendor_calendar_connections").select("*").eq("member_id", member_id).execute()
         rows = list(res.data or [])
+        for i, row in enumerate(rows):
+            if needs_reencrypt(row):
+                try:
+                    stored = encrypt_connection_secrets(row)
+                    stored["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    await db.table("vendor_calendar_connections").upsert(
+                        stored, on_conflict="member_id,provider"
+                    ).execute()
+                    rows[i] = stored
+                except Exception as e:
+                    logger.debug("calendar re-encrypt soft-fail: %s", e)
+        if decrypt:
+            rows = [decrypt_connection_secrets(r) for r in rows]
     except Exception as e:
         logger.debug("vendor_calendar_connections read failed (soft): %s", e)
         # Fall back to columns on vendor_members if table missing
@@ -423,7 +453,11 @@ async def _load_connections(db, member_id: str) -> list[dict]:
 
 async def list_vendor_calendar_status(db, member_id: str) -> list[dict]:
     """Status for UI Connect providers — Microsoft omitted unless already connected."""
-    existing = {str(r.get("provider") or "").lower(): r for r in await _load_connections(db, member_id)}
+    # decrypt=False: Connected means token ciphertext/plaintext present; no key needed for UI.
+    existing = {
+        str(r.get("provider") or "").lower(): r
+        for r in await _load_connections(db, member_id, decrypt=False)
+    }
     out = []
     for p in UI_CONNECT_PROVIDERS:
         out.append(connection_status(existing.get(p) or {"provider": p}))
