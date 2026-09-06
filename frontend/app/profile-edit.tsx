@@ -328,7 +328,7 @@ export default function ProfileEditScreen() {
             <View style={s.toggleRow}>
               <Text style={s.toggleLabel}>Available for assignments</Text>
               <Text style={{ color: TOKENS.moonMute, fontSize: 12, marginTop: 8, lineHeight: 16 }}>
-                Connect Google, Outlook, Apple, or an ICS calendar on web Availability so auto-assign only offers jobs that fit your real schedule.
+                Connect a calendar (Google, Apple, or ICS) on web Availability so auto-assign only offers jobs that fit your real schedule.
               </Text>
               <Switch
                 value={availability}

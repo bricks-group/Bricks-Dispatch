@@ -19,6 +19,9 @@ import httpx
 logger = logging.getLogger(__name__)
 
 PROVIDERS = ("google", "microsoft", "apple", "ics")
+# Vendors see Google / Apple / ICS only — Microsoft Graph stays in FreeBusy for
+# any legacy connection, but Outlook Connect is not offered (Azure signup needs a card).
+UI_CONNECT_PROVIDERS = ("google", "apple", "ics")
 
 
 def _as_dict(obj: Any) -> dict:
@@ -419,11 +422,17 @@ async def _load_connections(db, member_id: str) -> list[dict]:
 
 
 async def list_vendor_calendar_status(db, member_id: str) -> list[dict]:
-    """Status for all providers — includes placeholders when none connected."""
+    """Status for UI Connect providers — Microsoft omitted unless already connected."""
     existing = {str(r.get("provider") or "").lower(): r for r in await _load_connections(db, member_id)}
     out = []
-    for p in PROVIDERS:
+    for p in UI_CONNECT_PROVIDERS:
         out.append(connection_status(existing.get(p) or {"provider": p}))
+    # Keep a connected Microsoft row so disconnect still works; never offer Connect.
+    ms = existing.get("microsoft")
+    if ms:
+        st = connection_status(ms)
+        if st.get("connected"):
+            out.append(st)
     return out
 
 
