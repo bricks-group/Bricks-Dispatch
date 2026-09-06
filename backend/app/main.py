@@ -66,6 +66,16 @@ app.include_router(jobs.router, tags=["jobs"])
 app.include_router(post_production.router, tags=["post-production"])
 app.include_router(stripe_connect_status_router, tags=["vendor-os"])  # honest Connected (sole status route)
 app.include_router(vendor_os.router, tags=["vendor-os"])
+# Drop hollow Connected duplicate if still defined in vendor_os (honest router is sole status).
+from fastapi.routing import APIRoute
+app.router.routes = [
+    r for r in app.router.routes
+    if not (
+        isinstance(r, APIRoute)
+        and r.path == "/api/vendor-os/stripe-connect/status"
+        and getattr(r.endpoint, "__module__", "").endswith("routers.vendor_os")
+    )
+]
 app.include_router(stripe_connect_webhook_router, tags=["stripe-connect"])
 app.include_router(onboarding.router, tags=["onboarding"])
 app.include_router(admin_ops.router, tags=["admin"])
