@@ -65,29 +65,26 @@ def test_intake_awaits_admin_notify_not_background_tasks():
     assert "paid_booking_admin_subject" in src
     assert "email_html=" in src
     assert "_paid_booking_admin_email_html" in src
+    assert "format_when_line" in src
     assert "New paid booking:" not in src
     assert "job_data.get('address', job_id)" not in src
 
 
-def test_format_shoot_window_matches_go_web():
-    # Source-level: full package import needs pydantic on CI/dev without venv.
-    src = (ROOT / "app/services/notifications.py").read_text()
-    assert "def format_shoot_window" in src
-    assert '"afternoon": ("12:00", "16:00", "Afternoon")' in src
-    assert "Shoot window not set" in src
-    # Exec just the pure helper body (no Supabase/pydantic).
-    start = src.index("def _clock_hhmm")
-    end = src.index("def _assignment_email_html")
-    ns = {}
-    exec("_CANONICAL_WINDOWS = " + src[src.index("_CANONICAL_WINDOWS = "):src.index("def _clock_hhmm")], ns)
-    exec(src[start:end], ns)
-    assert ns["format_shoot_window"]({
+def test_format_shoot_window_is_booked_clock():
+    from app.services.notifications import format_shoot_window, format_when_line
+    assert format_shoot_window({
         "preferred_window": "afternoon",
-        "time_window_start": "12:00",
+        "time_window_start": "14:00",
         "time_window_end": "16:00",
-    }) == "Afternoon · 12:00–16:00 ET"
-    assert ns["format_shoot_window"]({}) == "Shoot window not set"
-    assert ns["format_shoot_window"]({"time_window_start": "09:00", "time_window_end": "12:00"}) == "Morning · 09:00–12:00 ET"
+    }) == "2:00 PM ET"
+    assert format_shoot_window({}) == "Shoot time not set"
+    assert format_shoot_window({"time_window_start": "09:00", "time_window_end": "12:00"}) == "9:00 AM ET"
+    assert format_when_line({
+        "scheduled_date": "2026-09-25",
+        "time_window_start": "14:00",
+        "preferred_window": "afternoon",
+        "time_window_end": "16:00",
+    }) == "Fri, Sep 25 · 2:00 PM ET"
 
 
 def test_notify_assignment_emails_photographer():
@@ -95,4 +92,4 @@ def test_notify_assignment_emails_photographer():
     assert "_assignment_email_html" in src
     assert "Open Bricks GO" in src
     assert 'result["email"]' in src
-    assert "format_shoot_window" in src
+    assert "format_when_line" in src

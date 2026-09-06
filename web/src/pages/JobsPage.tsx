@@ -134,7 +134,7 @@ export function JobsPage() {
               <th>Address</th>
               <th>Listing</th>
               <th>Date</th>
-              <th>Time window</th>
+              <th>Time</th>
               <th>Assigned to</th>
               <th>Payout</th>
               <th>Status</th>
@@ -347,7 +347,7 @@ function JobListingPanel({
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{job.address}</p>
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>SHOOT WINDOW</p>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>WHEN</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{formatShootWhen(job)}</p>
           {['assigned', 'in_progress', 'pending_assignment'].includes(job.status) ? (
             <form className="row" onSubmit={confirmArrive} style={{ marginTop: 8, gap: 8, alignItems: 'center' }}>

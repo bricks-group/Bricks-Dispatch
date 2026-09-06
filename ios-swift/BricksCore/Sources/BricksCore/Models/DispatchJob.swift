@@ -224,8 +224,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     }
 
 
-    /// Clear shoot window for Today / job detail — e.g. "Afternoon · 12:00–16:00 ET".
-    /// Honest when fields are missing — never invent times.
+    /// Booked arrive/start for Today / job detail — e.g. "2:00 PM ET".
     public var formattedShootWindow: String {
         ShootWindow.format(
             preferredWindow: preferredWindow,
@@ -235,7 +234,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         )
     }
 
-    /// Date + window when both useful.
+    /// Date + booked clock when both useful — e.g. "Fri, Sep 25 · 2:00 PM ET".
     public var formattedShootWhen: String {
         ShootWindow.formatWhen(
             scheduledDate: scheduledDate,

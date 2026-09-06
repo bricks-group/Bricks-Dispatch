@@ -2,6 +2,7 @@ import html as _html
 import logging
 import os
 import re
+from datetime import date as _date
 from ..shared.database import get_db
 from ..shared.schemas import NotificationRecord
 
@@ -23,20 +24,77 @@ _EMAIL_LOGO_URL = "https://www.brxs.ca/bricks-mark.png"
 
 _GO_WEB_URL = os.environ.get("GO_WEB_URL", "https://bricks-dispatch-web.vercel.app").rstrip("/")
 
+# Legacy morning/afternoon/evening fills only when no booked clock is stored.
+# Bookers pick a concrete arrive/start time; do not present these ranges as the booking.
 _CANONICAL_WINDOWS = {
-    "morning": ("09:00", "12:00", "Morning"),
-    "afternoon": ("12:00", "16:00", "Afternoon"),
-    "evening": ("16:00", "19:00", "Evening"),
+    "morning": ("09:00", "12:00"),
+    "afternoon": ("12:00", "16:00"),
+    "evening": ("16:00", "19:00"),
 }
+
+_DOW_ABBR = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MON_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_SHOOT_TIME_UNSET = "Shoot time not set"
 
 
 def _clock_hhmm(raw) -> str:
+    """Normalize HH:MM. Accepts HH:MM, HH:MM:SS, or ISO datetime with T."""
     s = (raw or "").strip()
     if not s:
         return ""
     if len(s) >= 5 and s[2] == ":":
         return s[:5]
-    return s[:5] if s else ""
+    if "T" in s:
+        after = s.split("T", 1)[1]
+        if len(after) >= 5 and after[2] == ":":
+            return after[:5]
+    return ""
+
+
+def _format_clock_12h(hhmm: str) -> str:
+    """'14:00' → '2:00 PM'. Empty if not a real clock."""
+    if not hhmm or len(hhmm) < 5 or hhmm[2] != ":":
+        return ""
+    try:
+        hour = int(hhmm[:2])
+        minute = int(hhmm[3:5])
+    except ValueError:
+        return ""
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return ""
+    suffix = "AM" if hour < 12 else "PM"
+    hour12 = hour % 12 or 12
+    return f"{hour12}:{minute:02d} {suffix}"
+
+
+def _booked_clock_hhmm(job: dict | None) -> str:
+    """Booked arrive/start: confirmed_arrive_at, else time_window_start, else preferred_window start."""
+    job = job or {}
+    confirmed = _clock_hhmm(job.get("confirmed_arrive_at"))
+    if confirmed:
+        return confirmed
+    start = _clock_hhmm(job.get("time_window_start"))
+    if start:
+        return start
+    preferred = (job.get("preferred_window") or "").strip().lower()
+    if preferred in _CANONICAL_WINDOWS:
+        return _CANONICAL_WINDOWS[preferred][0]
+    return ""
+
+
+def format_shoot_date(scheduled_date: str | None) -> str:
+    """'2026-09-25' → 'Fri, Sep 25'. Locale-stable English; no year."""
+    raw = (scheduled_date or "").strip()
+    if not raw:
+        return ""
+    ymd = raw[:10]
+    if len(ymd) >= 10 and ymd[4] == "-":
+        try:
+            d = _date.fromisoformat(ymd)
+        except ValueError:
+            return ymd
+        return f"{_DOW_ABBR[d.weekday()]}, {_MON_ABBR[d.month - 1]} {d.day}"
+    return ymd
 
 
 _PACKAGE_LINES: dict[str, tuple[str, str]] = {
@@ -71,48 +129,24 @@ def format_package_line(package_name: str | None, package_id: str | None = None)
 
 
 def format_shoot_window(job: dict | None) -> str:
-    """Match GO web shoot-window.ts. Prefer stored clocks; fill from preferred_window."""
+    """Booked arrive/start clock: '2:00 PM ET'. Not a window label or range."""
+    hhmm = _booked_clock_hhmm(job)
+    if not hhmm:
+        return _SHOOT_TIME_UNSET
+    pretty = _format_clock_12h(hhmm)
+    return f"{pretty} ET" if pretty else f"{hhmm} ET"
+
+
+def format_when_line(job: dict | None) -> str:
+    """Vendor/admin when-line: 'Fri, Sep 25 · 2:00 PM ET'."""
     job = job or {}
-    start = _clock_hhmm(job.get("time_window_start"))
-    end = _clock_hhmm(job.get("time_window_end"))
-    preferred = (job.get("preferred_window") or "").strip().lower()
-    label = ""
-    if preferred in _CANONICAL_WINDOWS:
-        label = _CANONICAL_WINDOWS[preferred][2]
-        # Preferred morning/afternoon/evening always maps to a known ET range —
-        # never leave the email as label-only ("Afternoon").
-        if not start:
-            start = _CANONICAL_WINDOWS[preferred][0]
-        if not end:
-            end = _CANONICAL_WINDOWS[preferred][1]
-    elif start and end:
-        for _k, (s, e, lab) in _CANONICAL_WINDOWS.items():
-            if s == start and e == end:
-                label = lab
-                break
-    elif preferred:
-        label = preferred[:1].upper() + preferred[1:]
-
-    confirmed = _clock_hhmm(job.get("confirmed_arrive_at"))
-    if confirmed:
-        if label and end:
-            return f"{label} · arrives ~{confirmed} ET (until {end})"
-        if label:
-            return f"{label} · arrives ~{confirmed} ET"
-        return f"Arrives ~{confirmed} ET"
-
-    if start and end:
-        rng = f"{start}–{end} ET"
-        return f"{label} · {rng}" if label else rng
-    if start and not end:
-        rng = f"{start} ET"
-        return f"{label} · from {rng}" if label else f"From {rng}"
-    if not start and end:
-        rng = f"{end} ET"
-        return f"{label} · until {rng}" if label else f"Until {rng}"
-    if label:
-        return f"{label} · times not set"
-    return "Shoot window not set"
+    day = format_shoot_date(job.get("scheduled_date"))
+    clock = format_shoot_window(job)
+    if clock == _SHOOT_TIME_UNSET:
+        return day or _SHOOT_TIME_UNSET
+    if day:
+        return f"{day} · {clock}"
+    return clock
 
 
 
@@ -123,7 +157,7 @@ def _arrive_confirm_email_html(agent_name: str, photographer: str, address: str,
     addr = (address or "").strip() or "your property"
     when = (when_line or "").strip()
     arrive_s = (arrive or "").strip()
-    when_p = f'<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Window: {when}</p>' if when else ""
+    when_p = f'<p style="color:#555;line-height:1.6;margin:0 0 12px 0">{when}</p>' if when else ""
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px">
@@ -158,10 +192,10 @@ async def notify_arrive_confirmed(job: dict, photographer: dict | None = None) -
     arrive = _clock_hhmm(job.get("confirmed_arrive_at")) or _clock_hhmm(job.get("time_window_start"))
     if not arrive:
         return result
-    window = format_shoot_window(job)
-    date = (job.get("scheduled_date") or "")[:10]
-    when_bits = [b for b in (date, window if window != "Shoot window not set" else "") if b]
-    when_line = " · ".join(when_bits)
+    arrive_display = _format_clock_12h(arrive) or arrive
+    when_line = format_when_line(job)
+    if when_line == _SHOOT_TIME_UNSET:
+        when_line = ""
     photo_name = ((photographer or {}).get("name") or "").strip() or "Your Bricks photographer"
     try:
         html = _arrive_confirm_email_html(
@@ -169,12 +203,12 @@ async def notify_arrive_confirmed(job: dict, photographer: dict | None = None) -
             photo_name,
             job.get("address") or "",
             when_line,
-            arrive,
+            arrive_display,
         )
         result["email"] = bool(
             await send_email_via_resend(
                 to_email,
-                f"Photographer arriving ~{arrive} ET — {job.get('address') or 'your shoot'}",
+                f"Photographer arriving ~{arrive_display} ET — {job.get('address') or 'your shoot'}",
                 html,
             )
         )
@@ -630,6 +664,7 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
         "time_window_start": job.get("time_window_start") or "",
         "time_window_end": job.get("time_window_end") or "",
         "preferred_window": job.get("preferred_window") or "",
+        "confirmed_arrive_at": job.get("confirmed_arrive_at") or "",
     }
     try:
         from ..notifications import notify_job_assigned_to_vendor
@@ -637,10 +672,9 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
     except Exception as exc:
         logger.error("Assignment SMS failed for job %s: %s", job.get("id"), exc)
 
-    window = format_shoot_window(details)
-    date = (details["scheduled_date"] or "")[:10]
-    when_bits = [b for b in (date, window if window != "Shoot window not set" else "") if b]
-    when_line = " · ".join(when_bits)
+    when_line = format_when_line(details)
+    if when_line == _SHOOT_TIME_UNSET:
+        when_line = ""
 
     title = "New job assigned"
     address = details["address"] or "a property"
