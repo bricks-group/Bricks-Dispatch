@@ -54,6 +54,12 @@ async def create_dispatch_job(
         job_data["assignee_id"] = ""
     if not job_data.get("vendor_id") or job_data.get("vendor_id") == job_data.get("assignee_id"):
         job_data["vendor_id"] = "default_vendor"
+    # Booked clocks must be America/Toronto HH:MM on the row — never raw ISO UTC.
+    from ..services.notifications import _clock_hhmm
+    for _k in ("time_window_start", "time_window_end"):
+        _norm = _clock_hhmm(job_data.get(_k))
+        if _norm:
+            job_data[_k] = _norm
     
     # Ensure checklist items have IDs
     for item in job_data.get("checklist", []):

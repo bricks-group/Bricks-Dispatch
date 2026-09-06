@@ -38,16 +38,28 @@ _SHOOT_TIME_UNSET = "Shoot time not set"
 
 
 def _clock_hhmm(raw) -> str:
-    """Normalize HH:MM. Accepts HH:MM, HH:MM:SS, or ISO datetime with T."""
+    """Normalize HH:MM in America/Toronto.
+
+    Bare HH:MM / HH:MM:SS stay as local clocks. ISO datetimes (T or space,
+    with Z/offset) convert to Toronto — never slice the UTC hour as if it
+    were Eastern (13:00Z is 9:00 AM ET in September, not 1:00 PM).
+    """
     s = (raw or "").strip()
     if not s:
         return ""
-    if len(s) >= 5 and s[2] == ":":
+    # Bare clock first — do not run through fromisoformat (naive shift risk).
+    if len(s) >= 5 and s[2] == ":" and "T" not in s and s.count("-") == 0:
         return s[:5]
-    if "T" in s:
-        after = s.split("T", 1)[1]
-        if len(after) >= 5 and after[2] == ":":
-            return after[:5]
+    if "T" in s or (s[0].isdigit() and s.count("-") >= 2):
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=ZoneInfo("America/Toronto"))
+            return d.astimezone(ZoneInfo("America/Toronto")).strftime("%H:%M")
+        except Exception:
+            return ""
     return ""
 
 
@@ -105,6 +117,11 @@ _PACKAGE_LINES: dict[str, tuple[str, str]] = {
     "showcase": ("Showcase", "HDR photo + Drone + Cinematic reel + Virtual tour + Floor plan"),
     "suite": ("Full suite", "HDR photo + Drone + Cinematic reel + Virtual tour + Twilight + Floor plan"),
     "full": ("Full suite", "HDR photo + Drone + Cinematic reel + Virtual tour + Twilight + Floor plan"),
+    # Companion ladder (booking-api): Visit is never packaged.
+    "standard": ("Standard", "HDR photo + Floor plan"),
+    "premium": ("Premium", "HDR photo + Floor plan + Virtual tour"),
+    "luxury": ("Luxury", "HDR photo + Floor plan + Virtual tour"),
+    "estate": ("Estate", "HDR photo + Floor plan + Virtual tour"),
 }
 
 
@@ -118,7 +135,7 @@ def format_package_line(package_name: str | None, package_id: str | None = None)
         key = raw.lower().replace(" ", "_").replace("-", "_")
     if key not in _PACKAGE_LINES:
         low = raw.lower()
-        for token in ("photos_only", "photos only", "essentials", "story", "showcase", "suite", "full"):
+        for token in ("photos_only", "photos only", "essentials", "story", "showcase", "suite", "full", "standard", "premium", "luxury", "estate"):
             if token == low or token.replace("_", " ") == low or token in low:
                 key = token.replace(" ", "_")
                 break

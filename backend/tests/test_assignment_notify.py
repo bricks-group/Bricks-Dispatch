@@ -93,3 +93,13 @@ def test_notify_assignment_emails_photographer():
     assert "Open Bricks GO" in src
     assert 'result["email"]' in src
     assert "format_when_line" in src
+
+def test_clock_hhmm_iso_utc_to_toronto():
+    from app.services.notifications import _clock_hhmm, format_shoot_window
+    # 13:00Z on 2026-09-20 is 09:00 America/Toronto (EDT), not 1:00 PM.
+    assert _clock_hhmm("2026-09-20T13:00:00.000Z") == "09:00"
+    assert _clock_hhmm("2026-09-20 13:00:00+00") == "09:00"
+    assert _clock_hhmm("14:00") == "14:00"
+    assert _clock_hhmm("14:00:00") == "14:00"
+    assert format_shoot_window({"time_window_start": "2026-09-20T13:00:00.000Z"}) == "9:00 AM ET"
+

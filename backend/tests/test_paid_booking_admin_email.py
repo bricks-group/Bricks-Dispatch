@@ -159,3 +159,13 @@ def test_format_package_line_expands_showcase():
     already = "Showcase — HDR photo + Drone + Cinematic reel + Virtual tour + Floor plan"
     assert format_package_line(already) == already
     assert format_package_line(None, "showcase") == already
+
+def test_format_package_line_companion_ladder():
+    assert format_package_line("Standard", "standard") == "Standard — HDR photo + Floor plan"
+    assert format_package_line(None, "premium") == (
+        "Premium — HDR photo + Floor plan + Virtual tour"
+    )
+    assert format_package_line("Luxury") == (
+        "Luxury — HDR photo + Floor plan + Virtual tour"
+    )
+
