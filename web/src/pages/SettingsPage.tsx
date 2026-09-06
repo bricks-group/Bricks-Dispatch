@@ -51,18 +51,30 @@ function StripeConnectSection() {
         {status && (
           <div className="row">
             <span className={`badge ${status.connected ? 'badge-green' : 'badge-gray'}`}>
-              {status.connected ? 'Connected' : 'Not connected'}
+              {status.connected
+                ? 'Connected'
+                : status.connect_status === 'pending' || status.connect_status === 'restricted'
+                  ? (status.connect_status === 'restricted' ? 'Restricted' : 'Pending')
+                  : 'Not connected'}
             </span>
             <span className="muted">
               {status.connected
                 ? 'Stripe is connected — job payouts go to this account.'
-                : 'Connect a Stripe account to receive job payouts. Owner payouts are the full package with $0 deduction.'}
+                : status.connect_status === 'pending'
+                  ? 'Finish Stripe setup to receive job payouts. Onboarding is still pending.'
+                  : status.connect_status === 'restricted'
+                    ? 'Stripe restricted this account — open Stripe to fix requirements before payouts.'
+                    : 'Connect a Stripe account to receive job payouts. Owner payouts are the full package with $0 deduction.'}
             </span>
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button type="button" onClick={connect} disabled={starting}>
-            {status?.connected ? 'Update Stripe account' : 'Connect Stripe'}
+            {status?.connected
+              ? 'Update Stripe account'
+              : status?.connect_status === 'pending' || status?.connect_status === 'restricted'
+                ? 'Finish Stripe setup'
+                : 'Connect Stripe'}
           </button>
           {error && <span className="error">{error}</span>}
         </div>
