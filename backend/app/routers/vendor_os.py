@@ -831,6 +831,7 @@ async def connect_vendor_calendar(
             }
         # Persist tokens only when supplied — Connected only after real tokens (and ping on complete-session).
         if payload.get("access_token"):
+            from ..services.calendar_token_crypto import encrypt_connection_secrets
             row = {
                 "member_id": actor_id,
                 "vendor_id": vendor_id,
@@ -840,11 +841,12 @@ async def connect_vendor_calendar(
                 "updated_at": now,
                 "created_at": now,
             }
+            stored = encrypt_connection_secrets(row)
             try:
-                await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
+                await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
             except Exception as e:
                 logger.warning("calendar upsert soft-fail: %s", e)
-            return connection_status(row)
+            return connection_status(stored)
 
         via = google_connect_via()
         # Default: Supabase-mediated Google OAuth (secret lives in Supabase).
@@ -900,6 +902,7 @@ async def connect_vendor_calendar(
                 "status": "needs_app_password",
                 "detail": "Apple Calendar needs an iCloud CalDAV URL and an app-specific password. Connected is only shown after both are saved.",
             }
+        from ..services.calendar_token_crypto import encrypt_connection_secrets
         row = {
             "member_id": actor_id,
             "vendor_id": vendor_id,
@@ -910,12 +913,13 @@ async def connect_vendor_calendar(
             "updated_at": now,
             "created_at": now,
         }
+        stored = encrypt_connection_secrets(row)
         try:
-            await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
+            await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
         except Exception as e:
             logger.warning("calendar upsert soft-fail: %s", e)
             return {"connected": False, "status": "error", "detail": f"Could not save CalDAV connection: {e}"}
-        return connection_status(row)
+        return connection_status(stored)
 
     if provider == "ics":
         ics_url = (payload.get("ics_url") or "").strip()
