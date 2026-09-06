@@ -23,7 +23,7 @@ const SLIDES = [
   {
     eye: 'Tiered payouts',
     head: 'Tier C to Tier A — move up.',
-    body: 'Paid on a published fixed rate card by package, size, and tier — never a percent of rack. Deliver jobs to move up tiers and unlock higher rates.',
+    body: 'Paid on a published fixed rate card for www à-la-carte media (Photos only → Full suite), size, and tier — never a percent of rack. Virtual Visit is a paid add-on. Deliver jobs to move up tiers and unlock higher rates.',
     img: 'EARNINGS STRIPE CHART',
   },
 ];

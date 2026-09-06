@@ -316,14 +316,10 @@ class VendorMember(BaseModel):
     rpas_advanced: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced"
-    # Gaussian splat Virtual Visit is included on every package tier (Standard and up,
-    # SERVICE_CATALOG_V2.md) -- unlike drone_certified, this has no job-type
-    # conditional gate, since there's no package tier that skips it. No automated
-    # verification path exists (unlike drone certs against Transport Canada's
-    # registry) -- admin-set via VendorMemberUpdate. Defaults False for new
-    # applicants; existing active vendors backfilled True in the same migration
-    # that adds this column, per 2026-08-02 decision to equip every tier rather
-    # than gate splat-capable dispatch to Tier A/B only.
+    # Polycam / splat gear flag for Virtual Visit deliverables. Virtual Visit is
+    # always a paid www add-on (never packaged into Photos only–Full suite).
+    # Unlike drone_certified there is no Transport Canada registry check —
+    # admin-set via VendorMemberUpdate. Defaults False for new applicants.
     polycam_equipped: bool = False
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
@@ -372,7 +368,7 @@ class VendorApplicationCreate(BaseModel):
     # Ontario Regions: GTA, York, Peel, Halton, Durham, Hamilton, Waterloo, Ottawa, etc.
     preferred_regions: List[str] = []
     accepted_terms: bool
-    ic_agreement_version: str = "1.4"
+    ic_agreement_version: str = "1.5"
     hst_number: Optional[str] = None
     # CRA small-supplier exemption: under $30,000 CAD/year across all clients,
     # registration for GST/HST isn't legally required. Lets an applicant pass

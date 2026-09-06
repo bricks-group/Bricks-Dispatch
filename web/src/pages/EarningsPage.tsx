@@ -64,7 +64,7 @@ export function EarningsPage() {
           {data.payout_model === 'ic_rate_card' && (
             <section className="card full">
               <h3>Rate card</h3>
-              <p className="muted">Fixed photographer rate by package and size — not a percent of rack.</p>
+              <p className="muted">Fixed photographer rate for www à-la-carte media (Photos only → Full suite) by size and tier — not a percent of rack. Virtual Visit is a paid add-on.</p>
             </section>
           )}
           <div className="page-grid">

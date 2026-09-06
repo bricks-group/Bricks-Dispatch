@@ -39,7 +39,7 @@ def calculate_payout_amount(rack_price: int | None, vendor_tier: int | None) -> 
     """
     Calculate payout amount in cents from tier_pct * rack_price.
     rack_price is the undiscounted rate, stored as dollars (e.g. 299). Stripe expects cents.
-    Tier A (55%) on Standard condo ($299): int(299 * 100 * 0.55) = 16445 cents = $164.45.
+    Tier A (55%) on Essentials-band condo rack ($299): int(299 * 100 * 0.55) = 16445 cents = $164.45.
 
     Must always be called with rack_price, never a customer-charged/discounted price --
     a member discount or brokerage credit consumption must never shrink a vendor's payout.
@@ -56,6 +56,27 @@ def calculate_payout_amount(rack_price: int | None, vendor_tier: int | None) -> 
 
 
 _SQFT_TIER_BOUNDARIES = (1999, "small"), (3499, "mid"), (4999, "large")
+
+# www à-la-carte catalog ids → existing vendor_payout_rates package_id cells.
+# Does not invent new dollar amounts; only remaps product naming/structure.
+_PACKAGE_RATE_ALIASES = {
+    "photos_only": "standard",
+    "photosonly": "standard",
+    "photos": "standard",
+    "essentials": "standard",
+    "story": "premium",
+    "showcase": "premium",
+    "suite": "luxury",
+    "full": "luxury",
+    "full_suite": "luxury",
+}
+
+
+def _rate_card_package_id(package_id: str | None) -> str | None:
+    if not package_id:
+        return None
+    key = package_id.strip().lower().replace("-", "_").replace(" ", "_")
+    return _PACKAGE_RATE_ALIASES.get(key, key)
 
 
 def _sqft_tier(sqft: int | None) -> str:
@@ -87,6 +108,7 @@ async def get_fixed_payout_amount(db, package_id: str | None, sqft: int | None, 
     computed for today's live prices -- day one, no vendor's pay changes.
     """
     global _payout_rate_cache, _payout_rate_cache_ts
+    package_id = _rate_card_package_id(package_id)
     if not package_id:
         return None
     now = datetime.now(timezone.utc).timestamp()

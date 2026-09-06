@@ -136,14 +136,14 @@ pick_vendor_rule_based(job, vendors)
 - `min_tier_required` on job is a hard gate — never assigned below it
 
 ## Vendor Model: Snappr/Homejab IC Model
-- IC agreement **v1.4** (effective 2026-09-04) — source of truth is `_IC_AGREEMENT_TEXT` in `backend/app/routers/onboarding.py`. Do not restore v1.1 clauses or % of rack add-on language.
+- IC agreement **v1.5** (effective 2026-09-06) — source of truth is `_IC_AGREEMENT_TEXT` in `backend/app/routers/onboarding.py`. Rate-card language matches www à-la-carte media (Photos only / Essentials / Story / Showcase / Full suite), not Standard–Estate. Virtual Visit is always a paid add-on. Do not restore v1.1 clauses or % of rack add-on language.
 - Contracting party: **Bricks Group**. Contact: `booking@brxs.ca` (no legal@ mailbox).
 - Insurance/WSIB **required before first dispatched job** (CGL $2M naming Bricks Group additional insured, drone aviation $1M if drone jobs, auto liability, WSIB clearance or exemption declaration). Lapsed coverage = automatic dispatch suspension.
-- Payouts are a **fixed vendor rate card** by package / sqft band / tier, not a % of what the client was charged. Add-ons are also fixed published dollar amounts by tier (never % of rack).
+- Payouts are a **fixed vendor rate card** by media package / sqft band / tier, not a % of what the client was charged. www catalog ids alias to existing `vendor_payout_rates` cells (no invented dollars). Add-ons (including Virtual Visit) are fixed published dollar amounts by tier (never % of rack).
 - No binding arbitration; Ontario courts. Either party may terminate on written notice (email is enough).
-- `GET /api/onboarding/ic-agreement` — `{ version: "1.4", effective_date: "2026-09-04", text }` — live photographer apply form on www.brxs.ca binds applicants to this JSON.
-- Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`. `/apply` stamps the live server version (`1.4`), not a stale client default.
-- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.4"`
+- `GET /api/onboarding/ic-agreement` — `{ version: "1.5", effective_date: "2026-09-06", text }` — live photographer apply form on www.brxs.ca binds applicants to this JSON.
+- Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`. `/apply` stamps the live server version (`1.5`), not a stale client default.
+- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.5"`
 - `ic_agreement_version='0.0'` = pre-dates new agreement; re-prompt on next login
 - `REQUIRE_VENDOR_COMPLIANCE` remains absent from dispatch scoring code; the contract itself now requires proof before first job.
 
@@ -230,7 +230,7 @@ pick_vendor_rule_based(job, vendors)
 - Rate limiting + Sentry ✅
 - Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
 - Vendor tier payouts: Tier C=35% (entry), B=45% (core), A=55% (elite) ✅
-- **Snappr/Homejab IC model: IC agreement v1.4 (Bricks Group, Ontario; insurance/WSIB required before first job)** ✅
+- **Snappr/Homejab IC model: IC agreement v1.5 (Bricks Group, Ontario; www à-la-carte rate card; Virtual Visit paid add-on; insurance/WSIB required before first job)** ✅
 - **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅
 - **Agent no-show: claim validation gates + admin review queue + Booking penalty callback** ✅
 - **Payout service: trip fees added to photographer payout (not deducted); correct table name** ✅
