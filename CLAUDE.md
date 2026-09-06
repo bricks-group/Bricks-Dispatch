@@ -230,7 +230,7 @@ pick_vendor_rule_based(job, vendors)
 - Rate limiting + Sentry ✅
 - Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
 - Vendor tier payouts: Tier C=35% (entry), B=45% (core), A=55% (elite) ✅
-- **Snappr/Homejab IC model: IC agreement v1.3 (Bricks Group, Ontario; insurance/WSIB required before first job)** ✅
+- **Snappr/Homejab IC model: IC agreement v1.4 (Bricks Group, Ontario; insurance/WSIB required before first job)** ✅
 - **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅
 - **Agent no-show: claim validation gates + admin review queue + Booking penalty callback** ✅
 - **Payout service: trip fees added to photographer payout (not deducted); correct table name** ✅
