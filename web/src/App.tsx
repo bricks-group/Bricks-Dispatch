@@ -16,6 +16,7 @@ import { CapturePage } from './pages/CapturePage';
 import { CaptureReviewPage } from './pages/CaptureReviewPage';
 import { VisitCapturePage } from './pages/VisitCapturePage';
 import { GoogleCalendarCallbackPage } from './pages/GoogleCalendarCallbackPage';
+import { AuthCallbackPage } from './pages/AuthCallbackPage';
 
 function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
   const now = new Date();
@@ -94,6 +95,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/auth/callback" element={<AuthCallbackPage />} />
       <Route path="/auth/google-calendar" element={<GoogleCalendarCallbackPage />} />
       <Route path="/capture" element={<CaptureGate><CapturePage /></CaptureGate>} />
       <Route path="/capture/review" element={<CaptureGate><CaptureReviewPage /></CaptureGate>} />
