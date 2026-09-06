@@ -20,7 +20,11 @@ export class Logger {
     this.traceId = traceId || uuidv4();
   }
 
-  private log(level: LogLevel, message: string, data?: Record<string, unknown>) {
+  private log(
+    level: LogLevel,
+    message: string,
+    data?: Record<string, unknown>,
+  ) {
     const logEntry: LogEntry = {
       timestamp: new Date().toISOString(),
       level: level,
@@ -34,7 +38,10 @@ export class Logger {
       console.log(JSON.stringify(logEntry));
     } else {
       // Fallback for local development
-      console.log(`[${logEntry.timestamp}] [${logEntry.level.toUpperCase()}] [${logEntry.function_name}] [${logEntry.trace_id}] ${logEntry.message}` + (data ? ` ${JSON.stringify(data)}` : ""));
+      console.log(
+        `[${logEntry.timestamp}] [${logEntry.level.toUpperCase()}] [${logEntry.function_name}] [${logEntry.trace_id}] ${logEntry.message}` +
+          (data ? ` ${JSON.stringify(data)}` : ""),
+      );
     }
   }
 
