@@ -9,10 +9,11 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-export function fmtDate(dateStr: string): string {
+export function fmtDate(dateStr: string, timeZone?: string): string {
   if (!dateStr) return '—';
+  const tz = timeZone && timeZone.trim() ? timeZone : undefined;
   return new Date(dateStr).toLocaleDateString('en-CA', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    timeZone: 'America/Toronto',
+    ...(tz ? { timeZone: tz } : {}),
   });
 }

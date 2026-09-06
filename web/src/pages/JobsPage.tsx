@@ -366,7 +366,7 @@ function JobListingPanel({
           ) : null}
           {job.confirmed_arrive_at ? (
             <p className="muted" style={{ padding: 0, margin: '6px 0 0' }}>
-              Agent emailed · arrives ~{String(job.confirmed_arrive_at).slice(0, 5)} ET
+              Agent emailed · arrives ~{formatShootWindow(job)}
             </p>
           ) : (
             <p className="muted" style={{ padding: 0, margin: '6px 0 0' }}>

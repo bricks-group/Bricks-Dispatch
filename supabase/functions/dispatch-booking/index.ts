@@ -355,7 +355,6 @@ Deno.serve(async (req: Request) => {
       day: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
-      timeZone: 'America/Toronto',
     });
 
     for (const contractor of available) {

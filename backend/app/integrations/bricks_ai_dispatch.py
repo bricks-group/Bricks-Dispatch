@@ -62,7 +62,11 @@ _DECLINE_NEUTRAL_THRESHOLD = 0.40
 # Weather helper (Open-Meteo — free, no key required)
 # ---------------------------------------------------------------------------
 
-async def _get_weather_context(lat: float, lng: float, scheduled_date: str) -> Optional[dict]:
+async def _get_weather_context(
+    lat: float, lng: float, scheduled_date: str, timezone_name: str | None = None
+) -> Optional[dict]:
+    from ..shared.job_timezone import valid_iana, DEFAULT_IANA
+    tz = valid_iana(timezone_name) or DEFAULT_IANA
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get(
@@ -71,7 +75,7 @@ async def _get_weather_context(lat: float, lng: float, scheduled_date: str) -> O
                     "latitude": lat,
                     "longitude": lng,
                     "hourly": "weathercode,windspeed_10m,precipitation_probability",
-                    "timezone": "America/Toronto",
+                    "timezone": tz,
                     "forecast_days": 7,
                 },
             )
@@ -311,7 +315,18 @@ async def bricks_smart_assign(job: Job, vendors: List[VendorMember]) -> Optional
     weather_context = None
     is_outdoor = job.job_type in _OUTDOOR_JOB_TYPES
     if is_outdoor and job.lat and job.lng and job.scheduled_date:
-        weather_context = await _get_weather_context(job.lat, job.lng, job.scheduled_date)
+        from ..shared.job_timezone import resolve_job_iana
+        weather_context = await _get_weather_context(
+            job.lat,
+            job.lng,
+            job.scheduled_date,
+            resolve_job_iana({
+                "timezone": getattr(job, "timezone", None),
+                "state": getattr(job, "state", None),
+                "address": getattr(job, "address", None),
+                "zip_code": getattr(job, "zip_code", None),
+            }),
+        )
         if weather_context:
             job_ctx = f"weather={weather_context['condition']}, wind={weather_context['max_wind_kmh']}km/h"
             if weather_context.get("drone_unsafe") and is_drone_job:

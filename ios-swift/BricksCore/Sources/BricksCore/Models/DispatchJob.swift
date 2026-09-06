@@ -38,8 +38,10 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
     public let timeWindowEnd: String
     /// Paid /book window: morning | afternoon | evening (optional).
     public let preferredWindow: String?
-    /// Exact arrive HH:MM (America/Toronto) after photographer confirms on GO.
+    /// Exact arrive HH:MM in the job timezone after photographer confirms on GO.
     public let confirmedArriveAt: String?
+    /// IANA timezone from intake / Stripe metadata. Missing → province fallback.
+    public let timezone: String?
     public let scheduledDate: String         // "YYYY-MM-DD"
     public let jobType: String               // "photo" | "drone" | "video"
     public var status: JobStatus
@@ -70,6 +72,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         transactionId: String? = nil, listingAddress: String? = nil,
         preferredWindow: String? = nil,
         confirmedArriveAt: String? = nil,
+        timezone: String? = nil,
         capture: CaptureEntitlements? = nil
     ) {
         self.id = id; self.bookingId = bookingId; self.address = address; self.city = city
@@ -77,6 +80,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         self.timeWindowStart = timeWindowStart; self.timeWindowEnd = timeWindowEnd
         self.preferredWindow = preferredWindow
         self.confirmedArriveAt = confirmedArriveAt
+        self.timezone = timezone
         self.scheduledDate = scheduledDate; self.jobType = jobType; self.status = status
         self.packageName = packageName; self.packagePrice = packagePrice; self.vendorPayout = vendorPayout
         self.agentName = agentName; self.agentPhone = agentPhone; self.agentEmail = agentEmail
@@ -89,7 +93,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, bookingId, address, city, state, zipCode, lat, lng
-        case timeWindowStart, timeWindowEnd, preferredWindow, confirmedArriveAt, scheduledDate, jobType, status
+        case timeWindowStart, timeWindowEnd, preferredWindow, confirmedArriveAt, timezone, scheduledDate, jobType, status
         case packageName, packagePrice, vendorPayout
         case agentName, agentPhone, agentEmail, clientInstructions
         case checklist, complexityScore, createdAt, updatedAt
@@ -113,9 +117,10 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         timeWindowEnd = try c.decodeIfPresent(String.self, forKey: .timeWindowEnd) ?? ""
         preferredWindow = try c.decodeIfPresent(String.self, forKey: .preferredWindow)
         let rawArrive = try c.decodeIfPresent(String.self, forKey: .confirmedArriveAt)
+        timezone = try c.decodeIfPresent(String.self, forKey: .timezone)
         confirmedArriveAt = {
             let s = (rawArrive ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return s.isEmpty ? nil : ShootWindow.clock(s)
+            return s.isEmpty ? nil : ShootWindow.clock(s, timezone: timezone, state: state, address: address)
         }()
         let rawDate = try c.decodeIfPresent(String.self, forKey: .scheduledDate) ?? ""
         scheduledDate = String(rawDate.prefix(10))
@@ -213,35 +218,48 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
         return "Unassigned"
     }
 
-    /// Calendar date in America/Toronto, matching Expo `en-CA` Today filter.
+    /// Calendar date in the device timezone, matching Expo `en-CA` Today filter.
     public static func torontoToday(now: Date = Date()) -> String {
+        calendarToday(now: now)
+    }
+
+    public static func calendarToday(now: Date = Date()) -> String {
         let fmt = DateFormatter()
         fmt.calendar = Calendar(identifier: .gregorian)
         fmt.locale = Locale(identifier: "en_CA")
-        fmt.timeZone = TimeZone(identifier: "America/Toronto")
+        fmt.timeZone = TimeZone.current
         fmt.dateFormat = "yyyy-MM-dd"
         return fmt.string(from: now)
     }
 
 
-    /// Booked arrive/start for Today / job detail — e.g. "2:00 PM ET".
+    /// Booked arrive/start for Today / job detail — e.g. "2:00 PM PT".
     public var formattedShootWindow: String {
         ShootWindow.format(
             preferredWindow: preferredWindow,
             timeWindowStart: timeWindowStart,
             timeWindowEnd: timeWindowEnd,
-            confirmedArriveAt: confirmedArriveAt
+            confirmedArriveAt: confirmedArriveAt,
+            timezone: timezone,
+            state: state,
+            address: address,
+            zipCode: zipCode,
+            scheduledDate: scheduledDate
         )
     }
 
-    /// Date + booked clock when both useful — e.g. "Fri, Sep 25 · 2:00 PM ET".
+    /// Date + booked clock when both useful — e.g. "Fri, Sep 25 · 2:00 PM PT".
     public var formattedShootWhen: String {
         ShootWindow.formatWhen(
             scheduledDate: scheduledDate,
             preferredWindow: preferredWindow,
             timeWindowStart: timeWindowStart,
             timeWindowEnd: timeWindowEnd,
-            confirmedArriveAt: confirmedArriveAt
+            confirmedArriveAt: confirmedArriveAt,
+            timezone: timezone,
+            state: state,
+            address: address,
+            zipCode: zipCode
         )
     }
 
@@ -280,6 +298,7 @@ public struct DispatchJob: Codable, Identifiable, Sendable, Hashable {
                 return p.isEmpty ? preferredWindow : other.preferredWindow
             }(),
             confirmedArriveAt: other.confirmedArriveAt ?? confirmedArriveAt,
+            timezone: other.timezone ?? timezone,
             capture: capture
         )
     }

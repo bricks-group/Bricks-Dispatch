@@ -211,6 +211,41 @@ final class BricksCoreTests: XCTestCase {
         XCTAssertEqual(job.formattedShootWindow, "4:00 PM ET")
     }
 
+    func testShootWindowVancouverIsPT() {
+        let s = ShootWindow.format(
+            preferredWindow: nil,
+            timeWindowStart: "14:00",
+            timeWindowEnd: "16:00",
+            timezone: "America/Vancouver",
+            scheduledDate: "2026-09-25"
+        )
+        XCTAssertEqual(s, "2:00 PM PT")
+        XCTAssertFalse(s.contains("ET"))
+        XCTAssertFalse(s.contains("America/Toronto"))
+    }
+
+    func testShootWindowProvinceFallbackBC() {
+        let s = ShootWindow.formatWhen(
+            scheduledDate: "2026-09-25",
+            preferredWindow: nil,
+            timeWindowStart: "14:00",
+            timeWindowEnd: "16:00",
+            state: "BC"
+        )
+        XCTAssertEqual(s, "Fri, Sep 25 · 2:00 PM PT")
+    }
+
+    func testJobDecodesTimezonePT() throws {
+        let json = """
+        {"id":"job-van","address":"200 Granville St, Vancouver, BC","state":"BC","time_window_start":"14:00","timezone":"America/Vancouver","status":"assigned"}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let job = try decoder.decode(DispatchJob.self, from: json)
+        XCTAssertEqual(job.timezone, "America/Vancouver")
+        XCTAssertEqual(job.formattedShootWindow, "2:00 PM PT")
+    }
+
     func testCaptureTagsParseAndFlatten() throws {
         let json = """
         {"sessionId":"s-tag","kind":"splat","address":"10 Main","frameCount":8,"stationCount":1,"rooms":[],"pipeline":[{"title":"Captured","detail":"ok","status":"done"}],"stations":[{"station_index":0,"room":"Kitchen","panCount":8,"hasEquirect":true}],"tags":[{"id":"t1","label":"Walk-in closet","note":"Cedar","yaw":45.2,"pitch":-8,"station_index":0}]}

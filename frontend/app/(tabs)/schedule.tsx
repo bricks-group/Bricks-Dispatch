@@ -13,6 +13,8 @@ const DAY_LABELS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
 type Job = {
   id: string; address: string; city: string; state: string;
+  timezone?: string | null;
+  zip_code?: string | null;
   time_window_start: string; time_window_end?: string | null;
   preferred_window?: string | null;
   job_type: string; status: string; scheduled_date: string;

@@ -54,10 +54,12 @@ async def create_dispatch_job(
         job_data["assignee_id"] = ""
     if not job_data.get("vendor_id") or job_data.get("vendor_id") == job_data.get("assignee_id"):
         job_data["vendor_id"] = "default_vendor"
-    # Booked clocks must be America/Toronto HH:MM on the row — never raw ISO UTC.
+    # Booked clocks are property-local HH:MM — never raw ISO UTC.
     from ..services.notifications import _clock_hhmm
+    from ..shared.job_timezone import stamp_job_timezone
+    job_data = stamp_job_timezone(job_data)
     for _k in ("time_window_start", "time_window_end"):
-        _norm = _clock_hhmm(job_data.get(_k))
+        _norm = _clock_hhmm(job_data.get(_k), job_data)
         if _norm:
             job_data[_k] = _norm
     
@@ -67,7 +69,10 @@ async def create_dispatch_job(
             item["id"] = str(uuid.uuid4())
 
     try:
-        res = await db.table("jobs").insert(job_data).execute()
+        # jobs.timezone is not a live column yet (DDL lives in Bricks OS).
+        # Keep IANA on job_data for the admin when-line; persist province via state.
+        insert_data = {k: v for k, v in job_data.items() if k != "timezone"}
+        res = await db.table("jobs").insert(insert_data).execute()
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to persist job")
 

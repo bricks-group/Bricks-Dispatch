@@ -14,8 +14,8 @@ type Overview = {
   filter?: { table?: string; assignee_ids?: string[]; vendor_ids?: string[]; actor_id?: string };
 };
 
-function torontoToday() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
+function calendarToday() {
+  return new Date().toLocaleDateString('en-CA');
 }
 
 function dateKey(raw?: string) {
@@ -40,7 +40,7 @@ export function OverviewPage() {
       .catch((e) => setError(e.message));
   }, []);
 
-  const today = torontoToday();
+  const today = calendarToday();
   const todayJobs = (data?.today_jobs && data.today_jobs.length > 0)
     ? data.today_jobs
     : jobs.filter((j) => dateKey(j.scheduled_date) === today);

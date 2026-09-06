@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 import httpx
 import os
 import re
@@ -31,6 +30,7 @@ from ..shared.job_scope import (
 from ..routers.vendor_profile import earnings_impl
 from ..shared.database import get_db
 from ..services.webhooks import send_dispatch_status_update_webhook
+from ..shared.job_timezone import tz_abbrev, zoneinfo_for_job
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import (
@@ -53,7 +53,6 @@ router = APIRouter(prefix="/api/vendor-os", tags=["vendor-os"])
 # cannot collect them before they complete (asyncio only weakly refs tasks).
 _background_tasks: set = set()
 
-_TORONTO_TZ = ZoneInfo("America/Toronto")
 
 
 
@@ -74,7 +73,7 @@ class JobListingUpdate(BaseModel):
 
 class ConfirmArriveRequest(BaseModel):
     """Photographer confirms exact arrive clock within the paid /book window."""
-    arrive_at: str  # HH:MM America/Toronto
+    arrive_at: str  # HH:MM in the job's property timezone
 
 
 def _is_uuid(value: Optional[str]) -> bool:
@@ -175,7 +174,7 @@ async def confirm_job_arrive_time(
     if win_start and win_end and not (win_start <= arrive <= win_end):
         raise HTTPException(
             status_code=400,
-            detail=f"Arrive time must fall inside the shoot window ({win_start}–{win_end} ET)",
+            detail=f"Arrive time must fall inside the shoot window ({win_start}–{win_end} {tz_abbrev(job)})",
         )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -1048,7 +1047,7 @@ async def update_vendor_job_status(
                         # was_on_time=False when data is missing would unfairly penalise the vendor.
                         deadline = datetime.strptime(
                             f"{sched_date} {time_end}", "%Y-%m-%d %H:%M"
-                        ).replace(tzinfo=_TORONTO_TZ)
+                        ).replace(tzinfo=zoneinfo_for_job(job))
                         # Use vendor-submitted completed_at if provided and not in the future.
                         # Vendors submit from their device when the shoot ends — using
                         # API call time unfairly penalises late status submissions.
@@ -1239,10 +1238,10 @@ async def _validate_noshow_claim(
             return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
     elif scheduled_date_str and time_window_str:
         try:
-            # time_window_start is "HH:MM" in Ontario local time — localize before UTC math
+            # time_window_start is "HH:MM" in the property timezone — localize before UTC math
             shoot_start = datetime.fromisoformat(
                 f"{scheduled_date_str}T{time_window_str[:5]}:00"
-            ).replace(tzinfo=_TORONTO_TZ)
+            ).replace(tzinfo=zoneinfo_for_job(job))
         except (ValueError, TypeError):
             return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
     else:
@@ -1254,7 +1253,7 @@ async def _validate_noshow_claim(
     if now_utc < earliest:
         return {
             "ok": False,
-            "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M ET')}"
+            "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M')} {tz_abbrev(job)}"
         }
     if now_utc > latest:
         return {
