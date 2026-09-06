@@ -6,6 +6,8 @@ from app.services.notifications import (
     _EMAIL_LOGO_URL,
     _build_html_email,
     _paid_booking_admin_email_html,
+    format_package_line,
+    format_when_line,
     paid_booking_admin_subject,
     short_booking_ref,
 )
@@ -55,7 +57,7 @@ def test_paid_booking_html_uses_brand_card_and_rows():
     html = _paid_booking_admin_email_html(
         address="10 Main St",
         package="Essentials ($399)",
-        when="2026-09-12 · Afternoon · 12:00–16:00 ET",
+        when="Fri, Sep 25 · 2:00 PM ET",
         assignee="unassigned",
         booking_ref="a1b2c3d4",
     )
@@ -67,7 +69,9 @@ def test_paid_booking_html_uses_brand_card_and_rows():
     assert "New booking paid" in html
     assert "Address" in html and "10 Main St" in html
     assert "Package" in html and "Essentials ($399)" in html
-    assert "When" in html and "2026-09-12" in html
+    assert "When" in html and "Fri, Sep 25 · 2:00 PM ET" in html
+    assert "Afternoon" not in html
+    assert "12:00–16:00" not in html
     assert "Assignee" in html and "unassigned" in html
     assert "Booking ref" in html and "a1b2c3d4" in html
     assert BOOKING_UUID not in html
@@ -100,7 +104,58 @@ def test_dispatch_sends_branded_html_not_blob_subject():
     src = (ROOT / "app/routers/dispatch.py").read_text()
     assert "email_html=_paid_booking_admin_email_html" in src
     assert "email_subject=paid_booking_admin_subject" in src
+    assert "format_when_line" in src
+    assert "format_package_line" in src
     assert 'f"New paid booking: {job_data.get(' not in src
     assert "short_booking_ref" in src
     # In-app body stays plain text
     assert "New job from Booking.\\n" in src or 'f"New job from Booking.\\n"' in src
+
+
+def test_paid_booking_when_line_is_booked_clock_not_window():
+    job = {
+        "scheduled_date": "2026-09-25",
+        "time_window_start": "14:00",
+        "time_window_end": "16:00",
+        "preferred_window": "afternoon",
+    }
+    when = format_when_line(job)
+    assert when == "Fri, Sep 25 · 2:00 PM ET"
+    assert "Afternoon" not in when
+    assert "–" not in when
+    html = _paid_booking_admin_email_html(
+        address="10 Main St",
+        package="Showcase — HDR photo + Drone + Cinematic reel + Virtual tour + Floor plan ($599)",
+        when=when,
+        assignee="unassigned",
+        booking_ref="a1b2c3d4",
+    )
+    assert "Fri, Sep 25 · 2:00 PM ET" in html
+    assert "Afternoon" not in html
+
+
+def test_paid_booking_when_line_uses_confirmed_arrive_when_set():
+    assert format_when_line({
+        "scheduled_date": "2026-09-25",
+        "time_window_start": "14:00",
+        "confirmed_arrive_at": "14:15",
+    }) == "Fri, Sep 25 · 2:15 PM ET"
+
+
+def test_paid_booking_when_line_legacy_preferred_window_fills_start_only():
+    when = format_when_line({
+        "scheduled_date": "2026-09-25",
+        "preferred_window": "afternoon",
+    })
+    assert when == "Fri, Sep 25 · 12:00 PM ET"
+    assert "Afternoon" not in when
+    assert "12:00–16:00" not in when
+
+
+def test_format_package_line_expands_showcase():
+    assert format_package_line("Showcase") == (
+        "Showcase — HDR photo + Drone + Cinematic reel + Virtual tour + Floor plan"
+    )
+    already = "Showcase — HDR photo + Drone + Cinematic reel + Virtual tour + Floor plan"
+    assert format_package_line(already) == already
+    assert format_package_line(None, "showcase") == already

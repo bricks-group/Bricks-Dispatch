@@ -150,13 +150,13 @@ final class BricksCoreTests: XCTestCase {
         XCTAssertEqual(CaptureDome.total, 24)
     }
 
-    func testShootWindowAfternoon() {
+    func testShootWindowAfternoonIsBookedClock() {
         let s = ShootWindow.format(
             preferredWindow: "afternoon",
-            timeWindowStart: "12:00",
+            timeWindowStart: "14:00",
             timeWindowEnd: "16:00"
         )
-        XCTAssertEqual(s, "Afternoon · 12:00–16:00 ET")
+        XCTAssertEqual(s, "2:00 PM ET")
     }
 
     func testShootWindowMissingHonest() {
@@ -165,7 +165,7 @@ final class BricksCoreTests: XCTestCase {
             timeWindowStart: "",
             timeWindowEnd: ""
         )
-        XCTAssertEqual(s, "Shoot window not set")
+        XCTAssertEqual(s, "Shoot time not set")
     }
 
 
@@ -176,7 +176,17 @@ final class BricksCoreTests: XCTestCase {
             timeWindowEnd: "16:00",
             confirmedArriveAt: "13:30"
         )
-        XCTAssertEqual(s, "Afternoon · arrives ~13:30 ET (until 16:00)")
+        XCTAssertEqual(s, "1:30 PM ET")
+    }
+
+    func testShootWindowFormatWhen() {
+        let s = ShootWindow.formatWhen(
+            scheduledDate: "2026-09-25",
+            preferredWindow: "afternoon",
+            timeWindowStart: "14:00",
+            timeWindowEnd: "16:00"
+        )
+        XCTAssertEqual(s, "Fri, Sep 25 · 2:00 PM ET")
     }
 
     func testJobDecodesConfirmedArrive() throws {
@@ -187,7 +197,7 @@ final class BricksCoreTests: XCTestCase {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let job = try decoder.decode(DispatchJob.self, from: json)
         XCTAssertEqual(job.confirmedArriveAt, "10:15")
-        XCTAssertEqual(job.formattedShootWindow, "Morning · arrives ~10:15 ET (until 12:00)")
+        XCTAssertEqual(job.formattedShootWindow, "10:15 AM ET")
     }
 
     func testJobDecodesPreferredWindow() throws {
@@ -198,7 +208,7 @@ final class BricksCoreTests: XCTestCase {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let job = try decoder.decode(DispatchJob.self, from: json)
         XCTAssertEqual(job.preferredWindow, "evening")
-        XCTAssertEqual(job.formattedShootWindow, "Evening · 16:00–19:00 ET")
+        XCTAssertEqual(job.formattedShootWindow, "4:00 PM ET")
     }
 
     func testCaptureTagsParseAndFlatten() throws {

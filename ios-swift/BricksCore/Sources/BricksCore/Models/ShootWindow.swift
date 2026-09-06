@@ -1,12 +1,14 @@
 import Foundation
 
-/// Paid /book windows (America/Toronto). Mirrors web `shoot-window.ts`.
+/// Booked clock times (America/Toronto). Mirrors web `shoot-window.ts`.
 public enum ShootWindow {
-    private static let canonical: [(key: String, start: String, end: String, label: String)] = [
-        ("morning", "09:00", "12:00", "Morning"),
-        ("afternoon", "12:00", "16:00", "Afternoon"),
-        ("evening", "16:00", "19:00", "Evening"),
+    private static let canonical: [(key: String, start: String)] = [
+        ("morning", "09:00"),
+        ("afternoon", "12:00"),
+        ("evening", "16:00"),
     ]
+
+    private static let unset = "Shoot time not set"
 
     public static func clock(_ raw: String?) -> String {
         let s = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -32,58 +34,66 @@ public enum ShootWindow {
             fmt.dateFormat = "HH:mm"
             return fmt.string(from: d)
         }
-        return String(s.prefix(5))
-    }
-
-    private static func windowLabel(preferred: String?, start: String, end: String) -> String {
-        let key = (preferred ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let hit = canonical.first(where: { $0.key == key }) { return hit.label }
-        if !start.isEmpty && !end.isEmpty {
-            if let hit = canonical.first(where: { $0.start == start && $0.end == end }) { return hit.label }
-        }
-        if !key.isEmpty {
-            return key.prefix(1).uppercased() + key.dropFirst()
-        }
         return ""
     }
 
+    private static func clock12(_ hhmm: String) -> String {
+        guard hhmm.count >= 5, hhmm[hhmm.index(hhmm.startIndex, offsetBy: 2)] == ":" else { return "" }
+        let hour = Int(hhmm.prefix(2)) ?? -1
+        let minute = Int(hhmm.dropFirst(3).prefix(2)) ?? -1
+        guard (0...23).contains(hour), (0...59).contains(minute) else { return "" }
+        let suffix = hour < 12 ? "AM" : "PM"
+        let hour12 = hour % 12 == 0 ? 12 : hour % 12
+        return "\(hour12):\(String(format: "%02d", minute)) \(suffix)"
+    }
+
+    private static func bookedClock(
+        preferredWindow: String?,
+        timeWindowStart: String?,
+        confirmedArriveAt: String?
+    ) -> String {
+        let confirmed = clock(confirmedArriveAt)
+        if !confirmed.isEmpty { return confirmed }
+        let start = clock(timeWindowStart)
+        if !start.isEmpty { return start }
+        let key = (preferredWindow ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let hit = canonical.first(where: { $0.key == key }) { return hit.start }
+        return ""
+    }
+
+    /// Booked arrive/start: "2:00 PM ET". Not a window label or range.
     public static func format(
         preferredWindow: String?,
         timeWindowStart: String?,
-        timeWindowEnd: String?,
+        timeWindowEnd _: String?,
         confirmedArriveAt: String? = nil
     ) -> String {
-        let start = clock(timeWindowStart)
-        let end = clock(timeWindowEnd)
-        let confirmed = clock(confirmedArriveAt)
-        let label = windowLabel(preferred: preferredWindow, start: start, end: end)
-
-        if !confirmed.isEmpty {
-            if !label.isEmpty && !end.isEmpty {
-                return "\(label) · arrives ~\(confirmed) ET (until \(end))"
-            }
-            if !label.isEmpty {
-                return "\(label) · arrives ~\(confirmed) ET"
-            }
-            return "Arrives ~\(confirmed) ET"
-        }
-
-        if !start.isEmpty && !end.isEmpty {
-            let range = "\(start)–\(end) ET"
-            return label.isEmpty ? range : "\(label) · \(range)"
-        }
-        if !start.isEmpty && end.isEmpty {
-            let range = "\(start) ET"
-            return label.isEmpty ? "From \(range)" : "\(label) · from \(range)"
-        }
-        if start.isEmpty && !end.isEmpty {
-            let range = "\(end) ET"
-            return label.isEmpty ? "Until \(range)" : "\(label) · until \(range)"
-        }
-        if !label.isEmpty { return "\(label) · times not set" }
-        return "Shoot window not set"
+        let hhmm = bookedClock(
+            preferredWindow: preferredWindow,
+            timeWindowStart: timeWindowStart,
+            confirmedArriveAt: confirmedArriveAt
+        )
+        if hhmm.isEmpty { return unset }
+        let pretty = clock12(hhmm)
+        return pretty.isEmpty ? "\(hhmm) ET" : "\(pretty) ET"
     }
 
+    public static func formatDate(_ scheduledDate: String?) -> String {
+        let raw = String((scheduledDate ?? "").prefix(10))
+        guard raw.count >= 10, raw[raw.index(raw.startIndex, offsetBy: 4)] == "-" else { return raw }
+        let inFmt = DateFormatter()
+        inFmt.locale = Locale(identifier: "en_US_POSIX")
+        inFmt.timeZone = TimeZone(identifier: "UTC")
+        inFmt.dateFormat = "yyyy-MM-dd"
+        guard let d = inFmt.date(from: raw) else { return raw }
+        let out = DateFormatter()
+        out.locale = Locale(identifier: "en_US_POSIX")
+        out.timeZone = TimeZone(identifier: "UTC")
+        out.dateFormat = "EEE, MMM d"
+        return out.string(from: d)
+    }
+
+    /// Date + booked clock: "Fri, Sep 25 · 2:00 PM ET".
     public static func formatWhen(
         scheduledDate: String?,
         preferredWindow: String?,
@@ -91,16 +101,16 @@ public enum ShootWindow {
         timeWindowEnd: String?,
         confirmedArriveAt: String? = nil
     ) -> String {
-        let date = String((scheduledDate ?? "").prefix(10))
-        let window = format(
+        let date = formatDate(scheduledDate)
+        let clock = format(
             preferredWindow: preferredWindow,
             timeWindowStart: timeWindowStart,
             timeWindowEnd: timeWindowEnd,
             confirmedArriveAt: confirmedArriveAt
         )
-        if !date.isEmpty && window != "Shoot window not set" { return "\(date) · \(window)" }
-        if !date.isEmpty { return "\(date) · Shoot window not set" }
-        return window
+        if clock == unset { return date.isEmpty ? unset : date }
+        if !date.isEmpty { return "\(date) · \(clock)" }
+        return clock
     }
 }
 

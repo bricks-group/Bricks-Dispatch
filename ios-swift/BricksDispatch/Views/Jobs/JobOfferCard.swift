@@ -94,7 +94,7 @@ struct JobOfferCard: View {
                 Divider().frame(width: 1, height: 48).background(.white.opacity(0.12))
                 InfoCell(
                     icon: "clock.fill",
-                    label: "Window",
+                    label: "Time",
                     value: job.formattedShootWindow
                 )
                 Divider().frame(width: 1, height: 48).background(.white.opacity(0.12))

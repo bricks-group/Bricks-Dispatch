@@ -205,7 +205,7 @@ export default function TodayScreen() {
                   {/* Info grid */}
                   <View style={s.nextGrid}>
                     {[
-                      ['WINDOW', formatShootWindow(nextJob)],
+                      ['TIME', formatShootWindow(nextJob)],
                       ['AGENT', nextJob.agent_name ? initials(nextJob.agent_name) : '—'],
                       ['PACKAGE', nextJob.package_name || '—'],
                     ].map(([label, value], i) => (

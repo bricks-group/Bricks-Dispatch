@@ -171,11 +171,8 @@ async def _email_agent_direct(to: str, subject: str, html: str) -> bool:
 
 
 def _when_line(job: dict) -> str:
-    from .notifications import format_shoot_window
-    date = (job.get("scheduled_date") or "")[:10]
-    window = format_shoot_window(job)
-    bits = [b for b in (date, window if window != "Shoot window not set" else "") if b]
-    return " · ".join(bits)
+    from .notifications import format_when_line
+    return format_when_line(job)
 
 
 async def notify_booking_confirmed(job_id: str) -> None:
