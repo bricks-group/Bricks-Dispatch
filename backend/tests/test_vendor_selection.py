@@ -487,3 +487,61 @@ def test_previous_job_coords_same_day():
     coords = previous_job_coords(job, occupied)
     assert coords is not None
     assert abs(coords[0] - 43.65) < 0.01
+
+
+def test_slot_bounds_property_local_to_utc():
+    """Vancouver 2pm PDT must FreeBusy as 21:00Z, not 14:00Z."""
+    from datetime import timezone
+    from app.services.shoot_duration import _slot_bounds, selected_slot_iso_pair
+
+    van = {
+        "address": "200 Granville St, Vancouver, BC",
+        "state": "BC",
+        "scheduled_date": "2026-09-25",
+        "time_window_start": "14:00",
+        "time_window_end": "15:00",
+        "sqft": 2000,
+    }
+    bounds = _slot_bounds(van)
+    assert bounds is not None
+    start, end = bounds
+    assert start.tzinfo is not None
+    assert start.astimezone(timezone.utc).hour == 21
+    assert end.astimezone(timezone.utc).hour == 22
+    pair = selected_slot_iso_pair(van)
+    assert pair == ("2026-09-25T21:00:00Z", "2026-09-25T22:00:00Z")
+
+    tor = {
+        "address": "10 King St W, Toronto, ON",
+        "state": "ON",
+        "scheduled_date": "2026-09-25",
+        "time_window_start": "14:00",
+        "time_window_end": "15:00",
+        "sqft": 2000,
+    }
+    t0, _ = _slot_bounds(tor)
+    assert t0.astimezone(timezone.utc).hour == 18  # EDT
+
+
+def test_slot_bounds_cross_zone_conflict():
+    """Same wall clock in different zones is not the same absolute block."""
+    from app.services.shoot_duration import vendor_slot_conflicts
+
+    van = {
+        "id": "a",
+        "address": "Vancouver BC",
+        "state": "BC",
+        "scheduled_date": "2026-09-25",
+        "time_window_start": "14:00",
+        "time_window_end": "15:00",
+    }
+    # Toronto 14:00–15:00 EDT is earlier in absolute time than Vancouver 14:00 PDT.
+    occupied = [{
+        "id": "b",
+        "address": "Toronto ON",
+        "state": "ON",
+        "scheduled_date": "2026-09-25",
+        "time_window_start": "14:00",
+        "time_window_end": "15:00",
+    }]
+    assert vendor_slot_conflicts(van, occupied) is False

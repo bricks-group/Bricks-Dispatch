@@ -462,8 +462,8 @@ async def _microsoft_schedule(token: str, start: datetime, end: datetime, email:
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 json={
                     "schedules": [email],
-                    "startTime": {"dateTime": start.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "UTC"},
-                    "endTime": {"dateTime": end.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "UTC"},
+                    "startTime": {"dateTime": _iso(start).replace("Z", ""), "timeZone": "UTC"},
+                    "endTime": {"dateTime": _iso(end).replace("Z", ""), "timeZone": "UTC"},
                     "availabilityViewInterval": 15,
                 },
             )

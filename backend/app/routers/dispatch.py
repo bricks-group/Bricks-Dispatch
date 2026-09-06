@@ -65,10 +65,15 @@ async def create_dispatch_job(
     
     # One-visit shoot checklist (Arrive → modes → Submit). No return visits.
     from ..services.visit_checklist import ensure_visit_checklist
-    from ..services.shoot_duration import estimate_shoot_duration_minutes
+    from ..services.shoot_duration import estimate_shoot_duration_minutes, selected_slot_iso_pair
     job_data["checklist"] = ensure_visit_checklist(job_data)
     if job_data.get("estimated_duration_min") is None:
         job_data["estimated_duration_min"] = estimate_shoot_duration_minutes(job_data)
+    # Persist one-visit UTC slot for FreeBusy / conflict / travel (migration 0008).
+    if not job_data.get("selected_slot_start") or not job_data.get("selected_slot_end"):
+        pair = selected_slot_iso_pair(job_data, job_data.get("estimated_duration_min"))
+        if pair:
+            job_data["selected_slot_start"], job_data["selected_slot_end"] = pair
 
     try:
         # jobs.timezone is not a live column yet (DDL lives in Bricks OS).

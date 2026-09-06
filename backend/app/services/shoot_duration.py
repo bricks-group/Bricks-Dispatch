@@ -125,8 +125,31 @@ def _parse_hhmm(raw: Any) -> Optional[tuple[int, int]]:
         return None
 
 
+def _job_zoneinfo(job: dict):
+    """Property-local ZoneInfo for booked clocks (Canada-wide)."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    from ..shared.job_timezone import resolve_job_iana
+
+    iana = resolve_job_iana(job)
+    try:
+        return ZoneInfo(iana)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("America/Toronto")
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _slot_bounds(job: Any, duration_min: Optional[int] = None) -> Optional[tuple[datetime, datetime]]:
-    """Return (start, end) as naive datetimes on the scheduled calendar day."""
+    """Return (start, end) as UTC-aware datetimes for the one-visit booked block.
+
+    Bare HH:MM clocks are property-local (resolve_job_iana). Converting to UTC
+    before FreeBusy / Graph / CalDAV keeps Canada-wide assign honest — treating
+    Vancouver 2pm as 14:00Z was wrong by seven hours.
+    """
     j = _as_dict(job)
     day = str(j.get("scheduled_date") or "")[:10]
     if len(day) < 10:
@@ -138,10 +161,7 @@ def _slot_bounds(job: Any, duration_min: Optional[int] = None) -> Optional[tuple
         try:
             s = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
             e = datetime.fromisoformat(str(end_iso).replace("Z", "+00:00"))
-            if s.tzinfo:
-                s = s.astimezone(timezone.utc).replace(tzinfo=None)
-            if e.tzinfo:
-                e = e.astimezone(timezone.utc).replace(tzinfo=None)
+            s, e = _as_utc(s), _as_utc(e)
             if e > s:
                 return s, e
         except (TypeError, ValueError):
@@ -154,18 +174,32 @@ def _slot_bounds(job: Any, duration_min: Optional[int] = None) -> Optional[tuple
         y, mo, d = int(day[0:4]), int(day[5:7]), int(day[8:10])
     except ValueError:
         return None
-    start = datetime(y, mo, d, start_hm[0], start_hm[1])
+
+    zi = _job_zoneinfo(j)
+    start_local = datetime(y, mo, d, start_hm[0], start_hm[1], tzinfo=zi)
 
     end_hm = _parse_hhmm(j.get("time_window_end"))
     dur = duration_min if duration_min is not None else estimate_shoot_duration_minutes(j)
     if end_hm:
-        end = datetime(y, mo, d, end_hm[0], end_hm[1])
+        end_local = datetime(y, mo, d, end_hm[0], end_hm[1], tzinfo=zi)
         # If window is shorter than estimated duration, extend to duration.
-        if end <= start or (end - start).total_seconds() / 60 < dur:
-            end = start + timedelta(minutes=dur)
+        if end_local <= start_local or (end_local - start_local).total_seconds() / 60 < dur:
+            end_local = start_local + timedelta(minutes=dur)
     else:
-        end = start + timedelta(minutes=dur)
-    return start, end
+        end_local = start_local + timedelta(minutes=dur)
+    return _as_utc(start_local), _as_utc(end_local)
+
+
+def selected_slot_iso_pair(job: Any, duration_min: Optional[int] = None) -> Optional[tuple[str, str]]:
+    """UTC ISO pair for jobs.selected_slot_start / selected_slot_end."""
+    bounds = _slot_bounds(job, duration_min)
+    if not bounds:
+        return None
+    s, e = bounds
+    return (
+        s.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        e.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
 
 
 def vendor_slot_conflicts(job: Any, occupied_jobs: Iterable[Any]) -> bool:
