@@ -108,6 +108,26 @@ export async function verifyOtp(email: string, token: string): Promise<AuthMembe
   return me();
 }
 
+/** Google sign-in for GO web. Basic login scopes only — not calendar. */
+export function authCallbackUrl(): string {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/auth/callback`;
+  }
+  return 'https://go.brxs.ca/auth/callback';
+}
+
+export async function loginWithGoogle(): Promise<void> {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: authCallbackUrl(),
+      // Default Google scopes: openid email profile. Do NOT request calendar here.
+      queryParams: { access_type: 'offline', prompt: 'select_account' },
+    },
+  });
+  if (error) throw error;
+}
+
 export async function me(): Promise<AuthMember> {
   return api.get<AuthMember>('/api/vendor-os/auth/me');
 }
