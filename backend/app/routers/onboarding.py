@@ -21,11 +21,11 @@ ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 # Version tracks the text revision so we can re-prompt if terms materially change.
-_IC_AGREEMENT_VERSION = "1.4"
-_IC_AGREEMENT_EFFECTIVE_DATE = "2026-09-04"
+_IC_AGREEMENT_VERSION = "1.5"
+_IC_AGREEMENT_EFFECTIVE_DATE = "2026-09-06"
 _IC_AGREEMENT_TEXT = """
-BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.4
-Effective: September 4, 2026
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.5
+Effective: September 6, 2026
 Contracting party: Bricks Group ("Bricks")
 Governing law: Ontario, Canada
 
@@ -65,16 +65,16 @@ You must send renewal certificates before expiry. Lapsed coverage is automatic s
 If you operate a drone you represent that you hold a valid Transport Canada RPAS certificate at the level required for that operation (Advanced for controlled airspace, including proximity to CYYZ and CYTZ). You comply with the Aeronautics Act, Canadian Aviation Regulations, and any NAV CANADA or site restriction. You are solely responsible for the operation, including fines, incidents, and third-party claims. If airspace, weather, or regulation prevents aerial capture, you still complete the ground package and note the miss in the job.
 
 8. PAYOUTS
-You are paid a fixed amount per accepted booking, set by Bricks' vendor rate card for the package, property size band, and your vendor tier at the time you accept the job. That amount does not change based on what the client was charged or any client discount. Add-ons (drone, reel, 3D tour, twilight, and similar) are paid at the published add-on payout for your tier. Bricks may change the rate card prospectively on 14 days' notice; changes do not apply to jobs already accepted.
+You are paid a fixed amount per accepted booking, set by Bricks' vendor rate card for the media package (or à-la-carte mix), property size band, and your vendor tier at the time you accept the job. That amount does not change based on what the client was charged or any client discount. Client media on www.brxs.ca is sold à la carte as Photos only, Essentials, Story, Showcase, and Full suite. Virtual Visit (free-roam Gaussian splat) is always a paid add-on — never packaged into a suite and never treated as included deliverable pay. Path-confined Virtual Tour may be included in Showcase and Full suite or sold as an add-on. Add-ons (drone, cinematic reel, Virtual Tour, twilight, Virtual Visit, and similar) are paid at the published add-on payout for your tier. Bricks may change the rate card prospectively on 14 days' notice; changes do not apply to jobs already accepted.
 
-Current package rate card (CAD, exclusive of HST), shown as Tier C / Tier B / Tier A:
+Current media rate card (CAD, exclusive of HST), shown as Tier C / Tier B / Tier A. These are the same fixed dollar cells already published on the vendor rate card (no new amounts):
 
-Standard — under 2,000 sqft $104.65 / $134.55 / $164.45; 2,000–3,499 $132.65 / $170.55 / $208.45; 3,500–4,999 $164.15 / $211.05 / $257.95; 5,000+ $174.65 / $224.55 / $274.45
-Premium — under 2,000 $209.65 / $269.55 / $329.45; 2,000–3,499 $262.15 / $337.05 / $411.95; 3,500–4,999 $314.64 / $404.55 / $494.45; 5,000+ $367.15 / $472.05 / $576.95
-Luxury — under 2,000 $402.15 / $517.05 / $631.95; 2,000–3,499 $419.65 / $539.55 / $659.45; 3,500–4,999 $524.65 / $674.55 / $824.45; 5,000+ $664.65 / $854.55 / $1,044.45
-Estate — $874.65 / $1,124.55 / $1,374.45 flat
+Photos only / Essentials — under 2,000 sqft $104.65 / $134.55 / $164.45; 2,000–3,499 $132.65 / $170.55 / $208.45; 3,500–4,999 $164.15 / $211.05 / $257.95; 5,000+ $174.65 / $224.55 / $274.45
+Story / Showcase — under 2,000 $209.65 / $269.55 / $329.45; 2,000–3,499 $262.15 / $337.05 / $411.95; 3,500–4,999 $314.64 / $404.55 / $494.45; 5,000+ $367.15 / $472.05 / $576.95
+Full suite — under 2,000 $402.15 / $517.05 / $631.95; 2,000–3,499 $419.65 / $539.55 / $659.45; 3,500–4,999 $524.65 / $674.55 / $824.45; 5,000+ $664.65 / $854.55 / $1,044.45
+Legacy Estate (flat, only if booked on that package) — $874.65 / $1,124.55 / $1,374.45
 
-Add-on payouts are fixed published dollar amounts from the add-on rate card for your tier — not a percentage of rack.
+Add-on payouts are fixed published dollar amounts from the add-on rate card for your tier — not a percentage of rack. Virtual Visit payout is the published Virtual Visit add-on cell for your tier (quoted by footprint for the client; never a percent of rack).
 
 Tier is assigned by Bricks based on quality, reliability, volume, and compliance. Tier C is the starting tier. Bricks may change your tier on notice. Payouts are via Stripe Connect within 7 business days of client acceptance of deliverables, or within 14 days of shoot completion if the client has not acted. Raise payout disputes in writing to booking@brxs.ca within 30 days of the payment date.
 
@@ -211,7 +211,7 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
 async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
     Photographer application. Requires acceptance of the current IC agreement.
-    Records ic_agreement_version as the live server version (currently 1.4).
+    Records ic_agreement_version as the live server version (currently 1.5).
     """
     if not application.accepted_terms:
         raise HTTPException(status_code=400, detail="You must accept the Bricks Contractor Agreement to apply.")

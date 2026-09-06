@@ -1,4 +1,4 @@
-"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.4 verbatim."""
+"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.5 verbatim."""
 import ast
 from pathlib import Path
 
@@ -23,15 +23,15 @@ def _assignment_value(path: Path, name: str):
     raise AssertionError(f"{name} not found in {path}")
 
 
-def test_ic_agreement_constants_are_v13():
+def test_ic_agreement_constants_are_v15():
     version = _assignment_value(ONBOARDING, "_IC_AGREEMENT_VERSION")
     effective = _assignment_value(ONBOARDING, "_IC_AGREEMENT_EFFECTIVE_DATE")
     text = _assignment_value(ONBOARDING, "_IC_AGREEMENT_TEXT")
 
-    assert version == "1.4"
-    assert effective == "2026-09-04"
-    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.4")
-    assert "Effective: September 4, 2026" in text
+    assert version == "1.5"
+    assert effective == "2026-09-06"
+    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.5")
+    assert "Effective: September 6, 2026" in text
     assert 'Contracting party: Bricks Group ("Bricks")' in text
     assert "Questions: booking@brxs.ca" in text
     assert text.endswith("Bricks Group · Ontario, Canada")
@@ -45,6 +45,13 @@ def test_ic_agreement_constants_are_v13():
     assert "percentage of rack" in text
     assert "35%" not in text and "45%" not in text and "55%" not in text
     assert "18. CHANGES; ENTIRE AGREEMENT" in text
+    assert "Photos only / Essentials" in text
+    assert "Story / Showcase" in text
+    assert "Full suite" in text
+    assert "Virtual Visit (free-roam Gaussian splat) is always a paid add-on" in text
+    assert "Standard —" not in text
+    assert "Premium —" not in text
+    assert "Luxury —" not in text
 
     assert "BRICKS DOES NOT REQUIRE PROOF OF INSURANCE" not in text
     assert "Bricks retains a platform fee from each job value" not in text
@@ -61,7 +68,7 @@ def test_get_ic_agreement_returns_version_date_text():
     assert "ic_agreement_version=_IC_AGREEMENT_VERSION" in src
 
 
-def test_application_schema_defaults_to_v13():
+def test_application_schema_defaults_to_v15():
     src = SCHEMAS.read_text()
-    assert 'ic_agreement_version: str = "1.4"' in src
+    assert 'ic_agreement_version: str = "1.5"' in src
     assert 'ic_agreement_version: str = "1.1"' not in src
