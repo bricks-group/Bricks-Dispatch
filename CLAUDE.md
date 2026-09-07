@@ -9,6 +9,10 @@ You are working on **Bricks GO**, the vendor-facing job orchestration layer of t
 
 All three repos share one Supabase project: `ctqwxwrcxwruaqojohpf`
 
+**Cross-repo status:** `BRICKS_STATUS.md` in `bricks-group/Bricks-OS` (repo root) is the
+shared status doc across all three apps -- read it for anything that spans repos (billing
+gaps, cross-service contract drift, launch-readiness findings).
+
 ## Two-Sided App Note (2026-06-10)
 The Dispatch photographer web experience is now built into the Bricks OS React app (`ruletheworld/bricks-os`), NOT as a separate `dispatch.brxs.ca` site. Photographers use `brokerage.brxs.ca` — after login, role-based routing sends them to the dark Dispatch shell at `/dispatch/*`. The Expo `frontend/` in THIS repo remains the primary Android + iOS (Swift) experience for photographers on mobile. The web shell is for desktop/browser access.
 
