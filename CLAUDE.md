@@ -175,10 +175,43 @@ pick_vendor_rule_based(job, vendors)
 1. Fotello — primary AI photo edits (webhook callback)
 2. Autoenhance — fallback if Fotello key missing (webhook callback)
 3. BoxBrownie — photo editing, retouching, day-to-dusk, item removal, and virtual staging. Polling only (no webhooks).
-4. 3D tours — **Polycam only** (2026-07-14 — Luma Labs pipeline removed, see below). Either a Polycam share URL pasted into `PropertyDetailPage.js` (embed, zero backend processing) or a manually uploaded `.ply`/`.splat` file signed via `_finalize_job_if_complete`'s generic splat_url resolution. No automated video→splat backend pipeline exists.
+4. 3D tours — **Polycam only** (2026-07-14 — Luma Labs pipeline removed, see below). Either a Polycam share URL pasted into `PropertyDetailPage.js` (embed, zero backend processing) or a manually uploaded `.ply`/`.splat` file signed via `_finalize_job_if_complete`'s generic splat_url resolution. No automated *video*→splat backend pipeline exists — that's still true. But do not read this as "no automated tour pipeline at all": see **Capture Pipeline** below for a separate, real, automated phone-capture → server-side-stitched tour/floorplan pipeline, added after this line was written.
 5. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
 6. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
 7. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
+
+## Capture Pipeline (undocumented until 2026-09-07 — real, substantial, not a stub)
+
+Phone-capture flow for GO's guided 360°-station camera (Matterport-style), separate
+from the photographer's professional-camera post-production pipeline above. Merged in
+from the now-archived `Bricks-Capture` repo (frontend) plus a real backend built
+since that merge — `Bricks-Capture`'s own README describes the review screen's
+"Submit to pipeline" as a no-op stub; that's now stale, it's fully wired.
+
+- `backend/app/routers/capture.py` — `/api/capture/*`: `sessions`, `rooms`, `stations`,
+  `frames/sign` + `frames/commit` (signed uploads), `submit` (compiles stations into a
+  real deliverable — refuses if no stations/equirects), `rebuild-tour`,
+  `rebuild-floorplan`, `visit/sign` + `visit/deliver` (Virtual Visit add-on).
+- `backend/app/services/capture_worker.py` — stitches pan-burst frames into equirects
+  server-side and compiles stations into a hosted tour / 2D floor plan. Failures raise
+  `CaptureWorkerError`, never silently mark a job Delivered.
+- `backend/app/services/capture_entitlements.py` — which GO in-app capture modes a job
+  actually purchased (`splat`/`floorplan`/`visit`), detected from real `jobs` columns
+  (`package_id`, `package_name`, `job_type`, `add_ons`, `checklist`,
+  `client_instructions`, `property_details`) — not a separate purchase table.
+- `backend/app/services/equirect_stitcher.py`, `tour_builder.py`, `capture_layout.py` —
+  supporting geometry/stitching/path-layout logic. `equirect_stitcher.py` needs
+  `numpy`/`opencv-python-headless` (both in `requirements.txt`).
+- Storage tables (`capture_sessions`/`rooms`/`pipeline`/`frames`) live in Bricks-OS,
+  service-role-only, same convention as `jobs`/`uploads`.
+- Frontend: `frontend/app/(capture)/` — `capture.tsx` (camera + coverage dome),
+  `mode.tsx`, `visit.tsx`, `floorplan.tsx`, `review.tsx` (coverage-by-room grid, real
+  submit/retry-compile/rebuild actions via `frontend/lib/capture-api.ts`, not stubs).
+  Requires `expo-camera` (in `frontend/package.json`).
+- Design rule: phone-mode capture is splat/tour frames only — professional stills stay
+  vendor-camera-only, never on a phone (`feedback_capture_app_no_stills_cannibalization`).
+  This is why there's no USB-C RAW ingest path here even though one existed in the old
+  standalone Capture repo prototype — dropping it was the intended fix, not a gap.
 
 ## Rules
 - `INTERNAL_API_KEY` header (`X-Internal-Api-Key`) required on dispatch intake endpoint
