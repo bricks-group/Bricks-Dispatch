@@ -63,6 +63,16 @@ def estimate_shoot_duration_minutes(job: Any) -> int:
     ).lower()
     jt = str(j.get("job_type") or "photo").lower()
     sqft = j.get("sqft")
+    if sqft is None:
+        # Booking often puts footprint in property_details ("2,450 sq ft") rather than sqft.
+        import re
+        blob_pd = str(j.get("property_details") or "")
+        m = re.search(r"(\d[\d,]{2,6})\s*(?:sq\.?\s*ft|sqft|square\s*feet)", blob_pd, re.I)
+        if m:
+            try:
+                sqft = int(m.group(1).replace(",", ""))
+            except ValueError:
+                sqft = None
 
     # Standalone non-photo shoots still get a sensible block.
     if jt == "drone" and "photo" not in blob and not any(k in keys for k in ("photo", "photos", "hdr")):

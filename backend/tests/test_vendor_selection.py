@@ -545,3 +545,138 @@ def test_slot_bounds_cross_zone_conflict():
         "time_window_end": "15:00",
     }]
     assert vendor_slot_conflicts(van, occupied) is False
+
+
+
+# ── FreeBusy token refresh + assign busy skip ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_token_refresh_on_expired_freebusy(monkeypatch):
+    """Expired Google access_token must refresh before FreeBusy is trusted."""
+    from datetime import datetime, timezone, timedelta
+    from app.services import vendor_calendars as vc
+
+    start = datetime(2026, 9, 10, 14, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 10, 15, 0, tzinfo=timezone.utc)
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "csec")
+
+    calls = {"freebusy": 0, "refresh": 0}
+
+    class FakeResp:
+        def __init__(self, status, data):
+            self.status_code = status
+            self._data = data
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError("http")
+        def json(self):
+            return self._data
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, headers=None, json=None, data=None):
+            if "oauth2.googleapis.com/token" in str(url):
+                calls["refresh"] += 1
+                return FakeResp(200, {"access_token": "fresh", "expires_in": 3600})
+            calls["freebusy"] += 1
+            # After refresh, token is "fresh"
+            auth = (headers or {}).get("Authorization") or ""
+            assert "fresh" in auth
+            return FakeResp(200, {"calendars": {"primary": {"busy": [{"start": "2026-09-10T14:00:00Z", "end": "2026-09-10T14:30:00Z"}]}}})
+
+    member = {
+        "id": "m1",
+        "email": "m@test.com",
+        "google_calendar_token": "stale",
+        "refresh_token": "rtok",
+        "token_expires_at": expired,
+    }
+    with patch("app.services.vendor_calendars.httpx.AsyncClient", FakeClient):
+        busy = await vc.vendor_is_busy(member, start, end)
+    assert busy is True
+    assert calls["refresh"] == 1
+    assert calls["freebusy"] == 1
+
+
+@pytest.mark.asyncio
+async def test_assign_skips_calendar_busy_vendor(monkeypatch):
+    """Busy FreeBusy vendor is excluded; free vendor wins."""
+    job_doc = {
+        "id": "job_busy",
+        "address": "10 King St Mississauga",
+        "city": "Mississauga",
+        "job_type": "photo",
+        "vendor_id": "default_vendor",
+        "time_window_start": "10:00",
+        "time_window_end": "11:00",
+        "scheduled_date": "2026-09-10",
+        "status": "pending_assignment",
+        "lat": 43.59,
+        "lng": -79.64,
+    }
+    members = [
+        {
+            "id": "busy_v",
+            "name": "Busy",
+            "email": "busy@test.com",
+            "is_active": True,
+            "status": "available",
+            "vendor_id": "default_vendor",
+            "specialty": "photo",
+            "onboarding_status": "approved",
+            "skills": ["photo"],
+            "service_areas": ["Mississauga", "GTA"],
+            "tier": 2,
+            "home_lat": 43.59,
+            "home_lng": -79.64,
+        },
+        {
+            "id": "free_v",
+            "name": "Free",
+            "email": "free@test.com",
+            "is_active": True,
+            "status": "available",
+            "vendor_id": "default_vendor",
+            "specialty": "photo",
+            "onboarding_status": "approved",
+            "skills": ["photo"],
+            "service_areas": ["Mississauga", "GTA"],
+            "tier": 1,
+            "home_lat": 43.59,
+            "home_lng": -79.64,
+        },
+    ]
+    mock_db = _supabase_style_db(job_doc, members)
+    monkeypatch.setenv("USE_AI_DISPATCH", "false")
+
+    async def fake_busy(member, start, end, db=None):
+        mid = member.id if hasattr(member, "id") else (member or {}).get("id")
+        return True if mid == "busy_v" else False
+
+    with patch("app.services.vendor_selection.get_db", AsyncMock(return_value=mock_db)):
+        with patch("app.services.vendor_selection.bricks_smart_assign", AsyncMock(return_value=None)):
+            with patch("app.services.vendor_selection.load_occupied_jobs_by_vendor", AsyncMock(return_value={})):
+                with patch("app.services.vendor_calendars.vendor_is_busy", AsyncMock(side_effect=fake_busy)):
+                    with patch("app.services.vendor_selection._update_job_assignee", AsyncMock()) as upd:
+                        chosen = await assign_vendor_for_job("job_busy")
+                        assert chosen == "free_v"
+                        assert upd.called
+
+
+def test_sqft_parsed_from_property_details():
+    from app.services.shoot_duration import estimate_shoot_duration_minutes
+    job = {
+        "job_type": "photo",
+        "time_window_start": "10:00",
+        "property_details": "Detached, 3,200 sq ft, 4 bed",
+    }
+    assert estimate_shoot_duration_minutes(job) == 75  # 2501-4000 band

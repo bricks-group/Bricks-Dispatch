@@ -832,12 +832,14 @@ async def connect_vendor_calendar(
         # Persist tokens only when supplied — Connected only after real tokens (and ping on complete-session).
         if payload.get("access_token"):
             from ..services.calendar_token_crypto import encrypt_connection_secrets
+            from ..services.vendor_calendars import _expires_at_iso
             row = {
                 "member_id": actor_id,
                 "vendor_id": vendor_id,
                 "provider": "google",
                 "access_token": payload.get("access_token"),
                 "refresh_token": payload.get("refresh_token"),
+                "token_expires_at": _expires_at_iso(payload.get("expires_in") or 3600),
                 "updated_at": now,
                 "created_at": now,
             }

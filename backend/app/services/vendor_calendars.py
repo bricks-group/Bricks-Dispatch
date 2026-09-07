@@ -470,7 +470,162 @@ async def list_vendor_calendar_status(db, member_id: str) -> list[dict]:
     return out
 
 
-async def _google_freebusy(token: str, start: datetime, end: datetime) -> Optional[bool]:
+# Sentinel: FreeBusy got 401 — caller should refresh and retry once.
+_AUTH_EXPIRED = object()
+
+
+async def refresh_google_access_token(refresh_token: str) -> Optional[dict]:
+    """Refresh Google access_token. Needs client id+secret on the API (fail-soft)."""
+    if not refresh_token or not google_direct_oauth():
+        return None
+    data = {
+        "client_id": google_client_id(),
+        "client_secret": google_client_secret(),
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post("https://oauth2.googleapis.com/token", data=data)
+        payload = {}
+        try:
+            payload = resp.json() if hasattr(resp, "json") else {}
+            if callable(payload):
+                payload = payload()
+        except Exception:
+            payload = {}
+        if getattr(resp, "status_code", 500) >= 400 or not isinstance(payload, dict):
+            logger.warning("Google token refresh HTTP %s", getattr(resp, "status_code", "?"))
+            return None
+        if not payload.get("access_token"):
+            return None
+        # Google omits refresh_token on refresh responses — keep the old one.
+        if not payload.get("refresh_token"):
+            payload["refresh_token"] = refresh_token
+        return payload
+    except Exception as e:
+        logger.warning("Google token refresh failed (soft): %s", e)
+        return None
+
+
+async def refresh_microsoft_access_token(refresh_token: str) -> Optional[dict]:
+    """Refresh Microsoft Graph access_token. Needs Azure client id+secret (fail-soft)."""
+    if not refresh_token or not microsoft_oauth_configured():
+        return None
+    data = {
+        "client_id": microsoft_client_id(),
+        "client_secret": microsoft_client_secret(),
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+        "scope": "Calendars.Read offline_access User.Read",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(
+                "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        payload = {}
+        try:
+            payload = resp.json() if hasattr(resp, "json") else {}
+            if callable(payload):
+                payload = payload()
+        except Exception:
+            payload = {}
+        if getattr(resp, "status_code", 500) >= 400 or not isinstance(payload, dict):
+            logger.warning("Microsoft token refresh HTTP %s", getattr(resp, "status_code", "?"))
+            return None
+        if not payload.get("access_token"):
+            return None
+        if not payload.get("refresh_token"):
+            payload["refresh_token"] = refresh_token
+        return payload
+    except Exception as e:
+        logger.warning("Microsoft token refresh failed (soft): %s", e)
+        return None
+
+
+def _token_expired(conn: dict, skew_seconds: int = 120) -> bool:
+    """True when token_expires_at is missing/past (refresh proactively)."""
+    raw = conn.get("token_expires_at")
+    if not raw:
+        return False  # unknown expiry — try access_token first; refresh on 401
+    try:
+        exp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        return exp <= datetime.now(timezone.utc) + timedelta(seconds=skew_seconds)
+    except (TypeError, ValueError):
+        return False
+
+
+async def _persist_refreshed_tokens(db, conn: dict, token_payload: dict) -> dict:
+    """Write refreshed tokens back (encrypted) and return updated plaintext conn."""
+    member_id = str(conn.get("member_id") or "")
+    provider = str(conn.get("provider") or "").lower()
+    if not member_id or not provider or db is None:
+        updated = dict(conn)
+        updated["access_token"] = token_payload.get("access_token")
+        if token_payload.get("refresh_token"):
+            updated["refresh_token"] = token_payload["refresh_token"]
+        updated["token_expires_at"] = _expires_at_iso(token_payload.get("expires_in"))
+        return updated
+    try:
+        stored = await upsert_oauth_connection(
+            db,
+            member_id=member_id,
+            vendor_id=str(conn.get("vendor_id") or "default_vendor"),
+            provider=provider,
+            token_payload={
+                "access_token": token_payload.get("access_token"),
+                "refresh_token": token_payload.get("refresh_token") or conn.get("refresh_token"),
+                "expires_in": token_payload.get("expires_in") or 3600,
+            },
+        )
+        from .calendar_token_crypto import decrypt_connection_secrets
+        return decrypt_connection_secrets(stored)
+    except Exception as e:
+        logger.warning("Persist refreshed calendar token soft-fail: %s", e)
+        updated = dict(conn)
+        updated["access_token"] = token_payload.get("access_token")
+        if token_payload.get("refresh_token"):
+            updated["refresh_token"] = token_payload["refresh_token"]
+        updated["token_expires_at"] = _expires_at_iso(token_payload.get("expires_in") or 3600)
+        return updated
+
+
+async def ensure_fresh_access_token(conn: dict, db=None) -> Optional[str]:
+    """Return a usable access_token, refreshing Google/Microsoft when expired.
+
+    Fail-soft: missing secret / network → return existing token (or None).
+    FreeBusy still treats unknown as continue; refreshed tokens make busy=True stick.
+    """
+    provider = str(conn.get("provider") or "").lower()
+    access = (conn.get("access_token") or "").strip() or None
+    refresh = (conn.get("refresh_token") or "").strip() or None
+    if provider not in ("google", "microsoft"):
+        return access
+    needs_refresh = (not access) or _token_expired(conn)
+    if not needs_refresh:
+        return access
+    if not refresh:
+        return access
+    payload = None
+    if provider == "google":
+        payload = await refresh_google_access_token(refresh)
+    elif provider == "microsoft":
+        payload = await refresh_microsoft_access_token(refresh)
+    if not payload or not payload.get("access_token"):
+        return access
+    updated = await _persist_refreshed_tokens(db, conn, payload)
+    conn.clear()
+    conn.update(updated)
+    return (conn.get("access_token") or "").strip() or None
+
+
+async def _google_freebusy(token: str, start: datetime, end: datetime):
+    """Return True/False busy, None unknown, or _AUTH_EXPIRED on 401."""
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.post(
@@ -483,7 +638,7 @@ async def _google_freebusy(token: str, start: datetime, end: datetime) -> Option
                 },
             )
             if resp.status_code == 401:
-                return None
+                return _AUTH_EXPIRED
             resp.raise_for_status()
             data = resp.json()
         calendars = data.get("calendars") or {}
@@ -510,7 +665,9 @@ async def _microsoft_schedule(token: str, start: datetime, end: datetime, email:
                     "availabilityViewInterval": 15,
                 },
             )
-            if resp.status_code in (401, 403):
+            if resp.status_code == 401:
+                return _AUTH_EXPIRED
+            if resp.status_code == 403:
                 return None
             resp.raise_for_status()
             data = resp.json()
@@ -623,10 +780,60 @@ async def _apple_caldav_busy(url: str, password: str, username: str, start: date
         return None
 
 
+async def _provider_busy(conn: dict, member: dict, start: datetime, end: datetime, db=None):
+    """Run FreeBusy for one connection with proactive refresh + one 401 retry."""
+    provider = str(conn.get("provider") or "").lower()
+    if provider in ("google", "microsoft"):
+        token = await ensure_fresh_access_token(conn, db=db)
+        if not token:
+            return None
+        if provider == "google":
+            result = await _google_freebusy(token, start, end)
+        else:
+            result = await _microsoft_schedule(
+                token, start, end, member.get("email") or conn.get("email")
+            )
+        if result is _AUTH_EXPIRED and conn.get("refresh_token"):
+            # Force refresh even if expiry looked fine, then retry once.
+            payload = None
+            if provider == "google":
+                payload = await refresh_google_access_token(conn["refresh_token"])
+            else:
+                payload = await refresh_microsoft_access_token(conn["refresh_token"])
+            if payload and payload.get("access_token"):
+                updated = await _persist_refreshed_tokens(db, conn, payload)
+                conn.clear()
+                conn.update(updated)
+                token2 = conn.get("access_token")
+                if token2:
+                    if provider == "google":
+                        result = await _google_freebusy(token2, start, end)
+                    else:
+                        result = await _microsoft_schedule(
+                            token2, start, end, member.get("email") or conn.get("email")
+                        )
+        if result is _AUTH_EXPIRED:
+            return None
+        return result
+
+    if provider == "apple":
+        return await _apple_caldav_busy(
+            conn.get("caldav_url") or "",
+            conn.get("caldav_password") or conn.get("app_password") or "",
+            conn.get("caldav_username") or member.get("email") or "",
+            start,
+            end,
+        )
+    if provider == "ics" and (conn.get("ics_url") or "").strip():
+        return await _ics_busy(conn["ics_url"].strip(), start, end)
+    return None
+
+
 async def vendor_is_busy(member: Any, start: datetime, end: datetime, db=None) -> Optional[bool]:
     """True if busy on any connected calendar; False if free; None if unknown.
 
     Fail-soft: network/auth errors → None so auto-assign continues with other rules.
+    Google/Microsoft access tokens are refreshed when expired (needs OAuth client secret).
     """
     m = _as_dict(member)
     member_id = str(m.get("id") or "")
@@ -639,9 +846,21 @@ async def vendor_is_busy(member: Any, start: datetime, end: datetime, db=None) -
     else:
         # Inline tokens on member dict (tests / denormalized)
         if m.get("google_calendar_token") or m.get("access_token"):
-            connections.append({"provider": "google", "access_token": m.get("google_calendar_token") or m.get("access_token")})
+            connections.append({
+                "provider": "google",
+                "member_id": member_id,
+                "access_token": m.get("google_calendar_token") or m.get("access_token"),
+                "refresh_token": m.get("refresh_token") or m.get("google_refresh_token"),
+                "token_expires_at": m.get("token_expires_at"),
+            })
         if m.get("microsoft_calendar_token"):
-            connections.append({"provider": "microsoft", "access_token": m["microsoft_calendar_token"]})
+            connections.append({
+                "provider": "microsoft",
+                "member_id": member_id,
+                "access_token": m["microsoft_calendar_token"],
+                "refresh_token": m.get("microsoft_refresh_token"),
+                "token_expires_at": m.get("token_expires_at"),
+            })
         if m.get("apple_caldav_url"):
             connections.append({
                 "provider": "apple",
@@ -657,25 +876,7 @@ async def vendor_is_busy(member: Any, start: datetime, end: datetime, db=None) -
 
     saw_free = False
     for conn in connections:
-        provider = str(conn.get("provider") or "").lower()
-        result: Optional[bool] = None
-        if provider == "google" and conn.get("access_token"):
-            result = await _google_freebusy(conn["access_token"], start, end)
-        elif provider == "microsoft" and conn.get("access_token"):
-            result = await _microsoft_schedule(
-                conn["access_token"], start, end, m.get("email") or conn.get("email")
-            )
-        elif provider == "apple":
-            result = await _apple_caldav_busy(
-                conn.get("caldav_url") or "",
-                conn.get("caldav_password") or conn.get("app_password") or "",
-                conn.get("caldav_username") or m.get("email") or "",
-                start,
-                end,
-            )
-        elif provider == "ics" and (conn.get("ics_url") or "").strip():
-            result = await _ics_busy(conn["ics_url"].strip(), start, end)
-
+        result = await _provider_busy(conn, m, start, end, db=db)
         if result is True:
             return True
         if result is False:

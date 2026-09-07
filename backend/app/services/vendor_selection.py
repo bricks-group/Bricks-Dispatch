@@ -245,7 +245,12 @@ async def _patch_job_assign(job_id: str, patch: dict) -> None:
         raise last
 
 
-async def _update_job_assignee(job_id: str, member_id: str, estimated_duration_min: Optional[int] = None):
+async def _update_job_assignee(
+    job_id: str,
+    member_id: str,
+    estimated_duration_min: Optional[int] = None,
+    job_doc: Optional[dict] = None,
+):
     now = datetime.now(timezone.utc).isoformat()
     patch = {
         "assignee_id": member_id,
@@ -254,6 +259,18 @@ async def _update_job_assignee(job_id: str, member_id: str, estimated_duration_m
     }
     if estimated_duration_min is not None:
         patch["estimated_duration_min"] = int(estimated_duration_min)
+    # Backfill migration-0008 slot clocks when intake soft-dropped them or Booking omitted them.
+    doc = dict(job_doc or {})
+    if estimated_duration_min is not None and doc.get("estimated_duration_min") is None:
+        doc["estimated_duration_min"] = int(estimated_duration_min)
+    if not doc.get("selected_slot_start") or not doc.get("selected_slot_end"):
+        try:
+            from .shoot_duration import selected_slot_iso_pair
+            pair = selected_slot_iso_pair(doc, estimated_duration_min)
+            if pair:
+                patch["selected_slot_start"], patch["selected_slot_end"] = pair
+        except Exception as e:
+            logger.debug("selected_slot backfill skipped for %s: %s", job_id, e)
     await _patch_job_assign(job_id, patch)
 
     try:
@@ -351,7 +368,7 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
                 filtered.append(v)
             vendors = filtered
     except Exception as e:
-        logger.debug("Calendar busy gate skipped: %s", e)
+        logger.warning("Calendar busy gate skipped (continuing with other gates): %s", e)
 
     min_tier = min_tier_for_job(job)
     eligible_ids = {v.id for v in filter_assignable_vendors(job, vendors, occupied_by_vendor)}
@@ -364,7 +381,7 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             chosen_id = await bricks_smart_assign(job, vendors, occupied_by_vendor=occupied_by_vendor)
             if chosen_id and chosen_id in eligible_ids:
                 logger.info(f"Job {job_id} assigned via Bricks AI to {chosen_id} (attempt {attempt})")
-                await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min)
+                await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min, job_doc=job_doc)
                 return chosen_id
             if chosen_id:
                 logger.warning(
@@ -378,7 +395,7 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
         chosen_id = pick_vendor_rule_based(job, vendors, occupied_by_vendor=occupied_by_vendor)
         if chosen_id is not None:
             logger.info(f"Job {job.id} assigned via rule-based fallback to {chosen_id} (attempt {attempt})")
-            await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min)
+            await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min, job_doc=job_doc)
             return chosen_id
 
         logger.warning(f"No vendor assigned for job {job_id} (attempt {attempt}/{_MAX_ASSIGNMENT_ATTEMPTS}).")
