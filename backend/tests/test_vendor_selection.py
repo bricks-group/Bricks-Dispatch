@@ -680,3 +680,126 @@ def test_sqft_parsed_from_property_details():
         "property_details": "Detached, 3,200 sq ft, 4 bed",
     }
     assert estimate_shoot_duration_minutes(job) == 75  # 2501-4000 band
+
+
+def test_manual_availability_toggle_and_hours():
+    from app.services.vendor_availability_gate import manual_availability_allows, work_hours_cover_slot
+
+    job = Job(
+        id="j1",
+        address="100 Queen St W, Mississauga, ON",
+        job_type="photo",
+        scheduled_date="2026-09-10",
+        time_window_start="10:00",
+        time_window_end="11:00",
+        city="Mississauga",
+        state="ON",
+    )
+    assert manual_availability_allows(None, job) is True
+    assert manual_availability_allows({"available": False, "work_start": "08:00", "work_end": "17:00"}, job) is False
+    assert manual_availability_allows(
+        {"available": True, "work_start": "08:00", "work_end": "17:00", "jobs_per_day": 4},
+        job,
+        has_calendar=False,
+    ) is True
+    assert manual_availability_allows(
+        {"available": True, "work_start": "08:00", "work_end": "09:30", "jobs_per_day": 4},
+        job,
+        has_calendar=False,
+    ) is False
+    assert manual_availability_allows(
+        {"available": True, "work_start": "08:00", "work_end": "09:30", "jobs_per_day": 4},
+        job,
+        has_calendar=True,
+    ) is True
+    assert work_hours_cover_slot("08:00", "17:00", job) is True
+    assert work_hours_cover_slot("12:00", "17:00", job) is False
+
+
+def test_manual_availability_capacity_and_blocks():
+    from app.services.vendor_availability_gate import manual_availability_allows
+
+    job = Job(
+        id="j2",
+        address="100 Queen St W, Mississauga, ON",
+        job_type="photo",
+        scheduled_date="2026-09-10",
+        time_window_start="10:00",
+        time_window_end="11:00",
+        city="Mississauga",
+        state="ON",
+    )
+    occupied = [
+        {"id": "a", "scheduled_date": "2026-09-10", "status": "assigned"},
+        {"id": "b", "scheduled_date": "2026-09-10", "status": "assigned"},
+    ]
+    assert manual_availability_allows(
+        {"available": True, "work_start": "08:00", "work_end": "17:00", "jobs_per_day": 2},
+        job,
+        occupied=occupied,
+        has_calendar=True,
+    ) is False
+    assert manual_availability_allows(
+        {"available": True, "work_start": "08:00", "work_end": "17:00", "jobs_per_day": 3},
+        job,
+        occupied=occupied,
+        has_calendar=True,
+    ) is True
+    assert manual_availability_allows(
+        {
+            "available": True,
+            "work_start": "08:00",
+            "work_end": "17:00",
+            "jobs_per_day": 4,
+            "blocked_windows": [{"start": "2026-09-10T13:30:00Z", "end": "2026-09-10T15:00:00Z"}],
+        },
+        job,
+        has_calendar=True,
+        duration_min=60,
+    ) is False
+
+
+def test_pick_vendor_respects_manual_unavailable():
+    job = Job(
+        address="100 Queen St W, Mississauga, ON",
+        job_type="photo",
+        time_window_start="10:00",
+        time_window_end="11:00",
+        scheduled_date="2026-09-10",
+        city="Mississauga",
+        state="ON",
+    )
+    vendors = [
+        VendorMember(
+            id="v1",
+            name="Off Duty",
+            email="off@test.com",
+            specialty="photo",
+            is_active=True,
+            status="available",
+            onboarding_status="approved",
+            service_areas=["Mississauga"],
+            home_city="Mississauga",
+        ),
+        VendorMember(
+            id="v2",
+            name="On Duty",
+            email="on@test.com",
+            specialty="photo",
+            is_active=True,
+            status="available",
+            onboarding_status="approved",
+            service_areas=["Mississauga"],
+            home_city="Mississauga",
+        ),
+    ]
+    chosen = pick_vendor_rule_based(
+        job,
+        vendors,
+        availability_by_member={
+            "v1": {"available": False, "work_start": "08:00", "work_end": "17:00", "jobs_per_day": 4},
+            "v2": {"available": True, "work_start": "08:00", "work_end": "17:00", "jobs_per_day": 4},
+        },
+        calendar_connected={"v1": False, "v2": False},
+    )
+    assert chosen == "v2"

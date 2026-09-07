@@ -142,9 +142,16 @@ def filter_assignable_vendors(
     job: Job,
     vendors: List[VendorMember],
     occupied_by_vendor: Optional[dict] = None,
+    availability_by_member: Optional[dict] = None,
+    calendar_connected: Optional[dict] = None,
+    duration_min: Optional[int] = None,
 ) -> List[VendorMember]:
-    """Apply eligibility + same-day slot conflict + travel-from-previous hard gates."""
+    """Apply eligibility + slot/travel + manual Availability hard gates."""
+    from .vendor_availability_gate import manual_availability_allows
+
     occupied_by_vendor = occupied_by_vendor or {}
+    availability_by_member = availability_by_member or {}
+    calendar_connected = calendar_connected or {}
     out: List[VendorMember] = []
     for v in vendors:
         if not member_eligible_for_job(v, job):
@@ -159,22 +166,47 @@ def filter_assignable_vendors(
             if cap is False:
                 logger.info("Vendor %s excluded: over travel cap from previous job for %s", v.id, job.id)
                 continue
+        settings = availability_by_member.get(v.id)
+        if not manual_availability_allows(
+            settings,
+            job,
+            occupied=occupied,
+            duration_min=duration_min,
+            has_calendar=bool(calendar_connected.get(v.id)),
+        ):
+            logger.info("Vendor %s excluded: manual availability for job %s", v.id, job.id)
+            continue
         out.append(v)
     return out
 
 
-def pick_vendor_rule_based(job: Job, vendors: List[VendorMember], occupied_by_vendor: Optional[dict] = None) -> Optional[str]:
+def pick_vendor_rule_based(
+    job: Job,
+    vendors: List[VendorMember],
+    occupied_by_vendor: Optional[dict] = None,
+    availability_by_member: Optional[dict] = None,
+    calendar_connected: Optional[dict] = None,
+    duration_min: Optional[int] = None,
+) -> Optional[str]:
     """
     Deterministic vendor selection for paid /book and Dispatch.
     Hard gates: approved+active (Aman/pending never), location, package min-tier,
-    skills, Advanced RPAS for drone. No match → None (job stays unassigned).
+    skills, Advanced RPAS for drone, manual Availability, slot/travel.
+    No match → None (job stays unassigned).
     Owner (Kam) ranks first among eligible so he wins matching GTA jobs.
     """
     min_tier = min_tier_for_job(job)
     preferred_tier = preferred_tier_for_job(job)
     drone_job = _is_drone_job(job)
 
-    eligible = filter_assignable_vendors(job, vendors, occupied_by_vendor=occupied_by_vendor)
+    eligible = filter_assignable_vendors(
+        job,
+        vendors,
+        occupied_by_vendor=occupied_by_vendor,
+        availability_by_member=availability_by_member,
+        calendar_connected=calendar_connected,
+        duration_min=duration_min,
+    )
 
     candidates = [v for v in eligible if v.status == "available"] or eligible
 
@@ -354,6 +386,16 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
         db, [v.id for v in vendors], scheduled_date=job.scheduled_date or None
     )
 
+    from .vendor_availability_gate import load_availability_by_member, member_has_calendar
+
+    availability_by_member = await load_availability_by_member(db, [v.id for v in vendors])
+    calendar_connected: dict = {}
+    for v in vendors:
+        try:
+            calendar_connected[v.id] = await member_has_calendar(db, v.id)
+        except Exception:
+            calendar_connected[v.id] = False
+
     # Calendar FreeBusy hard gate (busy=True excludes; None/False continue)
     try:
         from .vendor_calendars import vendor_is_busy
@@ -371,7 +413,17 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
         logger.warning("Calendar busy gate skipped (continuing with other gates): %s", e)
 
     min_tier = min_tier_for_job(job)
-    eligible_ids = {v.id for v in filter_assignable_vendors(job, vendors, occupied_by_vendor)}
+    eligible_ids = {
+        v.id
+        for v in filter_assignable_vendors(
+            job,
+            vendors,
+            occupied_by_vendor=occupied_by_vendor,
+            availability_by_member=availability_by_member,
+            calendar_connected=calendar_connected,
+            duration_min=duration_min,
+        )
+    }
 
     actual_attempts = 0
     for attempt in range(1, _MAX_ASSIGNMENT_ATTEMPTS + 1):
@@ -392,7 +444,14 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             _had_exception = True
             logger.exception(f"Bricks AI assignment failed for job {job_id} (attempt {attempt})")
 
-        chosen_id = pick_vendor_rule_based(job, vendors, occupied_by_vendor=occupied_by_vendor)
+        chosen_id = pick_vendor_rule_based(
+            job,
+            vendors,
+            occupied_by_vendor=occupied_by_vendor,
+            availability_by_member=availability_by_member,
+            calendar_connected=calendar_connected,
+            duration_min=duration_min,
+        )
         if chosen_id is not None:
             logger.info(f"Job {job.id} assigned via rule-based fallback to {chosen_id} (attempt {attempt})")
             await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min, job_doc=job_doc)
