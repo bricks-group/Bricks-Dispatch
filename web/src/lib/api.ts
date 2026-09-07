@@ -62,7 +62,23 @@ export type AuthMember = {
   role: string;
   title?: string;
   status: 'available' | 'busy' | 'offline';
+  onboarding_status?: string;
+  is_active?: boolean;
+  member_role?: string;
+  terms_accepted_at?: string | null;
+  application_submitted?: boolean;
+  app_access?: boolean;
+  portfolio_samples?: Array<{ media_type: string; url?: string; link?: string; label?: string }>;
 };
+
+export function hasAppAccess(m: AuthMember | null | undefined): boolean {
+  if (!m) return false;
+  if (typeof m.app_access === 'boolean') return m.app_access;
+  const role = `${m.role || m.title || ''}`.toLowerCase();
+  if (role.includes('owner')) return true;
+  const status = (m.onboarding_status || '').toLowerCase();
+  return status === 'approved' && m.is_active !== false;
+}
 
 export type VendorProfile = {
   id: string;

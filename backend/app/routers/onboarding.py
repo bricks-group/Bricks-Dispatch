@@ -15,6 +15,14 @@ from ..services.storage import upload_file
 from ..services.notifications import create_notification
 from ..shared.database import get_db
 from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, VendorMember, VendorDocument
+from ..shared.portfolio import (
+    PORTFOLIO_MEDIA_TYPES,
+    assemble_portfolio_samples,
+    normalize_media_type,
+    portfolio_doc_type,
+    sanitize_portfolio_samples,
+    supplemental_links_from_samples,
+)
 
 ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
 
@@ -190,14 +198,21 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     elif len(" ".join(equipment)) < 8:
         errs.append("Please describe your equipment in a little more detail.")
 
+    samples = sanitize_portfolio_samples(
+        [s.dict() if hasattr(s, "dict") else s for s in (application.portfolio_samples or [])]
+    )
     links = [str(l).strip() for l in (application.portfolio_links or []) if l and str(l).strip()]
-    if not links:
-        errs.append("At least one portfolio link is required.")
-    else:
-        for link in links:
-            if not link.lower().startswith(("http://", "https://")):
-                errs.append("Portfolio links must be full URLs (starting with https://).")
-                break
+    for link in links:
+        if not link.lower().startswith(("http://", "https://")):
+            errs.append("Portfolio links must be full URLs (starting with https://).")
+            break
+    for sample in samples:
+        link = (sample.get("link") or "").strip()
+        if link and not link.lower().startswith(("http://", "https://")):
+            errs.append("Portfolio sample links must be full URLs (starting with https://).")
+            break
+    if not samples and not links:
+        errs.append("Add at least one portfolio sample (image upload or link) by media type.")
 
     hst = (application.hst_number or "").strip()
     if not hst and not application.hst_exempt:
@@ -253,6 +268,14 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
 
     now_iso = datetime.now(timezone.utc).isoformat()
     application_token = secrets.token_urlsafe(32)
+    samples = sanitize_portfolio_samples(
+        [s.dict() if hasattr(s, "dict") else s for s in (application.portfolio_samples or [])]
+    )
+    links = [str(l).strip() for l in (application.portfolio_links or []) if l and str(l).strip()]
+    for extra in supplemental_links_from_samples(samples):
+        if extra not in links:
+            links.append(extra)
+
     member = VendorMember(
         id=str(uuid.uuid4()),
         application_token=application_token,
@@ -263,7 +286,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         specialty=application.specialties[0] if application.specialties else "photo",
         onboarding_status="pending",
         is_active=False,
-        portfolio_links=application.portfolio_links,
+        portfolio_links=links,
+        portfolio_samples=samples,
         equipment_list=application.equipment_list,
         home_city=application.city,
         home_lat=application.home_lat,
@@ -281,7 +305,18 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     )
 
     member_dict = member.dict()
-    await (await get_db()).table("vendor_members").insert(member_dict).execute()
+    # Coordinate models serialize as dicts; portfolio_samples as list[dict].
+    if "portfolio_samples" in member_dict and member_dict["portfolio_samples"] is not None:
+        member_dict["portfolio_samples"] = [
+            s.dict() if hasattr(s, "dict") else s for s in member_dict["portfolio_samples"]
+        ]
+    db = await get_db()
+    try:
+        await db.table("vendor_members").insert(member_dict).execute()
+    except Exception:
+        # Older DBs may lack portfolio_samples — insert without it, keep links.
+        member_dict.pop("portfolio_samples", None)
+        await db.table("vendor_members").insert(member_dict).execute()
 
     availability = AvailabilitySettings(
         member_id=member.id,
@@ -405,7 +440,10 @@ async def get_application_status(member_id: str, token: Optional[str] = None):
         "name": member["name"],
         "status": member["onboarding_status"],
         "is_active": member["is_active"],
-        "documents": docs
+        "documents": docs,
+        "portfolio_samples": assemble_portfolio_samples(member, docs),
+        "app_access": bool(member.get("is_active") and member.get("onboarding_status") == "approved"),
+        "application_submitted": bool(member.get("terms_accepted_at")),
     }
 
 
@@ -427,7 +465,12 @@ async def upload_compliance_document(
         raise HTTPException(status_code=404, detail="Member not found.")
     _check_application_token(member, token)
 
-    valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume"]
+    portfolio_docs = [portfolio_doc_type(t) for t in PORTFOLIO_MEDIA_TYPES]
+    valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume", *portfolio_docs]
+    # Allow portfolio_<type> aliases passed as bare media type via normalize
+    mt = normalize_media_type(doc_type)
+    if mt and doc_type not in valid_docs:
+        doc_type = portfolio_doc_type(mt)
     if doc_type not in valid_docs:
         raise HTTPException(status_code=400, detail=f"Invalid doc_type. Must be one of {valid_docs}")
 
@@ -571,4 +614,91 @@ async def validate_compliance(member_id: str, doc_type: str, request: Request):
         "expiry_date": validation.get("expiry_date"),
         "issues": validation.get("issues", []),
         "status": status,
+    }
+
+
+@router.post("/portfolio")
+async def upload_portfolio_sample(
+    member_id: str = Form(...),
+    media_type: str = Form(...),
+    filename: str = Form(...),
+    file_data: str = Form(...),
+    link: Optional[str] = Form(None),
+    token: Optional[str] = Form(None),
+):
+    """Upload a portfolio sample image for a catalog media type (HDR, drone, …)."""
+    mt = normalize_media_type(media_type)
+    if not mt:
+        raise HTTPException(
+            status_code=400,
+            detail=f"media_type must be one of {list(PORTFOLIO_MEDIA_TYPES)}",
+        )
+
+    res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
+    member = res_member.data
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found.")
+    _check_application_token(member, token)
+
+    import base64
+    try:
+        raw_bytes = base64.b64decode(file_data)
+    except Exception:
+        raw_bytes = file_data.encode()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(raw_bytes) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (12 MB max)")
+
+    _ext_mime = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "mp4": "video/mp4",
+        "mov": "video/quicktime",
+    }
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+    mime_type = _ext_mime.get(ext, "image/jpeg")
+
+    file_key, _, _, _ = await upload_file(
+        raw_bytes, "onboarding", member_id, filename, mime_type
+    )
+
+    doc_type = portfolio_doc_type(mt)
+    doc = VendorDocument(
+        id=str(uuid.uuid4()),
+        vendor_id=member.get("vendor_id", "default_vendor"),
+        member_id=member_id,
+        doc_type=doc_type,
+        file_url=file_key,
+        status="pending",
+    )
+    db = await get_db()
+    await db.table("vendor_documents").insert(doc.dict()).execute()
+
+    samples = sanitize_portfolio_samples(member.get("portfolio_samples") or [])
+    # Replace existing entry for this type
+    samples = [s for s in samples if s.get("media_type") != mt]
+    entry = {"media_type": mt, "url": file_key}
+    if link and str(link).strip():
+        entry["link"] = str(link).strip()
+    samples.append(entry)
+
+    try:
+        await db.table("vendor_members").update({
+            "portfolio_samples": samples,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", member_id).execute()
+    except Exception:
+        logger.warning("Could not persist portfolio_samples column for %s", member_id)
+
+    docs_res = await db.table("vendor_documents").select("*").eq("member_id", member_id).execute()
+    return {
+        "success": True,
+        "document_id": doc.id,
+        "media_type": mt,
+        "file_url": file_key,
+        "portfolio_samples": assemble_portfolio_samples({**member, "portfolio_samples": samples}, docs_res.data),
     }

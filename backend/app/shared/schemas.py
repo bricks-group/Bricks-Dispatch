@@ -290,6 +290,16 @@ class Coordinate(BaseModel):
     lat: float
     lng: float
 
+
+class PortfolioSample(BaseModel):
+    """One portfolio example keyed to a Bricks catalog media type."""
+    media_type: str  # hdr | drone | floor_plan | tour | twilight | reel
+    url: Optional[str] = None  # storage key or signed path for uploaded image
+    link: Optional[str] = None  # supplemental external URL
+    thumb_url: Optional[str] = None
+    filename: Optional[str] = None
+
+
 class VendorMember(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     vendor_id: str = "default_vendor"
@@ -306,6 +316,7 @@ class VendorMember(BaseModel):
     is_active: bool = False
     onboarding_status: str = "pending"
     portfolio_links: List[str] = []
+    portfolio_samples: List[PortfolioSample] = []
     equipment_list: List[str] = []
     service_areas: List[str] = [] # Legacy city-based
     operation_polygon: List[Coordinate] = [] # The "Connected Dots"
@@ -359,6 +370,7 @@ class VendorApplicationCreate(BaseModel):
     phone: str
     specialties: List[str]
     portfolio_links: List[str] = []
+    portfolio_samples: List[PortfolioSample] = []
     equipment_list: List[str] = []
     city: str
     max_travel_km: int = 50

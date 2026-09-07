@@ -17,6 +17,8 @@ import { CaptureReviewPage } from './pages/CaptureReviewPage';
 import { VisitCapturePage } from './pages/VisitCapturePage';
 import { GoogleCalendarCallbackPage } from './pages/GoogleCalendarCallbackPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
+import { UnderReviewPage } from './pages/UnderReviewPage';
+import { hasAppAccess, AuthMember } from './lib/api';
 
 function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
   const now = new Date();
@@ -35,6 +37,7 @@ function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
 function ProtectedLayout() {
   const [loading, setLoading] = useState(true);
   const [isAuthed, setIsAuthed] = useState(false);
+  const [member, setMember] = useState<AuthMember | null>(null);
   const [name, setName] = useState('');
   const navigate = useNavigate();
 
@@ -42,7 +45,7 @@ function ProtectedLayout() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) { setLoading(false); setIsAuthed(false); return; }
       me()
-        .then((member) => { setIsAuthed(true); setName(member.name); })
+        .then((m) => { setIsAuthed(true); setMember(m); setName(m.name); })
         .catch(() => setIsAuthed(false))
         .finally(() => setLoading(false));
     });
@@ -55,6 +58,11 @@ function ProtectedLayout() {
 
   if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
   if (!isAuthed) return <Navigate to="/login" replace />;
+
+  // Pending / inactive / Applicant — block Today/Jobs/Capture until Hiring approval.
+  if (!hasAppAccess(member)) {
+    return <UnderReviewPage onLogout={onLogout} />;
+  }
 
   return (
     <div className="app-shell">
@@ -80,14 +88,24 @@ function ProtectedLayout() {
 function CaptureGate({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [ok, setOk] = useState(false);
+  const [allowed, setAllowed] = useState(false);
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setOk(!!session);
-      setLoading(false);
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) { setOk(false); setLoading(false); return; }
+      setOk(true);
+      try {
+        const m = await me();
+        setAllowed(hasAppAccess(m));
+      } catch {
+        setAllowed(false);
+      } finally {
+        setLoading(false);
+      }
     });
   }, []);
   if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
   if (!ok) return <Navigate to="/login" replace />;
+  if (!allowed) return <UnderReviewPage />;
   return <>{children}</>;
 }
 

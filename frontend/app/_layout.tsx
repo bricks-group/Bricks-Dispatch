@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
 import { TOKENS } from '../constants/Theme';
 import { actorHeaders } from '../lib/api';
+import { hasAppAccess, needsRegister, isUnderReview } from '../lib/vendor';
 import { supabase } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 
@@ -114,7 +115,10 @@ export default function RootLayout() {
   useInitPushNotifications();
 
   useEffect(() => {
-    if (!fontsLoaded || onboardingChecked) return;
+    if (!fontsLoaded || !authChecked || !session) {
+      if (authChecked && !session) setOnboardingChecked(true);
+      return;
+    }
 
     (async () => {
       try {
@@ -122,12 +126,26 @@ export default function RootLayout() {
         const res = await fetch(`${API}/api/vendor-os/profile`, { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const profile = await res.json();
-        
-        const inOnboarding = segments[0] === 'onboarding';
-        
-        // New applicants skip slides (already seen pre-login) and go to registration form
-        if (profile.role === 'Applicant' && !inOnboarding) {
-          router.replace('/onboarding/register' as any);
+
+        const segs = segments as string[];
+        const inOnboarding = segs[0] === 'onboarding';
+        const onRegister = inOnboarding && segs[1] === 'register';
+        const onUnderReview = inOnboarding && segs[1] === 'under-review';
+        const onSlides = inOnboarding && segs[1] === 'slides';
+
+        // Gate Today/Jobs/Capture until Kam approves in Hiring.
+        // Detect pending via onboarding_status, is_active, app_access, or Applicant role
+        // (public_profile historically masked role as Photographer IC).
+        if (!hasAppAccess(profile)) {
+          if (needsRegister(profile)) {
+            if (!onRegister && !onSlides) {
+              router.replace('/onboarding/register' as any);
+            }
+          } else if (isUnderReview(profile) || profile.onboarding_status === 'pending' || profile.is_active === false) {
+            if (!onUnderReview) {
+              router.replace('/onboarding/under-review' as any);
+            }
+          }
         }
       } catch (e) {
         console.error("Onboarding check failed", e);
@@ -135,7 +153,7 @@ export default function RootLayout() {
         setOnboardingChecked(true);
       }
     })();
-  }, [fontsLoaded, segments, onboardingChecked]);
+  }, [fontsLoaded, authChecked, session, segments]);
 
   useEffect(() => {
     const timer = setTimeout(() => {

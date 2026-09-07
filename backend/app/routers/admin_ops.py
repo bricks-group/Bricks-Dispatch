@@ -9,6 +9,7 @@ from ..shared.database import get_db
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import VendorMemberUpdate, VendorLead
+from ..shared.portfolio import assemble_portfolio_samples
 from ..services.webhooks import send_dispatch_status_update_webhook
 from ..services.vendor_selection import assign_vendor_for_job
 from ..services.notifications import create_notification
@@ -72,9 +73,26 @@ async def list_applicants(
     page, page_size, skip = normalize_pagination(page, page_size)
     res = await query.order("created_at", ascending=False).range(skip, skip + page_size - 1).execute()
     
-    applicants = res.data
+    applicants = res.data or []
     total = res.count or 0
-    
+
+    # Attach portfolio samples by catalog media type for Hiring review.
+    member_ids = [a["id"] for a in applicants if a.get("id")]
+    docs_by_member: dict[str, list] = {mid: [] for mid in member_ids}
+    if member_ids:
+        try:
+            docs_res = await (await get_db()).table("vendor_documents").select(
+                "id, member_id, doc_type, file_url, status, created_at"
+            ).in_("member_id", member_ids).execute()
+            for d in (docs_res.data or []):
+                mid = d.get("member_id")
+                if mid in docs_by_member and str(d.get("doc_type") or "").startswith("portfolio_"):
+                    docs_by_member[mid].append(d)
+        except Exception:
+            pass
+    for a in applicants:
+        a["portfolio_samples"] = assemble_portfolio_samples(a, docs_by_member.get(a.get("id"), []))
+
     return paginated_response(applicants, total, page, page_size)
 
 @router.patch("/applicants/{member_id}")

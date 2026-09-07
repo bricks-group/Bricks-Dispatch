@@ -182,7 +182,21 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "total_jobs_completed": member.get("total_assignments") or 0,
         "rating": float(member.get("quality_rating") or 0),
         "ic_agreement_version": member.get("ic_agreement_version"),
+        "member_role": member.get("role") or "",
+        "terms_accepted_at": member.get("terms_accepted_at"),
+        "application_submitted": bool(member.get("terms_accepted_at")),
+        "app_access": bool(assignable or owner),
+        "portfolio_links": member.get("portfolio_links") or [],
+        "portfolio_samples": member.get("portfolio_samples") or [],
     }
     if extra:
         out.update(extra)
+    # Prefer assembled samples when caller passed documents via extra.
+    try:
+        from .portfolio import assemble_portfolio_samples
+        docs = (extra or {}).get("_portfolio_documents")
+        out["portfolio_samples"] = assemble_portfolio_samples(member, docs)
+        out.pop("_portfolio_documents", None)
+    except Exception:
+        pass
     return out

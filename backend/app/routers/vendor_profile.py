@@ -106,9 +106,21 @@ async def build_profile(member: dict) -> dict:
         except Exception:
             pass
     avail = await _availability_flag(db, member)
+    portfolio_docs = []
+    try:
+        docs = await db.table("vendor_documents").select(
+            "id, doc_type, file_url, status, created_at"
+        ).eq("member_id", member["id"]).execute()
+        portfolio_docs = [
+            d for d in (docs.data or [])
+            if str(d.get("doc_type") or "").startswith("portfolio_")
+        ]
+    except Exception:
+        portfolio_docs = []
     extra = {
         "availability": avail,
         "bio": member.get("bio") or member.get("internal_notes") or "",
+        "_portfolio_documents": portfolio_docs,
     }
     return public_profile(member, extra)
 
