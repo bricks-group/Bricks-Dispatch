@@ -29,11 +29,11 @@ ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 # Version tracks the text revision so we can re-prompt if terms materially change.
-_IC_AGREEMENT_VERSION = "1.5"
-_IC_AGREEMENT_EFFECTIVE_DATE = "2026-09-06"
+_IC_AGREEMENT_VERSION = "1.6"
+_IC_AGREEMENT_EFFECTIVE_DATE = "2026-09-09"
 _IC_AGREEMENT_TEXT = """
-BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.5
-Effective: September 6, 2026
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.6
+Effective: September 9, 2026
 Contracting party: Bricks Group ("Bricks")
 Governing law: Ontario, Canada
 
@@ -56,18 +56,18 @@ You provide and maintain your own camera, lenses, drone, lighting, vehicle, edit
 5. TAXES
 Fees are exclusive of HST/GST. You are solely responsible for income tax, HST/GST (if you are required to register), and any CPP that applies to you as self-employed. If your taxable supplies exceed the CRA small-supplier threshold, you must register, give Bricks your HST number, and Bricks will pay HST on your fees. Bricks will issue a T4A (Box 048) when required. Bricks does not remit EI or employer CPP for you and does not provide employment benefits.
 
-6. INSURANCE AND WSIB (REQUIRED BEFORE FIRST JOB)
-Before your first dispatched booking you must provide, and you must keep current:
+6. INSURANCE AND WSIB
+As an independent contractor, you are solely responsible for carrying insurance appropriate to your work, consistent with standard practice for independent photography and videography contractors. You represent that you maintain, or will promptly obtain and maintain:
 
-(a) Commercial general liability insurance of at least $2,000,000 CAD per occurrence, naming Bricks Group as additional insured, with at least 30 days' notice of cancellation or material change to Bricks.
+(a) Commercial general liability insurance of at least $2,000,000 CAD per occurrence, naming Bricks Group as additional insured where your insurer allows it, with at least 30 days' notice of cancellation or material change to Bricks.
 
 (b) If you accept drone jobs: unmanned-aircraft / aviation liability of at least $1,000,000 CAD.
 
 (c) Automobile liability on any vehicle used to travel to jobs, at or above Ontario statutory minimums, commercially rated if required by your insurer for this work.
 
-(d) A current WSIB Certificate of Clearance, or a written declaration of the exemption category you rely on under the Workplace Safety and Insurance Act, 1997.
+(d) Current WSIB coverage — either a WSIB Certificate of Clearance, or a written declaration of the exemption category you rely on under the Workplace Safety and Insurance Act, 1997.
 
-You must send renewal certificates before expiry. Lapsed coverage is automatic suspension from dispatch until cured. Bricks may refuse or cancel a job if proof is missing. Your indemnity in section 14 is in addition to insurance, not limited by it.
+Bricks may ask you to show proof of the above at any time. If you cannot show current coverage after being asked, or if coverage you previously provided has lapsed and is not promptly cured, Bricks may suspend or decline to dispatch you until it is resolved. Your indemnity in section 14 is in addition to insurance, not limited by it.
 
 7. DRONE
 If you operate a drone you represent that you hold a valid Transport Canada RPAS certificate at the level required for that operation (Advanced for controlled airspace, including proximity to CYYZ and CYTZ). You comply with the Aeronautics Act, Canadian Aviation Regulations, and any NAV CANADA or site restriction. You are solely responsible for the operation, including fines, incidents, and third-party claims. If airspace, weather, or regulation prevents aerial capture, you still complete the ground package and note the miss in the job.
@@ -116,7 +116,7 @@ You will indemnify, defend, and hold harmless Bricks Group and its officers, dir
 Bricks is not liable to you for lost jobs, lost profit, or equipment damage. Bricks' total liability to you for a booking is the payout for that booking. Nothing excludes liability that Ontario or Canadian law does not allow to be excluded (including fraud or bodily injury Bricks caused).
 
 16. TERM AND TERMINATION
-This agreement starts when you accept it and continues until terminated. Either party may terminate for any reason on written notice (email is enough). Bricks may suspend or terminate immediately if you lack required insurance or WSIB proof, for safety or legal risk, fraud, material quality failure, or material breach. Outstanding accepted jobs should be finished or handed off. Earned payouts for completed, accepted work are paid on the normal cycle. Sections 9–15 and 17 survive.
+This agreement starts when you accept it and continues until terminated. Either party may terminate for any reason on written notice (email is enough). Bricks may suspend or terminate immediately if you fail to maintain required insurance or WSIB coverage after being asked to show proof, for safety or legal risk, fraud, material quality failure, or material breach. Outstanding accepted jobs should be finished or handed off. Earned payouts for completed, accepted work are paid on the normal cycle. Sections 9–15 and 17 survive.
 
 17. DISPUTES AND LAW
 Ontario law and applicable Canadian federal law govern. Courts of Ontario have exclusive jurisdiction. Before filing, the parties will try to resolve a dispute in writing within 30 days. You may still make a complaint to the Ministry of Labour or the CRA. Binding arbitration is not required.
@@ -226,7 +226,7 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
 async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
     Photographer application. Requires acceptance of the current IC agreement.
-    Records ic_agreement_version as the live server version (currently 1.5).
+    Records ic_agreement_version as the live server version (currently 1.6).
     """
     if not application.accepted_terms:
         raise HTTPException(status_code=400, detail="You must accept the Bricks Contractor Agreement to apply.")
