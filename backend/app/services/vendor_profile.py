@@ -309,23 +309,6 @@ def has_lapsed_insurance(member: Any) -> bool:
     return False
 
 
-def lacks_required_compliance_for_first_job(member: Any) -> bool:
-    """True when a vendor is missing a verified COI or WSIB (clearance or
-    exemption declaration) -- the IC agreement requires proof of both
-    before the *first* dispatched job, not just "don't let it lapse" (see
-    has_lapsed_insurance() above for that). coi_verified/wsib_verified
-    default false for any newly-created vendor_members row, so this
-    correctly blocks a brand-new applicant with no docs on file yet.
-    Every vendor that already existed when these columns were introduced
-    was backfilled to true in the same migration that added them
-    (20260909000000_vendor_compliance_verified_flags.sql) -- a data-level
-    grandfather clause, not a runtime one, since this system's real vendor
-    rows already had total_assignments=0 (too early-stage to use job count
-    as a "pre-existing vendor" signal)."""
-    m = _as_dict(member)
-    return not (m.get("coi_verified") and m.get("wsib_verified"))
-
-
 def member_eligible_for_job(member: Any, job: Any) -> bool:
     m = _as_dict(member)
     if not m.get("is_active"):
@@ -333,8 +316,6 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     if is_aman_pending(m):
         return False
     if has_lapsed_insurance(m):
-        return False
-    if lacks_required_compliance_for_first_job(m):
         return False
     if int(m.get("tier") or 1) < min_tier_for_job(job):
         return False

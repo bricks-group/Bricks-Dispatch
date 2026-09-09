@@ -206,18 +206,20 @@ async def verify_document(
         api_error(404, "Document not found", "document_not_found")
 
     doc = res.data[0]
-    # Denormalize onto vendor_members so member_eligible_for_job() can gate
-    # dispatch on it without an extra query per candidate. Only coi and wsib
-    # are dispatch-blocking documents; other doc_types (hst_registry,
-    # id_verification, rpas_certificate, resume) don't have a lapse concept.
+    # Denormalize onto vendor_members: coi_expires_on/wsib_expires_on feed
+    # has_lapsed_insurance() (the only dispatch-blocking check for these
+    # docs -- see that function's docstring for why a brand-new vendor with
+    # no docs at all is *not* also gated). coi_verified/wsib_verified are
+    # admin-visibility signals only. Only coi and wsib are dispatch-relevant
+    # document types; others (hst_registry, id_verification,
+    # rpas_certificate, resume) don't have a lapse concept.
     if status == "verified" and doc.get("doc_type") in ("coi", "wsib"):
         # coi_verified/wsib_verified are set unconditionally on verification --
         # a WSIB *exemption declaration* (as opposed to a clearance
         # certificate) legitimately has no expiry_date, so it would never
-        # set wsib_expires_on below even though it fully satisfies the
-        # first-job requirement. The expires_on column is set only when the
-        # doc actually carries one, for has_lapsed_insurance() to catch a
-        # later lapse.
+        # set wsib_expires_on below even though it's a fully valid, verified
+        # document. The expires_on column is set only when the doc actually
+        # carries one, for has_lapsed_insurance() to catch a later lapse.
         verified_column = "coi_verified" if doc["doc_type"] == "coi" else "wsib_verified"
         update_fields = {verified_column: True}
         if doc.get("expiry_date"):

@@ -6,8 +6,8 @@ from app.services.vendor_selection import pick_vendor_rule_based, assign_vendor_
 def test_pick_vendor_rule_based_specialty_match():
     job = Job(address="123 Main St", job_type="video", time_window_start="09:00")
     vendors = [
-        VendorMember(id="v1", name="Photo Pro", email="v1@test.com", specialty="photo", is_active=True, status="available", onboarding_status="approved", coi_verified=True, wsib_verified=True),
-        VendorMember(id="v2", name="Video Pro", email="v2@test.com", specialty="video", is_active=True, status="available", onboarding_status="approved", coi_verified=True, wsib_verified=True),
+        VendorMember(id="v1", name="Photo Pro", email="v1@test.com", specialty="photo", is_active=True, status="available", onboarding_status="approved"),
+        VendorMember(id="v2", name="Video Pro", email="v2@test.com", specialty="video", is_active=True, status="available", onboarding_status="approved"),
     ]
     
     chosen_id = pick_vendor_rule_based(job, vendors)
@@ -16,8 +16,8 @@ def test_pick_vendor_rule_based_specialty_match():
 def test_pick_vendor_rule_based_load_balancing():
     job = Job(address="123 Main St", job_type="photo", time_window_start="09:00")
     vendors = [
-        VendorMember(id="v1", name="Busy Photo", email="v1@test.com", specialty="photo", is_active=True, status="available", active_assignments=5, onboarding_status="approved", coi_verified=True, wsib_verified=True),
-        VendorMember(id="v2", name="Free Photo", email="v2@test.com", specialty="photo", is_active=True, status="available", active_assignments=0, onboarding_status="approved", coi_verified=True, wsib_verified=True),
+        VendorMember(id="v1", name="Busy Photo", email="v1@test.com", specialty="photo", is_active=True, status="available", active_assignments=5, onboarding_status="approved"),
+        VendorMember(id="v2", name="Free Photo", email="v2@test.com", specialty="photo", is_active=True, status="available", active_assignments=0, onboarding_status="approved"),
     ]
     
     chosen_id = pick_vendor_rule_based(job, vendors)
@@ -26,8 +26,8 @@ def test_pick_vendor_rule_based_load_balancing():
 def test_pick_vendor_rule_based_quality_rating():
     job = Job(address="123 Main St", job_type="photo", time_window_start="09:00")
     vendors = [
-        VendorMember(id="v1", name="Good Photo", email="v1@test.com", specialty="photo", is_active=True, status="available", quality_rating=4.5, onboarding_status="approved", coi_verified=True, wsib_verified=True),
-        VendorMember(id="v2", name="Great Photo", email="v2@test.com", specialty="photo", is_active=True, status="available", quality_rating=4.9, onboarding_status="approved", coi_verified=True, wsib_verified=True),
+        VendorMember(id="v1", name="Good Photo", email="v1@test.com", specialty="photo", is_active=True, status="available", quality_rating=4.5, onboarding_status="approved"),
+        VendorMember(id="v2", name="Great Photo", email="v2@test.com", specialty="photo", is_active=True, status="available", quality_rating=4.9, onboarding_status="approved"),
     ]
     
     chosen_id = pick_vendor_rule_based(job, vendors)
@@ -118,8 +118,6 @@ async def test_assign_vendor_for_job_fallback(monkeypatch):
             "skills": ["photo"],
             "service_areas": ["Mississauga", "GTA"],
             "tier": 1,
-            "coi_verified": True,
-            "wsib_verified": True,
         }
     ]
     mock_db = _supabase_style_db(job_doc, members)
@@ -159,8 +157,6 @@ async def test_assign_vendor_for_job_ai_success(monkeypatch):
             "skills": ["photo"],
             "service_areas": ["Mississauga", "GTA"],
             "tier": 1,
-            "coi_verified": True,
-            "wsib_verified": True,
         }
     ]
     mock_db = _supabase_style_db(job_doc, members)
@@ -181,12 +177,7 @@ from app.shared.schemas import Job as _Job
 
 
 def _approved(**kwargs):
-    # coi_verified/wsib_verified default True here since "_approved" already
-    # implies fully cleared for dispatch in the other tests in this file --
-    # the compliance-gate tests below override them explicitly to exercise
-    # lacks_required_compliance_for_first_job().
-    base = dict(is_active=True, status="available", onboarding_status="approved", specialty="photo", tier=1,
-                coi_verified=True, wsib_verified=True)
+    base = dict(is_active=True, status="available", onboarding_status="approved", specialty="photo", tier=1)
     base.update(kwargs)
     return VendorMember(**base)
 
@@ -251,24 +242,6 @@ def test_null_insurance_expiry_does_not_block():
     no_date_on_file = _approved(id="nodate", name="No Date On File", email="nd@test.com", tier=1,
                                  skills=["photo"], service_areas=["GTA"])
     assert pick_vendor_rule_based(job, [no_date_on_file]) == "nodate"
-
-
-def test_missing_compliance_blocks_first_job():
-    # A brand-new applicant (coi_verified/wsib_verified both default False on
-    # a real DB row) must not be dispatchable until both are on file, per the
-    # IC agreement's "insurance/WSIB required before first dispatched job" --
-    # distinct from has_lapsed_insurance() above, which only catches a
-    # *previously verified* doc going stale.
-    job = Job(address="10 King St Mississauga", city="Mississauga", job_type="photo", time_window_start="09:00")
-    no_coi = _approved(id="nocoi", name="No COI Yet", email="nc@test.com", tier=1,
-                        skills=["photo"], service_areas=["GTA"], coi_verified=False)
-    no_wsib = _approved(id="nowsib", name="No WSIB Yet", email="nw@test.com", tier=1,
-                         skills=["photo"], service_areas=["GTA"], wsib_verified=False)
-    fully_compliant = _approved(id="compliant", name="Fully Compliant", email="fc@test.com", tier=1,
-                                 skills=["photo"], service_areas=["GTA"])
-    assert pick_vendor_rule_based(job, [no_coi]) is None
-    assert pick_vendor_rule_based(job, [no_wsib]) is None
-    assert pick_vendor_rule_based(job, [no_coi, no_wsib, fully_compliant]) == "compliant"
 
 
 # ── Auto-assign strengthen: duration, overlap, travel hard-gate, Canada ──────
@@ -665,8 +638,6 @@ async def test_assign_skips_calendar_busy_vendor(monkeypatch):
             "tier": 2,
             "home_lat": 43.59,
             "home_lng": -79.64,
-            "coi_verified": True,
-            "wsib_verified": True,
         },
         {
             "id": "free_v",
@@ -682,8 +653,6 @@ async def test_assign_skips_calendar_busy_vendor(monkeypatch):
             "tier": 1,
             "home_lat": 43.59,
             "home_lng": -79.64,
-            "coi_verified": True,
-            "wsib_verified": True,
         },
     ]
     mock_db = _supabase_style_db(job_doc, members)
@@ -811,8 +780,6 @@ def test_pick_vendor_respects_manual_unavailable():
             onboarding_status="approved",
             service_areas=["Mississauga"],
             home_city="Mississauga",
-            coi_verified=True,
-            wsib_verified=True,
         ),
         VendorMember(
             id="v2",
@@ -824,8 +791,6 @@ def test_pick_vendor_respects_manual_unavailable():
             onboarding_status="approved",
             service_areas=["Mississauga"],
             home_city="Mississauga",
-            coi_verified=True,
-            wsib_verified=True,
         ),
     ]
     chosen = pick_vendor_rule_based(
