@@ -341,6 +341,14 @@ class VendorMember(BaseModel):
     # date, never on NULL -- see that function's docstring.
     coi_expires_on: Optional[str] = None
     wsib_expires_on: Optional[str] = None
+    # Set true the moment a coi/wsib doc is marked verified, independent of
+    # whether it carries an expiry_date -- a WSIB *exemption declaration*
+    # (vs. a clearance certificate) legitimately has no expiry, so it would
+    # never populate wsib_expires_on above even once verified. These two
+    # flags are what lacks_required_compliance_for_first_job() checks; the
+    # expires_on fields are only for catching a later lapse.
+    coi_verified: bool = False
+    wsib_verified: bool = False
     internal_notes: str = ""
     completion_rate: float = 1.0
     avg_turnaround_days: float = 0.0
