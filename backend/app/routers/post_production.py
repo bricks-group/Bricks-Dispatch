@@ -17,6 +17,7 @@ _finalize_job_if_complete()'s splat_url resolution below.
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
 """
+import hmac
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -40,7 +41,7 @@ def _verify_callback_secret(secret: Optional[str]) -> None:
     _secret = os.environ.get("POST_PRODUCTION_CALLBACK_SECRET", "")
     if not _secret:
         raise HTTPException(status_code=500, detail="Callback secret not configured")
-    if secret != _secret:
+    if not secret or not hmac.compare_digest(secret, _secret):
         raise HTTPException(status_code=401, detail="Invalid callback secret")
 
 
