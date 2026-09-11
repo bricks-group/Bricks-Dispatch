@@ -174,13 +174,25 @@ pick_vendor_rule_based(job, vendors)
 - Feeds back into dispatch scoring immediately
 
 ## Post-Production Pipeline
-1. Fotello — primary AI photo edits (webhook callback)
-2. Autoenhance — fallback if Fotello key missing (webhook callback)
-3. BoxBrownie — photo editing, retouching, day-to-dusk, item removal, and virtual staging. Polling only (no webhooks).
-4. 3D tours — **Polycam only** (2026-07-14 — Luma Labs pipeline removed, see below). Either a Polycam share URL pasted into `PropertyDetailPage.js` (embed, zero backend processing) or a manually uploaded `.ply`/`.splat` file signed via `_finalize_job_if_complete`'s generic splat_url resolution. No automated *video*→splat backend pipeline exists — that's still true. But do not read this as "no automated tour pipeline at all": see **Capture Pipeline** below for a separate, real, automated phone-capture → server-side-stitched tour/floorplan pipeline, added after this line was written.
-5. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
-6. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
-7. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
+
+**Corrected 2026-09-11 — in-house CV enhancement promoted to the default primary path.** Lines 1-2 below described Fotello/Autoenhance as the primary photo-enhancement path for who knows how long; that's no longer accurate as of this date. Business direction: replace the three paid third-party post-production vendors (Fotello, Autoenhance, BoxBrownie) with in-house processing, phased, starting with the classical-CV-replaceable work. Phase 0/1 of that effort is done:
+
+- `select_enhancement_provider(asset)` (`app/services/post_production.py`) is the single place routing is decided for a non-staging photo asset: `bricks_inhouse_cv` (gated by `INHOUSE_CV_ENHANCEMENT_ENABLED`, default `"true"`) is now primary, not Fotello. Only when that flag is off does routing fall back to the old config-time chain (Fotello if `FOTELLO_API_KEY` set, else Autoenhance if `AUTOENHANCE_API_KEY` set).
+- **Real runtime failover, not just a refactor.** Before this date, a config-time-selected provider whose actual API call failed at runtime had no fallback for that asset — it was silently dropped (e.g. Fotello's key configured but the call itself erroring never tried Autoenhance). `_select_and_run_enhancement()` now builds the full fallback chain up front (in-house → Fotello → Autoenhance, or Fotello → Autoenhance, whichever vendors are actually configured) and walks it within the same attempt on any failure/exception, logging each attempt (`provider`/`job_id`/`upload_id`/`outcome`/`duration_ms`) — this closes what was previously zero volume/cost signal for these vendor calls anywhere in the codebase.
+- In-house enhancement (`app/services/photo_enhance_service.py::enhance_image`) runs **synchronously inline** inside `process_job_assets` (no webhook needed — it's local CPU work: CLAHE + edge-aware detail enhancement + grey-world white balance + unsharp mask, plus two new independently-flagged conservative refinements — `window_pull` (`INHOUSE_WINDOW_PULL_ENABLED`) locally recovers a hint of detail in blown-highlight window regions via a masked exposure pull, and `enhance_sky` (`INHOUSE_SKY_ENHANCE_ENABLED`) mildly boosts saturation/contrast of an already-present sky region — neither is sky replacement or any generative capability, both no-op safely when their target region isn't detected). The actual pixel work is dispatched via `asyncio.to_thread` so it doesn't block the shared event loop; `process_job_assets` itself now also calls `_finalize_job_if_complete` directly at the end of its own run (idempotent, no-ops on any still-in-flight vendor upload) since an all-in-house job has no webhook to trigger finalization the way a Fotello/Autoenhance job always did.
+- Writes `provider="bricks_inhouse_cv"` — a new, distinct tag from the older `"bricks_inhouse"` tag used by the pre-existing Tier-3 `/reconcile` last-resort path (stuck-upload timeout with *no* vendor key configured at all). That older path is unchanged, still last-resort, still real — it just now sits behind an already-primary in-house path instead of behind two primary vendors.
+- BoxBrownie / virtual staging routing is completely untouched by any of the above — `select_enhancement_provider()` is explicitly out of scope for `asset.get("requires_staging")` assets; those still go straight to `trigger_boxbrownie_staging` first, before this function is ever consulted.
+- No generative capability (object removal, day-to-dusk, full sky replacement/compositing) was touched or added — explicitly out of scope for this phase.
+
+Pipeline, as it now runs for a non-staging photo asset:
+1. **In-house CV enhancement** (`bricks_inhouse_cv`) — primary by default. Synchronous, no webhook. Falls through to the vendor chain below on any exception.
+2. Fotello — config-time fallback if `FOTELLO_API_KEY` set (webhook callback). Also the runtime fallback destination if in-house fails.
+3. Autoenhance — fallback if Fotello key missing, or if a configured Fotello call itself fails at runtime (webhook callback).
+4. BoxBrownie — photo editing, retouching, day-to-dusk, item removal, and virtual staging. Untouched by the above; polling only (no webhooks).
+5. 3D tours — **Polycam only** (2026-07-14 — Luma Labs pipeline removed, see below). Either a Polycam share URL pasted into `PropertyDetailPage.js` (embed, zero backend processing) or a manually uploaded `.ply`/`.splat` file signed via `_finalize_job_if_complete`'s generic splat_url resolution. No automated *video*→splat backend pipeline exists — that's still true. But do not read this as "no automated tour pipeline at all": see **Capture Pipeline** below for a separate, real, automated phone-capture → server-side-stitched tour/floorplan pipeline, added after this line was written.
+6. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
+7. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
+8. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
 
 ## Capture Pipeline (undocumented until 2026-09-07 — real, substantial, not a stub)
 
@@ -262,7 +274,7 @@ since that merge — `Bricks-Capture`'s own README describes the review screen's
 - **Gemini 1.5 Flash: explainability only (async, non-blocking, dashboard display)** ✅
 - Rule-based fallback with tier gate ✅
 - Payout flow (tier % → Stripe Connect transfer → record) ✅
-- Post-production pipeline: Fotello (primary) + Autoenhance (fallback) ✅
+- Post-production pipeline: Fotello (primary) + Autoenhance (fallback) ✅ — **superseded 2026-09-11**: in-house CV enhancement (`bricks_inhouse_cv`) is now the default primary path with real runtime failover to Fotello → Autoenhance; see Post-Production Pipeline section above.
 - Media delivery: signed URLs → media_delivery row → Resend email to agent ✅
 - QC vision agent: Gemini 1.5 Flash gates delivery; rejected photos excluded ✅
 - On-time rate: updated on every job completion (rolling avg, feeds dispatch score) ✅
