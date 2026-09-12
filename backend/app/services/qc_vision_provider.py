@@ -1,7 +1,8 @@
 """
 Vision QC provider — swappable backend for AI-based photo review.
 
-Currently backed by Gemini 1.5 Flash. qc_agent.py calls only
+Currently backed by Gemini (model name centralized in
+app.shared.gemini_config — see that module for why). qc_agent.py calls only
 is_configured() / run_vision_qc() here, never the Gemini API directly, so
 switching providers (OpenAI, a self-hosted VLM, Anthropic) means rewriting
 this one file — not the QC control flow, the OpenCV pre-pass routing, or
@@ -17,13 +18,11 @@ import os
 
 import httpx
 
+from ..shared.gemini_config import gemini_generate_content_url, get_gemini_model
+
 logger = logging.getLogger(__name__)
 
 _GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-_GEMINI_VISION_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash:generateContent"
-)
 
 
 def _api_key() -> str:
@@ -68,13 +67,23 @@ async def run_vision_qc(image_bytes: bytes, prompt: str) -> dict:
         },
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{_GEMINI_VISION_URL}?key={_api_key()}",
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    model = get_gemini_model()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{gemini_generate_content_url(model)}?key={_api_key()}",
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        # Fail open is the caller's job (qc_agent.py) — this must still be
+        # LOUD in error monitoring, not just a caught-and-forgotten
+        # exception. This is exactly how the gemini-1.5-flash 404s went
+        # unnoticed for as long as they did: the pipeline degraded silently
+        # to OpenCV-only with nothing visibly wrong anywhere.
+        logger.error(f"Gemini vision QC call failed (model={model}): {e}")
+        raise
 
     text = (
         data.get("candidates", [{}])[0]
@@ -100,7 +109,8 @@ async def generate_from_images(
     temperature: float = 0.2,
     timeout: float = 90.0,
 ) -> str:
-    """Multi-image Gemini Vision call. Same 1.5 Flash endpoint as COI/WSIB/QC.
+    """Multi-image Gemini Vision call. Same endpoint (model centralized in
+    app.shared.gemini_config) as COI/WSIB/QC.
 
     `images` is a list of raw image bytes. Returns the model text (JSON expected).
     Raises if GEMINI_API_KEY is missing or the request fails.
@@ -129,14 +139,19 @@ async def generate_from_images(
             "responseMimeType": "application/json",
         },
     }
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            _GEMINI_VISION_URL,
-            params={"key": api_key},
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    model = get_gemini_model()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                gemini_generate_content_url(model),
+                params={"key": api_key},
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error(f"Gemini generate_from_images call failed (model={model}): {e}")
+        raise
     text = (
         data.get("candidates", [{}])[0]
         .get("content", {})

@@ -17,7 +17,7 @@ gaps, cross-service contract drift, launch-readiness findings).
 The Dispatch photographer web experience is now built into the Bricks OS React app (`ruletheworld/bricks-os`), NOT as a separate `dispatch.brxs.ca` site. Photographers use `brokerage.brxs.ca` — after login, role-based routing sends them to the dark Dispatch shell at `/dispatch/*`. The Expo `frontend/` in THIS repo remains the primary Android + iOS (Swift) experience for photographers on mobile. The web shell is for desktop/browser access.
 
 ## Stack
-- Backend: FastAPI (Python 3.14), Supabase, Stripe Connect, Gemini 1.5 Flash (explainability only)
+- Backend: FastAPI (Python 3.14), Supabase, Stripe Connect, Gemini (model centralized in `app/shared/gemini_config.py`, currently `gemini-3.5-flash-lite`; see the 2026-09-12 outage/fix section below — this line said "Gemini 1.5 Flash" for who knows how long and that model has been fully retired by Google)
 - Frontend (Android): Expo (React Native) + web dashboard (`dispatch.brxs.ca`) — Android primary audience
 - Frontend (iOS): **Native Swift — `ios-swift/` directory** — SwiftUI, multi-target Xcode project (see below)
 - Deployed: `https://bricks-go-api.vercel.app` / `https://dispatch-api.brxs.ca`
@@ -89,6 +89,8 @@ API base: `https://dispatch-api.brxs.ca`
 - `backend/app/services/client_comms.py` — Resend emails: booking confirmed + photographer en route
 - `backend/app/services/qc_agent.py` — Gemini vision QC agent (scores uploaded photos 0-100)
 - `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration
+- `backend/app/services/object_removal_service.py` — in-house mask-guided object removal (Mac/LaMa primary, Gemini image-model fallback); see **Object Removal** section below. Its endpoint (`POST /api/v1/post-production/object-removal`) lives in `routers/post_production.py`.
+- `mac-inference-server/` — separate deployable FastAPI app the user runs on their own Apple Silicon Mac (LaMa inpainting inference); not part of `backend/`, never deployed to Vercel. See its own `README.md`.
 - `backend/video_worker/grade.py` — standalone ffmpeg-based video grade/trim/stabilize worker. **Not imported by anything in `app/` or deployed** — see Post-Production Pipeline's "Motion (Video) Enhancement" section below.
 - `backend/app/services/payout_service.py` — Stripe Connect transfers, tier percentages
 - `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (T+15 before claim)
@@ -124,7 +126,7 @@ Repeat-agent bonus: +5 points if vendor completed prior job for this agent.
 Brokerage favourite bonus: +15 points if the booking's brokerage has favourited this photographer (reads `brokerage_vendor_favorites` table). **Corrected 2026-08-30 — the 2026-07-27 "cannot fire" note below was itself stale.** `Job`/`JobIntakeRequest` (`app/shared/schemas.py:71,129`) both declare `brokerage_id: Optional[str] = None`, and `bricks_ai_dispatch.py:337-355` reads it via `getattr(job, "brokerage_id", None)` and queries `brokerage_vendor_favorites` when set. This is real, working code, not dead — verified by reading both files directly. Unclear exactly when the schema fix landed relative to the correction below; the doc just never caught up.
 Drone gate: `vendor.drone_certified=True` required for `job_type="drone"`.
 
-**Gemini 1.5 Flash** used ONLY for explainability string — called async after routing, shown in admin dashboard. Never on the hot dispatch path.
+**Gemini** (model centralized in `app/shared/gemini_config.py`, see the 2026-09-12 section below) used ONLY for explainability string — called async after routing, shown in admin dashboard. Never on the hot dispatch path.
 
 **Fallback: `pick_vendor_rule_based`** — tuple sort with same signals, used if no AI result.
 
@@ -196,7 +198,7 @@ Pipeline, as it now runs for a non-staging photo asset:
 3. Autoenhance — fallback if Fotello key missing, or if a configured Fotello call itself fails at runtime (webhook callback).
 4. BoxBrownie — photo editing, retouching, day-to-dusk, item removal, and virtual staging. Untouched by the above; polling only (no webhooks).
 5. 3D tours — **Polycam only** (2026-07-14 — Luma Labs pipeline removed, see below). Either a Polycam share URL pasted into `PropertyDetailPage.js` (embed, zero backend processing) or a manually uploaded `.ply`/`.splat` file signed via `_finalize_job_if_complete`'s generic splat_url resolution. No automated *video*→splat backend pipeline exists — that's still true. But do not read this as "no automated tour pipeline at all": see **Capture Pipeline** below for a separate, real, automated phone-capture → server-side-stitched tour/floorplan pipeline, added after this line was written.
-6. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
+6. QC vision agent: Gemini (model centralized, currently `gemini-3.5-flash-lite` — see 2026-09-12 section below) scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
 7. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
 8. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
 
@@ -298,6 +300,149 @@ detail, including the exact photo→video filter mapping):
   `media_delivery`/`uploads` row, mirroring the photo path's conventions) — not assumed or
   started here.
 
+## Gemini Model Outage & Centralization (2026-09-12)
+
+**Confirmed live production bug, not preventive housekeeping.** Google fully shut down
+all Gemini 1.0/1.5 models. Every one of the four call sites in this repo that built its
+own `"gemini-1.5-flash:generateContent"` URL — `qc_vision_provider.py`,
+`rpas_validator.py`, `compliance_validator.py`, `bricks_ai_dispatch.py` — had been
+getting a real 404 from Google on every actual API call, for as long as that model has
+been retired. This went unnoticed because all four call sites are deliberately fail-open
+(never block the pipeline on a Gemini outage): QC silently ran OpenCV-only, RPAS/COI/WSIB
+validation silently fell through to "failed"/manual-review with no vision check ever
+having actually run, and dispatch explainability silently fell back to the coded
+(non-LLM) explanation — with **two of the four not even logging the failure** (RPAS's and
+compliance's `except Exception as e:` blocks wrote straight to the result dict's `issues`
+list with no `logger` call at all; dispatch explainability's was a bare
+`except Exception: return None`). Only QC's own caller (`qc_agent.py`) was already
+logging at `error` — that's how this was eventually caught, via the runtime-error
+dashboard.
+
+**Fix:**
+- New `app/shared/gemini_config.py` is now the single source of the model name:
+  `get_gemini_model()` reads `GEMINI_MODEL_NAME` (env override) live on every call,
+  falling back to a default kept current in the module's own docstring/comment.
+  `gemini_generate_content_url(model=None)` builds the endpoint URL. All four files above
+  import from here instead of hardcoding their own copy of the string — the next model
+  retirement is a one-line default change (or an env var), not a four-file grep-and-replace.
+- **Model chosen: `gemini-3.5-flash-lite`** — verified via live web research on
+  2026-09-12, specifically because the obvious first guess was wrong: `gemini-3.1-flash-lite`
+  looks current at a glance (GA, listed as "Stable" on the general models page) but
+  Google's own deprecations page already lists it as deprecated (announced retirement,
+  shutdown scheduled 2027-05-07) with `gemini-3.5-flash-lite` named as the recommended
+  replacement — released 2026-07-21, GA, no shutdown date announced, and priced for
+  exactly this repo's use case here (cost-sensitive classification/vision-scoring, not
+  conversational): $0.30/1M input, $2.50/1M output vs. `gemini-3.8-flash`'s $0.75/$3.75 for
+  a full multimodal flagship this use case doesn't need. **Re-verify against
+  https://ai.google.dev/gemini-api/docs/deprecations before trusting this choice is still
+  current** — this space moves in weeks, not quarters (three Flash-tier releases in six
+  weeks as of this date).
+- Logging bumped so a future outage here can't go silent again: `qc_vision_provider.py`'s
+  two Gemini call functions now `logger.error(...)` (model name + exception) before
+  re-raising, on top of `qc_agent.py`'s pre-existing error log. `rpas_validator.py` and
+  `compliance_validator.py`'s previously-silent `except` blocks now `logger.error(...)`
+  with the model name and vendor/doc identifying info. `bricks_ai_dispatch.py`'s
+  explainability call now `logger.warning(...)` (chosen over `error` since this path is
+  explicitly non-critical/dashboard-only and a transient miss here is lower-stakes — but it
+  must no longer be indistinguishable from "Gemini just isn't configured").
+- Tests: `backend/tests/test_gemini_model_config.py` — the shared constant/URL builder,
+  the env override actually taking effect, all four call sites importing the shared helper
+  (not a reintroduced hardcoded string), and the bumped logging on a simulated Gemini
+  failure for all four (QC covered most thoroughly, including through `qc_agent.py`'s
+  fail-open path end-to-end, since it's the most critical of the four).
+
+**Found but out of scope, flagged for a separate decision:** while re-grepping the whole
+repo for any other hardcoded Gemini model string, `object_removal_service.py`'s
+`gemini-2.5-flash-image` (a genuinely different model for a genuinely different
+capability — image generation/editing, not text/vision classification, so it does not
+belong in the same `GEMINI_MODEL_NAME` default as the four sites above) turned out to
+already have an announced shutdown date of **2026-10-02 — about three weeks from this
+note** — per the same live deprecations-page research. That capability is already
+documented above as "NOT wired into `process_job_assets`" (no automatic-pipeline traffic
+today), which lowers the urgency, but it is real, addressable code
+(`POST /api/v1/post-production/object-removal`) and will start 404ing on its Gemini
+fallback path if this isn't picked up before that date. Not fixed here — left for
+whoever owns that feature to pick the right replacement (Google's own current guidance
+points at `gemini-3.1-flash-image-preview`, but a `-preview` suffix needs its own
+scrutiny before committing to it, same lesson as this section's own model choice above).
+
+## Object Removal (Mask-Guided Inpainting) — Phase 2, 2026-09-12
+
+New in-house capability: removing an unwanted object from a real estate photo (car, trash
+can, cord, clutter) given a mask marking what to erase. Business direction: no reliance on
+Fotello/BoxBrownie's own item-removal features for this — BoxBrownie's item-removal
+capability was never actually wired up in this repo anyway (only virtual staging is; see
+this file's 2026-09-12 research note above).
+
+**Honest scope, stated plainly so it isn't oversold: this is mask-guided inpainting, not
+autonomous "AI decides what's clutter" removal.** Real vendors like BoxBrownie's own
+item-removal service work by a human editor manually marking what to remove, not full
+autonomy — this v1 takes the same shape. Given an image AND a mask, it fills the masked
+region in convincingly; it does not detect objects on its own. **Mask SOURCING — what
+decides which pixels get marked (a human via a future editor UI, or a future
+auto-detection step) is a deliberately separate, not-yet-built piece.** This capability
+only ever runs a mask it's handed.
+
+Two engines, symmetric failover — same runtime-failover shape `_select_and_run_enhancement`
+already established for Phase 0/1 photo enhancement, applied to a new capability:
+
+1. **`bricks_mac_inference`** (primary) — a small self-hosted FastAPI server,
+   `mac-inference-server/` at the repo root (a separate deployable artifact, NOT part of
+   this repo's Vercel-deployed `backend/` — it runs on the user's own Apple Silicon Mac,
+   currently 8GB RAM, a hard constraint it was built against). Real mask-guided inpainting
+   via [LaMa](https://github.com/advimman/lama) (Large Mask Inpainting), through the
+   `simple-lama-inpainting` pip package — a small (~27M param, ~200MB checkpoint)
+   Fourier-convolution network purpose-built for this task, not a diffusion model, chosen
+   specifically because it's realistic on 8GB of RAM (researched 2026-09-12 against
+   IOPaint/lama-cleaner and other current wrappers before picking this one). Attempts Apple
+   MPS acceleration with an automatic per-op CPU fallback
+   (`PYTORCH_ENABLE_MPS_FALLBACK=1` — LaMa's Fourier-convolution layers aren't all
+   implemented for Metal yet). Reached over a Cloudflare Tunnel URL (`MAC_INFERENCE_URL`)
+   with a shared secret (`MAC_INFERENCE_KEY`, checked via `hmac.compare_digest` — this
+   server is exposed to the public internet, real auth not just an obscure URL). See
+   `mac-inference-server/README.md` for install/run/tunnel setup.
+2. **`gemini`** (fallback) — Gemini's current image model (`gemini-2.5-flash-image` via
+   `generateContent`; verified current/GA as of 2026-09-12 — same endpoint family
+   `qc_vision_provider.py` already uses for QC, but a distinct, image-capable model, not
+   `gemini-1.5-flash`). Researched: Gemini's image-editing API is mask-**free** /
+   natural-language-instruction-driven — there is no bitmask request parameter, a real
+   current API constraint, not an oversight in the code. To still honor a given mask,
+   `object_removal_service.py` burns it into a second copy of the photo as a solid magenta
+   highlight overlay and sends both the clean original and the highlighted copy, instructing
+   the model to remove/reconstruct whatever's under the highlight using the original as
+   context. Best-effort, not pixel-exact the way the Mac/LaMa path is.
+
+**Failover** (`backend/app/services/object_removal_service.py::remove_object`): Mac is
+tried first whenever both `MAC_INFERENCE_URL`/`MAC_INFERENCE_KEY` are configured — a quick
+`/health` check first (so a sleeping/offline Mac fails fast instead of hanging on a full
+photo upload), then the real `/inpaint` call with a generous 90s timeout since this is a
+home internet connection, not a datacenter. On any Mac failure, Gemini is tried next if
+`GEMINI_API_KEY` is set. If Mac isn't configured at all, Gemini is used directly. Neither
+available/working → the asset fails cleanly: returns `None` and logs why (same structured
+`provider`/`job_id`/`upload_id`/`outcome`/`duration_ms` shape `_log_enhancement_attempt`
+already established for Phase 0/1) — same worst-case shape as `_select_and_run_enhancement`'s
+"asset dropped" path; callers must not assume a result.
+
+**Not wired into `process_job_assets`** (the automatic per-asset pipeline) — deliberately,
+since it needs a mask and nothing in that pipeline produces one. Instead it's an addressable
+internal capability: `POST /api/v1/post-production/object-removal`
+(`routers/post_production.py`, `X-Internal-Api-Key`-gated like `/reconcile`) takes
+`upload_id` + `mask_base64`, runs the failover chain, uploads the result to Storage at
+`object-removed/{job_id}/{upload_id}_{timestamp}.jpg`, and returns a signed URL. It
+deliberately does **not** touch the `uploads` row or its `processed_url` — this repo doesn't
+own that table's schema (Bricks-OS is the DDL authority; a "reviewed/accepted" state would
+need a real migration there, not invented here) — a future caller (an editor review UI, or a
+later auto-mask-detection step) decides what to do with the result.
+
+Tests: `backend/tests/test_object_removal_service.py` (failover chain, mocking both
+provider calls — mirrors `test_post_production_enhancement.py`'s style) and
+`mac-inference-server/tests/test_app.py` (the Mac server's own HTTP request/auth contract,
+with the LaMa model itself mocked out — no real model weights loaded in CI/sandbox runs).
+
+**Not verified in this sandbox** (needs the user's own Mac + a live `GEMINI_API_KEY`): real
+LaMa inference on actual Apple Silicon hardware, and a real Gemini image-edit call against
+the live API. See the PR/session report for the full list.
+
 ## Capture Pipeline (undocumented until 2026-09-07 — real, substantial, not a stub)
 
 Phone-capture flow for GO's guided 360°-station camera (Matterport-style), separate
@@ -375,19 +520,19 @@ since that merge — `Bricks-Capture`'s own README describes the review screen's
 - **Repeat-agent bonus (+5pts if vendor has shot for this agent before)** ✅
 - **Brokerage favourite bonus (+15pts if brokerage has favourited the photographer)** ✅ — **re-corrected 2026-08-30: this is real and working, see line 117 above. The 2026-07-27 "dead code" correction was itself stale by the time this session found it.**
 - **Drone certification hard gate (drone_certified required for drone jobs)** ✅
-- **Gemini 1.5 Flash: explainability only (async, non-blocking, dashboard display)** ✅
+- **Gemini explainability: async, non-blocking, dashboard display** ✅ — model centralized 2026-09-12 after the gemini-1.5-flash retirement broke this silently; see Gemini Model Outage & Centralization section above
 - Rule-based fallback with tier gate ✅
 - Payout flow (tier % → Stripe Connect transfer → record) ✅
 - Post-production pipeline: Fotello (primary) + Autoenhance (fallback) ✅ — **superseded 2026-09-11**: in-house CV enhancement (`bricks_inhouse_cv`) is now the default primary path with real runtime failover to Fotello → Autoenhance; see Post-Production Pipeline section above.
 - Media delivery: signed URLs → media_delivery row → Resend email to agent ✅
-- QC vision agent: Gemini 1.5 Flash gates delivery; rejected photos excluded ✅
+- QC vision agent: Gemini gates delivery; rejected photos excluded ✅ — **corrected 2026-09-12**: this had silently been running OpenCV-only for as long as gemini-1.5-flash was 404ing; see Gemini Model Outage & Centralization section above
 - On-time rate: updated on every job completion (rolling avg, feeds dispatch score) ✅
 - Client comms: booking confirmed + photographer en route emails ✅
 - Rate limiting + Sentry ✅
 - Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
 - Vendor tier payouts: Tier C=35% (entry), B=45% (core), A=55% (elite) ✅
 - **Snappr/Homejab IC model: IC agreement v1.5 (Bricks Group, Ontario; www à-la-carte rate card; Virtual Visit paid add-on; insurance/WSIB required before first job)** ✅
-- **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅
+- **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅ — **corrected 2026-09-12**: the Gemini fallback path (used when OCR confidence is low) had been silently 404ing on the retired gemini-1.5-flash and failing with no log at all; see Gemini Model Outage & Centralization section above
 - **Agent no-show: claim validation gates + admin review queue + Booking penalty callback** ✅
 - **Payout service: trip fees added to photographer payout (not deducted); correct table name** ✅
 - **Stripe Connect E2E test suite (idempotency, zero-amount, trip fee addition logic)** ✅
@@ -429,6 +574,7 @@ since that merge — `Bricks-Capture`'s own README describes the review screen's
 - `TWILIO_AUTH_TOKEN` ✅ (set)
 - `TWILIO_FROM_NUMBER` ✅ (set)
 - `CALENDAR_TOKEN_ENCRYPTION_KEY` — app-level Fernet (or any secret) for encrypting `vendor_calendar_connections` OAuth/CalDAV secrets at rest; fail-soft if unset (FreeBusy → unknown). See `memory/calendar-token-encryption.md`
+- `MAC_INFERENCE_URL` / `MAC_INFERENCE_KEY` — **not yet set (2026-09-12)**. Needed for the Mac side of the new object-removal failover chain (see Object Removal section above) — set once the user has `mac-inference-server/` running on their own Mac and exposed via Cloudflare Tunnel (`mac-inference-server/README.md` has the exact values to copy in). Without these, object removal falls straight to Gemini (`GEMINI_API_KEY`, already set) — never hard-fails, just skips the self-hosted path.
 
 **Ops tasks (pre-launch):**
 - [ ] **Ontario employment lawyer review of IC agreement** — budget $2-4K (non-negotiable)
