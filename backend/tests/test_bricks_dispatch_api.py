@@ -19,6 +19,14 @@ def get_base_url():
     return ''
 
 BASE_URL = get_base_url()
+
+if not BASE_URL.startswith(("http://", "https://")):
+    pytest.skip(
+        "No live server configured (BASE_URL not found via /app/frontend/.env) — "
+        "skipping live-server integration tests",
+        allow_module_level=True,
+    )
+
 DEFAULT_HEADERS = {"X-User-Id": "default_user"}
 
 @pytest.fixture(scope="module")

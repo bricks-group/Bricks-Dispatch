@@ -341,6 +341,25 @@ class VendorMember(BaseModel):
     # date, never on NULL -- see that function's docstring.
     coi_expires_on: Optional[str] = None
     wsib_expires_on: Optional[str] = None
+    # Set true the moment a coi/wsib doc is marked verified, independent of
+    # whether it carries an expiry_date -- a WSIB *exemption declaration*
+    # (vs. a clearance certificate) legitimately has no expiry, so it would
+    # never populate wsib_expires_on above even once verified. Tracked as a
+    # denormalized signal for admin visibility (who has actually submitted
+    # verified compliance docs) -- NOT a dispatch gate. An earlier version
+    # of this field did gate a vendor's first dispatched job on it, matching
+    # the IC agreement's "insurance/WSIB required before first job" clause;
+    # reversed 2026-09-09 per direct instruction, since that's stricter than
+    # how comparable platforms actually operate (Snappr vets photographers
+    # on portfolio/equipment/interview and carries its own liability
+    # insurance for shoots rather than gating on individually-verified
+    # contractor coverage; TaskRabbit doesn't gate on insurance at all;
+    # Uber/DoorDash-style contingent liability exists specifically because
+    # most gig workers don't carry a full policy). has_lapsed_insurance()
+    # above -- don't let *previously verified* coverage go stale -- is
+    # unaffected by this reversal.
+    coi_verified: bool = False
+    wsib_verified: bool = False
     internal_notes: str = ""
     completion_rate: float = 1.0
     avg_turnaround_days: float = 0.0
@@ -380,7 +399,7 @@ class VendorApplicationCreate(BaseModel):
     # Ontario Regions: GTA, York, Peel, Halton, Durham, Hamilton, Waterloo, Ottawa, etc.
     preferred_regions: List[str] = []
     accepted_terms: bool
-    ic_agreement_version: str = "1.5"
+    ic_agreement_version: str = "1.6"
     hst_number: Optional[str] = None
     # CRA small-supplier exemption: under $30,000 CAD/year across all clients,
     # registration for GST/HST isn't legally required. Lets an applicant pass

@@ -6,9 +6,12 @@ Providers call back here when processing is complete:
   POST /api/v1/post-production/callback/autoenhance
   POST /api/v1/post-production/callback/boxbrownie
 
-BoxBrownie handles: photo editing, retouching, day-to-dusk, item removal, and virtual staging.
-BoxBrownie uses polling (not webhooks) — this endpoint handles any push
-notifications they may send for completed orders.
+BoxBrownie handles: virtual staging (the only capability actually wired up
+here -- see CLAUDE.md's 2026-09-12 research note; "photo editing,
+retouching, day-to-dusk, item removal" describes BoxBrownie's platform in
+general, not a live call site in this repo). BoxBrownie uses polling (not
+webhooks) — this endpoint handles any push notifications they may send for
+completed orders.
 
 Gaussian splat / 3D visits are handled entirely by Polycam (embed URL or a
 manually uploaded .ply/.splat file) — no backend processing needed; see
@@ -16,7 +19,14 @@ _finalize_job_if_complete()'s splat_url resolution below.
 
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
+
+Internal, addressable object-removal capability (mask-guided inpainting,
+NOT part of the automatic per-asset pipeline -- see the endpoint's own
+docstring below and object_removal_service.py's module docstring):
+  POST /api/v1/post-production/object-removal
 """
+import base64
+import hmac
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -24,10 +34,12 @@ from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+from pydantic import BaseModel
 
+from ..services.object_removal_service import remove_object, upload_object_removal_result
 from ..services.qc_agent import run_qc_for_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
-from ..shared.auth import get_own_internal_api_key
+from ..shared.auth import get_own_internal_api_key, verify_internal_api_key
 from ..shared.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -40,7 +52,7 @@ def _verify_callback_secret(secret: Optional[str]) -> None:
     _secret = os.environ.get("POST_PRODUCTION_CALLBACK_SECRET", "")
     if not _secret:
         raise HTTPException(status_code=500, detail="Callback secret not configured")
-    if secret != _secret:
+    if not secret or not hmac.compare_digest(secret, _secret):
         raise HTTPException(status_code=401, detail="Invalid callback secret")
 
 
@@ -549,4 +561,89 @@ async def reconcile_stuck_uploads(
         "pil_tier3_applied": pil_tier3_count,
         "timed_out": len(stuck_ids),
         "jobs_queued_for_finalization": len(other_job_ids),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Object removal (mask-guided inpainting) -- Phase 2, 2026-09-12
+# POST /api/v1/post-production/object-removal (internal, requires X-Internal-Api-Key)
+# ---------------------------------------------------------------------------
+
+class ObjectRemovalRequest(BaseModel):
+    upload_id: str
+    mask_base64: str  # single-channel PNG/JPEG, base64-encoded; white(255)=remove
+    mime_type: Optional[str] = None  # of the ORIGINAL photo; defaults to sniffing it
+
+
+@router.post("/object-removal")
+async def object_removal(
+    body: ObjectRemovalRequest,
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """
+    Runs mask-guided object removal on one existing upload and returns a
+    signed URL to the result. Internal-only (same X-Internal-Api-Key gate
+    as /reconcile) -- this is an addressable capability for a future caller
+    (an editor review UI, or a later auto-mask-detection step) to invoke
+    per-photo, NOT part of the automatic process_job_assets pipeline.
+
+    Deliberately does not touch the `uploads` row or its processed_url --
+    object removal here is a preview/candidate result, not an automatic
+    replacement of the delivered photo. Promoting a result to be the actual
+    delivered asset is a decision for whatever calls this, not made here.
+
+    Mask SOURCING (who or what decides what to remove, and draws the mask)
+    is a separate, not-yet-built piece -- see object_removal_service.py's
+    module docstring and CLAUDE.md's Object Removal section. This endpoint
+    only runs a mask it's handed.
+    """
+    if not verify_internal_api_key(x_internal_api_key):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        mask_bytes = base64.b64decode(body.mask_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="mask_base64 is not valid base64")
+    if not mask_bytes:
+        raise HTTPException(status_code=422, detail="mask_base64 decoded to empty content")
+
+    db = await get_db()
+    res_upload = await db.table("uploads").select("id, job_id, file_url, filename").eq("id", body.upload_id).maybe_single().execute()
+    if not res_upload.data:
+        raise HTTPException(status_code=404, detail=f"Upload {body.upload_id} not found")
+
+    upload = res_upload.data
+    job_id = upload["job_id"]
+
+    signed_url = await get_signed_download_url(upload["file_url"])
+    if not signed_url:
+        raise HTTPException(status_code=500, detail="Could not generate a signed URL for the source photo")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        img_resp = await client.get(signed_url)
+        img_resp.raise_for_status()
+        image_bytes = img_resp.content
+
+    result = await remove_object(
+        image_bytes,
+        mask_bytes,
+        job_id=job_id,
+        upload_id=body.upload_id,
+        mime_type=body.mime_type,
+    )
+    if not result:
+        raise HTTPException(
+            status_code=502,
+            detail="Object removal failed: no configured provider succeeded (see server logs for per-attempt detail)",
+        )
+
+    storage_path = await upload_object_removal_result(db.storage, job_id, body.upload_id, result["image_bytes"])
+    result_url = await get_signed_download_url(storage_path)
+
+    return {
+        "upload_id": body.upload_id,
+        "job_id": job_id,
+        "provider": result["provider"],
+        "result_url": result_url,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=SIGNED_URL_EXPIRY)).isoformat(),
     }

@@ -43,7 +43,7 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip internal auth for health, seed, docs, root, and job intake endpoints
         exempt_paths = ("/health", "/health/ready", "/docs", "/openapi.json", "/redoc")
-        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads", "/api/jobs", "/api/notifications", "/api/push-tokens", "/api/capture", "/api/stripe/connect-webhook")
+        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads", "/api/jobs", "/api/notifications", "/api/push-tokens", "/api/capture", "/api/stripe/connect-webhook", "/api/v1/post-production")
         if request.url.path in exempt_paths or any(request.url.path.startswith(p) for p in exempt_prefixes):
             return await call_next(request)
 

@@ -1,0 +1,15 @@
+# Bricks Mac inference server -- scoped to THIS server only.
+# Do not merge with backend/requirements.txt: this runs on a different
+# machine (the user's own Apple Silicon Mac), not the Vercel-deployed API.
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+Pillow>=10.0.0
+numpy>=1.26.0
+
+# Pulls in torch as a dependency. On macOS arm64, PyPI's `torch` wheel
+# already includes Apple MPS (Metal) support -- no special --index-url or
+# separate "torch-mps" package needed, unlike CUDA on Linux.
+torch>=2.2.0
+simple-lama-inpainting>=0.1.2

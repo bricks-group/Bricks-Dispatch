@@ -163,38 +163,26 @@ async def create_dispatch_job(
 async def update_job_status(
     job_id: str,
     payload: JobStatusUpdate,
-    authorization: str = Header(None),
-    x_user_id: str = Header(None),
     x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """
     Update job status and trigger webhook back to Booking service.
 
-    FIXED 2026-08-16: this endpoint never accepted X-Internal-Api-Key at all,
-    so resolve_vendor_actor_id() always fell through to its X-User-Id branch --
-    which the 2026-08-15 impersonation fix correctly hardened to also require
-    a valid internal key. Since that key was never being passed through here,
-    every service-to-service call (Booking notifying Dispatch of a
-    cancellation, server.py's booking_cancel) has 401'd since that fix landed.
-    Added a proper internal-service branch (same pattern as
-    require_vendor_admin) instead of depending on X-User-Id: default_user,
-    which is dev seed data, not a guaranteed row in production.
+    Internal-caller-only: this route sits behind InternalAuthMiddleware, which
+    already rejects any request without a valid X-Internal-Api-Key before it
+    reaches here. Real frontends (vendor apps) call
+    /api/vendor-os/jobs/{id}/status instead, which is exempted from that
+    middleware -- nothing calls this route with vendor auth.
     """
-    from ..shared.auth import resolve_vendor_actor_id, get_vendor_member, verify_internal_api_key
+    from ..shared.auth import verify_internal_api_key
     from ..services.webhooks import send_dispatch_status_update_webhook
 
     db = await get_db()
 
-    if x_internal_api_key is not None:
-        if not verify_internal_api_key(x_internal_api_key):
-            raise HTTPException(status_code=403, detail="Invalid internal API key")
-        actor_id = "internal_service"
-        job_query = db.table("jobs").select("*").eq("id", job_id)
-    else:
-        actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-        actor_member = await get_vendor_member(actor_id)
-        vendor_id = actor_member.get("vendor_id", "default_vendor")
-        job_query = db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id)
+    if not x_internal_api_key or not verify_internal_api_key(x_internal_api_key):
+        raise HTTPException(status_code=403, detail="Invalid internal API key")
+    actor_id = "internal_service"
+    job_query = db.table("jobs").select("*").eq("id", job_id)
 
     # Fetch job to get current status and booking_id
     res_job = await job_query.maybe_single().execute()

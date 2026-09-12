@@ -1,4 +1,4 @@
-"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.5 verbatim."""
+"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.6 verbatim."""
 import ast
 from pathlib import Path
 
@@ -23,20 +23,32 @@ def _assignment_value(path: Path, name: str):
     raise AssertionError(f"{name} not found in {path}")
 
 
-def test_ic_agreement_constants_are_v15():
+def test_ic_agreement_constants_are_v16():
     version = _assignment_value(ONBOARDING, "_IC_AGREEMENT_VERSION")
     effective = _assignment_value(ONBOARDING, "_IC_AGREEMENT_EFFECTIVE_DATE")
     text = _assignment_value(ONBOARDING, "_IC_AGREEMENT_TEXT")
 
-    assert version == "1.5"
-    assert effective == "2026-09-06"
-    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.5")
-    assert "Effective: September 6, 2026" in text
+    assert version == "1.6"
+    assert effective == "2026-09-09"
+    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.6")
+    assert "Effective: September 9, 2026" in text
     assert 'Contracting party: Bricks Group ("Bricks")' in text
     assert "Questions: booking@brxs.ca" in text
     assert text.endswith("Bricks Group · Ontario, Canada")
 
-    assert "INSURANCE AND WSIB (REQUIRED BEFORE FIRST JOB)" in text
+    # v1.6, 2026-09-09: insurance/WSIB is no longer gated on proof before the
+    # first dispatched job -- checked against how comparable platforms
+    # actually operate (Snappr vets on portfolio/equipment/interview and
+    # carries its own liability insurance for shoots rather than gating on
+    # individually-verified contractor coverage; TaskRabbit doesn't gate task
+    # access on insurance at all). The contractor's own coverage is still
+    # required and Bricks can still ask for proof and act on a real lapse --
+    # just not a hard pre-first-job checkpoint.
+    assert "6. INSURANCE AND WSIB" in text
+    assert "REQUIRED BEFORE FIRST JOB" not in text
+    assert "Before your first dispatched booking you must provide" not in text
+    assert "solely responsible for carrying insurance appropriate to your work" in text
+    assert "Bricks may ask you to show proof of the above at any time" in text
     assert "WSIB Certificate of Clearance" in text
     assert "Binding arbitration is not required." in text
     assert "fixed amount per accepted booking" in text
@@ -68,7 +80,8 @@ def test_get_ic_agreement_returns_version_date_text():
     assert "ic_agreement_version=_IC_AGREEMENT_VERSION" in src
 
 
-def test_application_schema_defaults_to_v15():
+def test_application_schema_defaults_to_v16():
     src = SCHEMAS.read_text()
-    assert 'ic_agreement_version: str = "1.5"' in src
+    assert 'ic_agreement_version: str = "1.6"' in src
+    assert 'ic_agreement_version: str = "1.5"' not in src
     assert 'ic_agreement_version: str = "1.1"' not in src

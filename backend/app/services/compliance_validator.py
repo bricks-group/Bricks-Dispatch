@@ -25,12 +25,9 @@ from typing import Optional
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from ..shared.gemini_config import gemini_generate_content_url, get_gemini_model
 
-_GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash:generateContent"
-)
+logger = logging.getLogger(__name__)
 
 # IC agreement Clause 6 minimums.
 _MIN_CGL_COVERAGE_CAD = 2_000_000
@@ -118,8 +115,9 @@ async def _gemini_extract(doc_b64: str, mime_type: str, doc_type: str) -> dict:
         }],
         "generationConfig": {"responseMimeType": "application/json"},
     }
+    model = get_gemini_model()
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(_GEMINI_URL, params={"key": api_key}, json=payload)
+        resp = await client.post(gemini_generate_content_url(model), params={"key": api_key}, json=payload)
         resp.raise_for_status()
     data = resp.json()
     raw = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -213,6 +211,13 @@ async def validate_compliance_document(
     try:
         extracted = await _gemini_extract(doc_b64, mime_type, doc_type)
     except Exception as e:
+        # Previously caught with no logger call at all — a Gemini outage
+        # here was invisible outside the vendor_documents.validation_result
+        # blob itself. Must be visible in error monitoring.
+        logger.error(
+            f"Compliance Gemini extraction failed (doc_type={doc_type}, "
+            f"model={get_gemini_model()}): {e}"
+        )
         result["issues"] = [f"Gemini extraction failed: {e}"]
         return result
 

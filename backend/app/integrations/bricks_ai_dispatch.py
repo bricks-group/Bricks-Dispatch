@@ -23,6 +23,7 @@ from typing import List, Optional
 import httpx
 from ..shared.schemas import Job, VendorMember
 from ..shared.geospatial import haversine_km as _haversine_km
+from ..shared.gemini_config import gemini_generate_content_url, get_gemini_model
 from ..services.vendor_profile import member_eligible_for_job, travel_within_cap
 from ..services.shoot_duration import previous_job_coords, vendor_slot_conflicts
 
@@ -31,11 +32,6 @@ logger = logging.getLogger(__name__)
 # Module-level set keeps a strong reference to fire-and-forget tasks so the garbage
 # collector cannot cancel them before they complete (per Python asyncio docs).
 _background_tasks: set = set()
-
-_GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash:generateContent"
-)
 
 _OUTDOOR_JOB_TYPES = {"drone", "exterior", "twilight"}
 
@@ -256,6 +252,7 @@ async def generate_dispatch_explanation(job: Job, vendor: VendorMember, score: f
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return None
+    model = get_gemini_model()
     try:
         prompt = f"""
 In one sentence (max 25 words), explain why this photographer was chosen for this job.
@@ -267,7 +264,7 @@ Return ONLY the explanation sentence as a plain JSON string.
 """
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.post(
-                _GEMINI_URL,
+                gemini_generate_content_url(model),
                 params={"key": api_key},
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
@@ -278,7 +275,17 @@ Return ONLY the explanation sentence as a plain JSON string.
             data = resp.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         return json.loads(text) if text else None
-    except Exception:
+    except Exception as e:
+        # Previously a bare `except Exception: return None` — not even a debug
+        # log. Non-blocking is the right behavior (never gate dispatch on this),
+        # but a Gemini outage here should still show up somewhere; the caller's
+        # own log line for this case previously read as "Gemini unavailable"
+        # (a config choice) when it could just as easily be an outage/model
+        # retirement, indistinguishable without this.
+        logger.warning(
+            f"Dispatch explainability Gemini call failed for job {job.id} "
+            f"(model={model}): {e}"
+        )
         return None
 
 

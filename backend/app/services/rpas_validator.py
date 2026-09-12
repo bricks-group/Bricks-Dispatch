@@ -23,12 +23,9 @@ from typing import Optional
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from ..shared.gemini_config import gemini_generate_content_url, get_gemini_model
 
-_GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash:generateContent"
-)
+logger = logging.getLogger(__name__)
 
 # Transport Canada RPAS pilot lookup — public registry
 # TC exposes a public search table at this URL; we scrape for pilot name and cert level.
@@ -116,7 +113,8 @@ def _ocr_extract(image_bytes: bytes) -> dict:
 
 async def _gemini_extract(image_b64: str, mime_type: str = "image/jpeg") -> dict:
     """
-    Use Gemini 1.5 Flash Vision to extract RPAS certificate details.
+    Use Gemini Vision (model centralized in app.shared.gemini_config) to
+    extract RPAS certificate details.
     Returns parsed fields or raises on failure.
     """
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -152,9 +150,10 @@ If this does not appear to be a valid Transport Canada RPAS certificate, set is_
         }],
         "generationConfig": {"responseMimeType": "application/json"},
     }
+    model = get_gemini_model()
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
-            _GEMINI_URL,
+            gemini_generate_content_url(model),
             params={"key": api_key},
             json=payload,
         )
@@ -339,6 +338,13 @@ async def validate_rpas_certificate(
         try:
             extracted = await _gemini_extract(image_b64, mime_type)
         except Exception as e:
+            # Previously caught with no logger call at all — a Gemini outage
+            # here was invisible outside the vendor_documents.validation_result
+            # blob itself. Must be visible in error monitoring.
+            logger.error(
+                f"RPAS Gemini extraction failed for vendor={vendor_name!r} "
+                f"(model={get_gemini_model()}): {e}"
+            )
             result["issues"] = [f"Gemini extraction failed: {e}"]
             return result
 
