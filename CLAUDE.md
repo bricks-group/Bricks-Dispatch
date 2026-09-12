@@ -351,20 +351,21 @@ dashboard.
   failure for all four (QC covered most thoroughly, including through `qc_agent.py`'s
   fail-open path end-to-end, since it's the most critical of the four).
 
-**Found but out of scope, flagged for a separate decision:** while re-grepping the whole
-repo for any other hardcoded Gemini model string, `object_removal_service.py`'s
-`gemini-2.5-flash-image` (a genuinely different model for a genuinely different
-capability — image generation/editing, not text/vision classification, so it does not
-belong in the same `GEMINI_MODEL_NAME` default as the four sites above) turned out to
-already have an announced shutdown date of **2026-10-02 — about three weeks from this
-note** — per the same live deprecations-page research. That capability is already
-documented above as "NOT wired into `process_job_assets`" (no automatic-pipeline traffic
-today), which lowers the urgency, but it is real, addressable code
-(`POST /api/v1/post-production/object-removal`) and will start 404ing on its Gemini
-fallback path if this isn't picked up before that date. Not fixed here — left for
-whoever owns that feature to pick the right replacement (Google's own current guidance
-points at `gemini-3.1-flash-image-preview`, but a `-preview` suffix needs its own
-scrutiny before committing to it, same lesson as this section's own model choice above).
+**Found and fixed same day (2026-09-12), shortly after the finding above was first
+written up as "out of scope":** `object_removal_service.py`'s `gemini-2.5-flash-image`
+(a genuinely different model for a genuinely different capability — image
+generation/editing, not text/vision classification, so it correctly lives in its own
+`_DEFAULT_GEMINI_IMAGE_MODEL`/`GEMINI_IMAGE_MODEL_NAME` in `gemini_config.py`, not the
+same default as the four text-model sites above) had an announced shutdown of
+**2026-10-02**. Re-verified rather than left as a flagged maybe: Google's own
+image-generation guide names `gemini-3.1-flash-image-preview` as the current official
+migration target — not a community guess — so the default was switched to it despite
+the `-preview` suffix (which normally argues against defaulting to a preview model, per
+this section's own text-model reasoning above) because a confirmed three-week-out
+shutdown is a bigger risk than a preview label. Still env-overridable via
+`GEMINI_IMAGE_MODEL_NAME` for whenever this preview graduates to GA or gets replaced
+again — re-verify against https://ai.google.dev/gemini-api/docs/deprecations before
+trusting this default, this space moved three times in six weeks as of this date.
 
 ## Object Removal (Mask-Guided Inpainting) — Phase 2, 2026-09-12
 
@@ -401,10 +402,12 @@ already established for Phase 0/1 photo enhancement, applied to a new capability
    with a shared secret (`MAC_INFERENCE_KEY`, checked via `hmac.compare_digest` — this
    server is exposed to the public internet, real auth not just an obscure URL). See
    `mac-inference-server/README.md` for install/run/tunnel setup.
-2. **`gemini`** (fallback) — Gemini's current image model (`gemini-2.5-flash-image` via
-   `generateContent`; verified current/GA as of 2026-09-12 — same endpoint family
+2. **`gemini`** (fallback) — Gemini's current image model, centralized in
+   `get_gemini_image_model()` (`gemini_config.py`), currently `gemini-3.1-flash-image-preview`
+   (switched from `gemini-2.5-flash-image` same day — see the Gemini Model Outage &
+   Centralization section above for why) via `generateContent`; same endpoint family
    `qc_vision_provider.py` already uses for QC, but a distinct, image-capable model, not
-   `gemini-1.5-flash`). Researched: Gemini's image-editing API is mask-**free** /
+   `gemini-1.5-flash`. Researched: Gemini's image-editing API is mask-**free** /
    natural-language-instruction-driven — there is no bitmask request parameter, a real
    current API constraint, not an oversight in the code. To still honor a given mask,
    `object_removal_service.py` burns it into a second copy of the photo as a solid magenta

@@ -57,20 +57,21 @@ def gemini_generate_content_url(model: str | None = None) -> str:
 # distinct Gemini image model family.
 #
 # Added 2026-09-12 for object_removal_service.py's Gemini fallback engine.
-# Researched at the same time as this file's own text-model incident above,
-# and the picture is genuinely noisy/fast-moving right now: multiple sources
-# describe gemini-2.5-flash-image as the current production image-editing
-# model (Google's own "now ready for production" post), but at least one
-# source claims an October 2026 shutdown with gemini-3.1-flash-image-preview
-# as successor -- and "-preview" model names are deliberately NOT used as a
-# default here (preview APIs can change without the deprecation-schedule
-# guarantees a GA model gets). Given that uncertainty, this is env-overridable
-# for exactly the reason get_gemini_model() above is: so a retirement doesn't
-# need a code change to fix, just GEMINI_IMAGE_MODEL_NAME. Re-verify against
+# Re-verified same day: gemini-2.5-flash-image's shutdown is confirmed for
+# 2026-10-02 (~3 weeks out), and Google's own migration guidance names
+# gemini-3.1-flash-image-preview as the official replacement -- not a
+# community guess, this is the documented "go-to image generation model"
+# in Google's current image-generation guide. Switched the default to it
+# despite the "-preview" suffix (which normally argues against defaulting
+# to a preview model, per get_gemini_model()'s reasoning above) because the
+# alternative is defaulting to a model that will be dead in three weeks --
+# the greater risk here is the confirmed shutdown, not the preview label.
+# Still env-overridable via GEMINI_IMAGE_MODEL_NAME for whenever this
+# preview graduates to GA (or gets replaced again). Re-verify against
 # https://ai.google.dev/gemini-api/docs/deprecations before assuming this
-# default is still current, especially given the Oct 2026 date some sources
-# reported is close.
-_DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"
+# default is still current -- this space moved three times in six weeks
+# as of this date.
+_DEFAULT_GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image-preview"
 
 
 def get_gemini_image_model() -> str:
