@@ -2,7 +2,9 @@
 
 Handles:
   GET  /api/uploads           — list all uploads (optionally filtered by job_id)
-  POST /api/uploads           — create a new upload record + store file to S3
+  POST /api/uploads           — small-file create (base64; 4MB Vercel cap)
+  POST /api/uploads/sign      — signed PUT for camera HDR / drone / reel
+  POST /api/uploads/complete  — register the signed object on the job
   GET  /api/uploads/{id}      — get a single upload by id
   DELETE /api/uploads/{id}    — delete an upload and decrement job count
 """
@@ -11,9 +13,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Form, Header, HTTPException
+from fastapi import APIRouter, Body, Form, Header, HTTPException
 
-from ..services.storage import upload_file
+from ..services.media_intake import infer_media_type, stills_storage_path, wants_staging
+from ..services.storage import create_signed_upload_url, upload_file
 from ..services.post_production import process_job_assets
 from fastapi import BackgroundTasks
 from ..shared.auth import get_vendor_member, resolve_vendor_actor_id
@@ -23,6 +26,125 @@ from ..shared.schemas import UploadRecord
 
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
+
+
+
+async def _actor_job(authorization, x_user_id, job_id: str):
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    db = await get_db()
+    res_job = await db.table("jobs").select(
+        "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
+    ).eq("id", job_id).maybe_single().execute()
+    job = res_job.data or {}
+    if not job or (
+        job.get("vendor_id") not in (vendor_id, actor_id)
+        and job.get("assignee_id") != actor_id
+    ):
+        api_error(404, "Job not found", "job_not_found")
+    return db, actor_id, vendor_id, job
+
+
+def _maybe_start_post(background_tasks, job: dict, new_uploaded: int, job_id: str) -> None:
+    deliverables = job.get("deliverables_count") or 0
+    status = (job.get("status") or "")
+    if status == "completed" and (not deliverables or new_uploaded >= deliverables):
+        background_tasks.add_task(process_job_assets, job_id)
+
+
+@router.post("/sign")
+async def sign_stills_upload(
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Mint a signed PUT for a camera still / drone / reel (bypasses 4.5MB Vercel POST).
+
+    Body: job_id, filename, mime_type?, media_type?, file_size?
+    PUT bytes to signed_url, then POST /api/uploads/complete.
+    """
+    job_id = str((payload or {}).get("job_id") or "").strip()
+    filename = str((payload or {}).get("filename") or "still.jpg")
+    mime_type = str((payload or {}).get("mime_type") or "")
+    media_type = infer_media_type(filename, mime_type, (payload or {}).get("media_type"))
+    if not job_id:
+        api_error(400, "job_id is required", "missing_job_id")
+    await _actor_job(authorization, x_user_id, job_id)
+    upload_id = str(uuid.uuid4())
+    path = stills_storage_path(job_id, upload_id, filename)
+    signed = await create_signed_upload_url(path)
+    if not signed or not signed.get("signed_url"):
+        api_error(502, "Could not mint stills upload URL", "stills_sign_failed")
+    return {
+        "ok": True,
+        "upload_id": upload_id,
+        "job_id": job_id,
+        "storage_path": path,
+        "path": signed.get("path") or path,
+        "signed_url": signed.get("signed_url"),
+        "token": signed.get("token"),
+        "content_type": mime_type or "application/octet-stream",
+        "media_type": media_type,
+        "requires_staging": media_type == "staging",
+    }
+
+
+@router.post("/complete")
+async def complete_stills_upload(
+    background_tasks: BackgroundTasks,
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Register a stills file after the client PUT to the signed URL."""
+    job_id = str((payload or {}).get("job_id") or "").strip()
+    upload_id = str((payload or {}).get("upload_id") or "").strip()
+    storage_path = str((payload or {}).get("storage_path") or (payload or {}).get("path") or "").strip()
+    filename = str((payload or {}).get("filename") or "still.jpg")
+    mime_type = str((payload or {}).get("mime_type") or "")
+    file_size = int((payload or {}).get("file_size") or 0)
+    media_type = infer_media_type(filename, mime_type, (payload or {}).get("media_type"))
+    if not job_id or not upload_id or not storage_path:
+        api_error(400, "job_id, upload_id, and storage_path are required", "missing_complete_fields")
+    prefix = f"bricks-go/jobs/{job_id}/{upload_id}/"
+    if not storage_path.startswith(prefix):
+        api_error(400, "storage_path must be the signed stills path for this job", "bad_stills_path")
+    db, _, _, job = await _actor_job(authorization, x_user_id, job_id)
+
+    record = UploadRecord(
+        id=upload_id,
+        job_id=job_id,
+        filename=filename,
+        file_size=file_size,
+        mime_type=mime_type,
+        file_url=storage_path,
+        media_type=media_type,
+        processing_status="pending",
+        requires_staging=media_type == "staging",
+    )
+    payload_row = record.dict()
+    try:
+        await db.table("uploads").insert(payload_row).execute()
+    except Exception:
+        # Older rows may lack optional columns — retry the core set.
+        slim = {k: payload_row[k] for k in (
+            "id", "job_id", "filename", "file_size", "mime_type",
+            "thumbnail", "file_url", "thumbnail_url", "qc_variant_url", "created_at",
+        )}
+        slim["media_type"] = media_type
+        await db.table("uploads").insert(slim).execute()
+
+    new_uploaded = (job.get("uploaded_count") or 0) + 1
+    await db.table("jobs").update({
+        "uploaded_count": new_uploaded,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", job_id).execute()
+    res_fresh = await db.table("jobs").select("status, deliverables_count, uploaded_count").eq("id", job_id).maybe_single().execute()
+    fresh = res_fresh.data or job
+    fresh["uploaded_count"] = new_uploaded
+    _maybe_start_post(background_tasks, fresh, new_uploaded, job_id)
+    return record.dict()
 
 
 @router.get("")
@@ -76,7 +198,8 @@ async def create_upload(
     filename: str = Form(...),
     file_size: int = Form(0),
     mime_type: str = Form(""),
-    file_data: str = Form(""),        # base64-encoded file content
+    file_data: str = Form(""),        # base64-encoded file content (small files only)
+    media_type: str = Form(""),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
@@ -127,6 +250,7 @@ async def create_upload(
         raise HTTPException(status_code=500, detail="File upload to storage failed")
 
     # Persist record
+    kind = infer_media_type(filename, mime_type, media_type)
     record = UploadRecord(
         id=upload_id,
         job_id=job_id,
@@ -137,9 +261,21 @@ async def create_upload(
         file_url=file_url,
         thumbnail_url=thumbnail_url,
         qc_variant_url=qc_variant_url,
+        media_type=kind,
+        processing_status="pending",
+        requires_staging=kind == "staging" or wants_staging({"filename": filename, "media_type": kind}),
     )
 
-    await db.table("uploads").insert(record.dict()).execute()
+    row = record.dict()
+    try:
+        await db.table("uploads").insert(row).execute()
+    except Exception:
+        slim = {k: row[k] for k in (
+            "id", "job_id", "filename", "file_size", "mime_type",
+            "thumbnail", "file_url", "thumbnail_url", "qc_variant_url", "created_at",
+        )}
+        slim["media_type"] = row.get("media_type") or "hdr"
+        await db.table("uploads").insert(slim).execute()
 
     # Increment job.uploaded_count
     job = res_job.data

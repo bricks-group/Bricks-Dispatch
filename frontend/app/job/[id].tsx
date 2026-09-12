@@ -742,6 +742,16 @@ export default function JobDetailScreen() {
             ) : null}
           </View>
         ) : null}
+        {['in_progress', 'completed', 'processing'].includes(job.status) ? (
+          <TouchableOpacity
+            style={s.captureStartChip}
+            onPress={() => router.push('/(tabs)/uploads' as any)}
+            activeOpacity={0.8}
+          >
+            <Text style={s.captureStartChipText}>Upload stills · drone · reel</Text>
+          </TouchableOpacity>
+        ) : null}
+
         {captureStatusRows.length > 0 ? (
           <View style={s.captureStatusBlock}>
             <Text style={s.sectionEye}>CAPTURE STATUS</Text>

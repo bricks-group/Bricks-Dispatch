@@ -236,6 +236,9 @@ class UploadRecord(BaseModel):
     file_url: Optional[str] = None     # S3 object key for original file
     thumbnail_url: Optional[str] = None  # S3 object key for thumbnail
     qc_variant_url: Optional[str] = None  # S3 object key for QC-review-sized JPEG
+    media_type: str = "hdr"  # hdr | drone | reel | twilight | staging
+    processing_status: Optional[str] = None  # pending | processing | done | failed
+    requires_staging: bool = False
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

@@ -11,6 +11,59 @@ import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
+const STILLS_TYPES = [
+  { id: 'hdr', label: 'HDR' },
+  { id: 'drone', label: 'Drone' },
+  { id: 'reel', label: 'Reel' },
+  { id: 'twilight', label: 'Twilight' },
+  { id: 'staging', label: 'Staging' },
+] as const;
+type StillsType = (typeof STILLS_TYPES)[number]['id'];
+
+async function putStill(jobId: string, asset: { uri: string; fileName?: string | null; mimeType?: string | null; fileSize?: number | null }, mediaType: StillsType, headers: Record<string, string>) {
+  const filename = asset.fileName || `upload_${Date.now()}.jpg`;
+  const mime = asset.mimeType || 'image/jpeg';
+  const signRes = await fetch(`${API}/api/uploads/sign`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      job_id: jobId,
+      filename,
+      mime_type: mime,
+      file_size: asset.fileSize || 0,
+      media_type: mediaType,
+    }),
+  });
+  const sign = await signRes.json().catch(() => ({}));
+  if (!signRes.ok || !sign.signed_url) {
+    throw new Error(sign.detail || sign.message || `Sign failed (${signRes.status})`);
+  }
+  const blobRes = await fetch(asset.uri);
+  const blob = await blobRes.blob();
+  const put = await fetch(sign.signed_url, {
+    method: 'PUT',
+    headers: { 'Content-Type': sign.content_type || mime },
+    body: blob,
+  });
+  if (!put.ok) throw new Error(`Upload failed (${put.status})`);
+  const done = await fetch(`${API}/api/uploads/complete`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      job_id: jobId,
+      upload_id: sign.upload_id,
+      storage_path: sign.storage_path,
+      filename,
+      mime_type: mime,
+      file_size: asset.fileSize || blob.size || 0,
+      media_type: mediaType,
+    }),
+  });
+  if (!done.ok) throw new Error(`Complete failed (${done.status})`);
+  return done.json();
+}
+
+
 type UploadRecord = {
   id: string; job_id: string; filename: string; file_size: number;
   mime_type: string; created_at: string;
@@ -53,6 +106,8 @@ export default function UploadsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [stillsType, setStillsType] = useState<StillsType>('hdr');
+  const [targetJobId, setTargetJobId] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -76,12 +131,12 @@ export default function UploadsScreen() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const pickAndUpload = async () => {
-    const activeJobs = jobs.filter(j => j.status === 'in_progress');
+    const activeJobs = jobs.filter(j => ['in_progress', 'completed', 'processing'].includes(j.status));
     if (activeJobs.length === 0) {
-      Alert.alert('No active jobs', 'Start a job before uploading files.');
+      Alert.alert('No active jobs', 'Check in on a job before uploading stills.');
       return;
     }
-    const targetJob = activeJobs[0];
+    const targetJob = activeJobs.find(j => j.id === targetJobId) || activeJobs[0];
 
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
@@ -90,29 +145,21 @@ export default function UploadsScreen() {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
-      quality: 0.8,
-      base64: true,
+      quality: 1,
+      allowsMultipleSelection: true,
       allowsEditing: false,
     });
     if (result.canceled || !result.assets?.length) return;
 
-    const asset = result.assets[0];
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append('job_id', targetJob.id);
-      form.append('filename', asset.fileName || `upload_${Date.now()}.jpg`);
-      form.append('file_size', String(asset.fileSize || 0));
-      form.append('mime_type', asset.mimeType || 'image/jpeg');
-      form.append('file_data', asset.base64 || '');
       const headers = await actorHeaders();
-      const res = await fetch(`${API}/api/uploads`, {
-        method: 'POST', headers, body: form,
-      });
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      for (const asset of result.assets) {
+        await putStill(targetJob.id, asset, stillsType, headers);
+      }
       await fetchData();
-    } catch {
-      Alert.alert('Upload failed', 'Network error — check your connection.');
+    } catch (e) {
+      Alert.alert('Upload failed', e instanceof Error ? e.message : 'Network error — check your connection.');
     } finally {
       setUploading(false);
     }
@@ -139,7 +186,36 @@ export default function UploadsScreen() {
           contentContainerStyle={s.scroll}
         >
           <Text style={s.title}>Upload</Text>
-          <Text style={s.subtitle}>Drop the card — we auto-sort by job.</Text>
+          <Text style={s.subtitle}>Camera JPEG, drone, reel, twilight — signed upload, no 4MB cap.</Text>
+
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+            {STILLS_TYPES.map((t) => (
+              <TouchableOpacity
+                key={t.id}
+                onPress={() => setStillsType(t.id)}
+                style={{
+                  paddingHorizontal: 10, paddingVertical: 6, borderRadius: 2,
+                  borderWidth: 1,
+                  borderColor: stillsType === t.id ? TOKENS.brick : TOKENS.nightHairS,
+                  backgroundColor: stillsType === t.id ? TOKENS.brick + '22' : 'transparent',
+                }}
+              >
+                <Text style={{ color: stillsType === t.id ? TOKENS.brickSoft : TOKENS.moonFaint, fontSize: 12 }}>{t.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {jobs.filter(j => ['in_progress', 'completed', 'processing'].includes(j.status)).length > 1 ? (
+            <View style={{ marginBottom: 14 }}>
+              {jobs.filter(j => ['in_progress', 'completed', 'processing'].includes(j.status)).map((j) => (
+                <TouchableOpacity key={j.id} onPress={() => setTargetJobId(j.id)} style={{ paddingVertical: 6 }}>
+                  <Text style={{ color: (targetJobId || '') === j.id || (!targetJobId && j === jobs.find(x => ['in_progress', 'completed', 'processing'].includes(x.status))) ? TOKENS.moon : TOKENS.moonFaint, fontSize: 13 }}>
+                    {(targetJobId === j.id) ? '● ' : '○ '}{j.address}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
 
           {/* Drop zone */}
           <TouchableOpacity style={s.dropZone} onPress={pickAndUpload} disabled={uploading} activeOpacity={0.8}>
@@ -149,7 +225,7 @@ export default function UploadsScreen() {
               <>
                 <Upload size={28} color={TOKENS.brick} strokeWidth={1.5} />
                 <Text style={s.dropTitle}>Tap to select files</Text>
-                <Text style={s.dropMeta}>RAW, JPEG, MP4 · up to 20 GB per job</Text>
+                <Text style={s.dropMeta}>JPEG / MP4 from the camera card · {stillsType.toUpperCase()}</Text>
                 <View style={s.chooseBtn}>
                   <Text style={s.chooseBtnText}>CHOOSE FILES</Text>
                 </View>

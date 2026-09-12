@@ -5,6 +5,7 @@ import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer } from '../lib/c
 import type { CaptureKind } from '../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
+import { STILLS_TYPES, uploadStillFile, type StillsType } from '../lib/stills-upload';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -202,8 +203,9 @@ function JobListingPanel({
   const [hits, setHits] = useState<ListingHit[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [uploads, setUploads] = useState<{ id: string; filename: string }[]>([]);
+  const [uploads, setUploads] = useState<{ id: string; filename: string; media_type?: string }[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [stillsType, setStillsType] = useState<StillsType>('hdr');
   const [pick, setPick] = useState(job.assignee_id || '');
   const [arriveAt, setArriveAt] = useState((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
 
@@ -257,24 +259,16 @@ function JobListingPanel({
   };
 
   const onUpload = async (event: FormEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
-    if (!file) return;
+    const files = Array.from(event.currentTarget.files || []);
+    if (!files.length) return;
     setUploading(true);
     setErr('');
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = '';
-      bytes.forEach((b) => { binary += String.fromCharCode(b); });
-      const fd = new FormData();
-      fd.append('job_id', job.id);
-      fd.append('filename', file.name);
-      fd.append('file_size', String(file.size));
-      fd.append('mime_type', file.type || 'application/octet-stream');
-      fd.append('file_data', btoa(binary));
-      const rec = await api.postForm<{ id: string; filename: string }>('/api/uploads', fd);
-      setUploads((list) => [...list, rec]);
-      onPatched({ ...job, uploaded_count: (job.uploaded_count || 0) + 1 });
+      for (const file of files) {
+        const rec = await uploadStillFile(job.id, file, stillsType);
+        setUploads((list) => [...list, rec]);
+        onPatched({ ...job, uploaded_count: (job.uploaded_count || 0) + 1 });
+      }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -432,12 +426,32 @@ function JobListingPanel({
         <JobShootChecklist job={job} />
         <CaptureStatusBlock job={job} />
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS</p>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS · CAMERA / DRONE / REEL</p>
+          <p className="muted" style={{ padding: 0, margin: '4px 0 8px', fontSize: 12 }}>
+            HDR stills stay on the camera. After the shoot, upload JPEG / RAW / MP4 here — files go straight to storage (not the 4MB API cap).
+          </p>
           <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
-            {uploads.length === 0 ? <li className="muted">None yet</li> : uploads.map((u) => <li key={u.id}>{u.filename}</li>)}
+            {uploads.length === 0 ? <li className="muted">None yet</li> : uploads.map((u) => (
+              <li key={u.id}>{u.filename}{u.media_type ? <span className="muted"> · {u.media_type}</span> : null}</li>
+            ))}
           </ul>
-          <input type="file" onChange={onUpload} disabled={uploading || job.status === 'assigned'} />
-          {uploading && <span className="muted"> Uploading…</span>}
+          <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select
+              value={stillsType}
+              onChange={(e) => setStillsType(e.target.value as StillsType)}
+              disabled={uploading || job.status === 'assigned'}
+            >
+              {STILLS_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+            <input
+              type="file"
+              multiple
+              accept="image/*,video/*,.jpg,.jpeg,.png,.tif,.tiff,.webp,.heic,.mp4,.mov"
+              onChange={onUpload}
+              disabled={uploading || job.status === 'assigned'}
+            />
+            {uploading && <span className="muted"> Uploading…</span>}
+          </div>
         </div>
         <form className="row" onSubmit={search}>
           <input

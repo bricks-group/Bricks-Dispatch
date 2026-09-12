@@ -180,48 +180,51 @@ async def process_job_assets(job_id: str):
 
     logger.info(f"Starting post-production for job {job_id}")
 
-    # Video/archive uploads aren't photo assets — Fotello/Autoenhance/BoxBrownie only
-    # edit images, so these are skipped from provider routing below and delivered as-is.
-    # 3D visits are Polycam-only (embed URL or a manually uploaded .ply/.splat file,
-    # handled generically by _finalize_job_if_complete's splat_url resolution) — no
-    # automated processing pipeline exists for raw video/zip captures.
-    _SPLAT_SOURCE_EXTENSIONS = (".mp4", ".mov", ".avi", ".zip", ".tar")
+    from .media_intake import delivery_route
 
     results = []
-    for asset in assets:
+    leftover = []
+    for asset in assets or []:
+        route = delivery_route(asset)
+        if route == "skip":
+            continue
+        if route == "visit":
+            logger.info(f"Skipping processing for pre-built 3D asset: {asset.get('filename')}")
+            leftover.append(asset)
+            continue
+        if route == "as_is":
+            leftover.append(asset)
+            continue
+
         storage_path = asset.get("file_url")
-        filename = (asset.get("filename") or "").lower()
-        if not storage_path: continue
-
-        # SKIP pre-processed .splat / .ply 3D assets (legacy direct-upload path)
-        if filename.endswith(".splat") or filename.endswith(".ply"):
-            logger.info(f"Skipping processing for pre-built 3D asset: {filename}")
-            continue
-
-        # SKIP video/archive assets — not photo-editable, no automated 3D processing exists
-        if filename.endswith(_SPLAT_SOURCE_EXTENSIONS):
-            continue
-
-        # Providers need an HTTP URL — generate a short-lived signed URL from the storage path
         provider_url = await get_signed_download_url(storage_path)
         if not provider_url:
-            logger.warning(f"Could not generate signed URL for asset {asset['id']} ({storage_path}) — skipping")
+            logger.warning(f"Could not generate signed URL for asset {asset['id']} ({storage_path}) — local deliver")
+            leftover.append(asset)
             continue
 
-        # ROUTE based on metadata
-        if asset.get("requires_staging"):
+        if route == "staging":
             bb_id = await trigger_boxbrownie_staging(provider_url)
             if bb_id:
                 results.append({"asset_id": asset["id"], "provider": "boxbrownie", "provider_job_id": bb_id})
+            else:
+                leftover.append(asset)
+            continue
+
+        if FOTELLO_API_KEY:
+            ft_id = await trigger_fotello_edit(provider_url)
+            if ft_id:
+                results.append({"asset_id": asset["id"], "provider": "fotello", "provider_job_id": ft_id})
+            else:
+                leftover.append(asset)
+        elif AUTOENHANCE_API_KEY:
+            ae_id = await trigger_autoenhance_edit(provider_url)
+            if ae_id:
+                results.append({"asset_id": asset["id"], "provider": "autoenhance", "provider_job_id": ae_id})
+            else:
+                leftover.append(asset)
         else:
-            if FOTELLO_API_KEY:
-                ft_id = await trigger_fotello_edit(provider_url)
-                if ft_id:
-                    results.append({"asset_id": asset["id"], "provider": "fotello", "provider_job_id": ft_id})
-            elif AUTOENHANCE_API_KEY:
-                ae_id = await trigger_autoenhance_edit(provider_url)
-                if ae_id:
-                    results.append({"asset_id": asset["id"], "provider": "autoenhance", "provider_job_id": ae_id})
+            leftover.append(asset)
 
     for res in results:
         await db.table("uploads").update({
@@ -229,3 +232,68 @@ async def process_job_assets(job_id: str):
             "provider": res["provider"],
             "provider_job_id": res["provider_job_id"]
         }).eq("id", res["asset_id"]).execute()
+
+    # Without vendor keys (or for drone/reel), leftover stills used to sit in
+    # processing forever — finalize never ran. Deliver them now so the listing
+    # file / client share is not a hollow path.
+    for asset in leftover:
+        await deliver_asset_without_vendor(db, job_id, asset)
+
+    if not results:
+        try:
+            from ..routers.post_production import _finalize_job_if_complete
+            await _finalize_job_if_complete(job_id)
+        except Exception as e:
+            logger.error(f"Job {job_id}: finalize after local deliver failed: {e}")
+
+
+async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
+    """Mark an upload done so listing delivery can proceed without Fotello/BoxBrownie.
+
+    Photos get in-house enhance when possible; drone/reel/video stay as-is.
+    Staging without BoxBrownie keys delivers the original (honest — not staged).
+    """
+    from .media_intake import delivery_route
+    from .storage import download_bytes
+
+    now = datetime.now(timezone.utc).isoformat()
+    upload_id = asset.get("id")
+    file_path = asset.get("file_url")
+    route = delivery_route(asset)
+    if not upload_id or not file_path:
+        return
+    if route == "visit":
+        return
+
+    processed = file_path
+    provider = "as_is"
+    qc_path = asset.get("qc_variant_url")
+
+    if route in ("vendor_photo", "staging"):
+        try:
+            from .photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
+            original = await download_bytes(file_path)
+            if original:
+                enhanced = enhance_image(original)
+                processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
+                qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
+                provider = "bricks_inhouse"
+        except Exception as e:
+            logger.error(f"In-house enhance failed for {upload_id}: {e} — delivering original")
+            processed = file_path
+            provider = "original"
+        if route == "staging" and provider != "boxbrownie":
+            logger.warning(
+                f"Job {job_id}: staging upload {upload_id} delivered without BoxBrownie "
+                "(keys missing or API failed) — original still, not virtually staged"
+            )
+
+    update = {
+        "processing_status": "done",
+        "processed_url": processed,
+        "provider": provider,
+        "processed_at": now,
+    }
+    if qc_path:
+        update["qc_variant_url"] = qc_path
+    await db.table("uploads").update(update).eq("id", upload_id).execute()
