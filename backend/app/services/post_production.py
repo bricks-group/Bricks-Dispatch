@@ -14,83 +14,22 @@ _AUTOENHANCE_API_KEY_ENV = "AUTOENHANCE_API_KEY"
 logger = logging.getLogger(__name__)
 
 # --- Config ---
-BOXBROWNIE_PUBLIC_KEY = os.environ.get("BOXBROWNIE_PUBLIC_KEY")
-BOXBROWNIE_PRIVATE_KEY = os.environ.get("BOXBROWNIE_PRIVATE_KEY")
+# BoxBrownie / third-party virtual staging is intentionally disabled (Kam 2026-09-12).
+# Staging uploads deliver originals to the listing file — never call vendors or claim furniture was staged.
+# Owned Bricks staging ships later. Fotello/Autoenhance remain optional HDR enhance only.
 AUTOENHANCE_API_KEY = os.environ.get("AUTOENHANCE_API_KEY")
 FOTELLO_API_KEY = os.environ.get("FOTELLO_API_KEY")
 
-# --- BoxBrownie Helpers ---
-
-def _build_bb_virtual_staging_xml(source_url: str, room_type: str, style_preset: str) -> str:
-    room_map = {'Living Room': 'Living Room', 'Bedroom': 'Bedroom 1', 'Kitchen': 'Kitchen'}
-    style_map = {'modern': 'Modern', 'coastal': 'Contemporary', 'scandi': 'Minimalist'}
-    room_name = room_map.get(room_type, 'Living Room')
-    furniture_style = style_map.get(style_preset, 'Modern')
-    
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<job>
-  <jobTitle>Bricks Virtual Staging - {room_name} - {furniture_style}</jobTitle>
-  <virtualStagingType>VIRTUAL_STAGING</virtualStagingType>
-  <fileGroup>
-    <files><fileURL>{source_url}</fileURL></files>
-    <options>
-      <option><optionName>ROOM_NAME</optionName><optionValue>{room_name}</optionValue></option>
-      <option><optionName>FURNITURE_STYLE</optionName><optionValue>{furniture_style}</optionValue></option>
-    </options>
-  </fileGroup>
-</job>"""
 
 async def trigger_boxbrownie_staging(source_url: str, room_type: str = "Living Room", style_preset: str = "modern") -> Optional[str]:
-    if not BOXBROWNIE_PUBLIC_KEY or not BOXBROWNIE_PRIVATE_KEY:
-        logger.error("BoxBrownie keys not configured")
-        return None
-    xml = _build_bb_virtual_staging_xml(source_url, room_type, style_preset)
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                "https://www.boxbrownie.com/api/v2/job/createVirtualStaging",
-                headers={"Api-Public-Key": BOXBROWNIE_PUBLIC_KEY, "Api-Private-Key": BOXBROWNIE_PRIVATE_KEY},
-                data={"xml": xml}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            job = data.get("job", {})
-            # Must store jobReference (e.g. "VS373735194179") — the GET endpoint uses this,
-            # not jobId (hex hash). BoxBrownie has no webhooks; we poll via jobReference.
-            return job.get("jobReference") or data.get("jobReference")
-    except Exception as e:
-        logger.exception(f"BoxBrownie staging request failed: {e}")
-        return None
+    """Disabled — no third-party virtual staging on the launch path."""
+    logger.info("BoxBrownie staging skipped (disabled): owned pipeline only")
+    return None
 
 
 async def poll_boxbrownie_job(job_reference: str) -> Optional[str]:
-    """
-    Poll BoxBrownie for a single job's status.
-    Returns the first completed fileURL, or None if not done yet or on error.
-    BoxBrownie has no webhooks — this is the only way to know when a job is done.
-    """
-    if not BOXBROWNIE_PUBLIC_KEY or not BOXBROWNIE_PRIVATE_KEY:
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                f"https://www.boxbrownie.com/api/v2/job/{job_reference}",
-                headers={"Api-Public-Key": BOXBROWNIE_PUBLIC_KEY, "Api-Private-Key": BOXBROWNIE_PRIVATE_KEY},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            job = data.get("job", {})
-            status = job.get("jobStatus", "")
-            if status == "Completed":
-                files = job.get("output", {}).get("file", [])
-                if isinstance(files, dict):
-                    files = [files]
-                if files:
-                    return files[0].get("fileURL")
-            return None
-    except Exception as e:
-        logger.error(f"BoxBrownie poll failed for {job_reference}: {e}")
-        return None
+    """Disabled — never poll BoxBrownie for staging results."""
+    return None
 
 # --- Autoenhance Helpers ---
 
@@ -204,11 +143,8 @@ async def process_job_assets(job_id: str):
             continue
 
         if route == "staging":
-            bb_id = await trigger_boxbrownie_staging(provider_url)
-            if bb_id:
-                results.append({"asset_id": asset["id"], "provider": "boxbrownie", "provider_job_id": bb_id})
-            else:
-                leftover.append(asset)
+            # Never call BoxBrownie / third-party staging. Deliver original (honest).
+            leftover.append(asset)
             continue
 
         if FOTELLO_API_KEY:
@@ -248,10 +184,10 @@ async def process_job_assets(job_id: str):
 
 
 async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
-    """Mark an upload done so listing delivery can proceed without Fotello/BoxBrownie.
+    """Mark an upload done so listing delivery can proceed without vendor APIs.
 
     Photos get in-house enhance when possible; drone/reel/video stay as-is.
-    Staging without BoxBrownie keys delivers the original (honest — not staged).
+    Staging always delivers the original (honest — not virtually staged; no third-party).
     """
     from .media_intake import delivery_route
     from .storage import download_bytes
@@ -282,10 +218,10 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             logger.error(f"In-house enhance failed for {upload_id}: {e} — delivering original")
             processed = file_path
             provider = "original"
-        if route == "staging" and provider != "boxbrownie":
-            logger.warning(
-                f"Job {job_id}: staging upload {upload_id} delivered without BoxBrownie "
-                "(keys missing or API failed) — original still, not virtually staged"
+        if route == "staging":
+            logger.info(
+                f"Job {job_id}: staging upload {upload_id} delivered as original "
+                "(no third-party virtual staging — owned pipeline later)"
             )
 
     update = {
