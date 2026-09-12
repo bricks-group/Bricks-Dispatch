@@ -13,6 +13,7 @@ Tables live in Bricks-OS (capture_sessions / rooms / pipeline / frames) and
 are service-role-only, same as jobs/uploads.
 """
 import json
+import logging
 import math
 from datetime import datetime, timezone
 from typing import Optional
@@ -53,6 +54,7 @@ from ..shared.errors import api_error
 from ..shared.job_scope import job_visible_to
 
 router = APIRouter(prefix="/api/capture", tags=["capture"])
+logger = logging.getLogger("capture")
 
 _VALID_KINDS = ("splat", "floorplan")
 
@@ -85,8 +87,21 @@ def _normalize_kind(raw) -> str:
 
 
 def _missing_table(exc: Exception) -> bool:
+    """True only when the capture_* table itself is missing.
+
+    Do NOT match generic "does not exist" — PostgREST/Postgres column errors
+    ("column X does not exist") would otherwise return an empty session with
+    sessionId=null and silently block every GO capture start.
+    """
     text = str(exc).lower()
-    return "does not exist" in text or "42p01" in text or "undefined table" in text
+    if "42p01" in text or "undefined_table" in text or "undefined table" in text:
+        return True
+    # PostgREST schema-cache miss for a relation
+    if "could not find the table" in text and "schema cache" in text:
+        return True
+    if "relation" in text and "does not exist" in text:
+        return True
+    return False
 
 
 def _job_meta(job: dict) -> tuple[str, str]:
@@ -395,7 +410,9 @@ async def ensure_session(
         return await _load_session_bundle(db, job_id, session, job)
     except Exception as e:
         if _missing_table(e):
+            logger.warning("capture tables missing on ensure_session: %s", e)
             return _empty_session(job, kind)
+        logger.exception("ensure_session failed job_id=%s kind=%s", job_id, kind)
         raise
 
 
