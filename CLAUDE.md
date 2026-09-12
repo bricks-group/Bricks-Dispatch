@@ -89,6 +89,7 @@ API base: `https://dispatch-api.brxs.ca`
 - `backend/app/services/client_comms.py` — Resend emails: booking confirmed + photographer en route
 - `backend/app/services/qc_agent.py` — Gemini vision QC agent (scores uploaded photos 0-100)
 - `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration
+- `backend/video_worker/grade.py` — standalone ffmpeg-based video grade/trim/stabilize worker. **Not imported by anything in `app/` or deployed** — see Post-Production Pipeline's "Motion (Video) Enhancement" section below.
 - `backend/app/services/payout_service.py` — Stripe Connect transfers, tier percentages
 - `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (T+15 before claim)
 - `backend/app/shared/schemas.py` — Pydantic models
@@ -198,6 +199,104 @@ Pipeline, as it now runs for a non-staging photo asset:
 6. QC vision agent: Gemini 1.5 Flash scores photos 0-100; passed(90+)/flagged(70-89)/rejected(<70)
 7. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
 8. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
+
+**Video uploads are currently delivered completely raw — traced precisely, 2026-09-12.**
+Before building anything for the "motion" capability, confirmed exactly what happens to a
+`.mp4`/`.mov`/`.avi`/`.zip`/`.tar` upload today, since it wasn't obvious from the code
+alone which of two very different things was happening. `process_job_assets()` (line ~377)
+does skip these extensions from the enhancement-provider loop entirely (`continue`, no
+`processing_status` ever set on that upload row) — that much matched what a prior research
+pass had flagged. What that pass didn't trace further: an unset `processing_status` is
+`None`, and `_finalize_job_if_complete()`'s in-flight gate only blocks on `"processing"`/
+`"pending"` — `None` sails through. `qc_agent.py::run_qc_for_job` then explicitly matches
+`.mp4`/`.mov` (not `.avi` — pre-existing gap, out of scope here) and marks them
+`qc_status="passed"` with a "Non-image asset — QC skipped" note, without ever inspecting
+the file. Delivery's own filter only excludes `.splat`/`.ply` by filename and
+`processing_status == "failed"` — neither applies — so `path = processed_url or file_url`
+resolves to the raw uploaded `file_url`, gets signed, and lands in `media_delivery.
+delivery_urls` and the agent's delivery email exactly as uploaded. **So: video is
+delivered, not dropped — just never touched.** This matters for scoping "motion
+enhancement" as a real gap (grading a raw upload before delivery), not a missing feature
+on top of nothing.
+
+## Motion (Video) Enhancement — researched 2026-09-12, built standalone, NOT deployed
+
+Phase 2 of the in-house post-production effort (Phase 0/1 = photos, above) was scoped as
+color grading + trim + stabilization for real camera-shot walkthrough/drone video —
+explicitly **not** AI-generated video, classical ffmpeg-filtergraph work on footage that
+already exists. Researched feasibility on this repo's actual deployment target before
+writing any processing code, per instruction, rather than assuming either way:
+
+- **Bundle size**: `backend/vercel.json` uses the legacy `@vercel/python` Build Output API
+  v2 builder with `maxLambdaSize: "250mb"` already configured — this repo hasn't opted into
+  the newer Vercel Functions format that Python's 500MB default / 5GB "large functions"
+  (Fluid Compute + Active CPU) apply to. A static ffmpeg binary (~70-100MB, e.g. via
+  `imageio-ffmpeg`) stacked on top of this function's already-bundled
+  opencv-python-headless/numpy/Pillow is a real risk against that 250MB cap, and Vercel's
+  own current guidance is that bundling ffmpeg into a Python serverless function is "not
+  recommended" for exactly this reason.
+- **Execution time**: `maxDuration: 300` in the same file matches Vercel Hobby's Fluid
+  Compute ceiling (fixed, not raisable); Pro/Enterprise can reach 800s standard / 1800s
+  beta, but nothing in this repo's config or docs says which plan is actually live. Even a
+  generous budget is a real risk for genuine on-site footage (this task's own framing
+  included raw drone footage, not only the packaged 60-90s cinematic cut) — two-pass
+  stabilization in particular is a real CPU-heavy motion-analysis step (timed locally: ~0.3s
+  for a 3-second 320×240 test clip, which does not extrapolate safely to minutes of 4K
+  drone footage), and a mid-encode kill on any hard ceiling leaves a stuck job with no
+  partial-output recovery path — unlike the photo pipeline's synchronous-but-fast per-image
+  CV pass.
+- **This repo already has a `backend/Dockerfile`** (apt-get system deps, runs
+  `uvicorn app.main:app` directly, no serverless wrapper or size/duration ceiling) — but
+  CLAUDE.md's own "Deployed:" line names only the two Vercel-fronted hosts
+  (`bricks-go-api.vercel.app` / `dispatch-api.brxs.ca`), and nothing in this repo says that
+  Dockerfile is an actual live deployment target today. Flagged as the most likely home for
+  this capability if/when it becomes one — not assumed, not wired to.
+
+**Decision: built the actual grading/trim/stabilization logic, but as a standalone module,
+not wired into the live pipeline** (`process_job_assets`/`_finalize_job_if_complete` above
+are untouched by this work) — per the explicit instruction not to force a half-working
+serverless integration. `backend/video_worker/grade.py` (own module docstring has the full
+detail, including the exact photo→video filter mapping):
+
+- `process_video(input_path, output_path, *, max_duration_s=None, stabilize=False, ...)` —
+  the one entry point a future integration would call. Shells out to a system `ffmpeg`/
+  `ffprobe` via subprocess; pure local-file-path in/out, zero dependency on anything in
+  `app/` (no Supabase/storage.py wiring — that's left for whoever eventually hosts this,
+  the same way `post_production.py::_run_inhouse_cv_enhancement` wraps
+  `photo_enhance_service.py` for photos).
+- Grading filtergraph translates photo_enhance_service.py's *intent*, not its per-pixel
+  algorithm (confirmed too slow for video, per instruction): CLAHE → ffmpeg's `clahe`
+  filter, **falling back to `histeq`** (global, not tile-based — weaker but same intent)
+  when `clahe` isn't compiled in — confirmed this actually matters: the ffmpeg build tested
+  against locally (Ubuntu 24.04's `apt` package, ffmpeg 6.1.1) has `libvidstab` but **no
+  `clahe` filter at all**, so the fallback path is the one that actually runs today, not a
+  defensive dead branch. Grey-world white balance → a fixed mild `colorbalance` cool-cast
+  reduction (not a true per-shot analysis — same "too slow" reasoning). Final `unsharp` +
+  a mild `eq` saturation lift for crispness/richness.
+- Stabilization: real two-pass `vidstabdetect`/`vidstabtransform`, feature-detected via
+  `ffmpeg -filters` (not assumed present) and chained into the same final encode as the
+  grading filters rather than a separate re-encode pass. Degrades to graded-but-not-
+  stabilized with a logged warning (never an exception) when the ffmpeg build lacks
+  `libvidstab`.
+- Trim: `max_duration_s` is accepted but never hardcoded — this repo has no per-package
+  target video length constant (that lives in Companion's config, e.g. its "60-90s
+  cinematic walkthrough" package copy); a caller passes the length in. `trim_only()` is
+  also exposed standalone (lossless stream-copy, no re-encode) for a trim-without-grading
+  case.
+- Tested in isolation (`backend/tests/test_video_grade_worker.py`) against an
+  ffmpeg-`lavfi`-generated synthetic test-pattern clip, the same "no external fixture"
+  convention `test_photo_enhance_service.py` uses for images — filtergraph fallback
+  selection, grade+trim+stabilize end-to-end, graceful degradation without libvidstab, and
+  the ffmpeg-unavailable error path. Skips (not fails) if `ffmpeg`/`ffprobe` aren't on
+  PATH, so it collects cleanly in an environment without them (this sandbox didn't have
+  ffmpeg until installed for this research; GitHub Actions' `ubuntu-latest` runner ships it
+  preinstalled, so CI exercises these for real).
+- **Open decision for the user, not made here**: where this actually runs in production —
+  the Dockerfile above, a dedicated worker, or the Mac-inference-server infra a parallel
+  image-generation effort is reportedly building. Whichever it is, that integration still
+  needs to be built (download from Storage → `process_video()` → upload result →
+  `media_delivery`/`uploads` row, mirroring the photo path's conventions) — not assumed or
+  started here.
 
 ## Capture Pipeline (undocumented until 2026-09-07 — real, substantial, not a stub)
 
