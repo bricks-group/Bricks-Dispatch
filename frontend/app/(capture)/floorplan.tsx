@@ -71,12 +71,17 @@ export default function FloorPlanCaptureScreen() {
     let cancelled = false;
     (async () => {
       if (!jobId) return;
-      const s = await ensureCaptureSession(jobId, KIND);
-      if (!cancelled) {
-        setSession(s);
-        setFrameCount(s.frameCount ?? 0);
-        setSelectedRoomId(s.currentRoomId ?? s.rooms?.[0]?.id ?? null);
+      const result = await ensureCaptureSession(jobId, KIND);
+      if (cancelled) return;
+      if (!result.ok || !result.session) {
+        setCaptureError(result.error ?? 'Could not start capture session');
+        return;
       }
+      setCaptureError(null);
+      const s = result.session;
+      setSession(s);
+      setFrameCount(s.frameCount ?? 0);
+      setSelectedRoomId(s.currentRoomId ?? s.rooms?.[0]?.id ?? null);
     })();
     return () => { cancelled = true; };
   }, [jobId]);

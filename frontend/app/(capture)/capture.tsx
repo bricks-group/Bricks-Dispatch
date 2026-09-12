@@ -65,12 +65,17 @@ export default function CaptureScreen() {
     let cancelled = false;
     (async () => {
       if (!jobId || kind === 'floorplan') return;
-      const s = await ensureCaptureSession(jobId, kind);
-      if (!cancelled) {
-        setSession(s);
-        setFrameCount(s.frameCount ?? 0);
-        setStationIndex(s.currentStationIndex ?? 0);
+      const result = await ensureCaptureSession(jobId, kind);
+      if (cancelled) return;
+      if (!result.ok || !result.session) {
+        setCaptureError(result.error ?? 'Could not start capture session');
+        return;
       }
+      setCaptureError(null);
+      const s = result.session;
+      setSession(s);
+      setFrameCount(s.frameCount ?? 0);
+      setStationIndex(s.currentStationIndex ?? 0);
     })();
     return () => { cancelled = true; };
   }, [jobId, kind]);

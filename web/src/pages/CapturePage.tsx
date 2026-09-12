@@ -143,8 +143,14 @@ export function CapturePage() {
     let cancelled = false;
     (async () => {
       if (!jobId) return;
-      const s = await ensureCaptureSession(jobId, kind);
+      const result = await ensureCaptureSession(jobId, kind);
       if (cancelled) return;
+      if (!result.ok || !result.session) {
+        setCaptureError(result.error ?? 'Could not start capture session');
+        return;
+      }
+      setCaptureError(null);
+      const s = result.session;
       setSession(s);
       setFrameCount(s.frameCount ?? 0);
       setStationIndex(s.currentStationIndex ?? 0);

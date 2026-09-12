@@ -163,8 +163,11 @@ export async function getCaptureSession(jobId: string, kind: CaptureKind = 'spla
   }
 }
 
-export async function ensureCaptureSession(jobId: string, kind: CaptureKind = 'splat'): Promise<CaptureSession> {
-  if (!jobId) return _emptySession(kind);
+export async function ensureCaptureSession(
+  jobId: string,
+  kind: CaptureKind = 'splat',
+): Promise<{ ok: boolean; error?: string; session?: CaptureSession }> {
+  if (!jobId) return { ok: false, error: 'Missing job' };
   try {
     const headers = await authHeaders({ 'Content-Type': 'application/json' });
     const res = await fetch(`${API_BASE}/api/capture/sessions`, {
@@ -172,10 +175,14 @@ export async function ensureCaptureSession(jobId: string, kind: CaptureKind = 's
       headers,
       body: JSON.stringify({ job_id: jobId, kind }),
     });
-    if (!res.ok) return _emptySession(kind);
-    return _asSession(await res.json(), kind);
-  } catch {
-    return _emptySession(kind);
+    if (!res.ok) return { ok: false, error: await _readError(res) };
+    const session = _asSession(await res.json(), kind);
+    if (!session.sessionId) {
+      return { ok: false, error: 'Capture session did not start — try again or check package entitlements', session };
+    }
+    return { ok: true, session };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) };
   }
 }
 
