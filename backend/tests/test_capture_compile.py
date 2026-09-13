@@ -236,7 +236,7 @@ def test_public_tour_embed_defaults_os_api_url(monkeypatch):
 
     monkeypatch.delenv("BRICKS_OS_API_URL", raising=False)
     url = public_tour_embed_url("job-1", "sess-1")
-    assert url == "https://bricks-brokerage-api.vercel.app/api/public/tours/job-1/sess-1"
+    assert url == "https://api.brxs.ca/api/public/tours/job-1/sess-1"
 
     monkeypatch.setenv("BRICKS_OS_API_URL", "https://custom.example")
     assert public_tour_embed_url("job-1", "sess-1") == (
@@ -245,7 +245,7 @@ def test_public_tour_embed_defaults_os_api_url(monkeypatch):
 
     monkeypatch.setenv("BRICKS_OS_API_URL", "  ")
     assert public_tour_embed_url("job-1", "sess-1").startswith(
-        "https://bricks-brokerage-api.vercel.app/"
+        "https://api.brxs.ca/"
     )
     assert public_tour_embed_url("", "sess-1") is None
 

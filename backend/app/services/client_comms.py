@@ -106,7 +106,7 @@ async def register_property_visit(
     api_key = get_own_internal_api_key()
     os_url = (os.environ.get("BRICKS_OS_API_URL") or "").strip().rstrip("/")
     if not os_url:
-        os_url = "https://bricks-brokerage-api.vercel.app"
+        os_url = "https://api.brxs.ca"
     if not api_key:
         logger.warning("INTERNAL_API_KEYS not set — skipping visit-ready call")
         return False
