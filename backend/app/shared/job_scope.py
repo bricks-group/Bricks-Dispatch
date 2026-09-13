@@ -113,7 +113,7 @@ def toronto_today() -> date:
     return datetime.now(_TORONTO).date()
 
 UNASSIGN_TOKENS = {"", "unassign", "none", "null"}
-UNASSIGNED_JOB_STATUSES = {"pending_assignment", "unassigned", ""}
+UNASSIGNED_JOB_STATUSES = {"pending_assignment", "unassigned", "dispatch_failed", ""}
 EMPTY_ASSIGNEE_VALUES = {"", "default_user", "null", "none"}
 
 

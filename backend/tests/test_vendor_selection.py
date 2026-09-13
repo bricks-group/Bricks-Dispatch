@@ -803,3 +803,94 @@ def test_pick_vendor_respects_manual_unavailable():
         calendar_connected={"v1": False, "v2": False},
     )
     assert chosen == "v2"
+
+
+@pytest.mark.asyncio
+async def test_assign_failure_marks_dispatch_failed_and_notifies_owner(monkeypatch):
+    """No eligible vendor → status=dispatch_failed (ops queue) + owner notify, not silent unassigned."""
+    from app.services import vendor_selection as vs
+
+    job_doc = {
+        "id": "job_fail_1",
+        "booking_id": "lead_1",
+        "address": "99 Nowhere Rd Calgary",
+        "city": "Calgary",
+        "job_type": "drone",
+        "vendor_id": "default_vendor",
+        "time_window_start": "09:00",
+        "scheduled_date": "2026-09-20",
+        "status": "pending_assignment",
+        "add_ons": [{"key": "drone"}],
+        "package_name": "Essentials",
+        "min_tier_required": 1,
+        "lat": None,
+        "lng": None,
+    }
+    members = [
+        {
+            "id": "ic_gta",
+            "name": "GTA only",
+            "email": "g@test.com",
+            "is_active": True,
+            "status": "available",
+            "vendor_id": "default_vendor",
+            "specialty": "photo",
+            "onboarding_status": "approved",
+            "skills": ["photo"],
+            "service_areas": ["Mississauga", "GTA"],
+            "home_city": "Mississauga",
+            "tier": 1,
+        }
+    ]
+    mock_db = _supabase_style_db(job_doc, members)
+    marked = []
+    notified = []
+
+    async def fake_mark(job_id):
+        marked.append(job_id)
+
+    async def fake_notify(job, err):
+        notified.append((job.id, err))
+
+    monkeypatch.setenv("USE_AI_DISPATCH", "false")
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+    with patch("app.services.vendor_selection.get_db", AsyncMock(return_value=mock_db)):
+        with patch("app.services.vendor_selection.bricks_smart_assign", AsyncMock(return_value=None)):
+            with patch("app.services.vendor_selection.load_occupied_jobs_by_vendor", AsyncMock(return_value={})):
+                with patch(
+                    "app.services.vendor_availability_gate.load_availability_by_member",
+                    AsyncMock(return_value={}),
+                ):
+                    with patch(
+                        "app.services.vendor_availability_gate.member_has_calendar",
+                        AsyncMock(return_value=False),
+                    ):
+                        with patch.object(vs, "_mark_dispatch_failed", side_effect=fake_mark):
+                            with patch.object(vs, "_notify_owner_no_vendor", side_effect=fake_notify):
+                                chosen = await assign_vendor_for_job("job_fail_1")
+
+    assert chosen is None
+    assert marked == ["job_fail_1"]
+    assert notified and notified[0][0] == "job_fail_1"
+
+
+@pytest.mark.asyncio
+async def test_mark_dispatch_failed_writes_expected_status():
+    """_mark_dispatch_failed must write status=dispatch_failed (admin queue key)."""
+    from app.services.vendor_selection import _mark_dispatch_failed
+
+    updates = []
+    mock_db = MagicMock()
+    chain = MagicMock()
+    chain.update.side_effect = lambda payload: (updates.append(dict(payload)), chain)[1]
+    chain.eq.return_value = chain
+    chain.execute = AsyncMock(return_value=MagicMock(data=None))
+    mock_db.table.return_value = chain
+
+    with patch("app.services.vendor_selection.get_db", AsyncMock(return_value=mock_db)):
+        await _mark_dispatch_failed("job_x")
+
+    assert updates
+    assert updates[0]["status"] == "dispatch_failed"
+    assert updates[0].get("assignee_id") == ""

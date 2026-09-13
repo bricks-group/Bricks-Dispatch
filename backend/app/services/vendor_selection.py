@@ -34,7 +34,70 @@ logger = logging.getLogger(__name__)
 OPS_EMAIL = "ops@brxs.ca"
 
 
+async def _mark_dispatch_failed(job_id: str) -> None:
+    """Stamp jobs.status=dispatch_failed so admin /dispatch-failures can see + retry it.
+
+    Historical bug: failure wrote status=unassigned while the ops queue only
+    listed dispatch_failed — paid first bookings with no eligible vendor were
+    invisible to the recovery path.
+    """
+    try:
+        await (await get_db()).table("jobs").update({
+            "status": "dispatch_failed",
+            "assignee_id": "",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", job_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to mark job {job_id} dispatch_failed: {e}")
+
+
+async def _notify_owner_no_vendor(job: Job, error_message: str) -> None:
+    """SMS + in-app to Kam when auto-assign cannot place a paid job. Never raises."""
+    from ..shared.job_scope import KAM_MEMBER_ID
+
+    address = (getattr(job, "address", None) or "").strip() or "a property"
+    when = (getattr(job, "scheduled_date", None) or "").strip()
+    reason = (error_message or "no eligible vendor").strip()
+    body_sms = f"Bricks: no photographer for {address}"
+    if when:
+        body_sms += f" on {when}"
+    body_sms += ". Open GO → Dispatch failures to assign."
+
+    phone = ""
+    try:
+        res = await (await get_db()).table("vendor_members").select("phone,email").eq(
+            "id", KAM_MEMBER_ID
+        ).maybe_single().execute()
+        phone = ((res.data or {}).get("phone") or "").strip()
+    except Exception as e:
+        logger.error(f"Owner phone lookup failed for job {job.id}: {e}")
+
+    if phone:
+        try:
+            from ..notifications import send_dispatch_sms
+            send_dispatch_sms(phone, body_sms)
+        except Exception as e:
+            logger.error(f"Owner no-vendor SMS failed for job {job.id}: {e}")
+
+    try:
+        from .notifications import create_notification
+        await create_notification(
+            title="Dispatch failed — needs assignment",
+            body=f"{address}" + (f" · {when}" if when else "") + f"\n{reason}",
+            ntype="dispatch_failed",
+            data={"job_id": job.id, "booking_id": getattr(job, "booking_id", None) or ""},
+            member_id=KAM_MEMBER_ID,
+            send_push=True,
+        )
+    except Exception as e:
+        logger.error(f"Owner no-vendor in-app notify failed for job {job.id}: {e}")
+
+
 async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: str = "") -> None:
+    """Record escalation, mark dispatch_failed, email ops, SMS/notify owner."""
+    err = error_message or f"No eligible vendor found after {attempt_count} attempt(s)"
+    await _mark_dispatch_failed(job.id)
+
     db = await get_db()
     try:
         await db.table("ops_escalations").insert({
@@ -42,11 +105,13 @@ async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: s
             "job_id": job.id,
             "escalation_type": "no_vendor_available",
             "attempt_count": attempt_count,
-            "error_message": error_message or f"No eligible vendor found after {attempt_count} attempt(s)",
+            "error_message": err,
             "status": "open",
         }).execute()
     except Exception as e:
         logger.error(f"Failed to write ops_escalation for job {job.id}: {e}")
+
+    await _notify_owner_no_vendor(job, err)
 
     resend_key = os.environ.get("RESEND_API_KEY")
     if not resend_key:
@@ -326,7 +391,7 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
     Retries up to _MAX_ASSIGNMENT_ATTEMPTS times; on final failure writes an
-    ops_escalation record and fires an email to ops@brxs.ca.
+    ops_escalation, marks status=dispatch_failed, emails ops@brxs.ca, and SMS/notifies owner.
 
     exclude_member_id: skip this vendor member on all attempts (e.g. contractor who no-showed).
     """
@@ -463,6 +528,5 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             # Only loop again if a transient exception occurred in bricks_smart_assign.
             break
 
-    await db.table("jobs").update({"status": "unassigned", "assignee_id": "", "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).execute()
     await _escalate_no_vendor(job, actual_attempts)
     return None

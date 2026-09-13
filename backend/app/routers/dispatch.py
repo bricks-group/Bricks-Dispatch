@@ -106,7 +106,7 @@ async def create_dispatch_job(
         status = "pending_assignment"
         try:
             assignee_id = await assign_vendor_for_job(job_id)
-            status = "assigned" if assignee_id else "unassigned"
+            status = "assigned" if assignee_id else "dispatch_failed"
         except Exception:
             logger.exception("Sync vendor assign failed for job %s", job_id)
 

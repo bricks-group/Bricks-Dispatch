@@ -693,7 +693,7 @@ async def manual_reassign_dispatch_failure(
 ):
     """
     Manually retry vendor assignment for a dispatch_failed job.
-    Resets status to 'pending' before running assign_vendor_for_job.
+    Resets status to 'pending_assignment' before running assign_vendor_for_job.
     If assignment still fails, the job returns to dispatch_failed and a new
     ops_escalation record is written.
     """
@@ -713,8 +713,8 @@ async def manual_reassign_dispatch_failure(
             detail=f"Job is in status '{res.data['status']}' — only dispatch_failed jobs can be manually reassigned",
         )
 
-    # Reset to pending so assign_vendor_for_job can proceed
-    await db.table("jobs").update({"status": "pending"}).eq("id", job_id).execute()
+    # Reset to pending_assignment so assign_vendor_for_job can proceed
+    await db.table("jobs").update({"status": "pending_assignment", "assignee_id": ""}).eq("id", job_id).execute()
 
     # Close the previous escalation record
     await db.table("ops_escalations").update({"status": "manual_retry"}).eq("job_id", job_id).eq("status", "open").execute()
