@@ -176,6 +176,17 @@ pick_vendor_rule_based(job, vendors)
 6. Media delivery: signed Supabase URLs → `media_delivery` row → Resend email to agent
 7. Stuck-job alert: reconcile endpoint logs ERROR for jobs stuck in post-production >4h
 
+## CGI Render Pipeline (developer/REIT vertical, added 2026-09-13)
+
+`backend/app/services/cgi_render.py` — **deliberately NOT mounted in `main.py`, and this is correct, not a bug.** Unlike `uploads.py`/`auth.py` (found unmounted-by-accident and fixed 2026-09-13, see Database Ownership section above), this file is a standalone worker script (`python -m app.services.cgi_render`), not a router. It needs a persistent host with Blender installed and a virtual desktop (Astra drives Blender interactively via OpenAI's computer-use tool, not just headless scripts) — that cannot run inside a Vercel serverless function's request lifecycle. **Before mounting this as a router or otherwise "fixing" it: don't.** It polls Bricks-OS's `GET /api/dev/cgi-assets/queued` and reports back via `PATCH /api/dev/cgi-assets/{id}/status`, both `X-Internal-Api-Key` gated like every other cross-service call in this repo.
+
+Not runnable yet — three things need to actually exist first:
+1. `OPENAI_API_KEY` env var (model `gpt-6-astra`, Responses API — tool calling requires `/v1/responses`, not Chat Completions, per OpenAI's own docs as of 2026-09-13). Not currently configured anywhere in this repo.
+2. A host to run the worker on, with Blender + a virtual desktop (e.g. Xvfb) — needs a real infra decision (small VM/container, not Vercel). Not provisioned.
+3. `_execute_computer_action` in that file raises `NotImplementedError` on purpose — it's the one function that actually drives the virtual desktop (mouse/keyboard/screenshot), and there's no display to drive it against yet. Wire it in once #2 is decided.
+
+The computer-use tool's exact JSON schema in that file (action types, `environment` field) is written against OpenAI's documented `computer-use-preview` shape plus their own Astra architectural-visualization case study, not verified against a live `gpt-6-astra` response — check current docs before trusting it. The control flow around it (queue poll, `MAX_ITERATIONS` cost cap, status reporting, upload to `brxs-deliverables`) is real and should survive that check.
+
 ## Rules
 - `INTERNAL_API_KEY` header (`X-Internal-Api-Key`) required on dispatch intake endpoint
 - Keep vendor selection idempotent — same job can be re-run without double-assigning
@@ -265,6 +276,8 @@ pick_vendor_rule_based(job, vendors)
 
 **Vercel env vars (bricks-go-api):**
 - `BOOKING_API_URL` — Booking service base URL for internal comms delegation (e.g. `https://booking-api.brxs.ca`); falls back to `BOOKING_CALLBACK_URL` if unset
+- `OS_API_URL` — Bricks-OS base URL for `cgi_render.py`'s queue polling (defaults to `https://bricks-brokerage-api.vercel.app`) — ⬜ not yet needed live, that worker isn't deployed anywhere yet
+- `OPENAI_API_KEY` — for `cgi_render.py` (Astra/Blender CGI pipeline) — ⬜ not set, worker not runnable yet (see CGI Render Pipeline section above)
 - `RESEND_API_KEY` ✅ (set)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)
 - `GEMINI_API_KEY` ✅ (set)
