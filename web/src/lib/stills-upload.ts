@@ -6,7 +6,6 @@ export const STILLS_TYPES = [
   { id: 'drone', label: 'Drone' },
   { id: 'reel', label: 'Reel' },
   { id: 'twilight', label: 'Twilight' },
-  { id: 'staging', label: 'Staging' },
 ] as const;
 
 export type StillsType = (typeof STILLS_TYPES)[number]['id'];
