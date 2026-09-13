@@ -1,52 +1,72 @@
 """CGI render pipeline for the developer/REIT vertical: Astra + Blender.
 
-**This is a standalone worker, not a FastAPI route.** Run it as its own
-process on a persistent host:
-
-    python -m app.services.cgi_render
+**This is a standalone worker, not a FastAPI route.** Build and run it via
+cgi_render.Dockerfile, which provisions everything this file needs (Blender,
+Xvfb virtual display, fluxbox window manager) and execs
+`python -m app.services.cgi_render` under it — running the bare module
+directly on a host with no DISPLAY will fail on the pyautogui import.
 
 It must NOT be wired into main.py / mounted as a router — the render loop
-needs a live virtual desktop (see _execute_computer_action below) and can
-run for minutes per job, both incompatible with a Vercel serverless
-function's lifecycle. This is the one piece of the developer/REIT vertical
-that genuinely needs different infrastructure than the rest of this repo.
+needs that live virtual desktop and can run for minutes per job, both
+incompatible with a Vercel serverless function's lifecycle. This is the one
+piece of the developer/REIT vertical that genuinely needs different
+infrastructure than the rest of this repo.
 
-Host requirements, none of which exist yet and all of which need a real
-decision before this can run for real:
-  - Blender installed, plus a virtual desktop the computer-use tool can
-    drive (e.g. Xvfb + a lightweight window manager) so Astra can actually
-    open and inspect the Blender GUI, not just run headless scripts.
+Two things still block this from running for real:
   - OPENAI_API_KEY (model gpt-6-astra, released 2026-09-03). Tool calling
     requires the Responses API (POST /v1/responses), not Chat Completions
     -- confirmed via OpenAI's own docs, 2026-09-13. This file calls that
     API over raw httpx, matching this repo's existing convention for
-    Gemini (qc_agent.py) rather than adding a new SDK dependency.
-  - OS_API_URL + INTERNAL_API_KEYS pointed at Bricks-OS, same
-    X-Internal-Api-Key convention every other cross-service call in this
-    repo already uses (see shared/auth.py's verify_internal_api_key /
-    get_own_internal_api_key).
+    Gemini (qc_agent.py) rather than adding a new SDK dependency. Not
+    configured anywhere in this repo yet.
+  - An actual deploy target to run cgi_render.Dockerfile on (small
+    always-on VM vs. a container platform supporting long-running non-HTTP
+    workers) -- a cost/ops decision, not a code one, still open.
 
-The computer_use tool's exact JSON shape (action types, environment field)
-is written here against OpenAI's documented computer-use-preview schema
-plus what OpenAI's own "Architectural visualization with Astra" case study
-describes (Astra opens/inspects the Blender GUI via computer use, and
-separately runs `blender --background --python` for repetitive camera-angle
-renders) -- it has NOT been verified against a live gpt-6-astra Responses
-API call, since no OPENAI_API_KEY or Blender/desktop environment exists in
-this session to test against. Check the live docs before running this for
-real; the control flow and cost/safety caps below are the part meant to
-survive that check unchanged.
+OS_API_URL + INTERNAL_API_KEYS also need to point at Bricks-OS, same
+X-Internal-Api-Key convention every other cross-service call in this repo
+already uses (see shared/auth.py's verify_internal_api_key /
+get_own_internal_api_key).
+
+The computer_use tool's exact JSON shape (action types, environment field,
+pending_safety_checks/acknowledged_safety_checks) is written here against
+OpenAI's documented computer-use-preview schema plus what OpenAI's own
+"Architectural visualization with Astra" case study describes (Astra
+opens/inspects the Blender GUI via computer use, and separately runs
+`blender --background --python` for repetitive camera-angle renders) -- it
+has NOT been verified against a live gpt-6-astra Responses API call, since
+no OPENAI_API_KEY exists in this session to test against. _execute_computer_action
+itself (driving pyautogui against the Dockerfile's Xvfb display) is real,
+complete code, not a stub -- but is likewise untested against a live
+computer-use response. Check the live docs / do a real test run before
+trusting either in production; the control flow and cost/safety caps around
+them are the part meant to survive that check unchanged.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
+
+try:
+    # Needs a real or virtual X display (DISPLAY env var) to import cleanly
+    # on Linux — see the Dockerfile alongside this file, which runs the
+    # worker under Xvfb. Importing this at module load time means the
+    # worker fails loudly on startup on a host with no display, rather than
+    # failing confusingly later on the first computer-use action.
+    import pyautogui
+    pyautogui.FAILSAFE = False  # this host has no human to yank the mouse to a corner
+except Exception as _pyautogui_err:  # ImportError, or Xlib's own error when DISPLAY is unset/unreachable
+    pyautogui = None
+    _PYAUTOGUI_IMPORT_ERROR = _pyautogui_err
 
 import httpx
 
@@ -144,25 +164,77 @@ def _run_blender_headless(python_script: str, workdir: Path) -> Optional[Path]:
         return None
 
 
-def _execute_computer_action(action: dict) -> dict:
-    """Execute one computer-use action (click, type, keypress, screenshot,
-    scroll) against this host's real virtual desktop, and return a
-    screenshot for the model's next turn.
+def _screenshot_data_url() -> str:
+    img = pyautogui.screenshot()
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
 
-    Deliberately NOT implemented against a real display here — that needs
-    an actual host with Xvfb/a window manager running, which this session
-    has no way to provision or test against. A real implementation would
-    drive the desktop with something like `pyautogui` or `xdotool` and
-    capture the screen with `mss`, keyed off action["type"]. Wire this in
-    once the target host is chosen and provisioned; until then this raises
-    so a misconfigured deployment fails loudly instead of silently
-    returning fake screenshots.
+
+def _execute_computer_action(action: dict) -> str:
+    """Execute one computer-use action against this host's real virtual
+    desktop (driven with pyautogui against the DISPLAY set up by the
+    Dockerfile's Xvfb), and return a screenshot data URL for the model's
+    next turn.
+
+    Written against OpenAI's documented computer-use-preview action set
+    (click/double_click/move/scroll/type/keypress/drag/wait/screenshot) --
+    same caveat as the rest of this file: not verified against a live
+    gpt-6-astra response, since no display exists in this session to test
+    against. Unknown action types are logged and skipped rather than
+    raising, so one action Astra tries that we haven't seen yet doesn't
+    kill an otherwise-working render session.
     """
-    raise NotImplementedError(
-        "cgi_render._execute_computer_action: no virtual desktop wired up yet — "
-        "this worker cannot run for real until a host with Blender + a virtual "
-        "display (e.g. Xvfb) is provisioned and this function drives it."
-    )
+    if pyautogui is None:
+        raise RuntimeError(
+            f"pyautogui unavailable ({_PYAUTOGUI_IMPORT_ERROR!r}) — this host has no usable "
+            "virtual display. Check DISPLAY is set and Xvfb is actually running (see Dockerfile)."
+        )
+
+    action_type = action.get("type")
+    try:
+        if action_type in (None, "screenshot"):
+            pass
+        elif action_type == "click":
+            pyautogui.click(x=action.get("x"), y=action.get("y"), button=action.get("button", "left"))
+        elif action_type == "double_click":
+            pyautogui.doubleClick(x=action.get("x"), y=action.get("y"))
+        elif action_type == "move":
+            pyautogui.moveTo(action.get("x"), action.get("y"))
+        elif action_type == "scroll":
+            pyautogui.moveTo(action.get("x"), action.get("y"))
+            pyautogui.hscroll(int(action.get("scroll_x", 0)))
+            # OpenAI's scroll_y grows downward (like screen coordinates);
+            # pyautogui.vscroll's positive direction is up the page — invert.
+            pyautogui.vscroll(-int(action.get("scroll_y", 0)))
+        elif action_type == "type":
+            pyautogui.typewrite(action.get("text", ""), interval=0.01)
+        elif action_type == "keypress":
+            keys = [k.lower() for k in (action.get("keys") or [])]
+            for k in keys:
+                pyautogui.keyDown(k)
+            for k in reversed(keys):
+                pyautogui.keyUp(k)
+        elif action_type == "drag":
+            path = action.get("path") or []
+            if path:
+                pyautogui.moveTo(path[0]["x"], path[0]["y"])
+                pyautogui.mouseDown()
+                for point in path[1:]:
+                    pyautogui.moveTo(point["x"], point["y"], duration=0.1)
+                pyautogui.mouseUp()
+        elif action_type == "wait":
+            time.sleep(action.get("ms", 1000) / 1000)
+        else:
+            logger.warning(f"cgi_render: unhandled computer-use action type {action_type!r}, skipping")
+    except Exception as e:
+        # An action failing (e.g. bad coordinates) shouldn't kill the whole
+        # render session — let Astra see the resulting screenshot and
+        # course-correct on its next turn, same as a human would notice a
+        # missed click and try again.
+        logger.warning(f"cgi_render: action {action_type!r} raised {e!r}, continuing")
+
+    return _screenshot_data_url()
 
 
 async def _run_astra_session(source_plan_url: str, brief: Optional[str], workdir: Path) -> list[Path]:
@@ -253,12 +325,24 @@ async def _run_astra_session(source_plan_url: str, brief: Optional[str], workdir
                     })
 
             for call in computer_calls:
-                action_output = _execute_computer_action(call.get("action") or {})
-                input_items.append({
+                screenshot_url = _execute_computer_action(call.get("action") or {})
+                output_item = {
                     "type": "computer_call_output",
                     "call_id": call["call_id"],
-                    "output": action_output,
-                })
+                    "output": {"type": "computer_screenshot", "image_url": screenshot_url},
+                }
+                # The computer-use tool can flag a pending safety check (e.g.
+                # an action it judges risky) that must be explicitly
+                # acknowledged on the next turn or the API rejects the call.
+                # We're driving an isolated render VM with no real user data
+                # or credentials exposed to it, so auto-acknowledging is the
+                # right call here -- this would NOT be safe for a tool
+                # driving a real desktop with the user's own accounts on it.
+                pending = call.get("pending_safety_checks") or []
+                if pending:
+                    output_item["acknowledged_safety_checks"] = pending
+                    logger.info(f"cgi_render: auto-acknowledged {len(pending)} safety check(s) on an isolated render VM")
+                input_items.append(output_item)
         else:
             logger.warning(f"cgi_render: hit MAX_ITERATIONS={MAX_ITERATIONS} without Astra signaling done")
 

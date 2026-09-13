@@ -178,14 +178,13 @@ pick_vendor_rule_based(job, vendors)
 
 ## CGI Render Pipeline (developer/REIT vertical, added 2026-09-13)
 
-`backend/app/services/cgi_render.py` — **deliberately NOT mounted in `main.py`, and this is correct, not a bug.** Unlike `uploads.py`/`auth.py` (found unmounted-by-accident and fixed 2026-09-13, see Database Ownership section above), this file is a standalone worker script (`python -m app.services.cgi_render`), not a router. It needs a persistent host with Blender installed and a virtual desktop (Astra drives Blender interactively via OpenAI's computer-use tool, not just headless scripts) — that cannot run inside a Vercel serverless function's request lifecycle. **Before mounting this as a router or otherwise "fixing" it: don't.** It polls Bricks-OS's `GET /api/dev/cgi-assets/queued` and reports back via `PATCH /api/dev/cgi-assets/{id}/status`, both `X-Internal-Api-Key` gated like every other cross-service call in this repo.
+`backend/app/services/cgi_render.py` — **deliberately NOT mounted in `main.py`, and this is correct, not a bug.** Unlike `uploads.py`/`auth.py` (found unmounted-by-accident and fixed 2026-09-13, see Database Ownership section above), this file is a standalone worker script, meant to run only via `cgi_render.Dockerfile` (provisions Blender + an Xvfb virtual display + fluxbox, then execs `python -m app.services.cgi_render` — running the bare module elsewhere fails on the pyautogui import, no DISPLAY). It needs a persistent host, not Vercel serverless, since the render loop can run minutes per job and needs that live desktop for Astra's computer-use tool to actually drive. **Before mounting this as a router or otherwise "fixing" it: don't.** It polls Bricks-OS's `GET /api/dev/cgi-assets/queued` and reports back via `PATCH /api/dev/cgi-assets/{id}/status`, both `X-Internal-Api-Key` gated like every other cross-service call in this repo.
 
-Not runnable yet — three things need to actually exist first:
+Two things actually block this from running for real (both infra/ops decisions, not code):
 1. `OPENAI_API_KEY` env var (model `gpt-6-astra`, Responses API — tool calling requires `/v1/responses`, not Chat Completions, per OpenAI's own docs as of 2026-09-13). Not currently configured anywhere in this repo.
-2. A host to run the worker on, with Blender + a virtual desktop (e.g. Xvfb) — needs a real infra decision (small VM/container, not Vercel). Not provisioned.
-3. `_execute_computer_action` in that file raises `NotImplementedError` on purpose — it's the one function that actually drives the virtual desktop (mouse/keyboard/screenshot), and there's no display to drive it against yet. Wire it in once #2 is decided.
+2. A deploy target for `cgi_render.Dockerfile` — small always-on VM vs. a container platform supporting long-running non-HTTP workers. Not provisioned or chosen.
 
-The computer-use tool's exact JSON schema in that file (action types, `environment` field) is written against OpenAI's documented `computer-use-preview` shape plus their own Astra architectural-visualization case study, not verified against a live `gpt-6-astra` response — check current docs before trusting it. The control flow around it (queue poll, `MAX_ITERATIONS` cost cap, status reporting, upload to `brxs-deliverables`) is real and should survive that check.
+`_execute_computer_action` is real, complete code now (not a stub) — drives pyautogui (click/type/keypress/scroll/drag/wait/screenshot) against the Dockerfile's Xvfb display, auto-acknowledges `pending_safety_checks` (safe here since it's driving an isolated render VM with no real user credentials on it, not a real user's desktop). The computer-use tool's exact JSON schema in that file (action types, `environment` field, safety-check fields) is written against OpenAI's documented `computer-use-preview` shape plus their own Astra architectural-visualization case study, not verified against a live `gpt-6-astra` response — check current docs and do a real test run once #1 and #2 above are resolved. The control flow around it (queue poll, `MAX_ITERATIONS` cost cap, status reporting, upload to `brxs-deliverables`) is real and should survive that check.
 
 ## Rules
 - `INTERNAL_API_KEY` header (`X-Internal-Api-Key`) required on dispatch intake endpoint
@@ -277,7 +276,7 @@ The computer-use tool's exact JSON schema in that file (action types, `environme
 **Vercel env vars (bricks-go-api):**
 - `BOOKING_API_URL` — Booking service base URL for internal comms delegation (e.g. `https://booking-api.brxs.ca`); falls back to `BOOKING_CALLBACK_URL` if unset
 - `OS_API_URL` — Bricks-OS base URL for `cgi_render.py`'s queue polling (defaults to `https://bricks-brokerage-api.vercel.app`) — ⬜ not yet needed live, that worker isn't deployed anywhere yet
-- `OPENAI_API_KEY` — for `cgi_render.py` (Astra/Blender CGI pipeline) — ⬜ not set, worker not runnable yet (see CGI Render Pipeline section above)
+- `OPENAI_API_KEY` — for `cgi_render.py` (Astra/Blender CGI pipeline) — ⬜ not set, and no deploy target chosen yet either (see CGI Render Pipeline section above)
 - `RESEND_API_KEY` ✅ (set)
 - `POST_PRODUCTION_CALLBACK_SECRET` ✅ (set)
 - `GEMINI_API_KEY` ✅ (set)
