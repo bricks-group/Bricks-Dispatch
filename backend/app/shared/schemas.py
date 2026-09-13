@@ -311,6 +311,8 @@ class VendorMember(BaseModel):
     phone: str = ""
     role: str = "Photographer IC"
     title: str = "Photographer IC"
+    # Wave A: photographer | stager | cleaner. Drone/RPAS is a photographer capability.
+    vendor_type: str = "photographer"
     specialty: str = "photo"
     skills: List[str] = []
     payout_mode: Optional[str] = None  # owner_full | ic_rate_card
@@ -371,6 +373,8 @@ class VendorApplicationCreate(BaseModel):
     name: str
     email: str
     phone: str
+    # Wave A vendor class; photographers.html posts photographer (default).
+    vendor_type: str = "photographer"
     specialties: List[str]
     portfolio_links: List[str] = []
     portfolio_samples: List[PortfolioSample] = []
@@ -427,6 +431,7 @@ class VendorMemberCreate(BaseModel):
     email: str
     phone: str = ""
     role: str = "Photographer"
+    vendor_type: str = "photographer"
 
 
 class VendorMemberUpdate(BaseModel):
@@ -435,6 +440,7 @@ class VendorMemberUpdate(BaseModel):
     phone: Optional[str] = None
     role: Optional[str] = None
     title: Optional[str] = None
+    vendor_type: Optional[str] = None
     skills: Optional[List[str]] = None
     service_areas: Optional[List[str]] = None
     payout_mode: Optional[str] = None

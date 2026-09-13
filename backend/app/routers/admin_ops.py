@@ -118,7 +118,25 @@ async def update_applicant_status(
     
     if update_data.get("onboarding_status") == "approved":
         update_data["is_active"] = True
-        update_data["role"] = "Photographer"
+        # Preserve Owner; otherwise set role from vendor_type (Wave A).
+        existing = await (await get_db()).table("vendor_members").select(
+            "vendor_type,role,title"
+        ).eq("id", member_id).maybe_single().execute()
+        row = (existing.data or {}) if existing else {}
+        from ..services.vendor_profile import (
+            is_platform_owner,
+            member_vendor_type,
+            normalize_vendor_type,
+            role_for_vendor_type,
+        )
+        if is_platform_owner({**row, "id": member_id}):
+            update_data["role"] = "Owner"
+        else:
+            vtype = normalize_vendor_type(
+                update_data.get("vendor_type") or row.get("vendor_type") or member_vendor_type(row)
+            )
+            update_data["vendor_type"] = vtype
+            update_data["role"] = role_for_vendor_type(vtype)
     
     res = await (await get_db()).table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()
     

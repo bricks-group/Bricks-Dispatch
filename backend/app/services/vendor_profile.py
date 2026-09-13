@@ -19,6 +19,38 @@ ORG_VENDOR_ID = "default_vendor"
 TIER_LABELS = {1: "C", 2: "B", 3: "A"}  # display only; pay is the rate card
 TOP_TIER = 3
 SKILL_KEYS = ("photo", "drone", "reel", "tour", "twilight")
+VENDOR_TYPES = ("photographer", "stager", "cleaner")
+VENDOR_TYPE_ALIASES = {
+    "photo": "photographer",
+    "photography": "photographer",
+    "photographer_ic": "photographer",
+    "media": "photographer",
+    "staging": "stager",
+    "stage": "stager",
+    "home_staging": "stager",
+    "furniture_staging": "stager",
+    "cleaning": "cleaner",
+    "clean": "cleaner",
+    "turnover": "cleaner",
+    "maid": "cleaner",
+}
+ROLE_FOR_VENDOR_TYPE = {
+    "photographer": "Photographer",
+    "stager": "Stager",
+    "cleaner": "Cleaner",
+}
+IC_TITLE_FOR_VENDOR_TYPE = {
+    "photographer": "Photographer IC",
+    "stager": "Stager IC",
+    "cleaner": "Cleaner IC",
+}
+# Media / field-capture job_types stay on the photographer spine.
+# Drone is a photographer capability (Advanced RPAS), not a vendor_type.
+_PHOTOGRAPHER_JOB_TYPES = {
+    "photo", "photography", "photos", "hdr", "drone", "reel", "video",
+    "tour", "virtual", "twilight", "floor_plan", "floorplan", "exterior",
+    "visit", "virtual_visit", "media", "",
+}
 
 GTA_TOKENS = {
     "gta", "greater toronto", "toronto", "mississauga", "brampton", "vaughan",
@@ -83,6 +115,56 @@ def is_aman_pending(member: Any) -> bool:
     return all(tok in name for tok in AMAN_NAME_TOKENS)
 
 
+
+def normalize_vendor_type(raw: Any) -> str:
+    """Wave A types only. Unknown values fall back to photographer (media path)."""
+    key = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not key:
+        return "photographer"
+    key = VENDOR_TYPE_ALIASES.get(key, key)
+    return key if key in VENDOR_TYPES else "photographer"
+
+
+def member_vendor_type(member: Any) -> str:
+    m = _as_dict(member)
+    # Owner is always on the photographer spine (media + RPAS capable).
+    if is_platform_owner(m):
+        return "photographer"
+    explicit = m.get("vendor_type")
+    if explicit:
+        return normalize_vendor_type(explicit)
+    role = str(m.get("role") or "").strip().lower()
+    title = str(m.get("title") or "").strip().lower()
+    for blob in (role, title):
+        mapped = VENDOR_TYPE_ALIASES.get(blob, blob)
+        if mapped in VENDOR_TYPES:
+            return mapped
+    return "photographer"
+
+
+def role_for_vendor_type(vendor_type: Any) -> str:
+    return ROLE_FOR_VENDOR_TYPE.get(normalize_vendor_type(vendor_type), "Photographer")
+
+
+def ic_title_for_vendor_type(vendor_type: Any) -> str:
+    return IC_TITLE_FOR_VENDOR_TYPE.get(normalize_vendor_type(vendor_type), "Photographer IC")
+
+
+def job_required_vendor_type(job: Any) -> str:
+    """Media bookings → photographer; future staging/cleaning jobs → those types."""
+    j = _as_dict(job)
+    for key in ("required_vendor_type", "vendor_type"):
+        if j.get(key):
+            return normalize_vendor_type(j.get(key))
+    jt = str(j.get("job_type") or "photo").strip().lower()
+    mapped = VENDOR_TYPE_ALIASES.get(jt, jt)
+    if mapped in ("stager", "cleaner"):
+        return mapped
+    if jt in _PHOTOGRAPHER_JOB_TYPES or mapped == "photographer":
+        return "photographer"
+    # Unknown job types stay on photographer so media path never breaks.
+    return "photographer"
+
 def has_advanced_rpas(member: Any) -> bool:
     m = _as_dict(member)
     if m.get("rpas_advanced") is True:
@@ -123,7 +205,13 @@ def vendor_skills(member: Any) -> set[str]:
         if "polycam" in t or "splat" in t or "virtual" in t:
             skills.add("tour")
     if not skills:
-        skills.add("photo")
+        vt = member_vendor_type(m)
+        if vt == "stager":
+            skills.add("staging")
+        elif vt == "cleaner":
+            skills.add("cleaning")
+        else:
+            skills.add("photo")
     return skills
 
 
@@ -140,12 +228,20 @@ def _add_on_keys(add_ons: Iterable) -> set[str]:
 
 def job_required_skills(job: Any) -> set[str]:
     j = _as_dict(job)
+    needed_type = job_required_vendor_type(j)
+    # Non-media Wave A jobs: type match is the hard gate; skills are soft labels.
+    if needed_type == "stager":
+        return {"staging"}
+    if needed_type == "cleaner":
+        return {"cleaning"}
     jt = str(j.get("job_type") or "photo").lower()
     skills: set[str] = set()
     if jt in ("photo", "photography", ""):
         skills.add("photo")
     elif jt == "virtual":
         skills.add("tour")
+    elif jt in ("stager", "staging", "cleaner", "cleaning"):
+        pass
     else:
         skills.add(jt)
     keys = _add_on_keys(j.get("add_ons") or [])
@@ -317,9 +413,15 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
         return False
     if has_lapsed_insurance(m):
         return False
-    if int(m.get("tier") or 1) < min_tier_for_job(job):
+    needed_type = job_required_vendor_type(job)
+    if member_vendor_type(m) != needed_type:
         return False
     if not location_matches(m, job):
+        return False
+    # Stager / cleaner: type + location + active/approved. No photo skill/RPAS gates.
+    if needed_type in ("stager", "cleaner"):
+        return True
+    if int(m.get("tier") or 1) < min_tier_for_job(job):
         return False
     needed = job_required_skills(job)
     have = vendor_skills(m)

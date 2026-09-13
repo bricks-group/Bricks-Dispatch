@@ -15,6 +15,7 @@ export function TeamPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('Photographer');
+  const [vendorType, setVendorType] = useState('photographer');
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -34,8 +35,8 @@ export function TeamPage() {
 
   const addMember = async () => {
     if (!name.trim() || !email.trim()) return;
-    await api.post('/api/vendor-os/team', { name, email, role, phone: '' });
-    setName(''); setEmail(''); setRole('Photographer');
+    await api.post('/api/vendor-os/team', { name, email, role, vendor_type: vendorType, phone: '' });
+    setName(''); setEmail(''); setRole('Photographer'); setVendorType('photographer');
     load();
   };
 
@@ -76,7 +77,7 @@ export function TeamPage() {
             {members.map((m) => (
               <tr key={m.id}>
                 <td style={{ fontWeight: 500 }}>{m.name}</td>
-                <td className="muted">{m.title || m.role}</td>
+                <td className="muted">{(m as any).vendor_type ? `${(m as any).vendor_type} · ${m.title || m.role}` : (m.title || m.role)}</td>
                 <td className="muted">{(m.skills || []).join(', ') || '—'}</td>
                 <td className="muted">{m.rpas_certificate_level || '—'}</td>
                 <td>
@@ -115,6 +116,11 @@ export function TeamPage() {
           <input value={name}  onChange={(e) => setName(e.target.value)}  placeholder="Full name" />
           <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" />
           <input value={role}  onChange={(e) => setRole(e.target.value)}  placeholder="Role" />
+          <select value={vendorType} onChange={(e) => setVendorType(e.target.value)} aria-label="Vendor type">
+            <option value="photographer">Photographer</option>
+            <option value="stager">Stager</option>
+            <option value="cleaner">Cleaner</option>
+          </select>
           <button type="submit" onClick={addMember}>Add</button>
         </div>
       </section>

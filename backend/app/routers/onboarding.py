@@ -218,6 +218,13 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     if not hst and not application.hst_exempt:
         errs.append("HST / GST number is required, or confirm the small-supplier exemption (under $30,000 CAD/year).")
 
+    from ..services.vendor_profile import normalize_vendor_type
+    vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
+    application.vendor_type = vtype
+    # Stager / cleaner may not have a media portfolio yet.
+    if vtype in ("stager", "cleaner"):
+        errs = [e for e in errs if "portfolio" not in e.lower()]
+
     if errs:
         raise HTTPException(status_code=400, detail=" ".join(errs))
 
@@ -225,8 +232,10 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
 @router.post("/apply")
 async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
-    Photographer application. Requires acceptance of the current IC agreement.
+    Wave A vendor application (photographer | stager | cleaner).
+    Requires acceptance of the current IC agreement.
     Records ic_agreement_version as the live server version (currently 1.5).
+    photographers.html posts vendor_type=photographer; drone remains an RPAS capability.
     """
     if not application.accepted_terms:
         raise HTTPException(status_code=400, detail="You must accept the Bricks Contractor Agreement to apply.")
@@ -237,11 +246,14 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     try:
 
         result = await _apply_to_bricks_inner(application)
+        from ..services.vendor_profile import normalize_vendor_type
+        vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
+        type_label = {"photographer": "photographer", "stager": "stager", "cleaner": "cleaner"}.get(vtype, "vendor")
         background_tasks.add_task(
             create_notification,
-            title="New photographer application",
+            title=f"New {type_label} application",
             body=(
-                f"{application.name} applied via brxs.ca/photographers.\n"
+                f"{application.name} applied ({vtype}).\n"
                 f"Email: {application.email}\n"
                 f"Phone: {application.phone}\n"
                 f"City: {application.city}\n"
@@ -249,9 +261,9 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
                 f"Drone certified: {application.drone_certified}"
             ),
             ntype="vendor_application",
-            data={"member_id": result["member_id"]},
+            data={"member_id": result["member_id"], "vendor_type": vtype},
             email_to=ADMIN_NOTIFICATION_EMAIL,
-            email_subject=f"New photographer application: {application.name}",
+            email_subject=f"New {type_label} application: {application.name}",
         )
         return result
     except HTTPException:
@@ -276,6 +288,14 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         if extra not in links:
             links.append(extra)
 
+    from ..services.vendor_profile import normalize_vendor_type
+    vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
+    # Photographer apply may omit specialties for stager/cleaner; keep a sensible default.
+    default_specialty = {
+        "photographer": "photo",
+        "stager": "staging",
+        "cleaner": "cleaning",
+    }.get(vtype, "photo")
     member = VendorMember(
         id=str(uuid.uuid4()),
         application_token=application_token,
@@ -283,7 +303,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         email=application.email.lower().strip(),
         phone=application.phone,
         role="Applicant",
-        specialty=application.specialties[0] if application.specialties else "photo",
+        vendor_type=vtype,
+        specialty=(application.specialties[0] if application.specialties else default_specialty),
         onboarding_status="pending",
         is_active=False,
         portfolio_links=links,
@@ -293,15 +314,15 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         home_lat=application.home_lat,
         home_lng=application.home_lng,
         hst_number=application.hst_number,
-        drone_certified=application.drone_certified,
-        rpas_certificate_number=application.rpas_certificate_number,
-        rpas_certificate_level=application.rpas_certificate_level,
+        drone_certified=application.drone_certified if vtype == "photographer" else False,
+        rpas_certificate_number=application.rpas_certificate_number if vtype == "photographer" else None,
+        rpas_certificate_level=application.rpas_certificate_level if vtype == "photographer" else None,
         max_travel_km=application.max_travel_km,
         operation_polygon=application.operation_polygon,
         service_areas=application.preferred_regions if application.preferred_regions else [application.city],
         ic_agreement_version=_IC_AGREEMENT_VERSION,
         terms_accepted_at=now_iso,
-        internal_notes=f"IC agreement v{_IC_AGREEMENT_VERSION} accepted on {now_iso}",
+        internal_notes=f"IC agreement v{_IC_AGREEMENT_VERSION} accepted on {now_iso}; vendor_type={vtype}",
     )
 
     member_dict = member.dict()
@@ -314,9 +335,13 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     try:
         await db.table("vendor_members").insert(member_dict).execute()
     except Exception:
-        # Older DBs may lack portfolio_samples — insert without it, keep links.
+        # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
         member_dict.pop("portfolio_samples", None)
-        await db.table("vendor_members").insert(member_dict).execute()
+        try:
+            await db.table("vendor_members").insert(member_dict).execute()
+        except Exception:
+            member_dict.pop("vendor_type", None)
+            await db.table("vendor_members").insert(member_dict).execute()
 
     availability = AvailabilitySettings(
         member_id=member.id,

@@ -12,6 +12,11 @@ from typing import Any, Optional
 OWNER_ID_PREFIX = "0c3fa7c2"
 OWNER_TITLE = "Owner"
 IC_TITLE = "Photographer IC"
+IC_TITLES = {
+    "photographer": "Photographer IC",
+    "stager": "Stager IC",
+    "cleaner": "Cleaner IC",
+}
 VENDOR_SKILLS = ("photo", "drone", "reel", "tour", "twilight")
 TIER_LABELS = {1: "C", 2: "B", 3: "A"}
 
@@ -35,7 +40,12 @@ def member_title(member: Optional[dict]) -> str:
     stored = (member or {}).get("title") or (member or {}).get("role") or ""
     if stored.strip().lower() in ("owner", "admin", "manager"):
         return stored
-    return IC_TITLE
+    try:
+        from ..services.vendor_profile import member_vendor_type
+        vtype = member_vendor_type(member)
+    except Exception:
+        vtype = "photographer"
+    return IC_TITLES.get(vtype, IC_TITLE)
 
 
 def is_assignable(member: Optional[dict]) -> bool:
@@ -94,6 +104,8 @@ def owner_seed_fields(member: dict) -> dict:
         patch["max_travel_km"] = 80
     if not member.get("polycam_equipped"):
         patch["polycam_equipped"] = True
+    if (member.get("vendor_type") or "") != "photographer":
+        patch["vendor_type"] = "photographer"
     return patch
 
 
@@ -147,6 +159,14 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "phone": member.get("phone") or "",
         "role": title,
         "title": title,
+        "vendor_type": (
+            "photographer" if owner else (
+                (member.get("vendor_type") or "").strip().lower()
+                or ("stager" if "stager" in (member.get("role") or "").lower()
+                    else "cleaner" if "cleaner" in (member.get("role") or "").lower()
+                    else "photographer")
+            )
+        ),
         "availability": (member.get("status") or "") == "available",
         "status": member.get("status") or "offline",
         "skills": member_skills(member),

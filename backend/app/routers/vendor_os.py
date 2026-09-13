@@ -315,11 +315,15 @@ async def create_vendor_member(
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
+    from ..services.vendor_profile import normalize_vendor_type, role_for_vendor_type
+    vtype = normalize_vendor_type(getattr(payload, "vendor_type", None) or "photographer")
+    role = (payload.role or "").strip() or role_for_vendor_type(vtype)
     member = VendorMember(
         name=payload.name,
         email=payload.email.strip().lower(),
         phone=payload.phone,
-        role=payload.role,
+        role=role,
+        vendor_type=vtype,
         vendor_id=actor_member.get("vendor_id", "default_vendor"),
     )
     member_dict = member.dict()
