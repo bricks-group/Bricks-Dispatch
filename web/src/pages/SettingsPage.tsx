@@ -59,9 +59,9 @@ function StripeConnectSection() {
             </span>
             <span className="muted">
               {status.connected
-                ? 'Stripe is connected — job payouts go to this account.'
+                ? 'Connected = payout-ready. Job payouts go to this Stripe account.'
                 : status.connect_status === 'pending'
-                  ? 'Finish Stripe setup to receive job payouts. Onboarding is still pending.'
+                  ? 'Pending — finish Stripe setup. Connected only after payouts are enabled.'
                   : status.connect_status === 'restricted'
                     ? 'Stripe restricted this account — open Stripe to fix requirements before payouts.'
                     : 'Connect a Stripe account to receive job payouts. Owner payouts are the full package with $0 deduction.'}

@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://dispatch-api.brxs.ca';
 const TOKEN_KEY = 'bricks_dispatch_token';
 
 type RequestOptions = RequestInit & { query?: Record<string, string | number | undefined> };

@@ -90,9 +90,9 @@ export default function SettingsScreen() {
                     {stripe == null
                       ? (stripeErr || 'Status unavailable')
                       : stripe.connected
-                        ? 'Connected — job payouts go to this account.'
+                        ? 'Connected = payout-ready. Job payouts go to this account.'
                         : stripe.connect_status === 'pending'
-                          ? 'Pending — finish Stripe setup to receive job payouts.'
+                          ? 'Pending — finish Stripe setup. Connected only after payouts are enabled.'
                           : stripe.connect_status === 'restricted'
                             ? 'Restricted — open Stripe to fix requirements before payouts.'
                             : 'Not connected. Owner payouts are the full package with $0 deduction.'}

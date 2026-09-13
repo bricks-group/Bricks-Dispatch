@@ -1,14 +1,15 @@
 import { NavLink } from 'react-router-dom';
 
 const items = [
-  { path: '/',              label: 'Overview',    end: true },
-  { path: '/jobs',         label: 'Jobs' },
-  { path: '/profile',      label: 'Profile' },
-  { path: '/team',         label: 'Team' },
-  { path: '/earnings',     label: 'Earnings' },
-  { path: '/availability', label: 'Availability' },
-  { path: '/performance',  label: 'Performance' },
-  { path: '/settings',     label: 'Settings' },
+  { path: '/',                label: 'Today',          end: true },
+  { path: '/jobs',           label: 'Jobs' },
+  { path: '/notifications',  label: 'Notifications' },
+  { path: '/profile',        label: 'Profile' },
+  { path: '/team',           label: 'Team' },
+  { path: '/earnings',       label: 'Earnings' },
+  { path: '/availability',   label: 'Availability' },
+  { path: '/performance',    label: 'Performance' },
+  { path: '/settings',       label: 'Settings' },
 ];
 
 function BrickMark({ size = 18 }: { size?: number }) {

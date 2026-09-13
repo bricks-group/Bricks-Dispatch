@@ -49,8 +49,8 @@ export function OverviewPage() {
     <div className="page-content">
       <div className="page-header">
         <div>
-          <h1>Overview</h1>
-          <p>Today's workload at a glance</p>
+          <h1>Today</h1>
+          <p>Your jobs and capacity for today</p>
         </div>
       </div>
 

@@ -1274,20 +1274,10 @@ async def get_stripe_connect_status(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """Whether this vendor org has a working payout account -- same readiness
-    check handle_payout_to_vendor itself uses (contractors.stripe_account_id)."""
-    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    actor_member = await get_vendor_member(actor_id)
-    if not is_vendor_admin(actor_member):
-        api_error(403, "Insufficient permissions", "insufficient_permissions")
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
-
-    res = await (await get_db()).table("contractors").select("stripe_account_id, connect_status").eq("vendor_id", vendor_id).maybe_single().execute()
-    row = res.data or {}
-    return {
-        "connected": bool(row.get("stripe_account_id")),
-        "connect_status": row.get("connect_status", "not_connected"),
-    }
+    """Honest Connected = Stripe-verified payout-ready (details_submitted + payouts_enabled).
+    Shadowed at boot by stripe_connect_status router; keep body honest if ever remounted."""
+    from ..routers.stripe_connect_status import get_stripe_connect_status as _honest
+    return await _honest(authorization=authorization, x_user_id=x_user_id)
 
 
 class StripeConnectOnboardRequest(BaseModel):

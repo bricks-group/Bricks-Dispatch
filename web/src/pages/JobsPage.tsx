@@ -208,10 +208,14 @@ function JobListingPanel({
   const [stillsType, setStillsType] = useState<StillsType>('hdr');
   const [pick, setPick] = useState(job.assignee_id || '');
   const [arriveAt, setArriveAt] = useState((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
+  const [noShowOpen, setNoShowOpen] = useState(false);
+  const [noShowNotes, setNoShowNotes] = useState('');
 
   useEffect(() => {
     setPick(job.assignee_id || '');
     setArriveAt((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
+    setNoShowOpen(false);
+    setNoShowNotes('');
   }, [job.id, job.assignee_id, job.confirmed_arrive_at, job.time_window_start]);
 
   useEffect(() => {
@@ -401,7 +405,35 @@ function JobListingPanel({
             {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : <span className="muted"> · rate card</span>}
           </p>
         </div>
-        <div className="row">
+        <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+          {job.status === 'pending_assignment' ? (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true); setErr('');
+                  try {
+                    await api.post(`/api/vendor-os/jobs/${job.id}/watch-action`, { action: 'accept' });
+                    onPatched({ ...job, status: 'assigned' });
+                  } catch (e) { setErr((e as Error).message); }
+                  finally { setBusy(false); }
+                }}
+              >Accept</button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true); setErr('');
+                  try {
+                    await api.put(`/api/vendor-os/jobs/${job.id}/status`, { status: 'declined' });
+                    onPatched({ ...job, status: 'declined' });
+                  } catch (e) { setErr((e as Error).message); }
+                  finally { setBusy(false); }
+                }}
+              >Decline</button>
+            </>
+          ) : null}
           {job.status === 'assigned' ? (
             <button type="button" disabled={busy} onClick={checkIn}>Check in</button>
           ) : null}
@@ -419,7 +451,43 @@ function JobListingPanel({
               }}
             >Mark complete</button>
           ) : null}
+          {['assigned', 'in_progress'].includes(job.status) ? (
+            <button type="button" disabled={busy} onClick={() => setNoShowOpen((v) => !v)}>
+              {noShowOpen ? 'Cancel no-show' : 'Report agent no-show'}
+            </button>
+          ) : null}
         </div>
+        {noShowOpen ? (
+          <div className="stack" style={{ border: '1px solid var(--c-hair, #333)', padding: 12, borderRadius: 8 }}>
+            <p className="muted" style={{ margin: 0, padding: 0 }}>
+              GPS is recorded on mobile. On web, add optional notes. A $60 trip fee is added to your next payout if the claim is approved.
+            </p>
+            <textarea
+              value={noShowNotes}
+              onChange={(e) => setNoShowNotes(e.target.value)}
+              placeholder="Optional: describe what happened…"
+              rows={3}
+              maxLength={500}
+              style={{ width: '100%' }}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true); setErr('');
+                try {
+                  const body: { notes?: string } = {};
+                  if (noShowNotes.trim()) body.notes = noShowNotes.trim();
+                  await api.post(`/api/vendor-os/jobs/${job.id}/agent-no-show`, body);
+                  onPatched({ ...job, status: 'agent_no_show' });
+                  setNoShowOpen(false);
+                  setNoShowNotes('');
+                } catch (e) { setErr((e as Error).message); }
+                finally { setBusy(false); }
+              }}
+            >Confirm no-show</button>
+          </div>
+        ) : null}
         {['assigned', 'in_progress'].includes(job.status) ? (
           <CaptureStartBlock job={job} />
         ) : null}
