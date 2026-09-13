@@ -82,13 +82,22 @@ class Job(BaseModel):
     # silent-drop pattern, just not yet known to be read back anywhere.
     payout_amount: Optional[int] = None
     dispatch_explanation: Optional[str] = None
+    # Cross-service reference — set when job originates from a Bricks-OS
+    # developer/REIT progress-capture visit instead of a Booking booking.
+    # Exactly one of booking_id / dev_capture_visit_id should be set.
+    dev_project_id: Optional[str] = None
+    dev_phase_id: Optional[str] = None
+    dev_capture_visit_id: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class JobIntakeRequest(BaseModel):
-    """Payload accepted by POST /api/v1/dispatch/jobs from Booking."""
-    booking_id: str
+    """Payload accepted by POST /api/v1/dispatch/jobs from Booking, or from
+    Bricks-OS for a developer/REIT progress-capture visit. booking_id is
+    optional so the latter can omit it — see dev_capture_visit_id below;
+    create_dispatch_job() requires exactly one of the two to be set."""
+    booking_id: Optional[str] = None
     address: str
     city: str = ""
     state: str = ""
@@ -139,6 +148,11 @@ class JobIntakeRequest(BaseModel):
     # intake until 2026-07-27, so Companion's brokerage_id was silently dropped before it
     # ever reached the insert. See Job's comment above for the downstream consequence.
     brokerage_id: Optional[str] = None
+    # See Job's comment above — set instead of booking_id for a developer/REIT
+    # progress-capture visit; create_dispatch_job() requires exactly one.
+    dev_project_id: Optional[str] = None
+    dev_phase_id: Optional[str] = None
+    dev_capture_visit_id: Optional[str] = None
 
 
 class JobStatusUpdate(BaseModel):
