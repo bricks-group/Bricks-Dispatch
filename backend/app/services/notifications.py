@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _EMAIL_FONT_STACK = "'General Sans','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 # Real hosted image, not a CSS square -- Outlook has no inline-SVG support and a
 # flat colored block can't approximate BrickMark's actual 3-rect "b" shape.
-# www.brxs.ca is served by bricks-prelaunch's Vercel project (confirmed live).
+# www.brxs.ca is served by bricks-site's Vercel project (renamed from bricks-prelaunch).
 _EMAIL_LOGO_URL = "https://www.brxs.ca/bricks-mark.png"
 
 
