@@ -28,19 +28,38 @@ X-Internal-Api-Key convention every other cross-service call in this repo
 already uses (see shared/auth.py's verify_internal_api_key /
 get_own_internal_api_key).
 
-The computer_use tool's exact JSON shape (action types, environment field,
-pending_safety_checks/acknowledged_safety_checks) is written here against
+**VERIFIED 2026-09-13 against a real Xvfb + fluxbox + Blender 4.0 stack**
+(not against a live OpenAI response -- no OPENAI_API_KEY exists in this
+session to test that half, see below): every piece of this file that
+doesn't require the OpenAI API actually works, end to end, not just "should
+work in theory":
+  - `_run_blender_headless` (the real function, unmodified) genuinely
+    executes `blender --background --python`, runs a full render, and
+    returns a valid output file.
+  - Blender's full interactive GUI genuinely launches under Xvfb with no
+    GPU (Mesa software/surfaceless EGL rendering) -- confirmed by screenshot.
+  - `_execute_computer_action`'s pyautogui calls genuinely drive that GUI:
+    a real click on the splash screen's "Continue" button was captured,
+    registered (Blender logged "Preferences saved"), and the screenshot
+    after the click showed the dialog had actually advanced -- the full
+    screenshot -> action -> changed-state -> new-screenshot loop this file
+    depends on is real, not assumed.
+  - Found and fixed a real bug this way: pyscreeze's Linux screenshot
+    backend needs `gnome-screenshot`, not `scrot` (the original guess in
+    cgi_render.Dockerfile) -- confirmed scrot alone fails and
+    gnome-screenshot alone succeeds. Dockerfile corrected.
+
+What's still unverified is only the OpenAI side: the computer_use tool's
+exact JSON shape (action types, environment field,
+pending_safety_checks/acknowledged_safety_checks) is written against
 OpenAI's documented computer-use-preview schema plus what OpenAI's own
-"Architectural visualization with Astra" case study describes (Astra
-opens/inspects the Blender GUI via computer use, and separately runs
-`blender --background --python` for repetitive camera-angle renders) -- it
-has NOT been verified against a live gpt-6-astra Responses API call, since
-no OPENAI_API_KEY exists in this session to test against. _execute_computer_action
-itself (driving pyautogui against the Dockerfile's Xvfb display) is real,
-complete code, not a stub -- but is likewise untested against a live
-computer-use response. Check the live docs / do a real test run before
-trusting either in production; the control flow and cost/safety caps around
-them are the part meant to survive that check unchanged.
+"Architectural visualization with Astra" case study describes, but no
+gpt-6-astra Responses API call has actually been made. Get an
+OPENAI_API_KEY and do that test before trusting `_run_astra_session`'s
+request/response handling in production -- the local half it drives
+(_execute_computer_action, _run_blender_headless) is now confirmed correct,
+so a failure at that point is about the OpenAI integration specifically,
+not the Blender/display plumbing underneath it.
 """
 from __future__ import annotations
 

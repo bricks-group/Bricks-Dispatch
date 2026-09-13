@@ -24,7 +24,12 @@ LABEL org.opencontainers.image.source="https://github.com/bricks-group/bricks-di
 # - xvfb: virtual X display — there's no physical monitor on this host.
 # - fluxbox: minimal window manager. pyautogui/computer-use need real
 #   window focus/decoration behavior, not a bare X server with no WM.
-# - scrot: pyautogui's screenshot backend on Linux.
+# - gnome-screenshot: pyautogui's actual screenshot backend on Linux, via
+#   pyscreeze. VERIFIED 2026-09-13 against a real Xvfb display — pyscreeze
+#   raises explicitly demanding gnome-screenshot and does NOT fall back to
+#   scrot; confirmed scrot alone (without gnome-screenshot) fails, and
+#   gnome-screenshot alone (without scrot) works. Don't add scrot back
+#   thinking it's the right tool here — it was the wrong guess.
 # - libgl1-mesa-glx, libxrender1, libxi6, libsm6: Blender's runtime GL/X deps.
 # NOTE: Debian's packaged Blender can lag well behind the latest release.
 # If a specific newer Blender version matters, replace this with the
@@ -33,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     blender \
     xvfb \
     fluxbox \
-    scrot \
+    gnome-screenshot \
     x11-utils \
     libgl1-mesa-glx \
     libxrender1 \
