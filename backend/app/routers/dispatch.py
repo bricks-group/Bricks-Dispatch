@@ -35,6 +35,13 @@ async def create_dispatch_job(
     if not internal_keys or x_internal_api_key not in internal_keys:
         raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
 
+    # Every job traces back to exactly one caller: Booking (booking_id) or
+    # Bricks-OS's developer/REIT progress-capture flow (dev_capture_visit_id).
+    # Without this gate a malformed payload would insert a job neither side
+    # can ever look up or report status back against.
+    if not payload.booking_id and not payload.dev_capture_visit_id:
+        raise HTTPException(status_code=400, detail="Either booking_id or dev_capture_visit_id is required")
+
     db = await get_db()
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -205,6 +212,7 @@ async def update_job_status(
     old_status = job.get("status")
     new_status = payload.status
     booking_id = job.get("booking_id")
+    dev_capture_visit_id = job.get("dev_capture_visit_id")
     
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({
@@ -222,7 +230,8 @@ async def update_job_status(
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
 
-    # Trigger sync to Booking if booking_id exists
+    # Trigger sync to whichever service originated the job — exactly one of
+    # these is ever set (create_dispatch_job requires it).
     if booking_id:
         await send_dispatch_status_update_webhook(
             booking_id=booking_id,
@@ -232,5 +241,12 @@ async def update_job_status(
             actor_id=actor_id,
             actor_type="vendor_member"
         )
-    
+    elif dev_capture_visit_id:
+        from ..services.webhooks import send_dev_capture_status_update_webhook
+        await send_dev_capture_status_update_webhook(
+            dev_capture_visit_id=dev_capture_visit_id,
+            job_id=job_id,
+            new_status=new_status,
+        )
+
     return {"status": "updated", "job_id": job_id, "new_status": new_status}
