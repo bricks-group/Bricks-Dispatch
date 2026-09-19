@@ -218,7 +218,31 @@ def _private_blob_object_url(pathname: str) -> Optional[str]:
     store_id = _store_id_from_token(token)
     if not store_id:
         return None
-    return f"https://{store_id}.private.blob.vercel-storage.com/{quote(pathname, safe='/')}"
+    # Blob CDN host uses lowercase store id.
+    return f"https://{store_id.lower()}.private.blob.vercel-storage.com/{quote(pathname, safe='/')}"
+
+
+def _blob_api_headers(token: str, content_type: Optional[str] = None, upsert: Optional[bool] = None) -> dict:
+    """Headers matching @vercel/blob requestApi (x-api-version required)."""
+    import random
+
+    store_id = _store_id_from_token(token) or ""
+    request_id = f"{store_id}:{int(time.time() * 1000)}:{random.randrange(16 ** 8):08x}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "x-api-version": os.getenv("VERCEL_BLOB_API_VERSION", "12"),
+        "x-api-blob-request-id": request_id,
+        "x-api-blob-request-attempt": "0",
+        "x-vercel-blob-access": "private",
+        "x-add-random-suffix": "0",
+    }
+    if store_id:
+        headers["x-vercel-blob-store-id"] = store_id
+    if content_type is not None:
+        headers["x-content-type"] = content_type or "application/octet-stream"
+    if upsert is not None:
+        headers["x-allow-overwrite"] = "1" if upsert else "0"
+    return headers
 
 
 async def _blob_put(
@@ -237,17 +261,8 @@ async def _blob_put(
         path_n = _normalize_storage_path(storage_path)
         params = quote(path_n, safe="")
         url = f"{BLOB_API_URL.rstrip('/')}/?pathname={params}"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "x-vercel-blob-access": "private",
-            "x-add-random-suffix": "0",
-            "x-content-type": content_type or "application/octet-stream",
-            "Content-Type": content_type or "application/octet-stream",
-        }
-        if upsert:
-            headers["x-allow-overwrite"] = "1"
-        else:
-            headers["x-allow-overwrite"] = "0"
+        headers = _blob_api_headers(token, content_type=content_type, upsert=upsert)
+        headers["x-content-length"] = str(len(data))
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.put(url, content=data, headers=headers)
         if resp.status_code >= 400:
@@ -272,6 +287,7 @@ async def _blob_get(storage_path: str) -> Optional[bytes]:
         if not obj_url:
             return None
         headers = {"Authorization": f"Bearer {token}"}
+        # Prefer CDN URL; fall back to API get is not required for private reads.
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.get(obj_url, headers=headers)
         if resp.status_code == 404:
