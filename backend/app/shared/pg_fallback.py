@@ -2,7 +2,8 @@
 
 Mirrors Bricks-OS book_checkout._pg_* helpers. Needs POSTGRES_URL or
 POSTGRES_URL_NON_POOLING on the Vercel project (present on bricks-os-api;
-add the same secrets to bricks-dispatch-api for this path to activate).
+add the same secrets to bricks-dispatch-api, OR this module will POST the
+job to OS /api/internal/create-assigned-job which already has Postgres).
 """
 from __future__ import annotations
 
@@ -50,12 +51,62 @@ def _pg_connect():
     return conn
 
 
+
+
+def os_insert_job_assigned_to_owner(job: dict) -> Optional[str]:
+    """When local POSTGRES_URL is missing, ask OS (which has it) to INSERT the job."""
+    import httpx
+    from .auth import get_own_internal_api_key
+
+    os_url = (os.environ.get("BRICKS_OS_API_URL") or "https://api.brxs.ca").strip().rstrip("/")
+    key = get_own_internal_api_key()
+    if not key:
+        logger.error("os job fallback skipped: INTERNAL_API_KEYS missing")
+        return None
+    payload = dict(job)
+    payload["assignee_id"] = KAM_MEMBER_ID
+    payload["status"] = "assigned"
+    if not payload.get("vendor_id"):
+        payload["vendor_id"] = ORG_VENDOR_ID
+    try:
+        r = httpx.post(
+            f"{os_url}/api/internal/create-assigned-job",
+            headers={
+                "Content-Type": "application/json",
+                "X-Internal-Api-Key": key,
+            },
+            json={"job": payload},
+            timeout=20.0,
+        )
+        if r.status_code >= 400:
+            logger.error(
+                "os job fallback HTTP %s: %s",
+                r.status_code,
+                (r.text or "")[:240],
+            )
+            return None
+        body = r.json() if r.content else {}
+        jid = body.get("job_id") or payload.get("id")
+        logger.warning(
+            "os job fallback ok id=%s assignee=%s",
+            jid,
+            KAM_MEMBER_ID,
+        )
+        return jid
+    except Exception as e:
+        logger.error("os job fallback failed: %s", str(e)[:300])
+        return None
+
+
 def pg_insert_job_assigned_to_owner(job: dict) -> Optional[str]:
-    """INSERT job already assigned to Kam (Owner) for GO visibility."""
+    """INSERT job already assigned to Kam (Owner) for GO visibility.
+
+    Prefers local POSTGRES_URL; if unset, proxies to OS which already has it.
+    """
     conn = _pg_connect()
     if not conn:
-        logger.error("pg job fallback skipped: POSTGRES_URL missing")
-        return None
+        logger.warning("pg job fallback: no POSTGRES_URL — trying OS proxy")
+        return os_insert_job_assigned_to_owner(job)
     job = dict(job)
     job["assignee_id"] = KAM_MEMBER_ID
     job["status"] = "assigned"
