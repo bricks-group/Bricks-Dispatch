@@ -18,7 +18,8 @@ import math
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
+from fastapi.responses import Response
 
 from ..services.capture_entitlements import (
     capture_forbidden_message,
@@ -46,7 +47,15 @@ from ..services.capture_worker import (
     save_session_tags,
     stations_have_compile_input,
 )
-from ..services.storage import STORAGE_BUCKET, create_signed_upload_url, get_signed_download_url, upload_bytes
+from ..services.storage import (
+    STORAGE_BUCKET,
+    _blob_get,
+    _blob_put,
+    create_signed_upload_url,
+    get_signed_download_url,
+    upload_bytes,
+    verify_capture_hmac,
+)
 from ..services.tour_builder import normalize_tag, normalize_tags
 from ..shared.auth import get_vendor_member, is_vendor_admin, resolve_vendor_actor_id, verify_internal_api_key
 from ..shared.database import get_db
@@ -1438,3 +1447,63 @@ async def deliver_virtual_visit(
         "output": output,
         "mode": "url" if polycam_url else "file",
     }
+
+
+# ---------------------------------------------------------------------------
+# Fair-Use private Blob proxy — HMAC is the auth (no JWT). GO clients PUT/GET
+# here because private Blob URLs require Authorization the phone cannot send.
+# ---------------------------------------------------------------------------
+
+@router.put("/blob-put/{path:path}")
+async def blob_put_proxy(
+    path: str,
+    request: Request,
+    exp: int = Query(...),
+    sig: str = Query(...),
+):
+    """Accept capture bytes into Vercel Blob when signed with CAPTURE_PUT_SECRET."""
+    try:
+        if not verify_capture_hmac("PUT", path, exp, sig):
+            api_error(403, "Invalid or expired upload signature", "bad_blob_sig")
+    except ValueError:
+        api_error(400, "Invalid path", "bad_blob_path")
+    body = await request.body()
+    if not body:
+        api_error(400, "Empty body", "empty_body")
+    content_type = request.headers.get("content-type") or "application/octet-stream"
+    ok = await _blob_put(path, body, content_type=content_type, upsert=True)
+    if not ok:
+        api_error(502, "Blob upload failed", "blob_put_failed")
+    return {"ok": True, "path": path.lstrip("/"), "bytes": len(body)}
+
+
+@router.get("/blob-get/{path:path}")
+async def blob_get_proxy(
+    path: str,
+    exp: int = Query(...),
+    sig: str = Query(...),
+):
+    """Stream capture bytes from Vercel Blob when signed with CAPTURE_PUT_SECRET."""
+    try:
+        if not verify_capture_hmac("GET", path, exp, sig):
+            api_error(403, "Invalid or expired download signature", "bad_blob_sig")
+    except ValueError:
+        api_error(400, "Invalid path", "bad_blob_path")
+    data = await _blob_get(path)
+    if data is None:
+        api_error(404, "Not found", "blob_not_found")
+    # Guess content-type from extension for tour HTML / floor-plan PNG.
+    lower = path.lower()
+    if lower.endswith(".html") or lower.endswith(".htm"):
+        ctype = "text/html; charset=utf-8"
+    elif lower.endswith(".png"):
+        ctype = "image/png"
+    elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        ctype = "image/jpeg"
+    elif lower.endswith(".json"):
+        ctype = "application/json"
+    elif lower.endswith(".svg"):
+        ctype = "image/svg+xml"
+    else:
+        ctype = "application/octet-stream"
+    return Response(content=data, media_type=ctype)
