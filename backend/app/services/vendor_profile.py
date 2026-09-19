@@ -1,1 +1,1 @@
-PLACEHOLDER_WILL_REPLACE
+@file:///tmp/RESTORE_NOW.json
