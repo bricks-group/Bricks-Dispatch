@@ -392,6 +392,80 @@ def test_calgary_alberta_without_gta():
     assert pick_vendor_rule_based(job, [gta_only]) is None
 
 
+def test_placeholder_emdash_address_ontario_gta_vendor():
+    """Prod smoke: address='—', city empty, state=ON, no lat/lng must still assign GTA vendor."""
+    gta = _approved(
+        id="0c3fa7c2-d23b-4e44-90ad-ab2d19af2580",
+        name="Ajani Kamali Akio",
+        email="akashorter@icloud.com",
+        role="Owner",
+        tier=3,
+        skills=["photo", "drone", "reel", "tour", "twilight"],
+        service_areas=["Mississauga", "GTA", "Toronto", "Peel", "Halton", "York", "Durham"],
+        home_city="Mississauga",
+        home_lat=43.5890,
+        home_lng=-79.6441,
+        max_travel_km=80,
+    )
+    job = Job(
+        address="—",
+        city="",
+        state="ON",
+        job_type="photo",
+        package_name="Essentials",
+        time_window_start="10:00",
+        time_window_end="11:00",
+        lat=None,
+        lng=None,
+    )
+    assert location_matches(gta, job) is True
+    assert pick_vendor_rule_based(job, [gta]) == gta.id
+
+
+def test_hamilton_on_without_lat_gta_vendor():
+    """Golden Horseshoe city outside classic GTA token list still matches ON + GTA spine."""
+    gta = _approved(
+        id="gta_ham",
+        name="GTA Photog",
+        email="gta@test.com",
+        skills=["photo"],
+        service_areas=["Mississauga", "GTA"],
+        home_city="Mississauga",
+    )
+    job = Job(
+        address="100 King St W",
+        city="Hamilton",
+        state="ON",
+        job_type="photo",
+        time_window_start="10:00",
+        lat=None,
+        lng=None,
+    )
+    assert location_matches(gta, job) is True
+    assert pick_vendor_rule_based(job, [gta]) == "gta_ham"
+
+
+def test_calgary_ab_still_rejects_gta_only_after_ontario_failopen():
+    """AB jobs must not be rescued by the Ontario/GTA province gate."""
+    gta_only = _approved(
+        id="gta",
+        name="GTA",
+        email="g@test.com",
+        skills=["photo"],
+        service_areas=["Mississauga", "GTA"],
+        home_city="Mississauga",
+    )
+    job = Job(
+        address="12 8 Ave SW",
+        city="Calgary",
+        state="AB",
+        job_type="photo",
+        time_window_start="10:00",
+    )
+    assert location_matches(gta_only, job) is False
+    assert pick_vendor_rule_based(job, [gta_only]) is None
+
+
 def test_visit_checklist_one_visit_no_return():
     job = {
         "job_type": "photo",
