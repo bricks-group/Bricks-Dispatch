@@ -57,7 +57,17 @@ GTA_TOKENS = {
     "markham", "richmond hill", "oakville", "burlington", "milton", "peel",
     "halton", "york", "durham", "etobicoke", "scarborough", "north york",
     "ajax", "pickering", "whitby", "oshawa", "vaughan", "caledon", "newmarket",
+    # Golden Horseshoe / launch footprint (Canada-only Ontario hub)
+    "hamilton", "niagara", "niagara falls", "st catharines", "st. catharines",
+    "guelph", "cambridge", "kitchener", "waterloo", "london", "barrie",
+    "golden horseshoe",
 }
+
+# Address/city values that mean "not geocoded yet" — never block auto-assign.
+_LOCATION_PLACEHOLDERS = frozenset({
+    "", "-", "—", "–", "−", "tbd", "tba", "n/a", "na", "none", "null",
+    "unknown", "address tbd", "address tba", "location tbd", "location tba",
+})
 
 # Canada province aliases — job.state / service_areas may use either form.
 PROVINCE_ALIASES = {
@@ -325,6 +335,43 @@ def travel_within_cap(member: Any, job: Any, origin: Optional[tuple[float, float
         return None
 
 
+def _is_placeholder_location_text(raw: Any) -> bool:
+    text = str(raw or "").strip().lower()
+    if text in _LOCATION_PLACEHOLDERS:
+        return True
+    # Unicode dashes / lone punctuation left after strip
+    normalized = (
+        text.replace("—", "-").replace("–", "-").replace("−", "-").strip("-").strip()
+    )
+    return normalized in _LOCATION_PLACEHOLDERS
+
+
+def _job_location_unknown(job: Any) -> bool:
+    """No lat/lng and address/city blank or placeholder (—, TBD, n/a, …).
+
+    Launch intake sometimes stores em-dash address + province only with no
+    geocode. That must fail-open so Ontario vendors are not all excluded.
+    """
+    j = _as_dict(job)
+    try:
+        lat, lng = j.get("lat"), j.get("lng")
+        if lat is not None and lng is not None:
+            float(lat)
+            float(lng)
+            return False
+    except (TypeError, ValueError):
+        pass
+    return _is_placeholder_location_text(j.get("address")) and _is_placeholder_location_text(
+        j.get("city")
+    )
+
+
+def _vendor_covers_gta(areas: list[str]) -> bool:
+    return any(
+        a in GTA_TOKENS or "gta" in a or "toronto" in a or "mississauga" in a for a in areas
+    )
+
+
 def _areas_match_job(areas: list[str], hay: str, job_province: Optional[str]) -> bool:
     if any(a and a in hay for a in areas):
         return True
@@ -339,11 +386,14 @@ def _areas_match_job(areas: list[str], hay: str, job_province: Optional[str]) ->
             return True
     if job_province and job_province in vendor_provinces:
         return True
-    vendor_gta = any(
-        a in GTA_TOKENS or "gta" in a or "toronto" in a or "mississauga" in a for a in areas
-    )
+    vendor_gta = _vendor_covers_gta(areas)
     job_gta = any(tok in hay for tok in GTA_TOKENS)
     if vendor_gta and (job_gta or not hay.strip()):
+        return True
+    # GTA / Mississauga-home spine covers Ontario launch jobs even when the
+    # city is outside classic GTA_TOKENS (e.g. Hamilton) or only state=ON is set.
+    # Calgary/AB still rejects: job_province is "ab", not "on".
+    if vendor_gta and job_province == "on":
         return True
     return False
 
@@ -352,6 +402,8 @@ def location_matches(member: Any, job: Any) -> bool:
     """Coords + travel cap are primary. Over-cap is a hard miss even with empty areas.
 
     Empty service_areas fail-open ONLY when job/vendor coords are unavailable.
+    Unknown/placeholder address (—, TBD) with no geocode fail-open so assign
+    is not blocked. Ontario + GTA-coverage vendor is a location match.
     Canada-wide: city / province aliases match without requiring GTA tokens.
     """
     m = _as_dict(member)
@@ -371,6 +423,10 @@ def location_matches(member: Any, job: Any) -> bool:
     if cap_hit is False:
         # Hard gate: known over-cap never rescued by empty/missing service_areas.
         return False
+
+    # No usable place string/coords → do not block (ops can re-home later).
+    if _job_location_unknown(j):
+        return True
 
     if _areas_match_job(areas, hay, job_province):
         return True
