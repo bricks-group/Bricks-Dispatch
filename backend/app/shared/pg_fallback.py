@@ -39,16 +39,20 @@ def _is_rest_quota_error(err: object) -> bool:
 
 
 def _pg_connect():
-    url = os.environ.get("POSTGRES_URL_NON_POOLING") or os.environ.get("POSTGRES_URL")
+    # Prefer pooler (POSTGRES_URL). Vercel cannot dial IPv6 db.*.supabase.co.
+    url = os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRES_URL_NON_POOLING")
     if not url:
         return None
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
-    import psycopg2
-
-    conn = psycopg2.connect(url, connect_timeout=10)
-    conn.autocommit = True
-    return conn
+    try:
+        import psycopg2
+        conn = psycopg2.connect(url, connect_timeout=10)
+        conn.autocommit = True
+        return conn
+    except Exception as e:
+        logger.warning("pg connect failed: %s", type(e).__name__)
+        return None
 
 
 
