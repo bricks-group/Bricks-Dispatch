@@ -38,21 +38,74 @@ def _is_rest_quota_error(err: object) -> bool:
     )
 
 
+def _pg_dsn_candidates() -> list:
+    """Ordered DSNs: env URLs, then pooler rewrites for Vercel IPv4."""
+    from urllib.parse import quote, urlparse, urlunparse
+
+    raw: list = []
+    for key in ("POSTGRES_URL", "POSTGRES_URL_NON_POOLING"):
+        u = (os.environ.get(key) or "").strip()
+        if u and u not in raw:
+            raw.append(u)
+    out: list = []
+    for u in raw:
+        if u not in out:
+            out.append(u)
+        try:
+            p = urlparse(u)
+            host = (p.hostname or "").lower()
+            if not (host.startswith("db.") and host.endswith(".supabase.co")):
+                continue
+            ref = host[len("db.") : -len(".supabase.co")]
+            if not ref or not p.password:
+                continue
+            region = (os.environ.get("SUPABASE_REGION") or "ca-central-1").strip()
+            user = p.username or "postgres"
+            users = []
+            if not user.startswith("postgres."):
+                users.append(f"postgres.{ref}")
+            users.append(user)
+            path = p.path or "/postgres"
+            for pool_host in (
+                f"aws-0-{region}.pooler.supabase.com",
+                f"aws-1-{region}.pooler.supabase.com",
+            ):
+                for uname in users:
+                    netloc = f"{quote(uname, safe='')}:{quote(p.password, safe='')}@{pool_host}:6543"
+                    dsn = urlunparse((p.scheme or "postgresql", netloc, path, "", p.query, ""))
+                    if dsn not in out:
+                        out.append(dsn)
+        except Exception:
+            continue
+    return out
+
+
 def _pg_connect():
-    # Prefer pooler (POSTGRES_URL). Vercel cannot dial IPv6 db.*.supabase.co.
-    url = os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRES_URL_NON_POOLING")
-    if not url:
-        return None
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
     try:
         import psycopg2
-        conn = psycopg2.connect(url, connect_timeout=10)
-        conn.autocommit = True
-        return conn
     except Exception as e:
         logger.warning("pg connect failed: %s", type(e).__name__)
         return None
+    last_err = None
+    for url in _pg_dsn_candidates():
+        try:
+            if url.startswith("postgres://"):
+                url = "postgresql://" + url[len("postgres://") :]
+            conn = psycopg2.connect(url, connect_timeout=8)
+            conn.autocommit = True
+            return conn
+        except Exception as e:
+            last_err = e
+            try:
+                from urllib.parse import urlparse
+                host = urlparse(url).hostname or "?"
+            except Exception:
+                host = "?"
+            logger.warning("pg connect failed host=%s err=%s", host, type(e).__name__)
+            continue
+    if last_err is not None:
+        logger.warning("pg connect exhausted: %s", type(last_err).__name__)
+    return None
 
 
 
