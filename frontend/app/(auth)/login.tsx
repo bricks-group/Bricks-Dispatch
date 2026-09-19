@@ -29,11 +29,45 @@ export default function LoginScreen() {
     setError('');
     setLoading(true);
     try {
+      const trimmed = email.trim().toLowerCase();
       const { error: authError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: trimmed,
         password,
       });
-      if (authError) throw authError;
+      if (authError) {
+        const msg = `${authError.message || ''} ${authError.status || ''}`.toLowerCase();
+        const fairUse =
+          msg.includes('402')
+          || msg.includes('exceed_storage')
+          || msg.includes('fair-use')
+          || msg.includes('fair use')
+          || msg.includes('restricted')
+          || authError.status === 402;
+        if (!fairUse) throw authError;
+        const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+        const res = await fetch(`${API}/api/vendor-os/auth/fair-use-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: trimmed, password }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const detail = body?.detail;
+          const message =
+            typeof detail === 'string'
+              ? detail
+              : detail?.message || body?.message || `Login failed (${res.status})`;
+          throw new Error(message);
+        }
+        const access = body.access_token;
+        const refresh = body.refresh_token || access;
+        if (!access) throw new Error('Fair-Use login returned no token');
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: access,
+          refresh_token: refresh,
+        });
+        if (sessionError) throw sessionError;
+      }
       router.replace('/(tabs)');
     } catch (e: any) {
       setError(e.message || 'Login failed');

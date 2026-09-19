@@ -111,6 +111,107 @@ export async function login(email: string): Promise<void> {
   if (error) throw error;
 }
 
+
+function isFairUseAuthError(err: unknown): boolean {
+  const anyErr = err as { message?: string; status?: number; code?: string; statusCode?: number } | null;
+  const msg = `${anyErr?.message || err || ''}`.toLowerCase();
+  const status = anyErr?.status ?? anyErr?.statusCode;
+  if (status === 402) return true;
+  return (
+    msg.includes('402')
+    || msg.includes('exceed_storage')
+    || msg.includes('storage_size_quota')
+    || msg.includes('fair-use')
+    || msg.includes('fair use')
+    || msg.includes('fair_use')
+    || msg.includes('restricted')
+    || msg.includes('over_quota')
+    || msg.includes('quota exceeded')
+  );
+}
+
+function parseApiErrorDetail(detail: unknown, fallback: string): string {
+  if (detail == null) return fallback;
+  if (typeof detail === 'string') return detail;
+  if (typeof detail === 'object') {
+    const d = detail as { message?: string; code?: string; detail?: unknown };
+    if (typeof d.message === 'string' && d.message) return d.message;
+    if (typeof d.detail === 'string') return d.detail;
+    if (d.detail && typeof d.detail === 'object' && typeof (d.detail as { message?: string }).message === 'string') {
+      return (d.detail as { message: string }).message;
+    }
+  }
+  return fallback;
+}
+
+async function fairUsePasswordLogin(email: string, password: string): Promise<AuthMember> {
+  const res = await fetch(`${API_BASE}/api/vendor-os/auth/fair-use-login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = (body as { detail?: unknown }).detail ?? body;
+    throw new Error(parseApiErrorDetail(detail, `Login failed (${res.status})`));
+  }
+  const access = (body as { access_token?: string }).access_token;
+  const refresh = (body as { refresh_token?: string }).refresh_token || access;
+  if (!access) throw new Error('Fair-Use login returned no token');
+  localStorage.setItem(TOKEN_KEY, access);
+  const { error } = await supabase.auth.setSession({
+    access_token: access,
+    refresh_token: refresh || access,
+  });
+  if (error) {
+    // Session may still work via TOKEN_KEY for API calls even if setSession complains.
+    console.warn('setSession after fair-use login:', error.message);
+  }
+  return me();
+}
+
+/** Password sign-in with Fair-Use Postgres fallback when Auth API is 402. */
+export async function loginWithPassword(email: string, password: string): Promise<AuthMember> {
+  const trimmed = email.trim().toLowerCase();
+  if (!trimmed || !password) {
+    throw new Error('Email and password are required');
+  }
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: trimmed,
+      password,
+    });
+    if (error) throw error;
+    if (data.session?.access_token) {
+      localStorage.setItem(TOKEN_KEY, data.session.access_token);
+    }
+    if (!data.session) throw new Error('No session');
+    return me();
+  } catch (err) {
+    if (isFairUseAuthError(err)) {
+      return fairUsePasswordLogin(trimmed, password);
+    }
+    // Auth completely blocked / network — try Fair-Use path once.
+    const msg = `${(err as Error)?.message || err || ''}`.toLowerCase();
+    if (
+      msg.includes('fetch')
+      || msg.includes('network')
+      || msg.includes('failed to fetch')
+      || msg.includes('auth')
+    ) {
+      try {
+        return await fairUsePasswordLogin(trimmed, password);
+      } catch (fairErr) {
+        // Prefer the Fair-Use error if Auth was clearly blocked; else original.
+        if (isFairUseAuthError(err)) throw fairErr;
+        throw fairErr;
+      }
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+
 export async function verifyOtp(email: string, token: string): Promise<AuthMember> {
   const { data, error } = await supabase.auth.verifyOtp({
     email,

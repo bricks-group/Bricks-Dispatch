@@ -46,6 +46,44 @@ def decode_supabase_user_from_jwt(token: str) -> Optional[tuple]:
     except Exception:
         return None
 
+
+
+def mint_supabase_access_token(
+    user_id: str,
+    email: str,
+    *,
+    expires_in: int = 7 * 24 * 3600,
+) -> str:
+    """Mint an HS256 JWT matching decode_supabase_user_from_jwt expectations."""
+    import time
+    import jwt
+
+    secret = (os.environ.get("SUPABASE_JWT_SECRET") or "").strip()
+    if not secret:
+        raise RuntimeError("SUPABASE_JWT_SECRET missing")
+    uid = str(user_id or "").strip()
+    if not uid:
+        raise RuntimeError("user_id required")
+    now = int(time.time())
+    payload = {
+        "aud": "authenticated",
+        "role": "authenticated",
+        "sub": uid,
+        "email": (email or "").strip().lower() or None,
+        "iat": now,
+        "exp": now + int(expires_in),
+    }
+    # Drop null email to keep payload clean
+    if not payload["email"]:
+        payload.pop("email", None)
+    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
+    if supabase_url:
+        payload["iss"] = f"{supabase_url}/auth/v1"
+    token = jwt.encode(payload, secret, algorithm="HS256")
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    return token
+
 def resolve_actor_id(x_user_id: Optional[str]) -> str:
     actor_id = (x_user_id or "").strip()
     if not actor_id:

@@ -313,6 +313,68 @@ def _rows_from_cursor(cur) -> list[dict]:
     return out
 
 
+
+def pg_verify_auth_password(email: str, password: str) -> Optional[dict]:
+    """Verify email+password against auth.users via pgcrypto crypt().
+
+    Returns {"id": uuid_str, "email": email} or None. Uses direct Postgres
+    only (Auth API is Fair-Use blocked). Returns None when PG unavailable
+    so callers can distinguish with a separate connect check if needed.
+    """
+    email_l = (email or "").strip().lower()
+    if not email_l or password is None or password == "":
+        return None
+    conn = _pg_connect()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            # Prefer deleted_at filter; fall back if column missing.
+            sqls = [
+                (
+                    "SELECT id::text AS id, email::text AS email FROM auth.users "
+                    "WHERE lower(email) = lower(%s) "
+                    "AND encrypted_password IS NOT NULL "
+                    "AND encrypted_password = crypt(%s, encrypted_password) "
+                    "AND deleted_at IS NULL "
+                    "LIMIT 1"
+                ),
+                (
+                    "SELECT id::text AS id, email::text AS email FROM auth.users "
+                    "WHERE lower(email) = lower(%s) "
+                    "AND encrypted_password IS NOT NULL "
+                    "AND encrypted_password = crypt(%s, encrypted_password) "
+                    "LIMIT 1"
+                ),
+            ]
+            last_err = None
+            for sql in sqls:
+                try:
+                    cur.execute(sql, (email_l, password))
+                    row = _row_from_cursor(cur)
+                    if row and row.get("id"):
+                        return {"id": str(row["id"]), "email": str(row.get("email") or email_l)}
+                    return None
+                except Exception as e:
+                    last_err = e
+                    err = str(e).lower()
+                    if "deleted_at" in err or "column" in err:
+                        continue
+                    logger.error("pg auth password verify failed: %s", str(e)[:300])
+                    return None
+            if last_err is not None:
+                logger.error("pg auth password verify failed: %s", str(last_err)[:300])
+            return None
+    except Exception as e:
+        logger.error("pg auth password verify failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def pg_select_vendor_member(actor_id: str = "", email: str = "") -> Optional[dict]:
     """Load vendor_members via Postgres (or OS proxy) when PostgREST is 402."""
     from .job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
