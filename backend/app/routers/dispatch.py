@@ -157,6 +157,66 @@ async def create_dispatch_job(
             "checklist": job_data.get("checklist") or [],
         }
     except Exception as e:
+        # Fair-Use / PostgREST 402: insert via Postgres already assigned to Owner
+        # so paid /book jobs still land on GO. Needs POSTGRES_URL on this project.
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_job_assigned_to_owner
+        from ..shared.job_scope import KAM_MEMBER_ID as _KAM
+
+        if _is_rest_quota_error(e):
+            pg_id = pg_insert_job_assigned_to_owner(job_data)
+            if pg_id:
+                logger.warning(
+                    "create_dispatch_job used pg fallback id=%s assignee=%s",
+                    pg_id,
+                    _KAM,
+                )
+                try:
+                    from ..services.notifications import format_when_line, format_package_line
+                    when = format_when_line(job_data)
+                    address = (job_data.get("address") or "").strip() or "n/a"
+                    pkg_name = format_package_line(
+                        job_data.get("package_name"),
+                        job_data.get("package_id"),
+                    )
+                    pkg_price = job_data.get("package_price")
+                    package = f"{pkg_name} (${pkg_price})" if pkg_price is not None else pkg_name
+                    booking_ref = short_booking_ref(job_data.get("booking_id"))
+                    await create_notification(
+                        title="New paid booking",
+                        body=(
+                            "New job from Booking (pg fallback).\n"
+                            f"Address: {address}\n"
+                            f"Package: {package}\n"
+                            f"When: {when}\n"
+                            f"Assignee: {_KAM}\n"
+                            f"Booking ref: {booking_ref}"
+                        ),
+                        ntype="new_booking",
+                        data={"job_id": pg_id, "assignee_id": _KAM},
+                        email_to=ADMIN_NOTIFICATION_EMAIL,
+                        email_subject=paid_booking_admin_subject(job_data.get("address")),
+                        email_html=_paid_booking_admin_email_html(
+                            address=address,
+                            package=package,
+                            when=when,
+                            assignee=_KAM,
+                            booking_ref=booking_ref,
+                        ),
+                    )
+                except Exception:
+                    logger.exception("Admin notify after pg fallback failed for %s", pg_id)
+                return {
+                    "job_id": pg_id,
+                    "status": "assigned",
+                    "assignee_id": _KAM,
+                    "created_at": now,
+                    "checklist": job_data.get("checklist") or [],
+                    "note": "pg_fallback_assigned_owner",
+                }
+            logger.error(
+                "create_dispatch_job Fair-Use + pg fallback failed (POSTGRES_URL set?): %s",
+                str(e)[:200],
+            )
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.put("/jobs/{job_id}/status", summary="Update job status and sync to Booking")
