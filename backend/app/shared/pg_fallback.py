@@ -186,3 +186,245 @@ def pg_insert_job_assigned_to_owner(job: dict) -> Optional[str]:
             conn.close()
         except Exception:
             pass
+
+
+def _os_internal_post(path: str, payload: dict) -> Optional[dict]:
+    """POST JSON to Bricks-OS internal Fair-Use helper. Returns parsed body or None."""
+    import httpx
+    from .auth import get_own_internal_api_key
+
+    os_url = (os.environ.get("BRICKS_OS_API_URL") or "https://api.brxs.ca").strip().rstrip("/")
+    key = get_own_internal_api_key()
+    if not key:
+        logger.error("os internal %s skipped: INTERNAL_API_KEYS missing", path)
+        return None
+    try:
+        r = httpx.post(
+            f"{os_url}{path}",
+            headers={
+                "Content-Type": "application/json",
+                "X-Internal-Api-Key": key,
+            },
+            json=payload,
+            timeout=20.0,
+        )
+        if r.status_code >= 400:
+            logger.error(
+                "os internal %s HTTP %s: %s",
+                path,
+                r.status_code,
+                (r.text or "")[:240],
+            )
+            return None
+        return r.json() if r.content else {}
+    except Exception as e:
+        logger.error("os internal %s failed: %s", path, str(e)[:300])
+        return None
+
+
+def _row_from_cursor(cur) -> Optional[dict]:
+    row = cur.fetchone()
+    if not row:
+        return None
+    cols = [d[0] for d in cur.description]
+    out = {}
+    for i, c in enumerate(cols):
+        v = row[i]
+        if hasattr(v, "isoformat"):
+            try:
+                v = v.isoformat()
+            except Exception:
+                v = str(v)
+        out[c] = v
+    return out
+
+
+def _rows_from_cursor(cur) -> list[dict]:
+    cols = [d[0] for d in cur.description] if cur.description else []
+    out = []
+    for row in cur.fetchall() or []:
+        d = {}
+        for i, c in enumerate(cols):
+            v = row[i]
+            if hasattr(v, "isoformat"):
+                try:
+                    v = v.isoformat()
+                except Exception:
+                    v = str(v)
+            d[c] = v
+        out.append(d)
+    return out
+
+
+def pg_select_vendor_member(actor_id: str = "", email: str = "") -> Optional[dict]:
+    """Load vendor_members via Postgres (or OS proxy) when PostgREST is 402."""
+    from .job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
+
+    actor_id = (actor_id or "").strip()
+    email_l = (email or "").strip().lower()
+    conn = _pg_connect()
+    if not conn:
+        body = _os_internal_post(
+            "/api/internal/vendor-member",
+            {"actor_id": actor_id, "email": email_l},
+        )
+        if not body:
+            return None
+        member = body.get("member")
+        return member if isinstance(member, dict) else None
+
+    rows: list[dict] = []
+    try:
+        with conn.cursor() as cur:
+            if actor_id:
+                cur.execute("SELECT * FROM public.vendor_members WHERE id = %s LIMIT 1", (actor_id,))
+                row = _row_from_cursor(cur)
+                if row:
+                    rows.append(row)
+                # Also match auth_user_id when JWT sub != member id
+                cur.execute(
+                    "SELECT * FROM public.vendor_members WHERE auth_user_id::text = %s LIMIT 5",
+                    (actor_id,),
+                )
+                for r in _rows_from_cursor(cur):
+                    if r not in rows and str(r.get("id")) not in {str(x.get("id")) for x in rows}:
+                        rows.append(r)
+            if actor_id.lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
+                cur.execute(
+                    "SELECT * FROM public.vendor_members WHERE id = %s LIMIT 1",
+                    (KAM_MEMBER_ID,),
+                )
+                row = _row_from_cursor(cur)
+                if row and str(row.get("id")) not in {str(x.get("id")) for x in rows}:
+                    rows.append(row)
+            if email_l:
+                cur.execute(
+                    "SELECT * FROM public.vendor_members WHERE lower(email) = %s LIMIT 10",
+                    (email_l,),
+                )
+                for r in _rows_from_cursor(cur):
+                    if str(r.get("id")) not in {str(x.get("id")) for x in rows}:
+                        rows.append(r)
+        picked = pick_canonical_member(rows, actor_id, email_l)
+        if picked:
+            logger.warning("pg vendor_member fallback ok id=%s", picked.get("id"))
+        return picked
+    except Exception as e:
+        logger.error("pg vendor_member select failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_jobs_for_assignees(
+    assignee_ids: list[str],
+    *,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """List jobs for photographer aliases via Postgres (or OS proxy)."""
+    ids = [str(a).strip() for a in (assignee_ids or []) if str(a).strip()]
+    if not ids:
+        return [], 0
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
+    conn = _pg_connect()
+    if not conn:
+        body = _os_internal_post(
+            "/api/internal/list-jobs-for-assignees",
+            {
+                "assignee_ids": ids,
+                "status": status,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        if not body:
+            return [], 0
+        jobs = body.get("jobs") if isinstance(body.get("jobs"), list) else []
+        total = int(body.get("total") or len(jobs))
+        return jobs, total
+
+    try:
+        with conn.cursor() as cur:
+            params: list[Any] = [ids]
+            where = "assignee_id = ANY(%s)"
+            if status:
+                where += " AND status = %s"
+                params.append(status)
+            cur.execute(
+                f"SELECT count(*) FROM public.jobs WHERE {where}",
+                params,
+            )
+            total = int((cur.fetchone() or [0])[0] or 0)
+            params2 = list(params) + [limit, offset]
+            cur.execute(
+                f"SELECT * FROM public.jobs WHERE {where} "
+                f"ORDER BY scheduled_date ASC NULLS LAST, time_window_start ASC NULLS LAST "
+                f"LIMIT %s OFFSET %s",
+                params2,
+            )
+            jobs = _rows_from_cursor(cur)
+            # Normalize add_ons JSON if returned as str
+            for j in jobs:
+                ao = j.get("add_ons")
+                if isinstance(ao, str):
+                    try:
+                        j["add_ons"] = json.loads(ao)
+                    except Exception:
+                        pass
+            logger.warning(
+                "pg jobs list fallback ok n=%s total=%s assignees=%s",
+                len(jobs),
+                total,
+                ids[:3],
+            )
+            return jobs, total
+    except Exception as e:
+        logger.error("pg jobs list failed: %s", str(e)[:300])
+        return [], 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_job_by_id(job_id: str) -> Optional[dict]:
+    """Fetch one job by id via Postgres or OS proxy."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        body = _os_internal_post(
+            "/api/internal/list-jobs-for-assignees",
+            {"assignee_ids": [KAM_MEMBER_ID], "limit": 200, "offset": 0, "job_id": jid},
+        )
+        # Prefer dedicated job_id filter when OS supports it; else scan.
+        if body and isinstance(body.get("job"), dict):
+            return body["job"]
+        jobs = body.get("jobs") if body and isinstance(body.get("jobs"), list) else []
+        return next((j for j in jobs if str(j.get("id")) == jid), None)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM public.jobs WHERE id = %s LIMIT 1", (jid,))
+            row = _row_from_cursor(cur)
+            if row and isinstance(row.get("add_ons"), str):
+                try:
+                    row["add_ons"] = json.loads(row["add_ons"])
+                except Exception:
+                    pass
+            return row
+    except Exception as e:
+        logger.error("pg job by id failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

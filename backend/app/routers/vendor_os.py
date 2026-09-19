@@ -400,45 +400,100 @@ async def get_vendor_os_jobs(
     aliases = photographer_assignee_ids(actor_id, actor_member)
     vendors = vendor_scope_ids(actor_id, actor_member)
 
-    sb = await get_db()
-    query = sb.table("jobs").select("*", count="exact")
-    if status:
-        query = query.eq("status", status)
-    # Default: assigned jobs for this photographer (aliases include Kam 0c3fa7c2).
-    # Owner Jobs page passes assignee_id=all so unassigned default_vendor jobs list.
-    if is_vendor_admin(actor_member) and assignee_id == "all":
-        query = query.or_(jobs_or_filter(vendors, aliases))
-    elif is_vendor_admin(actor_member) and assignee_id == "unassigned":
-        query = query.or_(jobs_or_filter(vendors, [])).or_(unassigned_assignee_or_filter())
-    elif assignee_id and assignee_id not in ("all", "unassigned"):
-        query = query.eq("assignee_id", assignee_id)
-    else:
-        query = query.in_("assignee_id", aliases or [actor_id])
-    if search:
-        query = query.or_(f"address.ilike.%{search}%,city.ilike.%{search}%")
-        
     page, page_size, skip = normalize_pagination(page, page_size)
-    res = await query.order("scheduled_date", desc=False).range(skip, skip + page_size - 1).execute()
-    jobs = res.data or []
-    total = res.count or 0
-    
-    db = await get_db()
-    res_members = await db.table("vendor_members").select("id, name").in_("vendor_id", vendors).limit(500).execute()
-    member_map = {m["id"]: m.get("name", "Unknown") for m in (res_members.data or [])}
-    listings = await _listings_by_ids(db, [j.get("transaction_id") for j in jobs])
-    res_full = await db.table("vendor_members").select("*").in_("vendor_id", vendors).limit(500).execute()
-    member_full = {m["id"]: m for m in (res_full.data or [])}
-    for job in jobs:
-        job["assignee_name"] = member_map.get(job.get("assignee_id"), "Unassigned")
-        _apply_listing(job, listings)
-        m = member_full.get(job.get("assignee_id")) or actor_member
-        cents = await photographer_payout_cents(db, job, m)
-        job["payout_display_cad"] = round(cents / 100, 2)
-        job["payout_model"] = "owner_full" if is_owner_member(m) else "ic_rate_card"
-        if job["payout_model"] == "owner_full":
-            job["deduction"] = 0
+    jobs = []
+    total = 0
+    fair_use_jobs = False
+    try:
+        sb = await get_db()
+        query = sb.table("jobs").select("*", count="exact")
+        if status:
+            query = query.eq("status", status)
+        # Default: assigned jobs for this photographer (aliases include Kam 0c3fa7c2).
+        # Owner Jobs page passes assignee_id=all so unassigned default_vendor jobs list.
+        if is_vendor_admin(actor_member) and assignee_id == "all":
+            query = query.or_(jobs_or_filter(vendors, aliases))
+        elif is_vendor_admin(actor_member) and assignee_id == "unassigned":
+            query = query.or_(jobs_or_filter(vendors, [])).or_(unassigned_assignee_or_filter())
+        elif assignee_id and assignee_id not in ("all", "unassigned"):
+            query = query.eq("assignee_id", assignee_id)
+        else:
+            query = query.in_("assignee_id", aliases or [actor_id])
+        if search:
+            query = query.or_(f"address.ilike.%{search}%,city.ilike.%{search}%")
+
+        res = await query.order("scheduled_date", desc=False).range(skip, skip + page_size - 1).execute()
+        jobs = res.data or []
+        total = res.count or 0
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_jobs_for_assignees
+        if not _is_rest_quota_error(e):
+            raise
+        fair_use_jobs = True
+        # Fair-Use: list assigned jobs via Postgres/OS. Admin "all"/"unassigned"
+        # scopes still collapse to this photographer's aliases under 402.
+        want_ids = aliases or [actor_id]
+        if assignee_id and assignee_id not in ("all", "unassigned"):
+            want_ids = [assignee_id]
+        jobs, total = pg_select_jobs_for_assignees(
+            want_ids, status=status, limit=page_size, offset=skip
+        )
+        if search:
+            q = (search or "").strip().lower()
+            jobs = [
+                j for j in jobs
+                if q in str(j.get("address") or "").lower()
+                or q in str(j.get("city") or "").lower()
+            ]
+            total = len(jobs)
+
+    member_map = {actor_member.get("id"): actor_member.get("name", "Unknown")}
+    member_full = {actor_member.get("id"): actor_member}
+    listings = {}
+    if not fair_use_jobs:
+        try:
+            db = await get_db()
+            res_members = await db.table("vendor_members").select("id, name").in_("vendor_id", vendors).limit(500).execute()
+            member_map = {m["id"]: m.get("name", "Unknown") for m in (res_members.data or [])}
+            listings = await _listings_by_ids(db, [j.get("transaction_id") for j in jobs])
+            res_full = await db.table("vendor_members").select("*").in_("vendor_id", vendors).limit(500).execute()
+            member_full = {m["id"]: m for m in (res_full.data or [])}
+            for job in jobs:
+                job["assignee_name"] = member_map.get(job.get("assignee_id"), "Unassigned")
+                _apply_listing(job, listings)
+                m = member_full.get(job.get("assignee_id")) or actor_member
+                cents = await photographer_payout_cents(db, job, m)
+                job["payout_display_cad"] = round(cents / 100, 2)
+                job["payout_model"] = "owner_full" if is_owner_member(m) else "ic_rate_card"
+                if job["payout_model"] == "owner_full":
+                    job["deduction"] = 0
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            if not _is_rest_quota_error(e):
+                raise
+            fair_use_jobs = True
+
+    if fair_use_jobs:
+        # Skip listing/payout PostgREST enrichers — stamp Owner payout honestly.
+        for job in jobs:
+            m = member_full.get(job.get("assignee_id")) or actor_member
+            job["assignee_name"] = member_map.get(job.get("assignee_id")) or m.get("name") or "Unassigned"
+            job["payout_model"] = "owner_full" if is_owner_member(m) else "ic_rate_card"
+            if job["payout_model"] == "owner_full":
+                job["deduction"] = 0
+                # Owner keeps rack; prefer package_price/rack_price when present.
+                dollars = job.get("package_price") or job.get("rack_price") or 0
+                try:
+                    job["payout_display_cad"] = round(float(dollars), 2)
+                except Exception:
+                    job["payout_display_cad"] = 0
+            else:
+                job.setdefault("payout_display_cad", 0)
+
     payload = paginated_response(jobs, total, page, page_size)
     payload["jobs"] = jobs  # Swift JobStore decodes { jobs: [...] }
+    if fair_use_jobs:
+        payload["fair_use_pg_fallback"] = True
     return payload
 
 
@@ -451,12 +506,28 @@ async def get_vendor_os_job(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    db = await get_db()
-    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
-    listings = await _listings_by_ids(db, [job.get("transaction_id")])
-    res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
-    job["assignee_name"] = (res_member.data or {}).get("name") if res_member.data else "Unassigned"
-    return _apply_listing(job, listings)
+    try:
+        db = await get_db()
+        job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
+        listings = await _listings_by_ids(db, [job.get("transaction_id")])
+        res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
+        job["assignee_name"] = (res_member.data or {}).get("name") if res_member.data else "Unassigned"
+        return _apply_listing(job, listings)
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        from ..shared.errors import api_error
+        from ..shared.job_scope import photographer_assignee_ids as _aliases
+        # _load_visible_job may raise api_error (HTTP) — only catch PostgREST quota
+        if not _is_rest_quota_error(e):
+            raise
+        job = pg_select_job_by_id(job_id)
+        if not job:
+            api_error(404, "Job not found", "job_not_found")
+        allowed = set(_aliases(actor_id, actor_member) or [actor_id])
+        if not is_vendor_admin(actor_member) and str(job.get("assignee_id") or "") not in allowed:
+            api_error(403, "You are not assigned to this job", "job_not_assigned_to_actor")
+        job["assignee_name"] = actor_member.get("name") or "Unassigned"
+        return job
 
 
 @router.get("/listings")

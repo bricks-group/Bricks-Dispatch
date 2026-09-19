@@ -5,6 +5,47 @@ from .errors import api_error
 from .schemas import VendorMember
 from .vendor_identity import is_owner_member
 
+
+def _is_rest_quota_error(err: object) -> bool:
+    e = str(err or "").lower()
+    return any(
+        tok in e
+        for tok in (
+            "402",
+            "exceed_storage",
+            "storage_size_quota",
+            "fair-use",
+            "fair use",
+            "fair_use",
+            "restricted",
+            "quota exceeded",
+            "over_quota",
+        )
+    )
+
+
+def decode_supabase_user_from_jwt(token: str) -> Optional[tuple]:
+    """Local HS256 verify when Auth API is Fair-Use blocked. Returns (user_id, email)."""
+    secret = (os.environ.get("SUPABASE_JWT_SECRET") or "").strip()
+    if not secret or not token:
+        return None
+    try:
+        import jwt
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            audience="authenticated",
+            options={"require": ["sub", "exp"]},
+        )
+        uid = str(payload.get("sub") or "").strip()
+        if not uid:
+            return None
+        email = payload.get("email")
+        return uid, (str(email).strip() if email else None)
+    except Exception:
+        return None
+
 def resolve_actor_id(x_user_id: Optional[str]) -> str:
     actor_id = (x_user_id or "").strip()
     if not actor_id:
@@ -20,30 +61,36 @@ def ensure_assigned_to_actor(job: dict, actor_id: str, member: Optional[dict] = 
 async def lookup_vendor_member(actor_id: str, email: Optional[str] = None) -> Optional[dict]:
     """Map auth user → vendor_members row. Prefer Kam Owner 0c3fa7c2 over a duplicate IC."""
     from .job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
+    from .pg_fallback import _is_rest_quota_error as _pg_quota, pg_select_vendor_member
 
-    db = await get_db()
-    rows: list[dict] = []
-    seen: set[str] = set()
-
-    def add(row):
-        if not row:
-            return
-        rid = str(row.get("id") or "")
-        if rid and rid not in seen:
-            seen.add(rid)
-            rows.append(row)
-
-    by_id = await db.table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
-    add(by_id.data)
     email_l = (email or "").strip().lower()
-    if str(actor_id or "").lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
-        kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
-        add(kam.data)
-    if email_l:
-        by_email = await db.table("vendor_members").select("*").ilike("email", email_l).limit(10).execute()
-        for row in by_email.data or []:
-            add(row)
-    return pick_canonical_member(rows, actor_id, email_l)
+    try:
+        db = await get_db()
+        rows: list[dict] = []
+        seen: set[str] = set()
+
+        def add(row):
+            if not row:
+                return
+            rid = str(row.get("id") or "")
+            if rid and rid not in seen:
+                seen.add(rid)
+                rows.append(row)
+
+        by_id = await db.table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
+        add(by_id.data)
+        if str(actor_id or "").lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
+            kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
+            add(kam.data)
+        if email_l:
+            by_email = await db.table("vendor_members").select("*").ilike("email", email_l).limit(10).execute()
+            for row in by_email.data or []:
+                add(row)
+        return pick_canonical_member(rows, actor_id, email_l)
+    except Exception as e:
+        if _pg_quota(e) or _is_rest_quota_error(e):
+            return pg_select_vendor_member(actor_id, email_l)
+        raise
 
 
 async def get_vendor_member(actor_id: str, email: Optional[str] = None) -> dict:
@@ -131,7 +178,7 @@ async def resolve_vendor_actor_id(
         token = authorization.replace("Bearer ", "").strip()
         if token:
             try:
-                # Verify with Supabase
+                # Verify with Supabase Auth API
                 user_resp = await (await get_db()).auth.get_user(token)
                 if user_resp and user_resp.user:
                     user = user_resp.user
@@ -140,6 +187,15 @@ async def resolve_vendor_actor_id(
                         api_error(403, "Vendor member not found", "vendor_member_not_found")
                     return member["id"]
             except Exception as e:
+                # Fair-Use locks Auth API — verify JWT locally with SUPABASE_JWT_SECRET
+                if _is_rest_quota_error(e):
+                    decoded = decode_supabase_user_from_jwt(token)
+                    if decoded:
+                        uid, email = decoded
+                        member = await lookup_vendor_member(uid, email)
+                        if not member:
+                            api_error(403, "Vendor member not found", "vendor_member_not_found")
+                        return member["id"]
                 api_error(401, f"Invalid session: {str(e)}", "invalid_session_token")
 
     if x_user_id and verify_internal_api_key(x_internal_api_key):
