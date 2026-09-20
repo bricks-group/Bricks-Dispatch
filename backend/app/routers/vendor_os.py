@@ -230,18 +230,38 @@ async def get_vendor_os_overview(
     vendor_id = actor_member.get("vendor_id") or ORG_VENDOR_ID
     assignees = photographer_assignee_ids(actor_id, actor_member)
     vendors = vendor_scope_ids(actor_id, actor_member)
-    member_ids = await get_vendor_member_ids(vendor_id)
 
-    db = await get_db()
-    # Assigned jobs for this photographer, including default_vendor rows even
-    # when vendor_members.vendor_id is the member UUID (Kam Owner session).
-    query = db.table("jobs").select("*")
-    if assignees:
-        query = query.in_("assignee_id", assignees)
-    else:
-        query = query.or_(jobs_or_filter(vendors, assignees))
-    res_jobs = await query.limit(500).execute()
-    jobs = [j for j in (res_jobs.data or []) if job_visible_to(j, actor_id, actor_member, assigned_only=True)]
+    fair_use = False
+    member_ids: list = []
+    try:
+        member_ids = await get_vendor_member_ids(vendor_id)
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        if not _is_rest_quota_error(e):
+            raise
+        fair_use = True
+        member_ids = [actor_id]
+
+    jobs = []
+    try:
+        db = await get_db()
+        # Assigned jobs for this photographer, including default_vendor rows even
+        # when vendor_members.vendor_id is the member UUID (Kam Owner session).
+        query = db.table("jobs").select("*")
+        if assignees:
+            query = query.in_("assignee_id", assignees)
+        else:
+            query = query.or_(jobs_or_filter(vendors, assignees))
+        res_jobs = await query.limit(500).execute()
+        jobs = [j for j in (res_jobs.data or []) if job_visible_to(j, actor_id, actor_member, assigned_only=True)]
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_jobs_for_assignees
+        if not _is_rest_quota_error(e):
+            raise
+        fair_use = True
+        want_ids = assignees or [actor_id]
+        jobs, _total = pg_select_jobs_for_assignees(want_ids, status=None, limit=500, offset=0)
+        jobs = [j for j in jobs if job_visible_to(j, actor_id, actor_member, assigned_only=True)]
 
     today = toronto_today()
     week_start = today - timedelta(days=today.weekday())
@@ -266,7 +286,7 @@ async def get_vendor_os_overview(
         if scheduled >= today and job.get("status") not in ("completed", "delivered"):
             upcoming.append(job)
     today_jobs = sorted(today_jobs, key=lambda j: (j.get("scheduled_date", ""), j.get("time_window_start", "")))
-    return {
+    payload = {
         "jobs_assigned_today": assigned_today,
         "jobs_assigned_week": assigned_week,
         "jobs_completed_week": completed_week,
@@ -280,6 +300,9 @@ async def get_vendor_os_overview(
             "actor_id": actor_id,
         },
     }
+    if fair_use:
+        payload["fair_use_pg_fallback"] = True
+    return payload
 
 
 @router.get("/team")
