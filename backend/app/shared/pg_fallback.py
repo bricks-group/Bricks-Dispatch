@@ -554,9 +554,9 @@ def pg_select_job_by_id(job_id: str) -> Optional[dict]:
 def pg_update_job(job_id: str, fields: dict) -> bool:
     """UPDATE public.jobs SET … via Postgres when PostgREST is Fair-Use 402.
 
-    Whitelist covers capture compile deliver paths: updated_at freshness and
-    checklist marks (floor-plan note / visit checklist JSON). Returns True when
-    at least one row was updated.
+    Whitelist covers capture compile deliver paths: updated_at freshness,
+    checklist marks, status/arrive fields, and uploaded_count for stills
+    registration under Fair Use. Returns True when at least one row was updated.
     """
     jid = str(job_id or "").strip()
     if not jid or not isinstance(fields, dict) or not fields:
@@ -569,6 +569,7 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
         "time_window_start",
         "time_window_end",
         "preferred_window",
+        "uploaded_count",
     }
     json_cols = {"checklist"}
     cols: list[tuple[str, Any]] = []
@@ -626,6 +627,153 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
     except Exception as e:
         logger.error("pg_update_job failed id=%s: %s", jid, str(e)[:300])
         return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+
+# Real public.uploads columns only — media_type / requires_staging are NOT DB cols.
+_UPLOADS_COLUMNS = (
+    "id",
+    "job_id",
+    "filename",
+    "file_size",
+    "mime_type",
+    "thumbnail",
+    "file_url",
+    "thumbnail_url",
+    "created_at",
+    "processing_status",
+    "provider",
+    "provider_job_id",
+    "processed_url",
+    "processed_at",
+    "qc_status",
+    "qc_score",
+    "qc_notes",
+    "qc_at",
+    "qc_variant_url",
+)
+
+
+def pg_insert_upload(row: dict) -> bool:
+    """INSERT/UPSERT public.uploads via Postgres when PostgREST is Fair-Use 402.
+
+    Whitelists real columns only (never media_type / requires_staging). On conflict
+    (id) updates file metadata so a retried complete is idempotent. Returns True
+    when a row was inserted or updated.
+    """
+    if not isinstance(row, dict) or not row:
+        return False
+    uid = str(row.get("id") or "").strip()
+    jid = str(row.get("job_id") or "").strip()
+    if not uid or not jid:
+        return False
+
+    cols: list[str] = []
+    vals: list[Any] = []
+    for c in _UPLOADS_COLUMNS:
+        if c not in row:
+            continue
+        v = row.get(c)
+        if c == "id":
+            v = uid
+        elif c == "job_id":
+            v = jid
+        elif c == "file_size":
+            try:
+                v = int(v or 0)
+            except Exception:
+                v = 0
+        cols.append(c)
+        vals.append(v)
+    if "id" not in cols or "job_id" not in cols:
+        return False
+    if "filename" not in cols:
+        cols.append("filename")
+        vals.append(str(row.get("filename") or "still.jpg"))
+    if "file_url" not in cols and row.get("file_url"):
+        cols.append("file_url")
+        vals.append(row.get("file_url"))
+
+    placeholders = ", ".join(["%s"] * len(cols))
+    # On conflict: refresh the file registration fields (idempotent complete).
+    update_cols = [
+        c for c in cols
+        if c not in ("id", "created_at")
+    ]
+    if update_cols:
+        set_sql = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+        conflict_sql = f"ON CONFLICT (id) DO UPDATE SET {set_sql}"
+    else:
+        conflict_sql = "ON CONFLICT (id) DO NOTHING"
+
+    sql = (
+        f"INSERT INTO public.uploads ({', '.join(cols)}) "
+        f"VALUES ({placeholders}) {conflict_sql}"
+    )
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_insert_upload: no Postgres connection id=%s", uid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, vals)
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_insert_upload ok id=%s job=%s cols=%s",
+                    uid,
+                    jid,
+                    cols,
+                )
+            else:
+                # DO NOTHING conflict with no update cols still counts as success
+                logger.warning("pg_insert_upload noop id=%s job=%s", uid, jid)
+                ok = True
+            return ok
+    except Exception as e:
+        logger.error("pg_insert_upload failed id=%s: %s", uid, str(e)[:400])
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_uploads_by_job_id(job_id: str, *, limit: int = 500) -> list[dict]:
+    """List uploads for a job via Postgres when PostgREST is Fair-Use 402."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        return []
+    limit = max(1, min(int(limit or 500), 500))
+    conn = _pg_connect()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM public.uploads
+                WHERE job_id = %s
+                ORDER BY created_at DESC NULLS LAST
+                LIMIT %s
+                """,
+                (jid, limit),
+            )
+            rows = _rows_from_cursor(cur)
+            logger.warning(
+                "pg_select_uploads_by_job_id ok job=%s n=%s", jid, len(rows)
+            )
+            return rows
+    except Exception as e:
+        logger.error("pg_select_uploads_by_job_id failed: %s", str(e)[:300])
+        return []
     finally:
         try:
             conn.close()

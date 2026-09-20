@@ -9,6 +9,7 @@ Handles:
   DELETE /api/uploads/{id}    — delete an upload and decrement job count
 """
 import base64
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -25,8 +26,26 @@ from ..shared.errors import api_error
 from ..shared.schemas import UploadRecord
 
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
+# Real public.uploads columns only — never send media_type / requires_staging to PG/REST core.
+_UPLOADS_DB_COLS = (
+    "id", "job_id", "filename", "file_size", "mime_type", "thumbnail",
+    "file_url", "thumbnail_url", "created_at", "processing_status",
+    "provider", "provider_job_id", "processed_url", "processed_at",
+    "qc_status", "qc_score", "qc_notes", "qc_at", "qc_variant_url",
+)
+
+
+def _uploads_db_row(payload_row: dict) -> dict:
+    """Whitelist real uploads columns for REST/PG inserts (no media_type/requires_staging)."""
+    out = {}
+    for k in _UPLOADS_DB_COLS:
+        if k in payload_row and payload_row[k] is not None:
+            out[k] = payload_row[k]
+    return out
 
 
 async def _actor_job(authorization, x_user_id, job_id: str):
@@ -34,10 +53,17 @@ async def _actor_job(authorization, x_user_id, job_id: str):
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     db = await get_db()
-    res_job = await db.table("jobs").select(
-        "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
-    ).eq("id", job_id).maybe_single().execute()
-    job = res_job.data or {}
+    job = {}
+    try:
+        res_job = await db.table("jobs").select(
+            "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
+        ).eq("id", job_id).maybe_single().execute()
+        job = res_job.data or {}
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        job = pg_select_job_by_id(job_id) or {}
     if not job or (
         job.get("vendor_id") not in (vendor_id, actor_id)
         and job.get("assignee_id") != actor_id
@@ -51,6 +77,63 @@ def _maybe_start_post(background_tasks, job: dict, new_uploaded: int, job_id: st
     status = (job.get("status") or "")
     if status == "completed" and (not deliverables or new_uploaded >= deliverables):
         background_tasks.add_task(process_job_assets, job_id)
+
+
+async def _insert_upload_row(db, payload_row: dict) -> None:
+    """Insert uploads row via REST; on Fair-Use 402 use Postgres. Raises on hard failure."""
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_upload
+
+    db_row = _uploads_db_row(payload_row)
+    # Prefer a slim REST payload first (real columns only) so unknown schema fields
+    # never poison the insert; keep a second attempt with processing_status if needed.
+    try:
+        await db.table("uploads").insert(db_row).execute()
+        return
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            if not pg_insert_upload(db_row):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Upload registration unavailable (Fair Use); try again shortly",
+                )
+            return
+        # Non-quota: try even slimmer core set (legacy schemas).
+        slim = {k: db_row[k] for k in (
+            "id", "job_id", "filename", "file_size", "mime_type",
+            "thumbnail", "file_url", "thumbnail_url", "qc_variant_url", "created_at",
+        ) if k in db_row}
+        try:
+            await db.table("uploads").insert(slim).execute()
+            return
+        except Exception as e2:
+            if _is_rest_quota_error(e2):
+                if not pg_insert_upload(db_row if db_row else slim):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Upload registration unavailable (Fair Use); try again shortly",
+                    )
+                return
+            raise
+
+
+async def _bump_uploaded_count(db, job_id: str, job: dict) -> int:
+    """Increment jobs.uploaded_count via REST; on Fair-Use 402 use Postgres."""
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+
+    new_uploaded = (job.get("uploaded_count") or 0) + 1
+    now = datetime.now(timezone.utc).isoformat()
+    fields = {"uploaded_count": new_uploaded, "updated_at": now}
+    try:
+        await db.table("jobs").update(fields).eq("id", job_id).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, fields):
+            raise HTTPException(
+                status_code=503,
+                detail="Job upload count unavailable (Fair Use); try again shortly",
+            )
+    return new_uploaded
 
 
 @router.post("/sign")
@@ -123,25 +206,22 @@ async def complete_stills_upload(
         processing_status="pending",
         requires_staging=media_type == "staging",
     )
-    payload_row = record.dict()
-    try:
-        await db.table("uploads").insert(payload_row).execute()
-    except Exception:
-        # Older rows may lack optional columns — retry the core set.
-        slim = {k: payload_row[k] for k in (
-            "id", "job_id", "filename", "file_size", "mime_type",
-            "thumbnail", "file_url", "thumbnail_url", "qc_variant_url", "created_at",
-        )}
-        slim["media_type"] = media_type
-        await db.table("uploads").insert(slim).execute()
+    await _insert_upload_row(db, record.dict())
 
-    new_uploaded = (job.get("uploaded_count") or 0) + 1
-    await db.table("jobs").update({
-        "uploaded_count": new_uploaded,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", job_id).execute()
-    res_fresh = await db.table("jobs").select("status, deliverables_count, uploaded_count").eq("id", job_id).maybe_single().execute()
-    fresh = res_fresh.data or job
+    new_uploaded = await _bump_uploaded_count(db, job_id, job)
+    fresh = dict(job)
+    # Best-effort refresh; Fair-Use may block the re-select.
+    try:
+        res_fresh = await db.table("jobs").select(
+            "status, deliverables_count, uploaded_count"
+        ).eq("id", job_id).maybe_single().execute()
+        fresh = res_fresh.data or job
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if _is_rest_quota_error(e):
+            fresh = pg_select_job_by_id(job_id) or job
+        else:
+            logger.warning("complete stills fresh job select failed: %s", str(e)[:200])
     fresh["uploaded_count"] = new_uploaded
     _maybe_start_post(background_tasks, fresh, new_uploaded, job_id)
     return record.dict()
@@ -172,23 +252,46 @@ async def list_uploads(
     sb = await get_db()
 
     if job_id:
-        res_job = await sb.table("jobs").select("id, vendor_id, assignee_id").eq("id", job_id).maybe_single().execute()
-        job = res_job.data or {}
+        job = {}
+        try:
+            res_job = await sb.table("jobs").select("id, vendor_id, assignee_id").eq("id", job_id).maybe_single().execute()
+            job = res_job.data or {}
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+            if not _is_rest_quota_error(e):
+                raise
+            job = pg_select_job_by_id(job_id) or {}
         if not job or (
             job.get("vendor_id") not in (vendor_id, actor_id)
             and job.get("assignee_id") != actor_id
         ):
             api_error(404, "Job not found", "job_not_found")
-        query = sb.table("uploads").select("*").eq("job_id", job_id)
+        try:
+            query = sb.table("uploads").select("*").eq("job_id", job_id)
+            res = await query.order("created_at", desc=True).limit(500).execute()
+            return res.data
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+            if not _is_rest_quota_error(e):
+                raise
+            return pg_select_uploads_by_job_id(job_id)
     else:
-        res_jobs = await sb.table("jobs").select("id").eq("vendor_id", vendor_id).execute()
-        job_ids = [j["id"] for j in (res_jobs.data or [])]
+        try:
+            res_jobs = await sb.table("jobs").select("id").eq("vendor_id", vendor_id).execute()
+            job_ids = [j["id"] for j in (res_jobs.data or [])]
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            if not _is_rest_quota_error(e):
+                raise
+            # Without a job_id filter, listing every vendor job via PG is heavier;
+            # return empty rather than fail the whole surface under Fair Use.
+            logger.warning("list_uploads vendor jobs REST 402 — returning []")
+            return []
         if not job_ids:
             return []
         query = sb.table("uploads").select("*").in_("job_id", job_ids)
-
-    res = await query.order("created_at", desc=True).limit(500).execute()
-    return res.data
+        res = await query.order("created_at", desc=True).limit(500).execute()
+        return res.data
 
 
 @router.post("")
@@ -219,15 +322,23 @@ async def create_upload(
 
     db = await get_db()
 
-    # Verify job belongs to this vendor
-    res_job = await db.table("jobs").select("id, uploaded_count, deliverables_count, status, vendor_id, assignee_id").eq("id", job_id).maybe_single().execute()
-    job_row = res_job.data or {}
+    # Verify job belongs to this vendor (Fair-Use: PG select on 402)
+    job_row = {}
+    try:
+        res_job = await db.table("jobs").select(
+            "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
+        ).eq("id", job_id).maybe_single().execute()
+        job_row = res_job.data or {}
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        job_row = pg_select_job_by_id(job_id) or {}
     if not job_row or (
         job_row.get("vendor_id") not in (vendor_id, actor_id)
         and job_row.get("assignee_id") != actor_id
     ):
         api_error(404, "Job not found", "job_not_found")
-    res_job.data = job_row
 
     # Decode base64 payload
     try:
@@ -266,36 +377,27 @@ async def create_upload(
         requires_staging=kind == "staging" or wants_staging({"filename": filename, "media_type": kind}),
     )
 
-    row = record.dict()
-    try:
-        await db.table("uploads").insert(row).execute()
-    except Exception:
-        slim = {k: row[k] for k in (
-            "id", "job_id", "filename", "file_size", "mime_type",
-            "thumbnail", "file_url", "thumbnail_url", "qc_variant_url", "created_at",
-        )}
-        slim["media_type"] = row.get("media_type") or "hdr"
-        await db.table("uploads").insert(slim).execute()
+    await _insert_upload_row(db, record.dict())
 
-    # Increment job.uploaded_count
-    job = res_job.data
-    new_uploaded = (job.get("uploaded_count") or 0) + 1
-    await db.table("jobs").update({
-        "uploaded_count": new_uploaded,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", job_id).execute()
+    # Increment job.uploaded_count (Fair-Use PG fallback)
+    new_uploaded = await _bump_uploaded_count(db, job_id, job_row)
 
     # Trigger post-production when uploads reach the declared count, but only once
     # the job is in `completed` status (vendor has wrapped up on-site).
     # When deliverables_count=0 (not set by Booking), post-production fires from the
     # "completed" status transition in vendor_os.py instead — triggering here on every
     # upload would fire before all files arrive, processing only a partial set.
-    deliverables = job.get("deliverables_count") or 0
+    deliverables = job_row.get("deliverables_count") or 0
     if deliverables and new_uploaded == deliverables:
-        # Re-read status fresh — photographer may have marked the job `completed` while
-        # this upload was in-flight, leaving the snapshot from the top of this handler stale.
-        res_fresh = await db.table("jobs").select("status").eq("id", job_id).maybe_single().execute()
-        job_status = (res_fresh.data or {}).get("status", "")
+        job_status = job_row.get("status", "")
+        try:
+            res_fresh = await db.table("jobs").select("status").eq("id", job_id).maybe_single().execute()
+            job_status = (res_fresh.data or {}).get("status", "") or job_status
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+            if _is_rest_quota_error(e):
+                fresh = pg_select_job_by_id(job_id) or {}
+                job_status = fresh.get("status", "") or job_status
         if job_status == "completed":
             background_tasks.add_task(process_job_assets, job_id)
 
