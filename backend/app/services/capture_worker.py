@@ -197,28 +197,45 @@ async def _attach_floorplan_media(db, job: dict, storage_path: str, session_id: 
     booking_id = job.get("booking_id")
     if not booking_id:
         return
+    file_name = f"floorplan-{session_id}.png"
+    signed = None
     try:
         signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24 * 7)
+        file_url = signed or storage_path
         existing = await db.table("media_files").select("id").eq("storage_path", storage_path).limit(1).execute()
         if existing.data:
             row_id = existing.data[0].get("id")
             if row_id and signed:
                 await db.table("media_files").update({
                     "file_url": signed,
-                    "file_name": f"floorplan-{session_id}.png",
+                    "file_name": file_name,
                     "label": "Floor plan",
                 }).eq("id", row_id).execute()
             return
         await db.table("media_files").insert({
             "booking_id": booking_id,
             "file_type": "floor_plan",
-            "file_name": f"floorplan-{session_id}.png",
-            "file_url": signed or storage_path,
+            "file_name": file_name,
+            "file_url": file_url,
             "storage_path": storage_path,
             "label": "Floor plan",
             "ai_provider": "bricks",
         }).execute()
     except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        if _is_rest_quota_error(e):
+            from ..shared.pg_capture import pg_upsert_media_file
+            file_url = signed or storage_path
+            if pg_upsert_media_file(
+                booking_id=booking_id,
+                storage_path=storage_path,
+                file_url=file_url,
+                file_name=file_name,
+                label="Floor plan",
+                file_type="floor_plan",
+                ai_provider="bricks",
+            ):
+                return
         logger.warning("media_files floor_plan insert skipped: %s", e)
 
 

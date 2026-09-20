@@ -488,3 +488,75 @@ def pg_count_delivered(job_id: str, kind: str) -> int:
     except Exception as e:
         logger.error("pg_count_delivered failed: %s", str(e)[:300])
         return 0
+
+
+def pg_upsert_media_file(
+    booking_id: str,
+    storage_path: str,
+    file_url: str,
+    file_name: str,
+    *,
+    label: str = "Floor plan",
+    file_type: str = "floor_plan",
+    ai_provider: str = "bricks",
+) -> bool:
+    """INSERT or UPDATE public.media_files by storage_path when PostgREST is 402.
+
+    Returns True on success, False on failure / missing args. Never raises.
+    """
+    bid = str(booking_id or "").strip()
+    sp = str(storage_path or "").strip()
+    if not bid or not sp:
+        return False
+    url = str(file_url or sp).strip() or sp
+    name = str(file_name or "").strip() or sp.rsplit("/", 1)[-1]
+    lab = str(label or "Floor plan")
+    ftype = str(file_type or "floor_plan")
+    provider = str(ai_provider or "bricks")
+
+    def run(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM public.media_files
+                WHERE storage_path = %s
+                LIMIT 1
+                """,
+                (sp,),
+            )
+            row = cur.fetchone()
+            if row:
+                mid = row[0]
+                cur.execute(
+                    """
+                    UPDATE public.media_files
+                    SET file_url = %s, file_name = %s, label = %s
+                    WHERE id = %s
+                    """,
+                    (url, name, lab, mid),
+                )
+                logger.warning(
+                    "pg_capture media_files update ok id=%s path=%s", mid, sp[:80]
+                )
+                return True
+            cur.execute(
+                """
+                INSERT INTO public.media_files (
+                  booking_id, file_type, file_name, file_url,
+                  storage_path, label, ai_provider
+                ) VALUES (
+                  %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (bid, ftype, name, url, sp, lab, provider),
+            )
+            logger.warning(
+                "pg_capture media_files insert ok booking=%s path=%s", bid, sp[:80]
+            )
+            return True
+
+    try:
+        return bool(_with_conn(run))
+    except Exception as e:
+        logger.error("pg_upsert_media_file failed: %s", str(e)[:400])
+        return False

@@ -381,3 +381,145 @@ def test_notify_deliver_updated_at_pg_on_402(monkeypatch):
     )
     assert pg_calls and pg_calls[0][0] == "job-dl"
     assert "updated_at" in pg_calls[0][1]
+
+
+def test_pg_upsert_media_file_insert(monkeypatch):
+    cur = MagicMock()
+    cur.fetchone.return_value = None  # no existing row
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    conn.close = MagicMock()
+    monkeypatch.setattr(pc, "_pg_connect", lambda: conn)
+
+    ok = pc.pg_upsert_media_file(
+        booking_id="bk-1",
+        storage_path="visits/job/floorplan-s1.png",
+        file_url="https://signed.example/plan.png",
+        file_name="floorplan-s1.png",
+    )
+    assert ok is True
+    assert cur.execute.call_count == 2
+    select_sql = cur.execute.call_args_list[0][0][0]
+    insert_sql = cur.execute.call_args_list[1][0][0]
+    assert "SELECT id FROM public.media_files" in select_sql
+    assert "INSERT INTO public.media_files" in insert_sql
+    insert_params = cur.execute.call_args_list[1][0][1]
+    assert insert_params[0] == "bk-1"
+    assert insert_params[1] == "floor_plan"
+    assert insert_params[3] == "https://signed.example/plan.png"
+    assert insert_params[4] == "visits/job/floorplan-s1.png"
+
+
+def test_pg_upsert_media_file_update_existing(monkeypatch):
+    cur = MagicMock()
+    cur.fetchone.return_value = ("media-row-9",)
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    conn.close = MagicMock()
+    monkeypatch.setattr(pc, "_pg_connect", lambda: conn)
+
+    ok = pc.pg_upsert_media_file(
+        booking_id="bk-2",
+        storage_path="visits/job/floorplan-s2.png",
+        file_url="https://signed.example/updated.png",
+        file_name="floorplan-s2.png",
+        label="Floor plan",
+    )
+    assert ok is True
+    assert cur.execute.call_count == 2
+    update_sql = cur.execute.call_args_list[1][0][0]
+    assert "UPDATE public.media_files" in update_sql
+    update_params = cur.execute.call_args_list[1][0][1]
+    assert update_params[0] == "https://signed.example/updated.png"
+    assert update_params[1] == "floorplan-s2.png"
+    assert update_params[2] == "Floor plan"
+    assert update_params[3] == "media-row-9"
+
+
+def test_pg_upsert_media_file_requires_booking_and_path(monkeypatch):
+    calls = []
+
+    def boom():
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(pc, "_pg_connect", boom)
+    assert pc.pg_upsert_media_file("", "path/a.png", "url", "a.png") is False
+    assert pc.pg_upsert_media_file("bk", "", "url", "a.png") is False
+    assert calls == []
+
+
+def test_attach_floorplan_media_rest_402_uses_pg(monkeypatch):
+    """_attach_floorplan_media falls back to pg_upsert_media_file on Fair-Use 402."""
+    from app.services import capture_worker as cw
+
+    pg_calls = []
+
+    class Chain:
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def update(self, *_a, **_k):
+            return self
+
+        def insert(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            assert name == "media_files"
+            return Chain()
+
+    async def fake_signed(path, expiry=0):
+        return f"https://signed.example/{path}"
+
+    def fake_pg(**kwargs):
+        pg_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(cw, "get_signed_download_url", fake_signed)
+    monkeypatch.setattr("app.shared.pg_capture.pg_upsert_media_file", fake_pg)
+
+    job = {"id": "job-1", "booking_id": "bk-fp"}
+    asyncio.run(
+        cw._attach_floorplan_media(Db(), job, "visits/j/floorplan-sess.png", "sess")
+    )
+    assert len(pg_calls) == 1
+    assert pg_calls[0]["booking_id"] == "bk-fp"
+    assert pg_calls[0]["storage_path"] == "visits/j/floorplan-sess.png"
+    assert pg_calls[0]["file_name"] == "floorplan-sess.png"
+    assert pg_calls[0]["file_type"] == "floor_plan"
+    assert "signed.example" in pg_calls[0]["file_url"]
+
+
+def test_attach_floorplan_media_no_booking_noop(monkeypatch):
+    from app.services import capture_worker as cw
+
+    called = []
+
+    class Db:
+        def table(self, *_a, **_k):
+            called.append("table")
+            raise AssertionError("should not touch REST without booking_id")
+
+    monkeypatch.setattr(
+        "app.shared.pg_capture.pg_upsert_media_file",
+        lambda **_k: called.append("pg") or True,
+    )
+    asyncio.run(cw._attach_floorplan_media(Db(), {"id": "j"}, "path.png", "sess"))
+    assert called == []
