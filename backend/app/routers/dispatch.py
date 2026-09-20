@@ -257,20 +257,38 @@ async def update_job_status(
         job_query = db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id)
 
     # Fetch job to get current status and booking_id
-    res_job = await job_query.maybe_single().execute()
-    if not res_job.data:
+    try:
+        res_job = await job_query.maybe_single().execute()
+        job = res_job.data if res_job else None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        job = pg_select_job_by_id(job_id)
+        if job and x_internal_api_key is None:
+            # Mirror vendor_id filter used on the REST query for non-internal callers.
+            if str(job.get("vendor_id") or "") != str(vendor_id):
+                job = None
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = res_job.data
+
     old_status = job.get("status")
     new_status = payload.status
     booking_id = job.get("booking_id")
-    
+
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({
-        "status": new_status,
-        "updated_at": now
-    }).eq("id", job_id).execute()
+    status_fields = {"status": new_status, "updated_at": now}
+    try:
+        await db.table("jobs").update(status_fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, status_fields):
+            raise HTTPException(
+                status_code=503,
+                detail="Job status update unavailable (Fair Use); try again shortly",
+            )
 
     # Auto-trigger payout when job is completed or delivered
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):

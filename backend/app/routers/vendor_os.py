@@ -119,8 +119,16 @@ async def _listings_by_ids(db, ids) -> dict:
 
 
 async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, *, admin_all: bool = False) -> dict:
-    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    job = res.data or {}
+    try:
+        res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        job = res.data or {}
+    except Exception as e:
+        # Fair-Use: PostgREST job reads 402 — load via Postgres so confirm-arrive /
+        # check-in / status can still authorize against the assigned row.
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        job = pg_select_job_by_id(job_id) or {}
     allow_all = admin_all and is_vendor_admin(actor_member)
     if not job_visible_to(job, actor_id, actor_member, assigned_only=not allow_all, admin_all=allow_all):
         api_error(404, "Job not found", "job_not_found")
@@ -190,7 +198,17 @@ async def confirm_job_arrive_time(
     if preferred:
         update["preferred_window"] = preferred
 
-    await db.table("jobs").update(update).eq("id", job_id).execute()
+    try:
+        await db.table("jobs").update(update).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, update):
+            raise HTTPException(
+                status_code=503,
+                detail="Job arrive confirm unavailable (Fair Use); try again shortly",
+            )
     refreshed = {**job, **update}
 
     try:
@@ -1489,7 +1507,18 @@ async def update_vendor_job_status(
         )
 
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
+    status_fields = {"status": new_status, "updated_at": now}
+    try:
+        await db.table("jobs").update(status_fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, status_fields):
+            raise HTTPException(
+                status_code=503,
+                detail="Job status update unavailable (Fair Use); try again shortly",
+            )
 
     # When vendor marks completed, start post-production only when uploads are
     # either not expected (deliverables_count=0) or already fully received.
