@@ -551,6 +551,39 @@ def pg_select_job_by_id(job_id: str) -> Optional[dict]:
             pass
 
 
+
+def pg_select_vendor_members_by_vendor_ids(vendor_ids: list[str]) -> list[dict]:
+    """Load vendor_members for one or more vendor_ids via Postgres when PostgREST is 402."""
+    ids = [str(v).strip() for v in (vendor_ids or []) if str(v).strip()]
+    if not ids:
+        return []
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_vendor_members_by_vendor_ids: no Postgres connection")
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM public.vendor_members WHERE vendor_id = ANY(%s)",
+                (ids,),
+            )
+            rows = _rows_from_cursor(cur)
+            logger.warning(
+                "pg_select_vendor_members_by_vendor_ids ok n=%s vendor_ids=%s",
+                len(rows),
+                ids[:5],
+            )
+            return rows
+    except Exception as e:
+        logger.error("pg_select_vendor_members_by_vendor_ids failed: %s", str(e)[:300])
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def pg_update_job(job_id: str, fields: dict) -> bool:
     """UPDATE public.jobs SET … via Postgres when PostgREST is Fair-Use 402.
 
@@ -570,6 +603,10 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
         "time_window_end",
         "preferred_window",
         "uploaded_count",
+        "assignee_id",
+        "estimated_duration_min",
+        "selected_slot_start",
+        "selected_slot_end",
     }
     json_cols = {"checklist"}
     cols: list[tuple[str, Any]] = []

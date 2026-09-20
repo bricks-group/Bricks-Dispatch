@@ -324,7 +324,12 @@ def pick_vendor_rule_based(
 
 
 async def _patch_job_assign(job_id: str, patch: dict) -> None:
-    """Update job assign fields; soft-drop columns PostgREST says are missing."""
+    """Update job assign fields; soft-drop columns PostgREST says are missing.
+
+    Fair-Use: when PostgREST returns 402, write via Postgres (pg_update_job).
+    """
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+
     data = dict(patch)
     last = None
     db = await get_db()
@@ -334,6 +339,10 @@ async def _patch_job_assign(job_id: str, patch: dict) -> None:
             return
         except Exception as e:
             last = e
+            if _is_rest_quota_error(e):
+                if pg_update_job(job_id, data):
+                    return
+                raise
             miss = _missing_column(str(e), list(data.keys()))
             if not miss:
                 raise
@@ -395,9 +404,20 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
 
     exclude_member_id: skip this vendor member on all attempts (e.g. contractor who no-showed).
     """
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_job_by_id,
+        pg_select_vendor_members_by_vendor_ids,
+    )
+
     db = await get_db()
-    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    job_doc = res.data
+    try:
+        res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        job_doc = res.data
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        job_doc = pg_select_job_by_id(job_id)
     if not job_doc:
         raise ValueError(f"Job {job_id} not found")
 
@@ -408,8 +428,13 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
     # this job's vendor_id. Paid /book previously stored Kam's member UUID as
     # jobs.vendor_id; those rows must still see every approved photographer.
     org_ids = list({ORG_VENDOR_ID, vendor_id}) if vendor_id else [ORG_VENDOR_ID]
-    res_members = await db.table("vendor_members").select("*").in_("vendor_id", org_ids).execute()
-    rows = res_members.data or []
+    try:
+        res_members = await db.table("vendor_members").select("*").in_("vendor_id", org_ids).execute()
+        rows = res_members.data or []
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        rows = pg_select_vendor_members_by_vendor_ids(org_ids)
     vendors = []
     for m in rows:
         try:

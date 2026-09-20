@@ -724,16 +724,34 @@ async def assign_job_to_member(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_job_by_id,
+        pg_select_vendor_member,
+        pg_update_job,
+    )
+
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     db = await get_db()
-    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    existing_job = res_job.data or {}
+    try:
+        res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        existing_job = res_job.data or {}
+    except Exception as e:
+        # Fair-Use: PostgREST job reads 402 — load via Postgres so Owner assign still works.
+        if not _is_rest_quota_error(e):
+            raise
+        existing_job = pg_select_job_by_id(job_id) or {}
     member_id = (payload.member_id or "").strip() if payload.member_id is not None else ""
     target = None
     if member_id and member_id.lower() not in ("auto", "unassign", "none", "null"):
-        res_member = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-        target = res_member.data
+        try:
+            res_member = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
+            target = res_member.data
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            target = pg_select_vendor_member(member_id)
     status_code, err, patch = resolve_manual_assignment(
         actor_id=actor_id,
         actor_member=actor_member,
@@ -750,7 +768,16 @@ async def assign_job_to_member(
     if err == "auto":
         new_assignee_id = await assign_vendor_for_job(job_id)
     else:
-        await db.table("jobs").update(patch).eq("id", job_id).execute()
+        try:
+            await db.table("jobs").update(patch).eq("id", job_id).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            if not pg_update_job(job_id, patch):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Job assign unavailable (Fair Use); try again shortly",
+                )
         new_assignee_id = patch.get("assignee_id")
         if new_assignee_id:
             try:
@@ -764,7 +791,13 @@ async def assign_job_to_member(
                 logger.error("Assignment notify failed for job %s: %s", job_id, _ne)
 
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if member_id == "auto" else "manual"})
-    res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+    try:
+        res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        final = res_final.data or {}
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        final = pg_select_job_by_id(job_id) or {}
 
     # Send booking confirmed email for manual assignments only.
     # Auto-assign path calls notify_booking_confirmed inside assign_vendor_for_job already;
@@ -776,10 +809,16 @@ async def assign_job_to_member(
         except Exception as _e:
             logger.error(f"Booking confirmed notification failed for job {job_id}: {_e}")
 
-    final = res_final.data or {}
     if new_assignee_id:
-        named = await db.table("vendor_members").select("id, name").eq("id", new_assignee_id).maybe_single().execute()
-        final["assignee_name"] = (named.data or {}).get("name") or "Unassigned"
+        try:
+            named = await db.table("vendor_members").select("id, name").eq("id", new_assignee_id).maybe_single().execute()
+            final["assignee_name"] = (named.data or {}).get("name") or "Unassigned"
+        except Exception as e:
+            if _is_rest_quota_error(e):
+                named_row = pg_select_vendor_member(new_assignee_id) or {}
+                final["assignee_name"] = named_row.get("name") or "Unassigned"
+            else:
+                final["assignee_name"] = "Unassigned"
     else:
         final["assignee_name"] = "Unassigned"
 
