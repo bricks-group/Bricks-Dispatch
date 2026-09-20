@@ -547,3 +547,278 @@ def pg_select_job_by_id(job_id: str) -> Optional[dict]:
             conn.close()
         except Exception:
             pass
+
+
+def pg_create_auth_user(
+    email: str,
+    password: str,
+    *,
+    full_name: str = "",
+) -> Optional[dict]:
+    """Insert auth.users (+ identity) via Postgres when Auth API is Fair-Use 402.
+
+    Uses pgcrypto crypt()/gen_salt('bf'). Prefers a direct (non-pooler) DSN so
+    the insert is not lost on transaction-mode pooler disconnects. Verifies the
+    row exists before returning.
+    Raises ValueError("email_taken") / ValueError("password_too_short").
+    """
+    import json
+    import uuid
+    from urllib.parse import urlparse
+
+    email_l = (email or "").strip().lower()
+    password = "" if password is None else str(password)
+    name = (full_name or "").strip()
+    if not email_l or not password:
+        return None
+    if len(password) < 8:
+        raise ValueError("password_too_short")
+
+    conn = None
+    try:
+        import psycopg2
+        from urllib.parse import urlparse as _urlparse
+
+        candidates = list(_pg_dsn_candidates() or [])
+        def _score(u: str) -> int:
+            try:
+                h = (_urlparse(u).hostname or "").lower()
+            except Exception:
+                return 50
+            if h.startswith("db.") and h.endswith(".supabase.co"):
+                return 0
+            if "pooler.supabase.com" in h and ":5432" in (u or ""):
+                return 1
+            if "pooler.supabase.com" in h:
+                return 10
+            return 5
+        candidates.sort(key=_score)
+        last_err = None
+        for url in candidates:
+            try:
+                if url.startswith("postgres://"):
+                    url = "postgresql://" + url[len("postgres://"):]
+                c = psycopg2.connect(url, connect_timeout=8)
+                c.autocommit = True
+                conn = c
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        if conn is None:
+            conn = _pg_connect()
+            if conn is not None:
+                try:
+                    conn.autocommit = True
+                except Exception:
+                    pass
+            else:
+                logger.error("pg_create_auth_user connect failed: %s", type(last_err).__name__ if last_err else "none")
+                return None
+    except Exception as e:
+        logger.error("pg_create_auth_user connect setup failed: %s", str(e)[:300])
+        return None
+
+    user_id = str(uuid.uuid4())
+    meta = {"full_name": name} if name else {}
+    app_meta = {"provider": "email", "providers": ["email"]}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM auth.users WHERE lower(email) = lower(%s) LIMIT 1",
+                (email_l,),
+            )
+            if cur.fetchone():
+                raise ValueError("email_taken")
+
+            insert_sqls = [
+                """
+                INSERT INTO auth.users (
+                  instance_id, id, aud, role, email, encrypted_password,
+                  email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+                  created_at, updated_at, confirmation_token, recovery_token,
+                  email_change_token_new, email_change, is_sso_user, is_anonymous
+                ) VALUES (
+                  '00000000-0000-0000-0000-000000000000'::uuid,
+                  %s::uuid, 'authenticated', 'authenticated', %s,
+                  crypt(%s, gen_salt('bf')), now(), %s::jsonb, %s::jsonb,
+                  now(), now(), '', '', '', '', false, false
+                )
+                RETURNING id::text AS id, email::text AS email
+                """,
+                """
+                INSERT INTO auth.users (
+                  instance_id, id, aud, role, email, encrypted_password,
+                  email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+                  created_at, updated_at, confirmation_token, recovery_token,
+                  email_change_token_new, email_change
+                ) VALUES (
+                  '00000000-0000-0000-0000-000000000000'::uuid,
+                  %s::uuid, 'authenticated', 'authenticated', %s,
+                  crypt(%s, gen_salt('bf')), now(), %s::jsonb, %s::jsonb,
+                  now(), now(), '', '', '', ''
+                )
+                RETURNING id::text AS id, email::text AS email
+                """,
+            ]
+            row = None
+            last_err = None
+            params = (user_id, email_l, password, json.dumps(app_meta), json.dumps(meta))
+            for sql in insert_sqls:
+                try:
+                    cur.execute(sql, params)
+                    row = _row_from_cursor(cur)
+                    if row and row.get("id"):
+                        break
+                except Exception as e:
+                    last_err = e
+                    row = None
+                    continue
+            if not row or not row.get("id"):
+                if last_err:
+                    logger.error("pg_create_auth_user insert failed: %s", str(last_err)[:400])
+                return None
+
+            # Verify persistence (guards pooler/transaction drop)
+            cur.execute(
+                "SELECT id::text AS id, email::text AS email FROM auth.users WHERE id = %s::uuid LIMIT 1",
+                (row["id"],),
+            )
+            verified = _row_from_cursor(cur)
+            if not verified or not verified.get("id"):
+                logger.error("pg_create_auth_user insert did not persist id=%s", row.get("id"))
+                return None
+
+            identity_id = str(uuid.uuid4())
+            identity_data = {
+                "sub": verified["id"],
+                "email": email_l,
+                "email_verified": True,
+                "phone_verified": False,
+            }
+            if name:
+                identity_data["full_name"] = name
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO auth.identities (
+                      id, user_id, identity_data, provider, provider_id,
+                      last_sign_in_at, created_at, updated_at
+                    ) VALUES (
+                      %s::uuid, %s::uuid, %s::jsonb, 'email', %s,
+                      now(), now(), now()
+                    )
+                    """,
+                    (identity_id, verified["id"], json.dumps(identity_data), verified["id"]),
+                )
+            except Exception as e:
+                logger.warning("identity insert failed: %s", str(e)[:200])
+
+            return {
+                "id": str(verified["id"]),
+                "email": str(verified.get("email") or email_l),
+            }
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.error("pg_create_auth_user failed: %s", str(e)[:400])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_upsert_vendor_member(
+    user_id: str,
+    email: str,
+    *,
+    name: str = "",
+    role: str = "Photographer",
+    vendor_id: str = "default_vendor",
+    onboarding_status: str = "under_review",
+) -> Optional[dict]:
+    """Ensure vendor_members row exists for a Fair-Use signup."""
+    uid = str(user_id or "").strip()
+    email_l = (email or "").strip().lower()
+    display = (name or "").strip() or (email_l.split("@")[0] if email_l else "")
+    if not uid or not email_l:
+        return None
+    existing = pg_select_vendor_member(uid, email_l)
+    if existing:
+        return existing
+    conn = _pg_connect()
+    if not conn:
+        return None
+    try:
+        try:
+            conn.autocommit = True
+        except Exception:
+            pass
+        with conn.cursor() as cur:
+            attempts = [
+                (
+                    """
+                    INSERT INTO public.vendor_members (
+                      id, email, name, role, vendor_id, onboarding_status,
+                      auth_user_id, created_at, updated_at
+                    ) VALUES (
+                      %s::uuid, %s, %s, %s, %s, %s, %s::uuid, now(), now()
+                    )
+                    ON CONFLICT (id) DO UPDATE SET
+                      email = EXCLUDED.email,
+                      name = COALESCE(NULLIF(EXCLUDED.name, ''), public.vendor_members.name),
+                      updated_at = now()
+                    RETURNING *
+                    """,
+                    (uid, email_l, display, role, vendor_id, onboarding_status, uid),
+                ),
+                (
+                    """
+                    INSERT INTO public.vendor_members (
+                      id, email, name, role, vendor_id, onboarding_status,
+                      created_at, updated_at
+                    ) VALUES (
+                      %s::uuid, %s, %s, %s, %s, %s, now(), now()
+                    )
+                    ON CONFLICT (id) DO NOTHING
+                    RETURNING *
+                    """,
+                    (uid, email_l, display, role, vendor_id, onboarding_status),
+                ),
+                (
+                    """
+                    INSERT INTO public.vendor_members (
+                      id, email, name, role, vendor_id, created_at, updated_at
+                    ) VALUES (
+                      %s::uuid, %s, %s, %s, %s, now(), now()
+                    )
+                    ON CONFLICT (id) DO NOTHING
+                    RETURNING *
+                    """,
+                    (uid, email_l, display, role, vendor_id),
+                ),
+            ]
+            last_err = None
+            for sql, params in attempts:
+                try:
+                    cur.execute(sql, params)
+                    row = _row_from_cursor(cur)
+                    if row:
+                        return row
+                except Exception as e:
+                    last_err = e
+                    logger.warning("pg_upsert_vendor_member attempt failed: %s", str(e)[:240])
+                    continue
+            if last_err:
+                logger.error("pg_upsert_vendor_member failed: %s", str(last_err)[:400])
+            return pg_select_vendor_member(uid, email_l)
+    except Exception as e:
+        logger.error("pg_upsert_vendor_member failed: %s", str(e)[:400])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

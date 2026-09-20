@@ -134,3 +134,88 @@ async def test_fair_use_login_no_vendor_member(monkeypatch):
         )
     assert ei.value.status_code == 403
     assert ei.value.detail["code"] == "vendor_member_not_found"
+
+
+@pytest.mark.asyncio
+async def test_fair_use_signup_missing_fields():
+    with pytest.raises(HTTPException) as ei:
+        await auth_router.vendor_os_fair_use_signup({})
+    assert ei.value.status_code == 400
+    assert ei.value.detail["code"] == "missing_fields"
+
+
+@pytest.mark.asyncio
+async def test_fair_use_signup_password_too_short(monkeypatch):
+    fake_conn = MagicMock()
+    monkeypatch.setattr(auth_router, "_pg_connect", lambda: fake_conn)
+    with pytest.raises(HTTPException) as ei:
+        await auth_router.vendor_os_fair_use_signup(
+            {"email": "new@example.com", "password": "short"}
+        )
+    assert ei.value.status_code == 400
+    assert ei.value.detail["code"] == "password_too_short"
+
+
+@pytest.mark.asyncio
+async def test_fair_use_signup_pg_unavailable(monkeypatch):
+    monkeypatch.setattr(auth_router, "_pg_connect", lambda: None)
+    with pytest.raises(HTTPException) as ei:
+        await auth_router.vendor_os_fair_use_signup(
+            {"email": "new@example.com", "password": "longenough"}
+        )
+    assert ei.value.status_code == 503
+    assert ei.value.detail["code"] == "fair_use_pg_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_fair_use_signup_email_taken(monkeypatch):
+    fake_conn = MagicMock()
+    monkeypatch.setattr(auth_router, "_pg_connect", lambda: fake_conn)
+
+    def _raise(_e, _p, full_name=""):
+        raise ValueError("email_taken")
+
+    monkeypatch.setattr(auth_router, "pg_create_auth_user", _raise)
+    with pytest.raises(HTTPException) as ei:
+        await auth_router.vendor_os_fair_use_signup(
+            {"email": "taken@example.com", "password": "longenough", "name": "Taken"}
+        )
+    assert ei.value.status_code == 409
+    assert ei.value.detail["code"] == "email_taken"
+
+
+@pytest.mark.asyncio
+async def test_fair_use_signup_success(monkeypatch):
+    fake_conn = MagicMock()
+    monkeypatch.setattr(auth_router, "_pg_connect", lambda: fake_conn)
+    monkeypatch.setattr(
+        auth_router,
+        "pg_create_auth_user",
+        lambda e, p, full_name="": {"id": "22222222-2222-2222-2222-222222222222", "email": e},
+    )
+    monkeypatch.setattr(
+        auth_router,
+        "pg_upsert_vendor_member",
+        lambda uid, email, name="": {
+            "id": uid,
+            "email": email,
+            "vendor_id": "default_vendor",
+            "name": name or "New",
+        },
+    )
+
+    async def _noop_audit(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(auth_router, "write_audit_event", _noop_audit)
+
+    out = await auth_router.vendor_os_fair_use_signup(
+        {"email": "new@example.com", "password": "longenough", "name": "New Photog"}
+    )
+    assert out["fair_use"] is True
+    assert out["needs_onboarding"] is True
+    assert out["user"]["email"] == "new@example.com"
+    assert out["access_token"]
+    decoded = auth_mod.decode_supabase_user_from_jwt(out["access_token"])
+    assert decoded is not None
+    assert decoded[0].startswith("22222222")

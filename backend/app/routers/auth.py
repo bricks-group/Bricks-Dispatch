@@ -8,7 +8,7 @@ from ..shared.auth import (
 )
 from ..shared.database import get_db
 from ..shared.errors import api_error
-from ..shared.pg_fallback import _pg_connect, pg_select_vendor_member, pg_verify_auth_password
+from ..shared.pg_fallback import _pg_connect, pg_select_vendor_member, pg_verify_auth_password, pg_create_auth_user, pg_upsert_vendor_member
 from ..shared.schemas import VendorAuthLogin
 
 router = APIRouter(prefix="/api", tags=["auth"])
@@ -167,5 +167,64 @@ async def vendor_os_fair_use_login(payload: dict = Body(default={})):
         "user": {"id": user["id"], "email": user.get("email") or email},
         "fair_use": True,
         "member_id": member["id"],
+    }
+
+
+@router.post("/vendor-os/auth/fair-use-signup")
+async def vendor_os_fair_use_signup(payload: dict = Body(default={})):
+    """Create photographer account via Postgres when Supabase Auth is Fair-Use 402."""
+    raw = payload if isinstance(payload, dict) else {}
+    email = (raw.get("email") or "").strip().lower()
+    password = "" if raw.get("password") is None else str(raw.get("password"))
+    name = (raw.get("name") or "").strip()
+    if not email or not password:
+        api_error(400, "Email and password are required", "missing_fields")
+    if len(password) < 8:
+        api_error(400, "Password must be at least 8 characters", "password_too_short")
+    probe = _pg_connect()
+    if probe is None:
+        api_error(503, "Fair-Use signup unavailable: Postgres not configured", "fair_use_pg_unavailable")
+    try:
+        probe.close()
+    except Exception:
+        pass
+    try:
+        user = pg_create_auth_user(email, password, full_name=name)
+    except ValueError as e:
+        code = str(e)
+        if code == "email_taken":
+            api_error(409, "An account with this email already exists", "email_taken")
+        if code == "password_too_short":
+            api_error(400, "Password must be at least 8 characters", "password_too_short")
+        api_error(400, str(e), "signup_failed")
+    if not user:
+        api_error(500, "Could not create account", "fair_use_signup_failed")
+    member = pg_upsert_vendor_member(user["id"], user.get("email") or email, name=name or email.split("@")[0])
+    if not member:
+        api_error(500, "Account created but vendor profile failed", "vendor_member_create_failed")
+    expires_in = 7 * 24 * 3600
+    try:
+        access_token = mint_supabase_access_token(user["id"], user.get("email") or email, expires_in=expires_in)
+    except Exception as e:
+        api_error(503, f"Could not mint session: {e}", "fair_use_jwt_unavailable")
+    refresh_token = access_token
+    try:
+        await write_audit_event(
+            member.get("id") or user["id"],
+            "session",
+            member.get("id") or user["id"],
+            "fair_use_signup",
+            vendor_id=member.get("vendor_id") or "default_vendor",
+        )
+    except Exception:
+        pass
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": expires_in,
+        "user": {"id": user["id"], "email": user.get("email") or email},
+        "fair_use": True,
+        "member_id": member.get("id"),
+        "needs_onboarding": True,
     }
 
