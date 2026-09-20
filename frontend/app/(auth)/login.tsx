@@ -10,6 +10,7 @@ import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 import BricksWordmark from '../../components/BricksWordmark';
+import { EnterFadeDown, PressScale } from '../../components/motion';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -183,6 +184,7 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          <EnterFadeDown>
           <View style={s.wordmarkWrap}>
             <BricksWordmark size={1.0} color={TOKENS.brick} pressable />
           </View>
@@ -244,17 +246,16 @@ export default function LoginScreen() {
               />
             </View>
 
-            <TouchableOpacity
+            <PressScale
               style={[s.primaryBtn, loading && s.btnDisabled]}
               onPress={mode === 'signin' ? handleLogin : handleSignup}
               disabled={loading || googleLoading}
-              activeOpacity={0.85}
             >
               {loading
                 ? <ActivityIndicator color={TOKENS.night} />
                 : <Text style={s.primaryBtnText}>{mode === 'signin' ? 'Sign in' : 'Create account'}</Text>
               }
-            </TouchableOpacity>
+            </PressScale>
 
             <View style={s.divider}>
               <View style={s.dividerLine} />
@@ -262,17 +263,17 @@ export default function LoginScreen() {
               <View style={s.dividerLine} />
             </View>
 
-            <TouchableOpacity
+            <PressScale
               style={[s.ghostBtn, googleLoading && s.btnDisabled]}
               onPress={handleGoogle}
               disabled={loading || googleLoading}
-              activeOpacity={0.8}
+              scaleTo={0.98}
             >
               {googleLoading
                 ? <ActivityIndicator color={TOKENS.moon} size="small" />
                 : <Text style={s.ghostBtnText}>Continue with Google</Text>
               }
-            </TouchableOpacity>
+            </PressScale>
           </View>
 
           <View style={s.footer}>
@@ -303,6 +304,7 @@ export default function LoginScreen() {
             )}
           </View>
 
+          </EnterFadeDown>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

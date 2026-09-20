@@ -3,11 +3,13 @@ import {
   View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, Image,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ArrowRight, Check, Camera } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../lib/api';
 import BricksAOSelector from '../../components/BricksAOSelector';
+import { EnterFadeDown, PressScale } from '../../components/motion';
 import { PORTFOLIO_TYPES } from '../../lib/vendor';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
@@ -183,7 +185,9 @@ export default function OnboardingRegister() {
   };
 
   return (
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content} nestedScrollEnabled>
+      <EnterFadeDown>
       <View style={styles.headerBox}>
         <Text style={styles.header}>join the crew</Text>
         <Text style={styles.subhead}>ONTARIO FIELD OPERATIONS</Text>
@@ -336,11 +340,10 @@ export default function OnboardingRegister() {
         </Text>
       </TouchableOpacity>
 
-      <TouchableOpacity
+      <PressScale
         style={styles.button}
         onPress={handleApply}
         disabled={loading || !agreement}
-        activeOpacity={0.9}
         data-testid="onboarding-submit"
       >
         {loading ? (
@@ -351,17 +354,20 @@ export default function OnboardingRegister() {
             <ArrowRight size={18} color="#FFF" strokeWidth={2} />
           </View>
         )}
-      </TouchableOpacity>
+      </PressScale>
 
       <View style={{ height: 60 }} />
+      </EnterFadeDown>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: TOKENS.night },
   container: { flex: 1, backgroundColor: TOKENS.night },
   content: { padding: 36 },
-  headerBox: { marginTop: 48, marginBottom: 36 },
+  headerBox: { marginTop: 16, marginBottom: 36 },
   header: {
     fontSize: 34, fontFamily: 'System', color: TOKENS.moon,
     letterSpacing: -1.1, textTransform: 'lowercase',

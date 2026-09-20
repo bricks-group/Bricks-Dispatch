@@ -187,12 +187,22 @@ export default function RootLayout() {
       >
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="(capture)" options={{ headerShown: false, presentation: 'fullScreenModal' }} />
+        <Stack.Screen
+          name="(capture)"
+          options={{
+            headerShown: false,
+            presentation: 'fullScreenModal',
+            animation: 'fade',
+            animationDuration: 220,
+          }}
+        />
         <Stack.Screen
           name="job/[id]"
           options={{
             headerShown: false,
             presentation: 'card',
+            animation: 'fade',
+            animationDuration: 220,
           }}
         />
         <Stack.Screen
