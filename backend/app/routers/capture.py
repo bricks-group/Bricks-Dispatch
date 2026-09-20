@@ -101,7 +101,14 @@ def _missing_table(exc: Exception) -> bool:
     Do NOT match generic "does not exist" — PostgREST/Postgres column errors
     ("column X does not exist") would otherwise return an empty session with
     sessionId=null and silently block every GO capture start.
+
+    Fair-Use / 402 / exceed_storage must NEVER be treated as missing tables —
+    those need Postgres fallback, not an empty session.
     """
+    from ..shared.pg_fallback import _is_rest_quota_error
+
+    if _is_rest_quota_error(exc):
+        return False
     text = str(exc).lower()
     if "42p01" in text or "undefined_table" in text or "undefined table" in text:
         return True
@@ -250,11 +257,23 @@ async def _actor_and_job(
     if not job_id:
         api_error(400, "job_id is required", "missing_job_id")
     db = await get_db()
-    res = await db.table("jobs").select(
-        "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id, "
-        "package_id, package_name, add_ons, client_instructions, property_details"
-    ).eq("id", job_id).maybe_single().execute()
-    job = res.data or {}
+    job: dict = {}
+    try:
+        res = await db.table("jobs").select(
+            "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id, "
+            "package_id, package_name, add_ons, client_instructions, property_details"
+        ).eq("id", job_id).maybe_single().execute()
+        job = res.data or {}
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        logger.warning("capture job fetch REST 402 — PG fallback job_id=%s", job_id)
+        job = pg_select_job_by_id(job_id) or {}
+    if not job.get("id"):
+        # Empty REST body can also mean Fair-Use silent failure; try PG once.
+        from ..shared.pg_fallback import pg_select_job_by_id
+        job = pg_select_job_by_id(job_id) or job
     if not job.get("id"):
         api_error(404, "Job not found", "job_not_found")
     if verify_internal_api_key(x_internal_api_key):
@@ -289,19 +308,32 @@ async def _load_session_bundle(
     if not session:
         return _empty_session(job)
     sid = session["id"]
-    rooms = await db.table("capture_rooms").select("id, name, frames, tone, position").eq(
-        "session_id", sid
-    ).order("position", desc=False).execute()
-    pipeline = await db.table("capture_pipeline").select("title, detail, status, position").eq(
-        "session_id", sid
-    ).order("position", desc=False).execute()
+    rooms_data: list = []
+    pipeline_data: list = []
+    try:
+        rooms = await db.table("capture_rooms").select("id, name, frames, tone, position").eq(
+            "session_id", sid
+        ).order("position", desc=False).execute()
+        rooms_data = rooms.data or []
+        pipeline = await db.table("capture_pipeline").select("title, detail, status, position").eq(
+            "session_id", sid
+        ).order("position", desc=False).execute()
+        pipeline_data = pipeline.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_rooms, pg_select_pipeline
+        if not _is_rest_quota_error(e):
+            raise
+        logger.warning("capture bundle REST 402 — PG rooms/pipeline sid=%s", sid)
+        rooms_data = pg_select_rooms(sid)
+        pipeline_data = pg_select_pipeline(sid)
     stations_pub = []
     try:
-        raw = await load_station_records(db, sid, rooms.data or [])
+        raw = await load_station_records(db, sid, rooms_data)
         stations_pub = [_station_public(s) for s in raw]
     except Exception:
         stations_pub = []
-    payload = _shape_session(job, session, rooms.data or [], pipeline.data or [], preferred_room_id, stations_pub)
+    payload = _shape_session(job, session, rooms_data, pipeline_data, preferred_room_id, stations_pub)
     try:
         loaded = await load_session_tags(sid)
         tags = loaded if loaded is not None else []
@@ -323,19 +355,33 @@ async def _load_session_bundle(
 
 
 async def _latest_session(db, job_id: str, kind: str) -> Optional[dict]:
-    res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
-        "kind", kind
-    ).order("created_at", desc=True).limit(1).execute()
-    rows = res.data or []
-    return rows[0] if rows else None
+    try:
+        res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
+            "kind", kind
+        ).order("created_at", desc=True).limit(1).execute()
+        rows = res.data or []
+        return rows[0] if rows else None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_session_latest
+        if not _is_rest_quota_error(e):
+            raise
+        return pg_select_session_latest(job_id, kind)
 
 
 async def _in_progress_session(db, job_id: str, kind: str) -> Optional[dict]:
-    res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
-        "status", "in_progress"
-    ).eq("kind", kind).order("created_at", desc=True).limit(1).execute()
-    rows = res.data or []
-    return rows[0] if rows else None
+    try:
+        res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
+            "status", "in_progress"
+        ).eq("kind", kind).order("created_at", desc=True).limit(1).execute()
+        rows = res.data or []
+        return rows[0] if rows else None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_session_in_progress
+        if not _is_rest_quota_error(e):
+            raise
+        return pg_select_session_in_progress(job_id, kind)
 
 
 @router.get("/sessions")
@@ -383,38 +429,52 @@ async def ensure_session(
             return await _load_session_bundle(db, job_id, existing, job)
 
         now = datetime.now(timezone.utc).isoformat()
-        inserted = await db.table("capture_sessions").insert({
-            "job_id": job_id,
-            "status": "in_progress",
-            "kind": kind,
-            "frame_count": 0,
-            "created_at": now,
-            "updated_at": now,
-        }).execute()
-        session = (inserted.data or [None])[0]
-        if not session:
-            api_error(500, "Could not create capture session", "session_create_failed")
+        session = None
+        try:
+            inserted = await db.table("capture_sessions").insert({
+                "job_id": job_id,
+                "status": "in_progress",
+                "kind": kind,
+                "frame_count": 0,
+                "created_at": now,
+                "updated_at": now,
+            }).execute()
+            session = (inserted.data or [None])[0]
+            if not session:
+                api_error(500, "Could not create capture session", "session_create_failed")
 
-        sid = session["id"]
-        await db.table("capture_pipeline").insert([
-            {
+            sid = session["id"]
+            await db.table("capture_pipeline").insert([
+                {
+                    "session_id": sid,
+                    "job_id": job_id,
+                    "title": title,
+                    "detail": detail,
+                    "status": status,
+                    "position": i,
+                }
+                for i, (title, detail, status) in enumerate(_PIPELINES[kind])
+            ]).execute()
+            await db.table("capture_rooms").insert({
                 "session_id": sid,
                 "job_id": job_id,
-                "title": title,
-                "detail": detail,
-                "status": status,
-                "position": i,
-            }
-            for i, (title, detail, status) in enumerate(_PIPELINES[kind])
-        ]).execute()
-        await db.table("capture_rooms").insert({
-            "session_id": sid,
-            "job_id": job_id,
-            "name": "Room 1",
-            "frames": 0,
-            "tone": "bad",
-            "position": 0,
-        }).execute()
+                "name": "Room 1",
+                "frames": 0,
+                "tone": "bad",
+                "position": 0,
+            }).execute()
+        except Exception as create_err:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_create_session_with_defaults
+            if not _is_rest_quota_error(create_err):
+                raise
+            logger.warning(
+                "ensure_session REST 402 — PG create job_id=%s kind=%s", job_id, kind
+            )
+            session = pg_create_session_with_defaults(job_id, kind, list(_PIPELINES[kind]))
+            if not session:
+                api_error(500, "Could not create capture session", "session_create_failed")
+
         session = await _in_progress_session(db, job_id, kind) or session
         return await _load_session_bundle(db, job_id, session, job)
     except Exception as e:
@@ -442,22 +502,40 @@ async def add_room(
         if not session:
             api_error(409, "No in-progress capture session", "session_not_found")
         sid = session["id"]
-        existing = await db.table("capture_rooms").select("id, name, position").eq(
-            "session_id", sid
-        ).order("position", desc=False).execute()
-        rows = existing.data or []
+        rows: list = []
+        try:
+            existing = await db.table("capture_rooms").select("id, name, position").eq(
+                "session_id", sid
+            ).order("position", desc=False).execute()
+            rows = existing.data or []
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_select_rooms
+            if not _is_rest_quota_error(e):
+                raise
+            rows = pg_select_rooms(sid)
         next_pos = (max((r.get("position") or 0) for r in rows) + 1) if rows else 0
         if not name:
             name = f"Room {len(rows) + 1}"
-        inserted = await db.table("capture_rooms").insert({
-            "session_id": sid,
-            "job_id": job_id,
-            "name": name,
-            "frames": 0,
-            "tone": "bad",
-            "position": next_pos,
-        }).execute()
-        room = (inserted.data or [None])[0]
+        room = None
+        try:
+            inserted = await db.table("capture_rooms").insert({
+                "session_id": sid,
+                "job_id": job_id,
+                "name": name,
+                "frames": 0,
+                "tone": "bad",
+                "position": next_pos,
+            }).execute()
+            room = (inserted.data or [None])[0]
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_insert_room
+            if not _is_rest_quota_error(e):
+                raise
+            room = pg_insert_room(
+                sid, job_id, name=name, frames=0, tone="bad", position=next_pos,
+            )
         return await _load_session_bundle(
             db, job_id, session, job, preferred_room_id=(room or {}).get("id"),
         )
@@ -635,10 +713,20 @@ async def sign_frame_upload(
                 "Could not mint a signed upload URL for capture frames",
                 "signed_upload_unavailable",
             )
-        rooms = await db.table("capture_rooms").select("id").eq("session_id", sid).order(
-            "position", desc=False
-        ).limit(1).execute()
-        room_id = (payload or {}).get("room_id") or ((rooms.data or [{}])[0].get("id") if rooms.data else None)
+        room_id = (payload or {}).get("room_id")
+        if not room_id:
+            try:
+                rooms = await db.table("capture_rooms").select("id").eq("session_id", sid).order(
+                    "position", desc=False
+                ).limit(1).execute()
+                room_id = ((rooms.data or [{}])[0].get("id") if rooms.data else None)
+            except Exception as e:
+                from ..shared.pg_fallback import _is_rest_quota_error
+                from ..shared.pg_capture import pg_select_rooms
+                if not _is_rest_quota_error(e):
+                    raise
+                rooms_pg = pg_select_rooms(sid)
+                room_id = (rooms_pg[0].get("id") if rooms_pg else None)
         return {
             "session_id": sid,
             "room_id": room_id,
@@ -681,10 +769,18 @@ async def commit_frame(
         api_error(400, "Upload must land under capture/{session}/stations/{n}/", "bad_storage_path")
     try:
         db = await get_db()
-        session_res = await db.table("capture_sessions").select("*").eq("id", session_id).eq(
-            "job_id", job_id
-        ).maybe_single().execute()
-        session = session_res.data or {}
+        session = None
+        try:
+            session_res = await db.table("capture_sessions").select("*").eq("id", session_id).eq(
+                "job_id", job_id
+            ).maybe_single().execute()
+            session = session_res.data or {}
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_select_session_by_id
+            if not _is_rest_quota_error(e):
+                raise
+            session = pg_select_session_by_id(session_id, job_id) or {}
         if not session or session.get("status") != "in_progress":
             api_error(409, "No in-progress capture session", "session_not_found")
         kind = session.get("kind") or "splat"
@@ -706,28 +802,71 @@ async def commit_frame(
             "content_type": _content_type_for(role, payload),
             "role": role,
         }.items() if v is not None}
+        frame_ok = False
         try:
             await db.table("capture_frames").insert({**row, **extra}).execute()
-        except Exception:
-            await db.table("capture_frames").insert(row).execute()
+            frame_ok = True
+        except Exception as e1:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            if _is_rest_quota_error(e1):
+                from ..shared.pg_capture import pg_insert_frame
+                frame_ok = bool(pg_insert_frame({**row, **extra}))
+            else:
+                try:
+                    await db.table("capture_frames").insert(row).execute()
+                    frame_ok = True
+                except Exception as e2:
+                    if _is_rest_quota_error(e2):
+                        from ..shared.pg_capture import pg_insert_frame
+                        frame_ok = bool(pg_insert_frame(row))
+                    else:
+                        raise
+        if not frame_ok:
+            api_error(500, "Could not record capture frame", "frame_insert_failed")
 
         new_count = int(session.get("frame_count") or 0) + 1
-        await db.table("capture_sessions").update({
-            "frame_count": new_count,
-            "updated_at": now,
-        }).eq("id", session_id).execute()
+        try:
+            await db.table("capture_sessions").update({
+                "frame_count": new_count,
+                "updated_at": now,
+            }).eq("id", session_id).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_session
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(session_id, {"frame_count": new_count, "updated_at": now})
 
         if room_id:
-            room_res = await db.table("capture_rooms").select("id, frames").eq("id", room_id).eq(
-                "session_id", session_id
-            ).maybe_single().execute()
-            room = room_res.data or {}
+            room = {}
+            try:
+                room_res = await db.table("capture_rooms").select("id, frames").eq("id", room_id).eq(
+                    "session_id", session_id
+                ).maybe_single().execute()
+                room = room_res.data or {}
+            except Exception as e:
+                from ..shared.pg_fallback import _is_rest_quota_error
+                from ..shared.pg_capture import pg_select_rooms
+                if not _is_rest_quota_error(e):
+                    raise
+                room = next((r for r in pg_select_rooms(session_id) if str(r.get("id")) == str(room_id)), {})
             if room:
                 room_frames = int(room.get("frames") or 0) + 1
-                await db.table("capture_rooms").update({
-                    "frames": room_frames,
-                    "tone": _tone(room_frames, kind),
-                }).eq("id", room_id).execute()
+                try:
+                    await db.table("capture_rooms").update({
+                        "frames": room_frames,
+                        "tone": _tone(room_frames, kind),
+                    }).eq("id", room_id).execute()
+                except Exception as e:
+                    from ..shared.pg_fallback import _is_rest_quota_error
+                    from ..shared.pg_capture import pg_update_room
+                    if not _is_rest_quota_error(e):
+                        raise
+                    pg_update_room(
+                        room_id,
+                        {"frames": room_frames, "tone": _tone(room_frames, kind)},
+                        session_id=session_id,
+                    )
 
         if idx is None:
             idx = parse_station_index_from_path(storage_path) or 0
@@ -757,10 +896,20 @@ async def commit_frame(
             pass
         await upload_bytes(man_path, json.dumps(meta).encode("utf-8"), "application/json", upsert=True)
 
-        await db.table("capture_pipeline").update({
-            "detail": f"{new_count} frames",
-            "status": "active",
-        }).eq("session_id", session_id).eq("title", "Captured").execute()
+        try:
+            await db.table("capture_pipeline").update({
+                "detail": f"{new_count} frames",
+                "status": "active",
+            }).eq("session_id", session_id).eq("title", "Captured").execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_pipeline
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_pipeline(
+                session_id, "Captured",
+                {"detail": f"{new_count} frames", "status": "active"},
+            )
 
         session["frame_count"] = new_count
         bundle = await _load_session_bundle(db, job_id, session, job, preferred_room_id=room_id)
@@ -792,14 +941,25 @@ async def _note_floorplan_on_job(db, job: dict, job_id: str, sid: str, n: int, n
 
 
 async def _fail_session(db, sid: str, stage_title: str, error: str, now: str) -> None:
-    await db.table("capture_sessions").update({
-        "status": "failed",
-        "updated_at": now,
-    }).eq("id", sid).execute()
-    await db.table("capture_pipeline").update({
-        "status": "todo",
-        "detail": (error or "compile failed")[:500],
-    }).eq("session_id", sid).eq("title", stage_title).execute()
+    try:
+        await db.table("capture_sessions").update({
+            "status": "failed",
+            "updated_at": now,
+        }).eq("id", sid).execute()
+        await db.table("capture_pipeline").update({
+            "status": "todo",
+            "detail": (error or "compile failed")[:500],
+        }).eq("session_id", sid).eq("title", stage_title).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_update_session, pg_update_pipeline
+        if not _is_rest_quota_error(e):
+            raise
+        pg_update_session(sid, {"status": "failed", "updated_at": now})
+        pg_update_pipeline(
+            sid, stage_title,
+            {"status": "todo", "detail": (error or "compile failed")[:500]},
+        )
 
 
 _PRODUCT_LABEL = {"splat": "3D tour", "floorplan": "Floor plan", "visit": "Virtual Visit"}
@@ -813,7 +973,11 @@ async def _first_delivered_of_kind(db, job_id: str, kind: str) -> bool:
         ).eq("status", "delivered").execute()
         rows = getattr(res, "data", None) or []
         return len(rows) <= 1
-    except Exception:
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_count_delivered
+        if _is_rest_quota_error(e):
+            return pg_count_delivered(job_id, kind) <= 1
         return True
 
 
@@ -879,34 +1043,58 @@ async def _deliver_session(
     job: dict | None = None,
     notify: bool = False,
 ) -> None:
-    await db.table("capture_sessions").update({
+    from ..shared.pg_fallback import _is_rest_quota_error
+    from ..shared.pg_capture import pg_update_session, pg_update_pipeline
+
+    async def _sess_upd(fields: dict):
+        try:
+            await db.table("capture_sessions").update(fields).eq("id", sid).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(sid, fields)
+
+    async def _pipe_upd(title: str, fields: dict):
+        try:
+            q = db.table("capture_pipeline").update(fields).eq("session_id", sid).eq("title", title)
+            await q.execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_pipeline(sid, title, fields)
+
+    await _sess_upd({
         "status": "delivered",
         "output_storage_path": output_path,
         "updated_at": now,
-    }).eq("id", sid).execute()
-    await db.table("capture_pipeline").update({"title": "Building tour"}).eq(
-        "session_id", sid
-    ).eq("title", "Splatting").execute()
+    })
+    await _pipe_upd("Splatting", {"title": "Building tour"})
     stage = "Tracing" if kind == "floorplan" else "Building tour"
     for title, detail in (
         (stage, "Compiled from 360 stations"),
         ("QC", "Skipped — Bricks-generated"),
         ("Delivered", "On listing file"),
     ):
-        await db.table("capture_pipeline").update({
-            "status": "done",
-            "detail": detail,
-        }).eq("session_id", sid).eq("title", title).execute()
+        await _pipe_upd(title, {"status": "done", "detail": detail})
     # Agent email only on submit/compile first deliver — never on rebuild (avoid spam).
     if notify and job is not None:
         await _notify_capture_session_delivered(db, job, sid, kind, output_path)
 
 
 async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
+    from ..shared.pg_fallback import _is_rest_quota_error
+    from ..shared.pg_capture import pg_update_session, pg_update_pipeline
+
     sid = session["id"]
-    await db.table("capture_pipeline").update({"title": "Building tour"}).eq(
-        "session_id", sid
-    ).eq("title", "Splatting").execute()
+    try:
+        await db.table("capture_pipeline").update({"title": "Building tour"}).eq(
+            "session_id", sid
+        ).eq("title", "Splatting").execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            pg_update_pipeline(sid, "Splatting", {"title": "Building tour"})
+        else:
+            raise
     stage = "Tracing" if kind == "floorplan" else "Building tour"
     processing = "tracing" if kind == "floorplan" else "splatting"
     try:
@@ -914,16 +1102,35 @@ async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
             "status": processing,
             "updated_at": now,
         }).eq("id", sid).execute()
-    except Exception:
-        await db.table("capture_sessions").update({
-            "status": "splatting",
-            "updated_at": now,
-        }).eq("id", sid).execute()
-        processing = "splatting"
-    await db.table("capture_pipeline").update({
-        "status": "active",
-        "detail": "Stitching 360 stations" if kind != "floorplan" else "Deriving plan from stations",
-    }).eq("session_id", sid).eq("title", stage).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            if not pg_update_session(sid, {"status": processing, "updated_at": now}):
+                pg_update_session(sid, {"status": "splatting", "updated_at": now})
+                processing = "splatting"
+        else:
+            try:
+                await db.table("capture_sessions").update({
+                    "status": "splatting",
+                    "updated_at": now,
+                }).eq("id", sid).execute()
+                processing = "splatting"
+            except Exception as e2:
+                if _is_rest_quota_error(e2):
+                    pg_update_session(sid, {"status": "splatting", "updated_at": now})
+                    processing = "splatting"
+                else:
+                    raise
+    detail = "Stitching 360 stations" if kind != "floorplan" else "Deriving plan from stations"
+    try:
+        await db.table("capture_pipeline").update({
+            "status": "active",
+            "detail": detail,
+        }).eq("session_id", sid).eq("title", stage).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            pg_update_pipeline(sid, stage, {"status": "active", "detail": detail})
+        else:
+            raise
     try:
         output = await process_capture_session(db, job, session, kind)
     except CaptureWorkerError as e:
@@ -980,14 +1187,25 @@ async def submit_session(
             api_error(400, "Submit needs equirects or a stitchable 360 pan at each station", "no_equirects")
 
         n = int(session.get("frame_count") or 0)
-        await db.table("capture_sessions").update({
-            "submitted_at": now,
-            "updated_at": now,
-        }).eq("id", sid).execute()
-        await db.table("capture_pipeline").update({
-            "status": "done",
-            "detail": f"{len(stations)} stations · {n} frames",
-        }).eq("session_id", sid).eq("title", "Captured").execute()
+        try:
+            await db.table("capture_sessions").update({
+                "submitted_at": now,
+                "updated_at": now,
+            }).eq("id", sid).execute()
+            await db.table("capture_pipeline").update({
+                "status": "done",
+                "detail": f"{len(stations)} stations · {n} frames",
+            }).eq("session_id", sid).eq("title", "Captured").execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_session, pg_update_pipeline
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(sid, {"submitted_at": now, "updated_at": now})
+            pg_update_pipeline(
+                sid, "Captured",
+                {"status": "done", "detail": f"{len(stations)} stations · {n} frames"},
+            )
         if kind == "floorplan":
             await _note_floorplan_on_job(db, job, job_id, sid, n, now)
         try:
@@ -1005,8 +1223,15 @@ async def submit_session(
 
 
 async def _session_by_id(db, session_id: str) -> Optional[dict]:
-    res = await db.table("capture_sessions").select("*").eq("id", session_id).maybe_single().execute()
-    return res.data or None
+    try:
+        res = await db.table("capture_sessions").select("*").eq("id", session_id).maybe_single().execute()
+        return res.data or None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_session_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        return pg_select_session_by_id(session_id)
 
 
 async def _run_rebuild_tour(db, job: dict, session: dict) -> dict:
@@ -1025,10 +1250,17 @@ async def _run_rebuild_tour(db, job: dict, session: dict) -> dict:
         await _deliver_session(db, session["id"], output, "splat", now)
         session["status"] = "delivered"
     else:
-        await db.table("capture_sessions").update({
-            "output_storage_path": output,
-            "updated_at": now,
-        }).eq("id", session["id"]).execute()
+        try:
+            await db.table("capture_sessions").update({
+                "output_storage_path": output,
+                "updated_at": now,
+            }).eq("id", session["id"]).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_session
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(session["id"], {"output_storage_path": output, "updated_at": now})
     bundle = await _load_session_bundle(db, job["id"], session, job)
     return {
         "ok": True,
@@ -1055,10 +1287,17 @@ async def _run_rebuild_floorplan(db, job: dict, session: dict) -> dict:
         await _deliver_session(db, session["id"], output, "floorplan", now)
         session["status"] = "delivered"
     else:
-        await db.table("capture_sessions").update({
-            "output_storage_path": output,
-            "updated_at": now,
-        }).eq("id", session["id"]).execute()
+        try:
+            await db.table("capture_sessions").update({
+                "output_storage_path": output,
+                "updated_at": now,
+            }).eq("id", session["id"]).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_session
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(session["id"], {"output_storage_path": output, "updated_at": now})
     bundle = await _load_session_bundle(db, job["id"], session, job)
     return {
         "ok": True,

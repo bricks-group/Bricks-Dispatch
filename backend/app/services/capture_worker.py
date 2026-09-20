@@ -69,15 +69,27 @@ async def load_station_records(db, session_id: str, rooms: list[dict] | None = N
                 "session_id", session_id
             ).order("position", desc=False).execute()
             rooms = _data(rooms_res)
-        except Exception:
-            rooms = []
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_select_rooms
+            if _is_rest_quota_error(e):
+                rooms = pg_select_rooms(session_id)
+            else:
+                rooms = []
     for r in rooms or []:
         room_name[r.get("id")] = r.get("name") or "Room"
 
-    frames_res = await db.table("capture_frames").select(
-        "id, room_id, storage_path, created_at"
-    ).eq("session_id", session_id).order("created_at", desc=False).execute()
-    frames = _data(frames_res)
+    try:
+        frames_res = await db.table("capture_frames").select(
+            "id, room_id, storage_path, created_at"
+        ).eq("session_id", session_id).order("created_at", desc=False).execute()
+        frames = _data(frames_res)
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_frames
+        if not _is_rest_quota_error(e):
+            raise
+        frames = pg_select_frames(session_id)
 
     stations: dict[int, dict] = {}
     extras = []
