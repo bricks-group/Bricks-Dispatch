@@ -924,20 +924,42 @@ async def commit_frame(
 
 
 async def _note_floorplan_on_job(db, job: dict, job_id: str, sid: str, n: int, now: str) -> None:
-    """Checklist only. Phone-origin plans are Bricks-generated, not BoxBrownie."""
+    """Checklist only. Phone-origin plans are Bricks-generated, not BoxBrownie.
+
+    Fair-Use: when PostgREST is 402, write via Postgres so the visit checklist
+    still marks floor-plan capture complete and bumps jobs.updated_at.
+    """
+    import json as _json
     checklist = job.get("checklist") or []
+    if isinstance(checklist, str):
+        try:
+            checklist = _json.loads(checklist)
+        except Exception:
+            checklist = []
     if not isinstance(checklist, list):
         checklist = []
     already = any(
         isinstance(c, dict) and (c.get("label") or "") == _FLOORPLAN_NOTE
         for c in checklist
     )
-    if not already:
-        checklist = list(checklist) + [{"label": _FLOORPLAN_NOTE, "completed": True}]
-        await db.table("jobs").update({
-            "checklist": checklist,
-            "updated_at": now,
-        }).eq("id", job_id).execute()
+    if already:
+        return
+    checklist = list(checklist) + [{"label": _FLOORPLAN_NOTE, "completed": True}]
+    fields = {"checklist": checklist, "updated_at": now}
+    try:
+        await db.table("jobs").update(fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, fields):
+            import logging
+            logging.getLogger(__name__).warning(
+                "Job %s: floorplan checklist PG fallback failed", job_id
+            )
+        else:
+            job["checklist"] = checklist
+            job["updated_at"] = now
 
 
 async def _fail_session(db, sid: str, stage_title: str, error: str, now: str) -> None:
@@ -996,7 +1018,18 @@ async def _notify_capture_session_delivered(db, job: dict, sid: str, kind: str, 
     try:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+        try:
+            await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+            if _is_rest_quota_error(e):
+                if not pg_update_job(job_id, {"updated_at": now}):
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Job %s: capture deliver updated_at PG fallback failed", job_id
+                    )
+            else:
+                raise
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(
@@ -1662,8 +1695,10 @@ async def deliver_virtual_visit(
     now = datetime.now(timezone.utc).isoformat()
     try:
         await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if _is_rest_quota_error(e):
+            pg_update_job(job_id, {"updated_at": now})
     try:
         await notify_capture_delivered(
             job_id,

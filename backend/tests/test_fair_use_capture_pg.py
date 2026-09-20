@@ -247,3 +247,137 @@ def test_in_progress_lookup_via_pg(monkeypatch):
     )
     out = asyncio.run(cap._in_progress_session(Db(), "job-z", "splat"))
     assert out["id"] == "pg-sess"
+
+
+def test_pg_update_job_updated_at(monkeypatch):
+    from app.shared import pg_fallback as pf
+
+    cur = MagicMock()
+    cur.rowcount = 1
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    conn.close = MagicMock()
+    monkeypatch.setattr(pf, "_pg_connect", lambda: conn)
+
+    ok = pf.pg_update_job("job-1", {"updated_at": "2026-09-20T08:00:00+00:00"})
+    assert ok is True
+    sql = cur.execute.call_args[0][0]
+    assert "UPDATE public.jobs" in sql
+    assert "updated_at" in sql
+    assert cur.execute.call_args[0][1][-1] == "job-1"
+
+
+def test_pg_update_job_checklist_jsonb(monkeypatch):
+    from app.shared import pg_fallback as pf
+
+    cur = MagicMock()
+    cur.rowcount = 1
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    conn.close = MagicMock()
+    monkeypatch.setattr(pf, "_pg_connect", lambda: conn)
+
+    checklist = [{"label": "Floor plan capture submitted", "completed": True}]
+    ok = pf.pg_update_job(
+        "job-2",
+        {"checklist": checklist, "updated_at": "2026-09-20T08:00:00+00:00"},
+    )
+    assert ok is True
+    sql, params = cur.execute.call_args[0]
+    assert "checklist = %s::jsonb" in sql
+    assert '"Floor plan capture submitted"' in params[0]
+    assert params[-1] == "job-2"
+
+
+def test_pg_update_job_rejects_unknown_fields(monkeypatch):
+    from app.shared import pg_fallback as pf
+
+    calls = []
+
+    def boom():
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(pf, "_pg_connect", boom)
+    # Only unknown fields → nothing to write → False without connecting
+    assert pf.pg_update_job("job-x", {"secret_col": "nope"}) is False
+    assert calls == []
+
+
+def test_note_floorplan_pg_on_rest_402(monkeypatch):
+    """_note_floorplan_on_job falls back to pg_update_job on Fair-Use 402."""
+    job = {"id": "job-fp", "checklist": []}
+    now = "2026-09-20T08:00:00+00:00"
+    pg_calls = []
+
+    class Chain:
+        def update(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            assert name == "jobs"
+            return Chain()
+
+    def fake_pg(job_id, fields):
+        pg_calls.append((job_id, fields))
+        return True
+
+    monkeypatch.setattr("app.shared.pg_fallback.pg_update_job", fake_pg)
+
+    asyncio.run(cap._note_floorplan_on_job(Db(), job, "job-fp", "sess-1", 4, now))
+    assert len(pg_calls) == 1
+    assert pg_calls[0][0] == "job-fp"
+    assert pg_calls[0][1]["updated_at"] == now
+    labels = [c.get("label") for c in pg_calls[0][1]["checklist"]]
+    assert "Floor plan capture submitted" in labels
+    assert job["checklist"][-1]["label"] == "Floor plan capture submitted"
+
+
+def test_notify_deliver_updated_at_pg_on_402(monkeypatch):
+    """First-of-kind deliver bumps jobs.updated_at via PG when REST is 402."""
+    job = {"id": "job-dl", "address": "9 King", "booking_id": "bk-1"}
+    pg_calls = []
+
+    class Chain:
+        def update(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            return Chain()
+
+    monkeypatch.setattr(cap, "_first_delivered_of_kind", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "app.shared.pg_fallback.pg_update_job",
+        lambda jid, fields: pg_calls.append((jid, fields)) or True,
+    )
+
+    async def fake_notify(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.client_comms.notify_capture_delivered", fake_notify
+    )
+
+    asyncio.run(
+        cap._notify_capture_session_delivered(Db(), job, "sess-9", "splat", "path/out")
+    )
+    assert pg_calls and pg_calls[0][0] == "job-dl"
+    assert "updated_at" in pg_calls[0][1]

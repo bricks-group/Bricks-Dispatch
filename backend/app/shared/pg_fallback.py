@@ -533,15 +533,99 @@ def pg_select_job_by_id(job_id: str) -> Optional[dict]:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM public.jobs WHERE id = %s LIMIT 1", (jid,))
             row = _row_from_cursor(cur)
-            if row and isinstance(row.get("add_ons"), str):
-                try:
-                    row["add_ons"] = json.loads(row["add_ons"])
-                except Exception:
-                    pass
+            if row:
+                for jk in ("add_ons", "checklist", "ai_flags", "property_details"):
+                    if isinstance(row.get(jk), str):
+                        try:
+                            row[jk] = json.loads(row[jk])
+                        except Exception:
+                            pass
             return row
     except Exception as e:
         logger.error("pg job by id failed: %s", str(e)[:300])
         return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_update_job(job_id: str, fields: dict) -> bool:
+    """UPDATE public.jobs SET … via Postgres when PostgREST is Fair-Use 402.
+
+    Whitelist covers capture compile deliver paths: updated_at freshness and
+    checklist marks (floor-plan note / visit checklist JSON). Returns True when
+    at least one row was updated.
+    """
+    jid = str(job_id or "").strip()
+    if not jid or not isinstance(fields, dict) or not fields:
+        return False
+    allowed = {
+        "updated_at",
+        "checklist",
+        "status",
+        "confirmed_arrive_at",
+        "time_window_start",
+        "time_window_end",
+        "preferred_window",
+    }
+    json_cols = {"checklist"}
+    cols: list[tuple[str, Any]] = []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        if k in json_cols:
+            if isinstance(v, (dict, list)):
+                cols.append((k, json.dumps(v)))
+            elif v is None:
+                cols.append((k, json.dumps([])))
+            elif isinstance(v, str):
+                # Already JSON text — keep as-is for ::jsonb cast
+                cols.append((k, v))
+            else:
+                cols.append((k, json.dumps(v)))
+        else:
+            cols.append((k, v))
+    if not cols:
+        return False
+    # Always refresh updated_at if caller forgot (OS living-file freshness).
+    if "updated_at" not in {c[0] for c in cols}:
+        from datetime import datetime, timezone
+        cols.append(("updated_at", datetime.now(timezone.utc).isoformat()))
+
+    set_parts = []
+    vals: list[Any] = []
+    for c, v in cols:
+        if c in json_cols:
+            set_parts.append(f"{c} = %s::jsonb")
+        else:
+            set_parts.append(f"{c} = %s")
+        vals.append(v)
+    vals.append(jid)
+    set_sql = ", ".join(set_parts)
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_update_job: no Postgres connection job=%s", jid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE public.jobs SET {set_sql} WHERE id = %s",
+                vals,
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_update_job ok id=%s fields=%s",
+                    jid,
+                    [c[0] for c in cols],
+                )
+            return ok
+    except Exception as e:
+        logger.error("pg_update_job failed id=%s: %s", jid, str(e)[:300])
+        return False
     finally:
         try:
             conn.close()
