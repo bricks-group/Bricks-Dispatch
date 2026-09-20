@@ -120,3 +120,21 @@ def test_get_signed_download_url_blob_fallback(monkeypatch):
     )
     assert url is not None
     assert "/api/capture/blob-get/" in url
+
+
+def test_download_bytes_falls_back_when_supabase_raises(monkeypatch):
+    async def boom_db():
+        raise RuntimeError("exceed_storage_size_quota")
+
+    got = []
+
+    async def fake_blob_get(path):
+        got.append(path)
+        return b"from-blob"
+
+    monkeypatch.setattr(st, "get_db", boom_db)
+    monkeypatch.setattr(st, "_blob_get", fake_blob_get)
+
+    data = asyncio.run(st.download_bytes("capture/sid/stations/0/equirect.jpg"))
+    assert data == b"from-blob"
+    assert got == ["capture/sid/stations/0/equirect.jpg"]
