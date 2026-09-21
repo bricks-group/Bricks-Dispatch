@@ -31,7 +31,15 @@ async def _list_for_member(member_id: str) -> list[dict]:
     try:
         res = await db.table("notifications").select("*").eq("member_id", member_id).order("created_at", desc=True).limit(100).execute()
         return [public_notification(r) for r in (res.data or [])]
-    except Exception:
+    except Exception as exc:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_notifications_for_member,
+        )
+
+        if _is_rest_quota_error(exc):
+            rows = pg_select_notifications_for_member(member_id, limit=100)
+            return [public_notification(r) for r in rows]
         # member_id column may not exist yet — honest empty, never leak every row
         return []
 
@@ -65,8 +73,14 @@ async def mark_all_read(
     db = await get_db()
     try:
         await db.table("notifications").update({"read": True, "updated_at": now}).eq("member_id", actor_id).eq("read", False).execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_mark_all_notifications_read,
+        )
+
+        if _is_rest_quota_error(exc):
+            pg_mark_all_notifications_read(actor_id)
     return {"ok": True}
 
 
@@ -79,8 +93,20 @@ async def mark_one_read(
 ):
     actor_id = await _actor(authorization, x_user_id)
     db = await get_db()
-    res = await db.table("notifications").select("*").eq("id", notification_id).maybe_single().execute()
-    row = res.data or {}
+    row: dict = {}
+    try:
+        res = await db.table("notifications").select("*").eq("id", notification_id).maybe_single().execute()
+        row = res.data or {}
+    except Exception as exc:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_notification_by_id,
+        )
+
+        if _is_rest_quota_error(exc):
+            row = pg_select_notification_by_id(notification_id) or {}
+        else:
+            row = {}
     if not row:
         api_error(404, "Notification not found", "notification_not_found")
     owner = row.get("member_id")
@@ -88,8 +114,14 @@ async def mark_one_read(
         api_error(404, "Notification not found", "notification_not_found")
     try:
         await db.table("notifications").update({"read": True}).eq("id", notification_id).execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_mark_notification_read,
+        )
+
+        if _is_rest_quota_error(exc):
+            pg_mark_notification_read(notification_id, actor_id)
     row["read"] = True
     return public_notification(row)
 

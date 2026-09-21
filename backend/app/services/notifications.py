@@ -606,7 +606,28 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
             }).eq("id", existing.data["id"]).execute()
             return {"registered": True, "id": existing.data["id"]}
     except Exception as exc:
-        logger.error("push_tokens lookup failed: %s", exc)
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_push_token_by_token,
+            pg_upsert_push_token,
+        )
+        if _is_rest_quota_error(exc):
+            found = pg_select_push_token_by_token(token)
+            if found and found.get("id"):
+                updated = pg_upsert_push_token({
+                    "id": found["id"],
+                    "member_id": member_id,
+                    "token": token,
+                    "platform": platform,
+                    "active": True,
+                    "updated_at": now,
+                })
+                if updated and updated.get("id"):
+                    return {"registered": True, "id": updated["id"]}
+                raise
+            # no existing row — fall through to insert path below via PG
+        else:
+            logger.error("push_tokens lookup failed: %s", exc)
     row = {
         "id": str(uuid.uuid4()),
         "member_id": member_id,
@@ -620,6 +641,12 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
         await db.table("push_tokens").insert(row).execute()
         return {"registered": True, "id": row["id"]}
     except Exception as exc:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_upsert_push_token
+        if _is_rest_quota_error(exc):
+            saved = pg_upsert_push_token(dict(row))
+            if saved and saved.get("id"):
+                return {"registered": True, "id": saved["id"]}
+            raise
         logger.error("push_tokens insert failed: %s", exc)
         slim = {k: row[k] for k in ("id", "token", "active") if k in row}
         slim["member_id"] = member_id
@@ -627,6 +654,10 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
             await db.table("push_tokens").insert(slim).execute()
             return {"registered": True, "id": row["id"]}
         except Exception as exc2:
+            if _is_rest_quota_error(exc2):
+                saved = pg_upsert_push_token(dict(row))
+                if saved and saved.get("id"):
+                    return {"registered": True, "id": saved["id"]}
             logger.error("push_tokens insert retry failed: %s", exc2)
             raise
 

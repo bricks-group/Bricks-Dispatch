@@ -1876,3 +1876,315 @@ def pg_select_push_tokens_for_member(member_id: str) -> list[dict]:
             conn.close()
         except Exception:
             pass
+
+
+def pg_select_notifications_for_member(member_id: str, *, limit: int = 100) -> list[dict]:
+    """List notifications for a photographer via Postgres (Fair-Use inbox path)."""
+    mid = str(member_id or "").strip()
+    if not mid:
+        return []
+    lim = max(1, min(int(limit or 100), 200))
+    conn = _pg_connect()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, body, type, data, read, member_id, created_at "
+                "FROM public.notifications "
+                "WHERE member_id = %s "
+                "ORDER BY created_at DESC NULLS LAST "
+                "LIMIT %s",
+                (mid, lim),
+            )
+            rows = _rows_from_cursor(cur)
+            for r in rows:
+                _parse_json_field(r, "data", default={})
+                if "read" in r:
+                    r["read"] = bool(r.get("read"))
+            logger.warning(
+                "pg_select_notifications_for_member ok n=%s member=%s",
+                len(rows),
+                mid[:12],
+            )
+            return rows
+    except Exception as e:
+        logger.error(
+            "pg_select_notifications_for_member failed member=%s: %s",
+            mid[:12],
+            str(e)[:300],
+        )
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_notification_by_id(notification_id: str) -> Optional[dict]:
+    """Fetch one notification row by id via Postgres."""
+    nid = str(notification_id or "").strip()
+    if not nid:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, body, type, data, read, member_id, created_at "
+                "FROM public.notifications WHERE id = %s LIMIT 1",
+                (nid,),
+            )
+            row = _row_from_cursor(cur)
+            if not row:
+                return None
+            _parse_json_field(row, "data", default={})
+            if "read" in row:
+                row["read"] = bool(row.get("read"))
+            return row
+    except Exception as e:
+        logger.error(
+            "pg_select_notification_by_id failed id=%s: %s",
+            nid[:36],
+            str(e)[:300],
+        )
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_mark_notification_read(notification_id: str, member_id: str | None = None) -> bool:
+    """Mark one notification read via Postgres. Optionally scope to member_id."""
+    nid = str(notification_id or "").strip()
+    if not nid:
+        return False
+    mid = str(member_id or "").strip() or None
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _pg_connect()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            if mid:
+                # updated_at may not exist on older schemas — try with it, then without
+                try:
+                    cur.execute(
+                        "UPDATE public.notifications SET read = true, updated_at = %s "
+                        "WHERE id = %s AND member_id = %s",
+                        (now, nid, mid),
+                    )
+                except Exception:
+                    cur.execute(
+                        "UPDATE public.notifications SET read = true "
+                        "WHERE id = %s AND member_id = %s",
+                        (nid, mid),
+                    )
+            else:
+                try:
+                    cur.execute(
+                        "UPDATE public.notifications SET read = true, updated_at = %s "
+                        "WHERE id = %s",
+                        (now, nid),
+                    )
+                except Exception:
+                    cur.execute(
+                        "UPDATE public.notifications SET read = true WHERE id = %s",
+                        (nid,),
+                    )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_mark_notification_read ok id=%s member=%s",
+                    nid[:36],
+                    (mid or "")[:12],
+                )
+            return ok
+    except Exception as e:
+        logger.error(
+            "pg_mark_notification_read failed id=%s: %s",
+            nid[:36],
+            str(e)[:300],
+        )
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_mark_all_notifications_read(member_id: str) -> int:
+    """Mark all unread notifications for a member read. Returns rows updated (or -1 on soft fail)."""
+    mid = str(member_id or "").strip()
+    if not mid:
+        return 0
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _pg_connect()
+    if not conn:
+        return 0
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "UPDATE public.notifications SET read = true, updated_at = %s "
+                    "WHERE member_id = %s AND read = false",
+                    (now, mid),
+                )
+            except Exception:
+                cur.execute(
+                    "UPDATE public.notifications SET read = true "
+                    "WHERE member_id = %s AND (read = false OR read IS NULL)",
+                    (mid,),
+                )
+            n = int(cur.rowcount or 0)
+            logger.warning(
+                "pg_mark_all_notifications_read ok n=%s member=%s",
+                n,
+                mid[:12],
+            )
+            return n
+    except Exception as e:
+        logger.error(
+            "pg_mark_all_notifications_read failed member=%s: %s",
+            mid[:12],
+            str(e)[:300],
+        )
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+_PUSH_TOKENS_COLUMNS = (
+    "id",
+    "member_id",
+    "token",
+    "platform",
+    "active",
+    "created_at",
+    "updated_at",
+)
+
+
+def pg_select_push_token_by_token(token: str) -> Optional[dict]:
+    """Lookup push_tokens row by device token via Postgres."""
+    tok = str(token or "").strip()
+    if not tok:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, member_id, token, platform, active, created_at, updated_at "
+                "FROM public.push_tokens WHERE token = %s LIMIT 1",
+                (tok,),
+            )
+            return _row_from_cursor(cur)
+    except Exception as e:
+        logger.error("pg_select_push_token_by_token failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_upsert_push_token(row: dict) -> Optional[dict]:
+    """Insert or update a push_tokens row via Postgres (Fair-Use device register).
+
+    Prefer update-by-token when a row exists; otherwise INSERT. Whitelists columns.
+    """
+    if not isinstance(row, dict) or not row:
+        return None
+    from datetime import datetime, timezone
+
+    data = {k: row[k] for k in _PUSH_TOKENS_COLUMNS if k in row}
+    tok = str(data.get("token") or "").strip()
+    mid = str(data.get("member_id") or "").strip()
+    if not tok or not mid:
+        return None
+    if not data.get("id"):
+        import uuid
+
+        data["id"] = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    if not data.get("created_at"):
+        data["created_at"] = now
+    data["updated_at"] = now
+    if "platform" not in data:
+        data["platform"] = "expo"
+    if "active" not in data:
+        data["active"] = True
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_upsert_push_token: no Postgres connection")
+        return None
+    try:
+        with conn.cursor() as cur:
+            existing = None
+            try:
+                cur.execute(
+                    "SELECT id FROM public.push_tokens WHERE token = %s LIMIT 1",
+                    (tok,),
+                )
+                existing = _row_from_cursor(cur)
+            except Exception:
+                existing = None
+
+            if existing and existing.get("id"):
+                cur.execute(
+                    "UPDATE public.push_tokens SET member_id = %s, platform = %s, "
+                    "active = %s, updated_at = %s WHERE id = %s",
+                    (
+                        mid,
+                        data.get("platform") or "expo",
+                        bool(data.get("active", True)),
+                        now,
+                        existing["id"],
+                    ),
+                )
+                data["id"] = existing["id"]
+                logger.warning(
+                    "pg_upsert_push_token update ok id=%s member=%s",
+                    data["id"],
+                    mid[:12],
+                )
+                return data
+
+            cols = [c for c in _PUSH_TOKENS_COLUMNS if c in data]
+            placeholders = ", ".join(["%s"] * len(cols))
+            sql = (
+                f"INSERT INTO public.push_tokens ({', '.join(cols)}) "
+                f"VALUES ({placeholders})"
+            )
+            vals = [data[c] for c in cols]
+            cur.execute(sql, vals)
+            logger.warning(
+                "pg_upsert_push_token insert ok id=%s member=%s",
+                data.get("id"),
+                mid[:12],
+            )
+            return data
+    except Exception as e:
+        logger.error("pg_upsert_push_token failed: %s", str(e)[:400])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
