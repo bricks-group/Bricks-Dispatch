@@ -1270,3 +1270,237 @@ def pg_upsert_vendor_member(
             conn.close()
         except Exception:
             pass
+
+
+# --- Fair-Use: availability gate + calendar FreeBusy + vendor notify ----------
+
+_VENDOR_AVAILABILITY_JSON_COLS = ("blocked_windows",)
+
+_NOTIFICATIONS_COLUMNS = (
+    "id",
+    "title",
+    "body",
+    "type",
+    "data",
+    "read",
+    "member_id",
+    "created_at",
+)
+
+
+def _parse_json_field(row: dict, key: str, default: Any = None) -> None:
+    """In-place: if row[key] is a JSON string, parse it (jsonb from psycopg2)."""
+    if key not in row:
+        return
+    v = row.get(key)
+    if isinstance(v, str):
+        try:
+            row[key] = json.loads(v)
+        except Exception:
+            if default is not None:
+                row[key] = default
+
+
+def pg_select_vendor_availability_by_member_ids(member_ids: list[str]) -> dict[str, dict]:
+    """Map member_id → vendor_availability row via Postgres (Fair-Use path).
+
+    Returns {} on connect/query failure so callers can soft-fail open.
+    """
+    ids = [str(m).strip() for m in (member_ids or []) if str(m).strip()][:80]
+    if not ids:
+        return {}
+    conn = _pg_connect()
+    if not conn:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM public.vendor_availability "
+                "WHERE member_id = ANY(%s) LIMIT 80",
+                (ids,),
+            )
+            rows = _rows_from_cursor(cur)
+            out: dict[str, dict] = {}
+            for row in rows:
+                for jk in _VENDOR_AVAILABILITY_JSON_COLS:
+                    _parse_json_field(row, jk, default=[])
+                mid = row.get("member_id")
+                if mid:
+                    out[str(mid)] = row
+            logger.warning(
+                "pg vendor_availability fallback ok n=%s members=%s",
+                len(out),
+                ids[:3],
+            )
+            return out
+    except Exception as e:
+        logger.error("pg vendor_availability failed: %s", str(e)[:300])
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_vendor_calendar_connections(member_id: str) -> list[dict]:
+    """Rows from public.vendor_calendar_connections for one member (Fair-Use path)."""
+    mid = str(member_id or "").strip()
+    if not mid:
+        return []
+    conn = _pg_connect()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM public.vendor_calendar_connections "
+                "WHERE member_id = %s LIMIT 20",
+                (mid,),
+            )
+            rows = _rows_from_cursor(cur)
+            logger.warning(
+                "pg vendor_calendar_connections fallback ok n=%s member=%s",
+                len(rows),
+                mid[:12],
+            )
+            return rows
+    except Exception as e:
+        logger.error(
+            "pg vendor_calendar_connections failed member=%s: %s",
+            mid[:12],
+            str(e)[:300],
+        )
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_insert_notification(row: dict) -> bool:
+    """INSERT public.notifications via Postgres when PostgREST is Fair-Use 402.
+
+    Whitelists NotificationRecord columns only (id, title, body, type, data,
+    read, member_id, created_at). Generates uuid id + created_at when missing.
+    """
+    if not isinstance(row, dict) or not row:
+        return False
+
+    import uuid
+    from datetime import datetime, timezone
+
+    data = {k: row[k] for k in _NOTIFICATIONS_COLUMNS if k in row}
+    if not data.get("title") and not data.get("body"):
+        return False
+    if not data.get("id"):
+        data["id"] = str(uuid.uuid4())
+    if not data.get("created_at"):
+        data["created_at"] = datetime.now(timezone.utc).isoformat()
+    if "type" not in data:
+        data["type"] = "info"
+    if "read" not in data:
+        data["read"] = False
+    if "data" not in data:
+        data["data"] = {}
+
+    cols: list[str] = []
+    vals: list[Any] = []
+    for c in _NOTIFICATIONS_COLUMNS:
+        if c not in data:
+            continue
+        v = data[c]
+        if c == "data":
+            if not isinstance(v, str):
+                try:
+                    v = json.dumps(v if v is not None else {})
+                except Exception:
+                    v = "{}"
+            cols.append(c)
+            vals.append(v)
+        else:
+            cols.append(c)
+            vals.append(v)
+    if "id" not in cols or "title" not in cols:
+        return False
+
+    # data is jsonb — cast when present
+    placeholders = []
+    for c in cols:
+        if c == "data":
+            placeholders.append("%s::jsonb")
+        else:
+            placeholders.append("%s")
+    sql = (
+        f"INSERT INTO public.notifications ({', '.join(cols)}) "
+        f"VALUES ({', '.join(placeholders)})"
+    )
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning(
+            "pg_insert_notification: no Postgres connection title=%s",
+            str(data.get("title") or "")[:40],
+        )
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, vals)
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_insert_notification ok id=%s member=%s type=%s",
+                    data.get("id"),
+                    data.get("member_id"),
+                    data.get("type"),
+                )
+            return ok
+    except Exception as e:
+        logger.error(
+            "pg_insert_notification failed id=%s: %s",
+            data.get("id"),
+            str(e)[:400],
+        )
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_push_tokens_for_member(member_id: str) -> list[dict]:
+    """Active push_tokens for a member via Postgres (Fair-Use path for notify)."""
+    mid = str(member_id or "").strip()
+    if not mid:
+        return []
+    conn = _pg_connect()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM public.push_tokens "
+                "WHERE member_id = %s AND active = true LIMIT 50",
+                (mid,),
+            )
+            rows = _rows_from_cursor(cur)
+            logger.warning(
+                "pg push_tokens fallback ok n=%s member=%s",
+                len(rows),
+                mid[:12],
+            )
+            return rows
+    except Exception as e:
+        logger.error(
+            "pg push_tokens failed member=%s: %s",
+            mid[:12],
+            str(e)[:300],
+        )
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

@@ -425,6 +425,15 @@ async def _load_connections(db, member_id: str, *, decrypt: bool = True) -> list
         if decrypt:
             rows = [decrypt_connection_secrets(r) for r in rows]
     except Exception as e:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_vendor_calendar_connections,
+        )
+        if _is_rest_quota_error(e):
+            rows = list(pg_select_vendor_calendar_connections(member_id) or [])
+            if decrypt and rows:
+                rows = [decrypt_connection_secrets(r) for r in rows]
+            return rows
         logger.debug("vendor_calendar_connections read failed (soft): %s", e)
         # Fall back to columns on vendor_members if table missing
         try:

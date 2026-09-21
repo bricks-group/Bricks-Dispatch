@@ -546,8 +546,12 @@ async def send_push_to_member(member_id: str, title: str, body: str, data: dict 
         res = await (await get_db()).table("push_tokens").select("*").eq("member_id", member_id).eq("active", True).limit(50).execute()
         tokens = res.data or []
     except Exception as exc:
-        logger.error("push_tokens lookup failed: %s", exc)
-        return False
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_push_tokens_for_member
+        if _is_rest_quota_error(exc):
+            tokens = list(pg_select_push_tokens_for_member(member_id) or [])
+        else:
+            logger.error("push_tokens lookup failed: %s", exc)
+            return False
     if not tokens:
         logger.info("No push tokens for member %s — skipping push", member_id)
         return False
@@ -649,10 +653,25 @@ async def create_notification(
     try:
         await (await get_db()).table("notifications").insert(notif_dict).execute()
     except Exception as exc:
-        if member_id:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_notification
+        if _is_rest_quota_error(exc):
+            if not pg_insert_notification(dict(notif_dict)):
+                raise
+        elif member_id:
             logger.info("notifications insert with member_id failed (%s) — retrying without it", type(exc).__name__)
             notif_dict.pop("member_id", None)
-            await (await get_db()).table("notifications").insert(notif_dict).execute()
+            try:
+                await (await get_db()).table("notifications").insert(notif_dict).execute()
+            except Exception as exc2:
+                if _is_rest_quota_error(exc2):
+                    # Prefer original member-scoped row on Fair-Use retry
+                    retry_row = dict(notif_dict)
+                    if member_id:
+                        retry_row["member_id"] = member_id
+                    if not pg_insert_notification(retry_row):
+                        raise
+                else:
+                    raise
         else:
             raise
     if member_id and send_push:
