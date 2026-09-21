@@ -669,28 +669,50 @@ async def list_dispatch_failures(
     """
     List jobs stuck in dispatch_failed status, joined with their ops_escalation record.
     Returns newest first. Use POST /dispatch-failures/{job_id}/reassign to retry.
+
+    Fair-Use: when Canada PostgREST returns 402, list jobs + escalations via Postgres
+    so Owner can still recover failed auto-assign while Storage quota is locked.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
 
-    db = await get_db()
-    res_jobs = await db.table("jobs").select(
-        "id, booking_id, address, city, job_type, package_name, min_tier_required, "
-        "scheduled_date, time_window_start, time_window_end, created_at, updated_at"
-    ).eq("status", "dispatch_failed").order("updated_at", desc=True).range(offset, offset + limit - 1).execute()
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_dispatch_failed_jobs,
+        pg_select_ops_escalations_for_jobs,
+    )
 
-    jobs = res_jobs.data or []
+    db = await get_db()
+    jobs: list = []
+    try:
+        res_jobs = await db.table("jobs").select(
+            "id, booking_id, address, city, job_type, package_name, min_tier_required, "
+            "scheduled_date, time_window_start, time_window_end, created_at, updated_at"
+        ).eq("status", "dispatch_failed").order("updated_at", desc=True).range(offset, offset + limit - 1).execute()
+        jobs = res_jobs.data or []
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        jobs = pg_select_dispatch_failed_jobs(limit=limit, offset=offset)
+
     if not jobs:
         return {"total": 0, "items": []}
 
-    job_ids = [j["id"] for j in jobs]
-    res_esc = await db.table("ops_escalations").select(
-        "job_id, attempt_count, error_message, status, created_at"
-    ).in_("job_id", job_ids).execute()
+    job_ids = [j["id"] for j in jobs if j.get("id")]
+    escalations: list = []
+    try:
+        res_esc = await db.table("ops_escalations").select(
+            "job_id, attempt_count, error_message, status, created_at"
+        ).in_("job_id", job_ids).execute()
+        escalations = res_esc.data or []
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        escalations = pg_select_ops_escalations_for_jobs(job_ids)
 
-    escalation_by_job = {e["job_id"]: e for e in (res_esc.data or [])}
+    escalation_by_job = {e["job_id"]: e for e in escalations if e.get("job_id")}
 
     items = []
     for j in jobs:
@@ -714,28 +736,58 @@ async def manual_reassign_dispatch_failure(
     Resets status to 'pending_assignment' before running assign_vendor_for_job.
     If assignment still fails, the job returns to dispatch_failed and a new
     ops_escalation record is written.
+
+    Fair-Use: job load/reset and open-escalation close fall back to Postgres on
+    PostgREST 402 so Owner can recover failed auto-assign under Fair Use.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
 
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_mark_ops_escalations_manual_retry,
+        pg_select_job_by_id,
+        pg_update_job,
+    )
+
     db = await get_db()
-    res = await db.table("jobs").select("id, status").eq("id", job_id).maybe_single().execute()
-    if not res.data:
+    job_row = None
+    try:
+        res = await db.table("jobs").select("id, status").eq("id", job_id).maybe_single().execute()
+        job_row = res.data
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        job_row = pg_select_job_by_id(job_id)
+
+    if not job_row:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if res.data["status"] != "dispatch_failed":
+    if job_row.get("status") != "dispatch_failed":
         raise HTTPException(
             status_code=409,
-            detail=f"Job is in status '{res.data['status']}' — only dispatch_failed jobs can be manually reassigned",
+            detail=f"Job is in status '{job_row.get('status')}' — only dispatch_failed jobs can be manually reassigned",
         )
 
     # Reset to pending_assignment so assign_vendor_for_job can proceed
-    await db.table("jobs").update({"status": "pending_assignment", "assignee_id": ""}).eq("id", job_id).execute()
+    reset_fields = {"status": "pending_assignment", "assignee_id": ""}
+    try:
+        await db.table("jobs").update(reset_fields).eq("id", job_id).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, reset_fields):
+            raise HTTPException(status_code=500, detail="Could not reset job for reassign (Fair-Use PG)")
 
     # Close the previous escalation record
-    await db.table("ops_escalations").update({"status": "manual_retry"}).eq("job_id", job_id).eq("status", "open").execute()
+    try:
+        await db.table("ops_escalations").update({"status": "manual_retry"}).eq("job_id", job_id).eq("status", "open").execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        pg_mark_ops_escalations_manual_retry(job_id)
 
     assigned_member_id = await assign_vendor_for_job(job_id)
 

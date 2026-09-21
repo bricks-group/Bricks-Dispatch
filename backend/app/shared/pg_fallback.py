@@ -2188,3 +2188,137 @@ def pg_upsert_push_token(row: dict) -> Optional[dict]:
             conn.close()
         except Exception:
             pass
+
+
+def pg_select_dispatch_failed_jobs(limit: int = 50, offset: int = 0) -> list[dict]:
+    """List jobs with status=dispatch_failed via Postgres (Fair-Use 402).
+
+    Columns match admin_ops.list_dispatch_failures select list.
+    Ordered by updated_at DESC. limit/offset clamped to safe bounds.
+    """
+    try:
+        lim = max(1, min(int(limit or 50), 200))
+    except Exception:
+        lim = 50
+    try:
+        off = max(0, int(offset or 0))
+    except Exception:
+        off = 0
+
+    cols = (
+        "id, booking_id, address, city, job_type, package_name, min_tier_required, "
+        "scheduled_date, time_window_start, time_window_end, created_at, updated_at, status"
+    )
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_dispatch_failed_jobs: no Postgres connection")
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {cols} FROM public.jobs "
+                "WHERE status = %s "
+                "ORDER BY updated_at DESC NULLS LAST "
+                "LIMIT %s OFFSET %s",
+                ("dispatch_failed", lim, off),
+            )
+            rows = _rows_from_cursor(cur)
+            logger.warning(
+                "pg_select_dispatch_failed_jobs ok n=%s limit=%s offset=%s",
+                len(rows),
+                lim,
+                off,
+            )
+            return rows
+    except Exception as e:
+        logger.error("pg_select_dispatch_failed_jobs failed: %s", str(e)[:400])
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_ops_escalations_for_jobs(job_ids: list[str]) -> list[dict]:
+    """Load ops_escalations rows for job ids via Postgres (Fair-Use 402).
+
+    Returns job_id, attempt_count, error_message, status, created_at — same
+    shape as admin_ops.list_dispatch_failures join.
+    """
+    ids = [str(j).strip() for j in (job_ids or []) if str(j).strip()]
+    if not ids:
+        return []
+    # Cap IN list for safety
+    ids = ids[:200]
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_ops_escalations_for_jobs: no Postgres connection")
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT job_id, attempt_count, error_message, status, created_at "
+                "FROM public.ops_escalations "
+                "WHERE job_id = ANY(%s)",
+                (ids,),
+            )
+            rows = _rows_from_cursor(cur)
+            logger.warning(
+                "pg_select_ops_escalations_for_jobs ok n=%s jobs=%s",
+                len(rows),
+                len(ids),
+            )
+            return rows
+    except Exception as e:
+        logger.error("pg_select_ops_escalations_for_jobs failed: %s", str(e)[:400])
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_mark_ops_escalations_manual_retry(job_id: str) -> int:
+    """Set open ops_escalations for a job to status=manual_retry via Postgres.
+
+    Returns number of rows updated (0 when none open or PG unavailable).
+    """
+    jid = str(job_id or "").strip()
+    if not jid:
+        return 0
+    conn = _pg_connect()
+    if not conn:
+        logger.warning(
+            "pg_mark_ops_escalations_manual_retry: no Postgres connection job=%s",
+            jid[:12],
+        )
+        return 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE public.ops_escalations "
+                "SET status = %s "
+                "WHERE job_id = %s AND status = %s",
+                ("manual_retry", jid, "open"),
+            )
+            n = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            logger.warning(
+                "pg_mark_ops_escalations_manual_retry ok job=%s n=%s",
+                jid[:12],
+                n,
+            )
+            return int(n)
+    except Exception as e:
+        logger.error(
+            "pg_mark_ops_escalations_manual_retry failed job=%s: %s",
+            jid[:12],
+            str(e)[:400],
+        )
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
