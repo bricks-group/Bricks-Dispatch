@@ -449,7 +449,7 @@ def pg_select_jobs_for_assignees(
     ids = [str(a).strip() for a in (assignee_ids or []) if str(a).strip()]
     if not ids:
         return [], 0
-    limit = max(1, min(int(limit or 50), 200))
+    limit = max(1, min(int(limit or 50), 500))
     offset = max(0, int(offset or 0))
     conn = _pg_connect()
     if not conn:
