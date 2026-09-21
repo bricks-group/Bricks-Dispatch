@@ -340,7 +340,21 @@ async def upsert_oauth_connection(
         "created_at": now,
     }
     stored = encrypt_connection_secrets(row)
-    await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
+    try:
+        await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
+    except Exception as e:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_upsert_vendor_calendar_connection,
+        )
+        if _is_rest_quota_error(e):
+            pg_row = pg_upsert_vendor_calendar_connection(stored)
+            if not pg_row:
+                raise RuntimeError(
+                    "Could not save calendar connection (Fair-Use Postgres fallback failed)"
+                ) from e
+            return stored
+        raise
     return stored
 
 
@@ -416,10 +430,25 @@ async def _load_connections(db, member_id: str, *, decrypt: bool = True) -> list
                 try:
                     stored = encrypt_connection_secrets(row)
                     stored["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    await db.table("vendor_calendar_connections").upsert(
-                        stored, on_conflict="member_id,provider"
-                    ).execute()
-                    rows[i] = stored
+                    try:
+                        await db.table("vendor_calendar_connections").upsert(
+                            stored, on_conflict="member_id,provider"
+                        ).execute()
+                        rows[i] = stored
+                    except Exception as e:
+                        from ..shared.pg_fallback import (
+                            _is_rest_quota_error,
+                            pg_upsert_vendor_calendar_connection,
+                        )
+                        if _is_rest_quota_error(e):
+                            if pg_upsert_vendor_calendar_connection(stored):
+                                rows[i] = stored
+                            else:
+                                logger.debug(
+                                    "calendar re-encrypt Fair-Use PG soft-fail: %s", e
+                                )
+                        else:
+                            logger.debug("calendar re-encrypt soft-fail: %s", e)
                 except Exception as e:
                     logger.debug("calendar re-encrypt soft-fail: %s", e)
         if decrypt:

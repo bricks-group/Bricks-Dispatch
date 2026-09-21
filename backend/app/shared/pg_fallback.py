@@ -1577,6 +1577,180 @@ def pg_select_vendor_calendar_connections(member_id: str) -> list[dict]:
             pass
 
 
+
+_VENDOR_CALENDAR_CONNECTION_COLUMNS = (
+    "id",
+    "member_id",
+    "vendor_id",
+    "provider",
+    "access_token",
+    "refresh_token",
+    "token_expires_at",
+    "caldav_url",
+    "caldav_username",
+    "caldav_password",
+    "ics_url",
+    "created_at",
+    "updated_at",
+)
+
+
+def pg_upsert_vendor_calendar_connection(row: dict) -> Optional[dict]:
+    """INSERT … ON CONFLICT (member_id, provider) DO UPDATE for Fair-Use Connect.
+
+    Whitelists real columns. Generates uuid id + created_at/updated_at when missing.
+    On conflict updates credential columns + updated_at from EXCLUDED (never overwrites
+    created_at). Returns the row after upsert (RETURNING * / re-select) or None.
+    """
+    if not isinstance(row, dict) or not row:
+        return None
+
+    import uuid
+    from datetime import datetime, timezone
+
+    mid = str(row.get("member_id") or "").strip()
+    provider = str(row.get("provider") or "").strip().lower()
+    if not mid or not provider:
+        return None
+
+    data = {k: row[k] for k in _VENDOR_CALENDAR_CONNECTION_COLUMNS if k in row}
+    data["member_id"] = mid
+    data["provider"] = provider
+    if not data.get("vendor_id"):
+        data["vendor_id"] = str(row.get("vendor_id") or "").strip() or ORG_VENDOR_ID
+    if not data.get("id"):
+        data["id"] = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    if not data.get("created_at"):
+        data["created_at"] = now
+    if not data.get("updated_at"):
+        data["updated_at"] = now
+
+    cols: list[str] = []
+    vals: list[Any] = []
+    placeholders: list[str] = []
+    for c in _VENDOR_CALENDAR_CONNECTION_COLUMNS:
+        if c not in data:
+            continue
+        cols.append(c)
+        vals.append(data[c])
+        placeholders.append("%s")
+
+    if "member_id" not in cols or "provider" not in cols:
+        return None
+
+    # Do NOT overwrite created_at on conflict.
+    update_cols = (
+        "vendor_id",
+        "access_token",
+        "refresh_token",
+        "token_expires_at",
+        "caldav_url",
+        "caldav_username",
+        "caldav_password",
+        "ics_url",
+        "updated_at",
+    )
+    set_parts = [f"{c} = EXCLUDED.{c}" for c in update_cols if c in cols]
+    set_sql = ", ".join(set_parts) if set_parts else "updated_at = EXCLUDED.updated_at"
+
+    sql = (
+        f"INSERT INTO public.vendor_calendar_connections ({', '.join(cols)}) "
+        f"VALUES ({', '.join(placeholders)}) "
+        f"ON CONFLICT (member_id, provider) DO UPDATE SET {set_sql} "
+        f"RETURNING *"
+    )
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning(
+            "pg_upsert_vendor_calendar_connection: no Postgres connection member=%s provider=%s",
+            mid[:12],
+            provider,
+        )
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, vals)
+            rows = _rows_from_cursor(cur)
+            if not rows:
+                cur.execute(
+                    "SELECT * FROM public.vendor_calendar_connections "
+                    "WHERE member_id = %s AND provider = %s LIMIT 1",
+                    (mid, provider),
+                )
+                rows = _rows_from_cursor(cur)
+            if not rows:
+                return None
+            out = rows[0]
+            logger.warning(
+                "pg_upsert_vendor_calendar_connection ok member=%s provider=%s",
+                mid[:12],
+                provider,
+            )
+            return out
+    except Exception as e:
+        logger.error(
+            "pg_upsert_vendor_calendar_connection failed member=%s provider=%s: %s",
+            mid[:12],
+            provider,
+            str(e)[:400],
+        )
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_delete_vendor_calendar_connection(member_id: str, provider: str) -> bool:
+    """DELETE vendor_calendar_connections row by member_id + provider (Fair-Use path).
+
+    Returns True when the DELETE executed without error (rowcount >= 0 is ok).
+    """
+    mid = str(member_id or "").strip()
+    prov = str(provider or "").strip().lower()
+    if not mid or not prov:
+        return False
+    conn = _pg_connect()
+    if not conn:
+        logger.warning(
+            "pg_delete_vendor_calendar_connection: no Postgres connection member=%s provider=%s",
+            mid[:12],
+            prov,
+        )
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM public.vendor_calendar_connections "
+                "WHERE member_id = %s AND provider = %s",
+                (mid, prov),
+            )
+            logger.warning(
+                "pg_delete_vendor_calendar_connection ok member=%s provider=%s rowcount=%s",
+                mid[:12],
+                prov,
+                getattr(cur, "rowcount", None),
+            )
+            return True
+    except Exception as e:
+        logger.error(
+            "pg_delete_vendor_calendar_connection failed member=%s provider=%s: %s",
+            mid[:12],
+            prov,
+            str(e)[:400],
+        )
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+
 def pg_insert_notification(row: dict) -> bool:
     """INSERT public.notifications via Postgres when PostgREST is Fair-Use 402.
 

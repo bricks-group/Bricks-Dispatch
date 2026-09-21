@@ -1072,7 +1072,19 @@ async def connect_vendor_calendar(
             try:
                 await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
             except Exception as e:
-                logger.warning("calendar upsert soft-fail: %s", e)
+                from ..shared.pg_fallback import (
+                    _is_rest_quota_error,
+                    pg_upsert_vendor_calendar_connection,
+                )
+                if _is_rest_quota_error(e):
+                    if not pg_upsert_vendor_calendar_connection(stored):
+                        return {
+                            "connected": False,
+                            "status": "error",
+                            "detail": "Could not save calendar connection (Fair-Use).",
+                        }
+                else:
+                    logger.warning("calendar upsert soft-fail: %s", e)
             return connection_status(stored)
 
         via = google_connect_via()
@@ -1144,8 +1156,20 @@ async def connect_vendor_calendar(
         try:
             await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
         except Exception as e:
-            logger.warning("calendar upsert soft-fail: %s", e)
-            return {"connected": False, "status": "error", "detail": f"Could not save CalDAV connection: {e}"}
+            from ..shared.pg_fallback import (
+                _is_rest_quota_error,
+                pg_upsert_vendor_calendar_connection,
+            )
+            if _is_rest_quota_error(e):
+                if not pg_upsert_vendor_calendar_connection(stored):
+                    return {
+                        "connected": False,
+                        "status": "error",
+                        "detail": "Could not save calendar connection (Fair-Use).",
+                    }
+            else:
+                logger.warning("calendar upsert soft-fail: %s", e)
+                return {"connected": False, "status": "error", "detail": f"Could not save CalDAV connection: {e}"}
         return connection_status(stored)
 
     if provider == "ics":
@@ -1163,8 +1187,20 @@ async def connect_vendor_calendar(
         try:
             await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
         except Exception as e:
-            logger.warning("calendar upsert soft-fail: %s", e)
-            return {"connected": False, "status": "error", "detail": f"Could not save ICS URL: {e}"}
+            from ..shared.pg_fallback import (
+                _is_rest_quota_error,
+                pg_upsert_vendor_calendar_connection,
+            )
+            if _is_rest_quota_error(e):
+                if not pg_upsert_vendor_calendar_connection(row):
+                    return {
+                        "connected": False,
+                        "status": "error",
+                        "detail": "Could not save calendar connection (Fair-Use).",
+                    }
+            else:
+                logger.warning("calendar upsert soft-fail: %s", e)
+                return {"connected": False, "status": "error", "detail": f"Could not save ICS URL: {e}"}
         return connection_status(row)
 
     api_error(400, "Unsupported provider", "invalid_provider")
@@ -1395,7 +1431,20 @@ async def disconnect_vendor_calendar(
     try:
         await db.table("vendor_calendar_connections").delete().eq("member_id", actor_id).eq("provider", provider).execute()
     except Exception as e:
-        logger.warning("calendar disconnect soft-fail: %s", e)
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_delete_vendor_calendar_connection,
+        )
+        if _is_rest_quota_error(e):
+            if not pg_delete_vendor_calendar_connection(actor_id, provider):
+                return {
+                    "connected": True,
+                    "provider": provider,
+                    "status": "error",
+                    "detail": "Could not disconnect calendar (Fair-Use).",
+                }
+        else:
+            logger.warning("calendar disconnect soft-fail: %s", e)
     return {"connected": False, "provider": provider, "status": "not_connected", "detail": "Disconnected"}
 
 
