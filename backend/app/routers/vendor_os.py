@@ -873,14 +873,40 @@ async def get_vendor_availability(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_vendor_availability,
+        pg_upsert_vendor_availability,
+    )
+
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
-    res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
-    record = res.data
+    try:
+        res = await (
+            await get_db()
+        ).table("vendor_availability").select("*").eq(
+            "vendor_id", vendor_id
+        ).eq("member_id", actor_id).maybe_single().execute()
+        record = res.data
+    except Exception as e:
+        # Fair-Use: PostgREST availability read 402 — load/create via Postgres.
+        if not _is_rest_quota_error(e):
+            raise
+        record = pg_select_vendor_availability(actor_id, vendor_id)
+        if not record:
+            default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
+            pg_upsert_vendor_availability(default)
+            return default
+        return record
     if not record:
         default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
-        await (await get_db()).table("vendor_availability").insert(default).execute()
+        try:
+            await (await get_db()).table("vendor_availability").insert(default).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            pg_upsert_vendor_availability(default)
         return default
     return record
 
@@ -891,6 +917,12 @@ async def update_vendor_availability(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_vendor_availability,
+        pg_upsert_vendor_availability,
+    )
+
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
@@ -898,16 +930,54 @@ async def update_vendor_availability(
         api_error(400, "jobs_per_day must be non-negative", "invalid_capacity")
     update_data = payload.dict()
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    
-    await (await get_db()).table("vendor_availability").upsert({
-        "vendor_id": vendor_id, 
-        "member_id": actor_id, 
-        **update_data
-    }).execute()
-    
-    await write_audit_event(actor_id, "availability", actor_id, "update", vendor_id=vendor_id, details=update_data)
-    res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
-    return res.data
+    row = {
+        "vendor_id": vendor_id,
+        "member_id": actor_id,
+        **update_data,
+    }
+
+    try:
+        await (await get_db()).table("vendor_availability").upsert(row).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        upserted = pg_upsert_vendor_availability(row)
+        try:
+            await write_audit_event(
+                actor_id,
+                "availability",
+                actor_id,
+                "update",
+                vendor_id=vendor_id,
+                details=update_data,
+            )
+        except Exception:
+            pass
+        return upserted or pg_select_vendor_availability(actor_id, vendor_id)
+
+    try:
+        await write_audit_event(
+            actor_id,
+            "availability",
+            actor_id,
+            "update",
+            vendor_id=vendor_id,
+            details=update_data,
+        )
+    except Exception:
+        pass
+
+    try:
+        res = await (
+            await get_db()
+        ).table("vendor_availability").select("*").eq(
+            "vendor_id", vendor_id
+        ).eq("member_id", actor_id).maybe_single().execute()
+        return res.data
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        return pg_select_vendor_availability(actor_id, vendor_id)
 
 
 

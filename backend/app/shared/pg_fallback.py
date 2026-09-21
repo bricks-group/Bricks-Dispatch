@@ -1276,6 +1276,18 @@ def pg_upsert_vendor_member(
 
 _VENDOR_AVAILABILITY_JSON_COLS = ("blocked_windows",)
 
+_VENDOR_AVAILABILITY_COLUMNS = (
+    "id",
+    "vendor_id",
+    "member_id",
+    "available",
+    "work_start",
+    "work_end",
+    "jobs_per_day",
+    "blocked_windows",
+    "updated_at",
+)
+
 _NOTIFICATIONS_COLUMNS = (
     "id",
     "title",
@@ -1299,6 +1311,192 @@ def _parse_json_field(row: dict, key: str, default: Any = None) -> None:
         except Exception:
             if default is not None:
                 row[key] = default
+
+
+def pg_select_vendor_availability(
+    member_id: str, vendor_id: str | None = None
+) -> Optional[dict]:
+    """SELECT one vendor_availability row by member_id (+ optional vendor_id).
+
+    Parses blocked_windows JSON. Returns None if missing or on failure.
+    """
+    mid = str(member_id or "").strip()
+    if not mid:
+        return None
+    vid = str(vendor_id).strip() if vendor_id is not None else ""
+    conn = _pg_connect()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            if vid:
+                cur.execute(
+                    "SELECT * FROM public.vendor_availability "
+                    "WHERE member_id = %s AND vendor_id = %s LIMIT 1",
+                    (mid, vid),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM public.vendor_availability "
+                    "WHERE member_id = %s LIMIT 1",
+                    (mid,),
+                )
+            rows = _rows_from_cursor(cur)
+            if not rows:
+                return None
+            row = rows[0]
+            for jk in _VENDOR_AVAILABILITY_JSON_COLS:
+                _parse_json_field(row, jk, default=[])
+            logger.warning(
+                "pg_select_vendor_availability ok member=%s vendor=%s",
+                mid[:12],
+                (vid or "-")[:20],
+            )
+            return row
+    except Exception as e:
+        logger.error(
+            "pg_select_vendor_availability failed member=%s: %s",
+            mid[:12],
+            str(e)[:300],
+        )
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_upsert_vendor_availability(row: dict) -> Optional[dict]:
+    """INSERT … ON CONFLICT (vendor_id, member_id) DO UPDATE for Fair-Use hours.
+
+    Whitelists real columns. Generates id + updated_at when missing. Casts
+    blocked_windows to jsonb. Returns the row after upsert (RETURNING * / re-select).
+    """
+    if not isinstance(row, dict) or not row:
+        return None
+
+    import uuid
+    from datetime import datetime, timezone
+
+    mid = str(row.get("member_id") or "").strip()
+    vid = str(row.get("vendor_id") or "").strip() or ORG_VENDOR_ID
+    if not mid:
+        return None
+
+    data = {k: row[k] for k in _VENDOR_AVAILABILITY_COLUMNS if k in row}
+    data["member_id"] = mid
+    data["vendor_id"] = vid
+    if not data.get("id"):
+        data["id"] = str(uuid.uuid4())
+    if not data.get("updated_at"):
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if "available" not in data:
+        data["available"] = True
+    if "work_start" not in data:
+        data["work_start"] = "08:00"
+    if "work_end" not in data:
+        data["work_end"] = "17:00"
+    if "jobs_per_day" not in data:
+        data["jobs_per_day"] = 4
+    if "blocked_windows" not in data:
+        data["blocked_windows"] = []
+
+    cols: list[str] = []
+    vals: list[Any] = []
+    placeholders: list[str] = []
+    for c in _VENDOR_AVAILABILITY_COLUMNS:
+        if c not in data:
+            continue
+        v = data[c]
+        if c == "jobs_per_day":
+            try:
+                v = int(v)
+            except Exception:
+                v = 4
+        elif c == "available":
+            v = bool(v)
+        elif c == "blocked_windows":
+            if not isinstance(v, str):
+                try:
+                    if isinstance(v, list):
+                        v = [
+                            (x.dict() if hasattr(x, "dict") else x)
+                            for x in v
+                        ]
+                    v = json.dumps(v if v is not None else [])
+                except Exception:
+                    v = "[]"
+            cols.append(c)
+            vals.append(v)
+            placeholders.append("%s::jsonb")
+            continue
+        cols.append(c)
+        vals.append(v)
+        placeholders.append("%s")
+
+    if "member_id" not in cols or "vendor_id" not in cols:
+        return None
+
+    update_cols = (
+        "available",
+        "work_start",
+        "work_end",
+        "jobs_per_day",
+        "blocked_windows",
+        "updated_at",
+    )
+    set_parts = [f"{c} = EXCLUDED.{c}" for c in update_cols if c in cols]
+    set_sql = ", ".join(set_parts) if set_parts else "updated_at = EXCLUDED.updated_at"
+
+    sql = (
+        f"INSERT INTO public.vendor_availability ({', '.join(cols)}) "
+        f"VALUES ({', '.join(placeholders)}) "
+        f"ON CONFLICT (vendor_id, member_id) DO UPDATE SET {set_sql} "
+        f"RETURNING *"
+    )
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning(
+            "pg_upsert_vendor_availability: no Postgres connection member=%s",
+            mid[:12],
+        )
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, vals)
+            rows = _rows_from_cursor(cur)
+            if not rows:
+                cur.execute(
+                    "SELECT * FROM public.vendor_availability "
+                    "WHERE member_id = %s AND vendor_id = %s LIMIT 1",
+                    (mid, vid),
+                )
+                rows = _rows_from_cursor(cur)
+            if not rows:
+                return None
+            out = rows[0]
+            for jk in _VENDOR_AVAILABILITY_JSON_COLS:
+                _parse_json_field(out, jk, default=[])
+            logger.warning(
+                "pg_upsert_vendor_availability ok member=%s vendor=%s",
+                mid[:12],
+                vid[:20],
+            )
+            return out
+    except Exception as e:
+        logger.error(
+            "pg_upsert_vendor_availability failed member=%s: %s",
+            mid[:12],
+            str(e)[:400],
+        )
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def pg_select_vendor_availability_by_member_ids(member_ids: list[str]) -> dict[str, dict]:
