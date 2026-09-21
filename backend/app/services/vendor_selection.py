@@ -40,14 +40,26 @@ async def _mark_dispatch_failed(job_id: str) -> None:
     Historical bug: failure wrote status=unassigned while the ops queue only
     listed dispatch_failed — paid first bookings with no eligible vendor were
     invisible to the recovery path.
+
+    Fair-Use: when PostgREST returns 402, write via Postgres (pg_update_job).
+    Never raises.
     """
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+
+    payload = {
+        "status": "dispatch_failed",
+        "assignee_id": "",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
     try:
-        await (await get_db()).table("jobs").update({
-            "status": "dispatch_failed",
-            "assignee_id": "",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", job_id).execute()
+        await (await get_db()).table("jobs").update(payload).eq("id", job_id).execute()
     except Exception as e:
+        if _is_rest_quota_error(e):
+            try:
+                if pg_update_job(job_id, payload):
+                    return
+            except Exception as pg_e:
+                logger.error(f"pg_update_job dispatch_failed failed for {job_id}: {pg_e}")
         logger.error(f"Failed to mark job {job_id} dispatch_failed: {e}")
 
 
@@ -70,7 +82,16 @@ async def _notify_owner_no_vendor(job: Job, error_message: str) -> None:
         ).maybe_single().execute()
         phone = ((res.data or {}).get("phone") or "").strip()
     except Exception as e:
-        logger.error(f"Owner phone lookup failed for job {job.id}: {e}")
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+
+        if _is_rest_quota_error(e):
+            try:
+                member = pg_select_vendor_member(KAM_MEMBER_ID) or {}
+                phone = (member.get("phone") or "").strip()
+            except Exception as pg_e:
+                logger.error(f"Owner phone pg fallback failed for job {job.id}: {pg_e}")
+        if not phone:
+            logger.error(f"Owner phone lookup failed for job {job.id}: {e}")
 
     if phone:
         try:
@@ -98,18 +119,30 @@ async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: s
     err = error_message or f"No eligible vendor found after {attempt_count} attempt(s)"
     await _mark_dispatch_failed(job.id)
 
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_ops_escalation
+
+    esc_row = {
+        "booking_id": job.booking_id,
+        "job_id": job.id,
+        "escalation_type": "no_vendor_available",
+        "attempt_count": attempt_count,
+        "error_message": err,
+        "status": "open",
+    }
     db = await get_db()
     try:
-        await db.table("ops_escalations").insert({
-            "booking_id": job.booking_id,
-            "job_id": job.id,
-            "escalation_type": "no_vendor_available",
-            "attempt_count": attempt_count,
-            "error_message": err,
-            "status": "open",
-        }).execute()
+        await db.table("ops_escalations").insert(esc_row).execute()
     except Exception as e:
-        logger.error(f"Failed to write ops_escalation for job {job.id}: {e}")
+        if _is_rest_quota_error(e):
+            try:
+                if pg_insert_ops_escalation(esc_row):
+                    pass
+                else:
+                    logger.error(f"pg_insert_ops_escalation returned False for job {job.id}")
+            except Exception as pg_e:
+                logger.error(f"pg_insert_ops_escalation failed for job {job.id}: {pg_e}")
+        else:
+            logger.error(f"Failed to write ops_escalation for job {job.id}: {e}")
 
     await _notify_owner_no_vendor(job, err)
 

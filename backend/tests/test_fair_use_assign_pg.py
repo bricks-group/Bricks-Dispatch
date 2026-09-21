@@ -275,3 +275,206 @@ def test_load_occupied_jobs_falls_back_to_pg_on_402(monkeypatch):
     assert pg_calls[0][1] == "2026-09-21"
     assert out["photog-1"][0]["id"] == "job-occ"
     assert out["photog-2"] == []
+
+
+def test_pg_insert_ops_escalation_whitelists_and_generates_id(monkeypatch):
+    cur = MagicMock()
+    cur.rowcount = 1
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    conn.close = MagicMock()
+    monkeypatch.setattr(pf, "_pg_connect", lambda: conn)
+
+    ok = pf.pg_insert_ops_escalation(
+        {
+            "booking_id": "book-1",
+            "job_id": "job-esc-1",
+            "escalation_type": "no_vendor_available",
+            "attempt_count": 2,
+            "error_message": "no eligible vendor",
+            "status": "open",
+            "evil_col": "dropme",
+        }
+    )
+    assert ok is True
+    sql = cur.execute.call_args[0][0]
+    params = cur.execute.call_args[0][1]
+    assert "INSERT INTO public.ops_escalations" in sql
+    assert "evil_col" not in sql
+    assert "booking_id" in sql and "job_id" in sql
+    assert "escalation_type" in sql and "attempt_count" in sql
+    assert "error_message" in sql and "status" in sql and "id" in sql
+    # id + created_at auto-generated; booking/job/type/attempt/err/status present
+    assert "book-1" in params
+    assert "job-esc-1" in params
+    assert "no_vendor_available" in params
+    assert 2 in params
+    assert "open" in params
+
+
+def test_pg_insert_ops_escalation_empty_row(monkeypatch):
+    monkeypatch.setattr(pf, "_pg_connect", lambda: (_ for _ in ()).throw(AssertionError("no connect")))
+    assert pf.pg_insert_ops_escalation({}) is False
+    assert pf.pg_insert_ops_escalation(None) is False  # type: ignore[arg-type]
+
+
+def test_mark_dispatch_failed_falls_back_to_pg_on_402(monkeypatch):
+    pg_calls = []
+
+    class Chain:
+        def update(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            assert name == "jobs"
+            return Chain()
+
+    monkeypatch.setattr(vs, "get_db", AsyncMock(return_value=Db()))
+    monkeypatch.setattr(
+        "app.shared.pg_fallback.pg_update_job",
+        lambda jid, fields: pg_calls.append((jid, fields)) or True,
+    )
+
+    asyncio.run(vs._mark_dispatch_failed("job-df-1"))
+    assert len(pg_calls) == 1
+    assert pg_calls[0][0] == "job-df-1"
+    assert pg_calls[0][1]["status"] == "dispatch_failed"
+    assert pg_calls[0][1]["assignee_id"] == ""
+    assert "updated_at" in pg_calls[0][1]
+
+
+def test_mark_dispatch_failed_never_raises_on_pg_miss(monkeypatch):
+    class Chain:
+        def update(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            return Chain()
+
+    monkeypatch.setattr(vs, "get_db", AsyncMock(return_value=Db()))
+    monkeypatch.setattr(
+        "app.shared.pg_fallback.pg_update_job",
+        lambda *_a, **_k: False,
+    )
+    # Must not raise
+    asyncio.run(vs._mark_dispatch_failed("job-df-2"))
+
+
+def test_escalate_no_vendor_falls_back_to_pg_on_402(monkeypatch):
+    esc_calls = []
+    mark_calls = []
+    notify_calls = []
+
+    class Chain:
+        def insert(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            assert name == "ops_escalations"
+            return Chain()
+
+    job = MagicMock()
+    job.id = "job-esc-2"
+    job.booking_id = "book-2"
+    job.address = "1 Test St"
+    job.package_name = "Essentials"
+    job.min_tier_required = 1
+
+    monkeypatch.setattr(vs, "get_db", AsyncMock(return_value=Db()))
+    monkeypatch.setattr(
+        vs,
+        "_mark_dispatch_failed",
+        AsyncMock(side_effect=lambda jid: mark_calls.append(jid)),
+    )
+    monkeypatch.setattr(
+        vs,
+        "_notify_owner_no_vendor",
+        AsyncMock(side_effect=lambda j, err: notify_calls.append((j.id, err))),
+    )
+    monkeypatch.setattr(
+        "app.shared.pg_fallback.pg_insert_ops_escalation",
+        lambda row: esc_calls.append(dict(row)) or True,
+    )
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+    asyncio.run(vs._escalate_no_vendor(job, 3, "no eligible vendor"))
+    assert mark_calls == ["job-esc-2"]
+    assert notify_calls and notify_calls[0][0] == "job-esc-2"
+    assert len(esc_calls) == 1
+    assert esc_calls[0]["job_id"] == "job-esc-2"
+    assert esc_calls[0]["booking_id"] == "book-2"
+    assert esc_calls[0]["escalation_type"] == "no_vendor_available"
+    assert esc_calls[0]["attempt_count"] == 3
+    assert esc_calls[0]["status"] == "open"
+    assert "no eligible vendor" in esc_calls[0]["error_message"]
+
+
+def test_notify_owner_phone_falls_back_to_pg_on_402(monkeypatch):
+    pg_calls = []
+    sms_calls = []
+
+    class Chain:
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def maybe_single(self):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            assert name == "vendor_members"
+            return Chain()
+
+    job = MagicMock()
+    job.id = "job-sms-1"
+    job.address = "42 King St"
+    job.scheduled_date = "2026-09-21"
+    job.booking_id = "book-sms"
+
+    monkeypatch.setattr(vs, "get_db", AsyncMock(return_value=Db()))
+    monkeypatch.setattr(
+        "app.shared.pg_fallback.pg_select_vendor_member",
+        lambda mid, email="": pg_calls.append(mid) or {"id": mid, "phone": "+15551234567"},
+    )
+    monkeypatch.setattr(
+        "app.notifications.send_dispatch_sms",
+        lambda phone, body: sms_calls.append((phone, body)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.services.notifications.create_notification",
+        AsyncMock(return_value=None),
+        raising=False,
+    )
+
+    asyncio.run(vs._notify_owner_no_vendor(job, "no eligible vendor"))
+    assert pg_calls == [KAM_MEMBER_ID]
+    assert sms_calls and sms_calls[0][0] == "+15551234567"
+    assert "42 King St" in sms_calls[0][1]
+

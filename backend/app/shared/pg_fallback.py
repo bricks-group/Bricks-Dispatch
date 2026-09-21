@@ -748,6 +748,109 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
 
 
 
+def pg_insert_ops_escalation(row: dict) -> bool:
+    """INSERT public.ops_escalations via Postgres when PostgREST is Fair-Use 402.
+
+    Columns match _escalate_no_vendor: booking_id, job_id, escalation_type,
+    attempt_count, error_message, status. Generates uuid id + created_at when
+    missing. Returns True when a row was inserted.
+    """
+    if not isinstance(row, dict) or not row:
+        return False
+
+    import uuid
+    from datetime import datetime, timezone
+
+    allowed = {
+        "id",
+        "booking_id",
+        "job_id",
+        "escalation_type",
+        "attempt_count",
+        "error_message",
+        "status",
+        "created_at",
+        "resolved_at",
+        "resolved_by",
+        "notes",
+    }
+    data = {k: v for k, v in row.items() if k in allowed}
+    if not data.get("escalation_type"):
+        data["escalation_type"] = "no_vendor_available"
+    if not data.get("status"):
+        data["status"] = "open"
+    if data.get("attempt_count") is None:
+        data["attempt_count"] = 1
+    else:
+        try:
+            data["attempt_count"] = int(data["attempt_count"])
+        except Exception:
+            data["attempt_count"] = 1
+    if not data.get("id"):
+        data["id"] = str(uuid.uuid4())
+    if not data.get("created_at"):
+        data["created_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Prefer stable column order for readable SQL/logs
+    order = [
+        "id",
+        "booking_id",
+        "job_id",
+        "escalation_type",
+        "attempt_count",
+        "error_message",
+        "status",
+        "created_at",
+        "resolved_at",
+        "resolved_by",
+        "notes",
+    ]
+    cols = [c for c in order if c in data]
+    vals = [data[c] for c in cols]
+    if "escalation_type" not in cols or "status" not in cols:
+        return False
+
+    placeholders = ", ".join(["%s"] * len(cols))
+    sql = (
+        f"INSERT INTO public.ops_escalations ({', '.join(cols)}) "
+        f"VALUES ({placeholders})"
+    )
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning(
+            "pg_insert_ops_escalation: no Postgres connection job=%s",
+            str(data.get("job_id") or "")[:12],
+        )
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, vals)
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_insert_ops_escalation ok id=%s job=%s type=%s",
+                    data.get("id"),
+                    data.get("job_id"),
+                    data.get("escalation_type"),
+                )
+            return ok
+    except Exception as e:
+        logger.error(
+            "pg_insert_ops_escalation failed job=%s: %s",
+            data.get("job_id"),
+            str(e)[:400],
+        )
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+
+
 # Real public.uploads columns only — media_type / requires_staging are NOT DB cols.
 _UPLOADS_COLUMNS = (
     "id",
