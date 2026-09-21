@@ -183,3 +183,95 @@ def test_assign_job_to_member_manual_pg_on_402(monkeypatch):
     assert out["assignee_id"] == KAM_MEMBER_ID
     assert out["status"] == "assigned"
     assert out.get("assignee_name") == "Kam"
+
+
+def test_pg_select_occupied_jobs_empty_ids(monkeypatch):
+    monkeypatch.setattr(pf, "_pg_connect", lambda: (_ for _ in ()).throw(AssertionError("no connect")))
+    assert pf.pg_select_occupied_jobs_by_assignees([]) == {}
+    assert pf.pg_select_occupied_jobs_by_assignees(["", "  "]) == {}
+
+
+def test_pg_select_occupied_jobs_passes_scheduled_date(monkeypatch):
+    cur = MagicMock()
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    cur.description = [
+        ("id",),
+        ("assignee_id",),
+        ("scheduled_date",),
+        ("status",),
+    ]
+    cur.fetchall.return_value = [
+        ("job-a", "photog-1", "2026-09-20", "assigned"),
+    ]
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    conn.close = MagicMock()
+    monkeypatch.setattr(pf, "_pg_connect", lambda: conn)
+
+    out = pf.pg_select_occupied_jobs_by_assignees(
+        ["photog-1", "photog-2"], scheduled_date="2026-09-20T15:00:00Z"
+    )
+    assert "photog-1" in out
+    assert out["photog-1"][0]["id"] == "job-a"
+    sql = cur.execute.call_args[0][0]
+    params = cur.execute.call_args[0][1]
+    assert "assignee_id = ANY(%s)" in sql
+    assert "status = ANY(%s)" in sql
+    assert "scheduled_date = %s" in sql
+    assert params[0] == ["photog-1", "photog-2"]
+    assert params[1] == ["assigned", "in_progress", "pending_assignment", "completed"]
+    assert params[2] == "2026-09-20"
+
+
+def test_load_occupied_jobs_falls_back_to_pg_on_402(monkeypatch):
+    pg_calls = []
+
+    class Chain:
+        def select(self, *_a, **_k):
+            return self
+
+        def in_(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            assert name == "jobs"
+            return Chain()
+
+    monkeypatch.setattr(
+        "app.shared.pg_fallback.pg_select_occupied_jobs_by_assignees",
+        lambda ids, scheduled_date=None: pg_calls.append((list(ids), scheduled_date))
+        or {
+            "photog-1": [
+                {
+                    "id": "job-occ",
+                    "assignee_id": "photog-1",
+                    "scheduled_date": "2026-09-21",
+                    "status": "assigned",
+                }
+            ]
+        },
+    )
+
+    out = asyncio.run(
+        vs.load_occupied_jobs_by_vendor(
+            Db(),
+            ["photog-1", "photog-2"],
+            scheduled_date="2026-09-21",
+        )
+    )
+    assert len(pg_calls) == 1
+    assert pg_calls[0][0] == ["photog-1", "photog-2"]
+    assert pg_calls[0][1] == "2026-09-21"
+    assert out["photog-1"][0]["id"] == "job-occ"
+    assert out["photog-2"] == []

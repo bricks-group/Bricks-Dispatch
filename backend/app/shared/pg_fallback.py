@@ -513,6 +513,82 @@ def pg_select_jobs_for_assignees(
             pass
 
 
+def pg_select_occupied_jobs_by_assignees(
+    assignee_ids: list[str],
+    scheduled_date: Optional[str] = None,
+) -> dict[str, list[dict]]:
+    """Jobs on assignees' books for auto-assign conflict/travel (Fair-Use PG path).
+
+    Groups by assignee_id. Returns {} on connect/query failure so callers can soft-fail.
+    """
+    ids = [str(a).strip() for a in (assignee_ids or []) if str(a).strip()][:80]
+    if not ids:
+        return {}
+    conn = _pg_connect()
+    if not conn:
+        return {}
+
+    cols_full = (
+        "id, assignee_id, scheduled_date, time_window_start, time_window_end, "
+        "confirmed_arrive_at, selected_slot_start, selected_slot_end, "
+        "estimated_duration_min, lat, lng, status, address, city"
+    )
+    cols_slim = (
+        "id, assignee_id, scheduled_date, time_window_start, time_window_end, "
+        "lat, lng, status, address, city"
+    )
+    statuses = ["assigned", "in_progress", "pending_assignment", "completed"]
+    date_s = str(scheduled_date)[:10] if scheduled_date else None
+
+    def _query(cur, col_sql: str) -> list[dict]:
+        params: list[Any] = [ids, statuses]
+        where = "assignee_id = ANY(%s) AND status = ANY(%s)"
+        if date_s:
+            where += " AND scheduled_date = %s"
+            params.append(date_s)
+        cur.execute(
+            f"SELECT {col_sql} FROM public.jobs WHERE {where} LIMIT 400",
+            params,
+        )
+        return _rows_from_cursor(cur)
+
+    try:
+        with conn.cursor() as cur:
+            try:
+                rows = _query(cur, cols_full)
+            except Exception as col_err:
+                logger.warning(
+                    "pg occupied jobs full cols failed, retry slim: %s",
+                    str(col_err)[:200],
+                )
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                rows = _query(cur, cols_slim)
+            out: dict[str, list[dict]] = {}
+            for row in rows:
+                aid = row.get("assignee_id")
+                if aid:
+                    out.setdefault(str(aid), []).append(row)
+            logger.warning(
+                "pg occupied jobs fallback ok n=%s assignees=%s date=%s",
+                sum(len(v) for v in out.values()),
+                ids[:3],
+                date_s,
+            )
+            return out
+    except Exception as e:
+        logger.error("pg occupied jobs failed: %s", str(e)[:300])
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+
 def pg_select_job_by_id(job_id: str) -> Optional[dict]:
     """Fetch one job by id via Postgres or OS proxy."""
     jid = str(job_id or "").strip()

@@ -173,6 +173,21 @@ async def load_occupied_jobs_by_vendor(
             elif aid:
                 occupied.setdefault(aid, []).append(row)
     except Exception as e:
+        # Fair-Use 402: PostgREST blocked — read conflicts via Postgres.
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_occupied_jobs_by_assignees,
+        )
+        if _is_rest_quota_error(e):
+            pg_map = pg_select_occupied_jobs_by_assignees(
+                ids[:80], scheduled_date=scheduled_date
+            )
+            for aid, jobs in (pg_map or {}).items():
+                if aid in occupied:
+                    occupied[aid].extend(jobs)
+                elif aid:
+                    occupied.setdefault(aid, []).extend(jobs)
+            return occupied
         # Soft-drop missing columns (selected_slot_*, estimated_duration_min)
         msg = str(e)
         miss = _missing_column(msg, [
