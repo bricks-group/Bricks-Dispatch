@@ -536,6 +536,35 @@ def test_rebuild_floorplan_from_stations_uses_tracer_no_stitch():
         ) = orig
 
 
+
+def test_upload_floorplan_png_refuses_stub():
+    """69-byte 1×1 PNG stubs must not be marked delivered (OS public host 404s them)."""
+    import asyncio
+    import app.services.capture_worker as cw
+
+    stub = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de0000000c49444154789c63f8cfc0000003010100c9fe92ef0000000049454e44ae426082")
+    assert len(stub) == 69
+    assert len(stub) < cw.MIN_FLOORPLAN_PNG_BYTES
+
+    async def boom_upload(*a, **k):
+        raise AssertionError("stub must not reach upload_bytes")
+
+    orig = cw.upload_bytes
+    cw.upload_bytes = boom_upload
+    try:
+        try:
+            asyncio.run(cw._upload_floorplan_png(
+                {"id": "job1"},
+                {"id": "sess1", "output_storage_path": "visits/job1/floorplan-sess1.png"},
+                stub,
+            ))
+            assert False, "expected CaptureWorkerError"
+        except cw.CaptureWorkerError as e:
+            assert "stub" in str(e).lower() or "too small" in str(e).lower()
+    finally:
+        cw.upload_bytes = orig
+
+
 def test_rebuild_floorplan_fails_honestly_without_input():
     import asyncio
     import app.services.capture_worker as cw

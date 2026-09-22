@@ -483,8 +483,20 @@ async def rebuild_tour_from_equirects(db, job: dict, session: dict) -> str:
     return await _publish_tour_player(job, session, compiled, upload_scenes=False)
 
 
+# Match OS public floorplan host: tiny Blob stubs (e.g. 69-byte 1×1 PNG) are not deliverables.
+MIN_FLOORPLAN_PNG_BYTES = 200
+
+
 async def _upload_floorplan_png(job: dict, session: dict, png: bytes) -> str:
-    """Write PNG to the delivered path when present, else the standard visit path."""
+    """Write PNG to the delivered path when present, else the standard visit path.
+
+    Refuses stub/empty PNGs so listing + Companion never get a "delivered"
+    floor plan that 404s on /api/public/floorplans (Fair-Use Blob stubs).
+    """
+    if not png or len(png) < MIN_FLOORPLAN_PNG_BYTES:
+        raise CaptureWorkerError(
+            f"Floor-plan PNG too small ({0 if not png else len(png)} bytes) — refusing stub deliver"
+        )
     sid = session["id"]
     job_id = job["id"]
     candidates = []
