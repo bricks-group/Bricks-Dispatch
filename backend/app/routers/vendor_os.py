@@ -1647,6 +1647,46 @@ async def get_audit_events(
     return paginated_response(items, total, page, page_size)
 
 
+async def _refresh_decline_rate(db, assignee_id: str, now: str, job_id: str) -> None:
+    """Recompute rolling 30-day decline_rate; REST→PG under Fair Use. Soft-fail."""
+    try:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_jobs_for_assignees,
+            pg_update_vendor_member_fields,
+        )
+        _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        recent_jobs: list = []
+        try:
+            res_recent = await db.table("jobs").select("id, status, created_at").eq(
+                "assignee_id", assignee_id
+            ).gte("created_at", _thirty_days_ago).execute()
+            recent_jobs = res_recent.data or []
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            jobs, _total = pg_select_jobs_for_assignees(
+                [assignee_id], status=None, limit=500, offset=0
+            )
+            recent_jobs = [
+                j for j in (jobs or [])
+                if str(j.get("created_at") or "") >= _thirty_days_ago
+            ]
+        recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
+        total_recent = len(recent_jobs)
+        new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
+        fields = {"decline_rate": new_rate, "updated_at": now}
+        try:
+            await db.table("vendor_members").update(fields).eq("id", assignee_id).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            if not pg_update_vendor_member_fields(assignee_id, fields):
+                logger.error("decline_rate PG update failed for job %s", job_id)
+    except Exception as e:
+        logger.error(f"decline_rate update failed for job {job_id}: {e}")
+
+
 @router.put("/jobs/{job_id}/status")
 async def update_vendor_job_status(
     job_id: str,
@@ -1718,42 +1758,37 @@ async def update_vendor_job_status(
                 logger.error(f"Post-production trigger failed for job {job_id}: {e}")
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
-        try:
-            assignee_id = job.get("assignee_id")
-            if assignee_id and assignee_id != "default_user":
-                # Rolling 30-day decline rate (per IC agreement §40% threshold).
-                # Denominator = ALL jobs offered to this vendor in the last 30 days,
-                # regardless of current status (includes in-progress, assigned, completed).
-                # Using only terminal states in the denominator overstates the rate —
-                # a single decline would show 100% when active jobs are excluded.
-                # Filter by created_at (when the offer was made), not updated_at.
-                _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-                res_recent = await db.table("jobs").select("id, status").eq(
-                    "assignee_id", assignee_id
-                ).gte("created_at", _thirty_days_ago).execute()
-                recent_jobs = res_recent.data or []
-                recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
-                total_recent = len(recent_jobs)
-                new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
-                await db.table("vendor_members").update({
-                    "decline_rate": new_rate,
-                    "updated_at": now,
-                }).eq("id", assignee_id).execute()
-        except Exception as e:
-            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+        # Rolling 30-day decline rate (per IC agreement §40% threshold).
+        # Denominator = ALL jobs offered to this vendor in the last 30 days.
+        # REST→PG under Fair Use; soft-fail — never block the status response.
+        assignee_id = job.get("assignee_id")
+        if assignee_id and assignee_id != "default_user":
+            await _refresh_decline_rate(db, assignee_id, now, job_id)
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         try:
+            from ..shared.pg_fallback import (
+                _is_rest_quota_error,
+                pg_select_vendor_member,
+                pg_update_vendor_member_fields,
+            )
             assignee_id = job.get("assignee_id")
             if assignee_id and assignee_id != "default_user":
                 time_end = job.get("time_window_end", "")
                 sched_date = job.get("scheduled_date", "")
-                res_m = await db.table("vendor_members").select(
-                    "total_assignments, on_time_rate"
-                ).eq("id", assignee_id).maybe_single().execute()
-                if res_m.data:
-                    prev_total = res_m.data.get("total_assignments") or 0
-                    prev_rate = res_m.data.get("on_time_rate") or 1.0
+                member_row = None
+                try:
+                    res_m = await db.table("vendor_members").select(
+                        "total_assignments, on_time_rate"
+                    ).eq("id", assignee_id).maybe_single().execute()
+                    member_row = res_m.data
+                except Exception as e:
+                    if not _is_rest_quota_error(e):
+                        raise
+                    member_row = pg_select_vendor_member(assignee_id) or None
+                if member_row:
+                    prev_total = member_row.get("total_assignments") or 0
+                    prev_rate = member_row.get("on_time_rate") or 1.0
                     new_total = prev_total + 1
                     update_fields: dict = {"total_assignments": new_total, "updated_at": now}
                     if sched_date and time_end:
@@ -1781,7 +1816,13 @@ async def update_vendor_job_status(
                         prev_on_time = round(prev_rate * prev_total)
                         new_on_time = prev_on_time + (1 if was_on_time else 0)
                         update_fields["on_time_rate"] = round(new_on_time / new_total, 4)
-                    await db.table("vendor_members").update(update_fields).eq("id", assignee_id).execute()
+                    try:
+                        await db.table("vendor_members").update(update_fields).eq("id", assignee_id).execute()
+                    except Exception as e:
+                        if not _is_rest_quota_error(e):
+                            raise
+                        if not pg_update_vendor_member_fields(assignee_id, update_fields):
+                            logger.error("on_time_rate PG update failed for job %s", job_id)
         except Exception as e:
             logger.error(f"on_time_rate update failed for job {job_id}: {e}")
 
@@ -1828,20 +1869,16 @@ async def watch_job_action(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """Called by the watchOS app to accept, decline, mark on-way, or mark arrived."""
+    """Called by the watchOS / GO app to accept, decline, mark on-way, or mark arrived."""
     if body.action not in _WATCH_ACTION_STATUS_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown action '{body.action}'")
 
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
 
     db = await get_db()
-    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = res_job.data
+    # Fair-Use: load via _load_visible_job (REST→PG) instead of raw PostgREST.
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
     assignee_id = job.get("assignee_id")
     if assignee_id != actor_id:
         raise HTTPException(status_code=403, detail="You are not the assigned photographer for this job")
@@ -1856,7 +1893,18 @@ async def watch_job_action(
         return {"status": "no_change", "job_id": job_id, "current_status": old_status}
 
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
+    status_fields = {"status": new_status, "updated_at": now}
+    try:
+        await db.table("jobs").update(status_fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, status_fields):
+            raise HTTPException(
+                status_code=503,
+                detail="Job status update unavailable (Fair Use); try again shortly",
+            )
 
     if new_status == "in_progress" and old_status != "in_progress":
         try:
@@ -1866,16 +1914,7 @@ async def watch_job_action(
             logger.error(f"En-route notification failed for job {job_id}: {e}")
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
-        try:
-            _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-            res_recent = await db.table("jobs").select("id, status").eq("assignee_id", actor_id).gte("created_at", _thirty_days_ago).execute()
-            recent_jobs = res_recent.data or []
-            recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
-            total_recent = len(recent_jobs)
-            new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
-            await db.table("vendor_members").update({"decline_rate": new_rate, "updated_at": now}).eq("id", actor_id).execute()
-        except Exception as e:
-            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+        await _refresh_decline_rate(db, actor_id, now, job_id)
 
     booking_id = job.get("booking_id")
     if booking_id:

@@ -747,6 +747,65 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
             pass
 
 
+def pg_update_vendor_member_fields(member_id: str, fields: dict) -> bool:
+    """UPDATE public.vendor_members SET … via Postgres when PostgREST is Fair-Use 402.
+
+    Whitelist: decline_rate, on_time_rate, total_assignments, updated_at.
+    Returns True when at least one row was updated.
+    """
+    mid = str(member_id or "").strip()
+    if not mid or not isinstance(fields, dict) or not fields:
+        return False
+    allowed = {
+        "decline_rate",
+        "on_time_rate",
+        "total_assignments",
+        "updated_at",
+    }
+    cols: list[tuple[str, Any]] = []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        cols.append((k, v))
+    if not cols:
+        return False
+    if "updated_at" not in {c[0] for c in cols}:
+        from datetime import datetime, timezone
+        cols.append(("updated_at", datetime.now(timezone.utc).isoformat()))
+
+    set_parts = [f"{c} = %s" for c, _v in cols]
+    vals: list[Any] = [v for _c, v in cols]
+    vals.append(mid)
+    set_sql = ", ".join(set_parts)
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_update_vendor_member_fields: no Postgres connection id=%s", mid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE public.vendor_members SET {set_sql} WHERE id = %s",
+                vals,
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_update_vendor_member_fields ok id=%s fields=%s",
+                    mid,
+                    [c[0] for c in cols],
+                )
+            return ok
+    except Exception as e:
+        logger.error("pg_update_vendor_member_fields failed id=%s: %s", mid, str(e)[:300])
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 
 def pg_insert_ops_escalation(row: dict) -> bool:
     """INSERT public.ops_escalations via Postgres when PostgREST is Fair-Use 402.
