@@ -683,6 +683,8 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
         "estimated_duration_min",
         "selected_slot_start",
         "selected_slot_end",
+        "payout_amount",
+        "payout_status",
     }
     json_cols = {"checklist"}
     cols: list[tuple[str, Any]] = []
@@ -2376,6 +2378,558 @@ def pg_mark_ops_escalations_manual_retry(job_id: str) -> int:
             str(e)[:400],
         )
         return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+
+def pg_select_vendor_payout_rates() -> list[dict]:
+    """Load vendor_payout_rates rows via Postgres when PostgREST is Fair-Use 402."""
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_vendor_payout_rates: no Postgres connection")
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT package_id, sqft_tier, vendor_tier, amount_cents "
+                "FROM public.vendor_payout_rates"
+            )
+            rows = _rows_from_cursor(cur)
+            logger.warning("pg_select_vendor_payout_rates ok n=%s", len(rows))
+            return rows
+    except Exception as e:
+        logger.error("pg_select_vendor_payout_rates failed: %s", str(e)[:300])
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_payout_by_job_id(job_id: str) -> Optional[dict]:
+    """Fetch one payouts row by job_id via Postgres."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_payout_by_job_id: no Postgres connection")
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM public.payouts WHERE job_id = %s LIMIT 1",
+                (jid,),
+            )
+            row = _row_from_cursor(cur)
+            if row:
+                logger.warning("pg_select_payout_by_job_id ok job=%s id=%s", jid[:12], row.get("id"))
+            return row
+    except Exception as e:
+        logger.error("pg_select_payout_by_job_id failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_insert_payout(row: dict) -> Optional[dict]:
+    """INSERT public.payouts via Postgres. Generates text uuid id when missing."""
+    if not isinstance(row, dict) or not row:
+        return None
+    import uuid
+    from datetime import datetime, timezone
+
+    allowed = {
+        "id",
+        "job_id",
+        "vendor_id",
+        "contractor_id",
+        "amount",
+        "status",
+        "stripe_transfer_id",
+        "created_at",
+        "net_amount",
+        "trip_fees_total",
+        "hst_paid_cents",
+        "contractor_hst_rate",
+        "paid_at",
+    }
+    data = {k: row[k] for k in allowed if k in row}
+    if not data.get("job_id") or data.get("amount") is None or not data.get("vendor_id"):
+        return None
+    if not data.get("id"):
+        data["id"] = str(uuid.uuid4())
+    if not data.get("created_at"):
+        data["created_at"] = datetime.now(timezone.utc).isoformat()
+    if not data.get("status"):
+        data["status"] = "pending"
+
+    cols = list(data.keys())
+    vals = [data[c] for c in cols]
+    placeholders = ", ".join(["%s"] * len(cols))
+    col_sql = ", ".join(cols)
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_insert_payout: no Postgres connection")
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO public.payouts ({col_sql}) VALUES ({placeholders}) RETURNING *",
+                vals,
+            )
+            out = _row_from_cursor(cur)
+            if out:
+                logger.warning("pg_insert_payout ok id=%s job=%s", out.get("id"), out.get("job_id"))
+            return out
+    except Exception as e:
+        logger.error("pg_insert_payout failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_update_payout(payout_id: str, fields: dict) -> bool:
+    """UPDATE public.payouts SET … via Postgres when PostgREST is Fair-Use 402."""
+    pid = str(payout_id or "").strip()
+    if not pid or not isinstance(fields, dict) or not fields:
+        return False
+    allowed = {
+        "amount",
+        "status",
+        "stripe_transfer_id",
+        "contractor_id",
+        "net_amount",
+        "trip_fees_total",
+        "hst_paid_cents",
+        "contractor_hst_rate",
+        "paid_at",
+    }
+    cols: list[tuple[str, Any]] = [(k, v) for k, v in fields.items() if k in allowed]
+    if not cols:
+        return False
+    set_parts = [f"{c} = %s" for c, _v in cols]
+    vals: list[Any] = [v for _c, v in cols]
+    vals.append(pid)
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_update_payout: no Postgres connection id=%s", pid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE public.payouts SET {', '.join(set_parts)} WHERE id = %s",
+                vals,
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_update_payout ok id=%s fields=%s",
+                    pid,
+                    [c[0] for c in cols],
+                )
+            return ok
+    except Exception as e:
+        logger.error("pg_update_payout failed id=%s: %s", pid, str(e)[:300])
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_trip_fees(
+    member_id: str,
+    *,
+    status: str = "pending",
+    created_at_lte: Optional[str] = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Select agent_noshow_trip_fees for a member via Postgres."""
+    mid = str(member_id or "").strip()
+    if not mid:
+        return []
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_trip_fees: no Postgres connection")
+        return []
+    try:
+        with conn.cursor() as cur:
+            params: list[Any] = [mid, status]
+            where = "member_id = %s AND status = %s"
+            if created_at_lte:
+                where += " AND created_at <= %s::timestamptz"
+                params.append(created_at_lte)
+            params.append(max(1, min(int(limit or 200), 500)))
+            cur.execute(
+                f"SELECT id, amount_cents, status, created_at, member_id, job_id "
+                f"FROM public.agent_noshow_trip_fees WHERE {where} "
+                f"ORDER BY created_at ASC LIMIT %s",
+                params,
+            )
+            rows = _rows_from_cursor(cur)
+            # Normalize id to str (uuid)
+            for r in rows:
+                if r.get("id") is not None:
+                    r["id"] = str(r["id"])
+            logger.warning(
+                "pg_select_trip_fees ok n=%s member=%s status=%s",
+                len(rows),
+                mid[:12],
+                status,
+            )
+            return rows
+    except Exception as e:
+        logger.error("pg_select_trip_fees failed: %s", str(e)[:300])
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_update_trip_fees_by_ids(fee_ids: list, fields: dict) -> bool:
+    """UPDATE agent_noshow_trip_fees for a list of ids via Postgres."""
+    ids = [str(i).strip() for i in (fee_ids or []) if str(i).strip()]
+    if not ids or not isinstance(fields, dict) or not fields:
+        return False
+    allowed = {
+        "status",
+        "paid_via_payout_id",
+        "paid_at",
+    }
+    cols: list[tuple[str, Any]] = [(k, v) for k, v in fields.items() if k in allowed]
+    if not cols:
+        return False
+    set_parts = [f"{c} = %s" for c, _v in cols]
+    vals: list[Any] = [v for _c, v in cols]
+    vals.append(ids)
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_update_trip_fees_by_ids: no Postgres connection")
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE public.agent_noshow_trip_fees SET {', '.join(set_parts)} "
+                f"WHERE id = ANY(%s::uuid[])",
+                vals,
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_update_trip_fees_by_ids ok n=%s fields=%s",
+                    cur.rowcount,
+                    [c[0] for c in cols],
+                )
+            return ok
+    except Exception as e:
+        logger.error("pg_update_trip_fees_by_ids failed: %s", str(e)[:300])
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_update_trip_fees_for_member(
+    member_id: str,
+    *,
+    status_from: str,
+    fields: dict,
+    created_at_lte: Optional[str] = None,
+) -> bool:
+    """UPDATE trip fees for member matching status (and optional created_at cap)."""
+    mid = str(member_id or "").strip()
+    if not mid or not isinstance(fields, dict) or not fields:
+        return False
+    allowed = {
+        "status",
+        "paid_via_payout_id",
+        "paid_at",
+    }
+    cols: list[tuple[str, Any]] = [(k, v) for k, v in fields.items() if k in allowed]
+    if not cols:
+        return False
+    set_parts = [f"{c} = %s" for c, _v in cols]
+    vals: list[Any] = [v for _c, v in cols]
+    vals.extend([mid, status_from])
+    where = "member_id = %s AND status = %s"
+    if created_at_lte:
+        where += " AND created_at <= %s::timestamptz"
+        vals.append(created_at_lte)
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_update_trip_fees_for_member: no Postgres connection")
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE public.agent_noshow_trip_fees SET {', '.join(set_parts)} WHERE {where}",
+                vals,
+            )
+            n = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            logger.warning(
+                "pg_update_trip_fees_for_member ok member=%s n=%s",
+                mid[:12],
+                n,
+            )
+            return True  # soft-ok even if 0 rows (idempotent)
+    except Exception as e:
+        logger.error("pg_update_trip_fees_for_member failed: %s", str(e)[:300])
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_list_payouts(
+    *,
+    vendor_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """List payouts via Postgres for admin list endpoint under Fair Use."""
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_list_payouts: no Postgres connection")
+        return []
+    try:
+        with conn.cursor() as cur:
+            where_parts: list[str] = []
+            params: list[Any] = []
+            if vendor_id:
+                where_parts.append("vendor_id = %s")
+                params.append(vendor_id)
+            if status:
+                where_parts.append("status = %s")
+                params.append(status)
+            where = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+            params.extend([limit, offset])
+            cur.execute(
+                f"SELECT * FROM public.payouts{where} "
+                f"ORDER BY created_at DESC NULLS LAST LIMIT %s OFFSET %s",
+                params,
+            )
+            rows = _rows_from_cursor(cur)
+            logger.warning("pg_list_payouts ok n=%s", len(rows))
+            return rows
+    except Exception as e:
+        logger.error("pg_list_payouts failed: %s", str(e)[:300])
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_payouts_status_amounts() -> list[dict]:
+    """Select status+amount for all payouts (summary) via Postgres."""
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_payouts_status_amounts: no Postgres connection")
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, amount FROM public.payouts")
+            rows = _rows_from_cursor(cur)
+            logger.warning("pg_select_payouts_status_amounts ok n=%s", len(rows))
+            return rows
+    except Exception as e:
+        logger.error("pg_select_payouts_status_amounts failed: %s", str(e)[:300])
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_contractor_by_vendor_id(vendor_id: str) -> Optional[dict]:
+    """Fetch contractors row by vendor_id via Postgres."""
+    vid = str(vendor_id or "").strip()
+    if not vid:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_contractor_by_vendor_id: no Postgres connection")
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, stripe_account_id, connect_status, vendor_id, full_name, email "
+                "FROM public.contractors WHERE vendor_id = %s LIMIT 1",
+                (vid,),
+            )
+            row = _row_from_cursor(cur)
+            if row and row.get("id") is not None:
+                row["id"] = str(row["id"])
+            return row
+    except Exception as e:
+        logger.error("pg_select_contractor_by_vendor_id failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_contractor_by_stripe_account_id(stripe_account_id: str) -> Optional[dict]:
+    """Fetch contractors.id by stripe_account_id via Postgres."""
+    aid = str(stripe_account_id or "").strip()
+    if not aid:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_contractor_by_stripe_account_id: no Postgres connection")
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, stripe_account_id, connect_status, vendor_id "
+                "FROM public.contractors WHERE stripe_account_id = %s LIMIT 1",
+                (aid,),
+            )
+            row = _row_from_cursor(cur)
+            if row and row.get("id") is not None:
+                row["id"] = str(row["id"])
+            return row
+    except Exception as e:
+        logger.error("pg_select_contractor_by_stripe_account_id failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_insert_contractor(row: dict) -> Optional[dict]:
+    """INSERT public.contractors via Postgres for Connect onboarding under Fair Use."""
+    if not isinstance(row, dict) or not row:
+        return None
+    import uuid
+    from datetime import datetime, timezone
+
+    allowed = {
+        "id",
+        "vendor_id",
+        "full_name",
+        "email",
+        "stripe_account_id",
+        "connect_status",
+        "phone",
+        "tier",
+        "status",
+        "created_at",
+    }
+    data = {k: row[k] for k in allowed if k in row and row[k] is not None}
+    if not data.get("vendor_id") or not data.get("full_name") or not data.get("email"):
+        return None
+    if not data.get("id"):
+        data["id"] = str(uuid.uuid4())
+    if not data.get("created_at"):
+        data["created_at"] = datetime.now(timezone.utc).isoformat()
+    if "connect_status" not in data:
+        data["connect_status"] = "not_connected"
+    if "status" not in data:
+        data["status"] = "active"
+    if "tier" not in data:
+        data["tier"] = 1
+
+    cols = list(data.keys())
+    vals = [data[c] for c in cols]
+    placeholders = ", ".join(["%s"] * len(cols))
+    col_sql = ", ".join(cols)
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_insert_contractor: no Postgres connection")
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO public.contractors ({col_sql}) VALUES ({placeholders}) RETURNING "
+                f"id, vendor_id, full_name, email, stripe_account_id, connect_status",
+                vals,
+            )
+            out = _row_from_cursor(cur)
+            if out and out.get("id") is not None:
+                out["id"] = str(out["id"])
+                logger.warning("pg_insert_contractor ok id=%s vendor=%s", out["id"], out.get("vendor_id"))
+            return out
+    except Exception as e:
+        logger.error("pg_insert_contractor failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_update_contractor(contractor_id: str, fields: dict) -> bool:
+    """UPDATE public.contractors SET … via Postgres (connect_status / stripe_account_id)."""
+    cid = str(contractor_id or "").strip()
+    if not cid or not isinstance(fields, dict) or not fields:
+        return False
+    allowed = {
+        "stripe_account_id",
+        "connect_status",
+        "connect_onboarded_at",
+        "full_name",
+        "email",
+        "phone",
+    }
+    cols: list[tuple[str, Any]] = [(k, v) for k, v in fields.items() if k in allowed]
+    if not cols:
+        return False
+    set_parts = [f"{c} = %s" for c, _v in cols]
+    vals: list[Any] = [v for _c, v in cols]
+    vals.append(cid)
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_update_contractor: no Postgres connection id=%s", cid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE public.contractors SET {', '.join(set_parts)} WHERE id = %s::uuid",
+                vals,
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_update_contractor ok id=%s fields=%s",
+                    cid,
+                    [c[0] for c in cols],
+                )
+            return ok
+    except Exception as e:
+        logger.error("pg_update_contractor failed id=%s: %s", cid, str(e)[:300])
+        return False
     finally:
         try:
             conn.close()

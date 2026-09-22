@@ -104,7 +104,15 @@ def sync_contractor_connect_status(contractor_id: str, stripe_account_id: str) -
             "connect_status": payload["connect_status"],
         }).eq("id", contractor_id).execute()
     except Exception as e:
-        logger.warning("Could not persist connect_status for contractor %s: %s", contractor_id, type(e).__name__)
+        from app.shared.pg_fallback import _is_rest_quota_error, pg_update_contractor
+        if _is_rest_quota_error(e):
+            if not pg_update_contractor(contractor_id, {"connect_status": payload["connect_status"]}):
+                logger.warning(
+                    "Could not persist connect_status (Fair-Use PG) for contractor %s",
+                    contractor_id,
+                )
+        else:
+            logger.warning("Could not persist connect_status for contractor %s: %s", contractor_id, type(e).__name__)
     return payload
 
 
@@ -133,16 +141,39 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
     When provided it is used to look up the Stripe account directly, avoiding the
     multi-row ambiguity of querying by org-level vendor_id.
     """
+    def _load_contractor(resolved_vendor_id: str):
+        from app.shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_contractor_by_vendor_id,
+        )
+        try:
+            response = supabase.table("contractors").select(
+                "id, stripe_account_id, connect_status"
+            ).eq("vendor_id", resolved_vendor_id).maybe_single().execute()
+            return response.data
+        except Exception as e:
+            if _is_rest_quota_error(e):
+                return pg_select_contractor_by_vendor_id(resolved_vendor_id)
+            raise
+
     if contractor_id:
         # contractor_id is vendor_members.id (photographer-level); contractors are linked via
         # vendor_id FK — not a shared PK — so resolve the vendor_id from vendor_members first.
-        member_res = supabase.table("vendor_members").select("vendor_id").eq("id", contractor_id).maybe_single().execute()
-        member = member_res.data or {}
+        from app.shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+        try:
+            member_res = supabase.table("vendor_members").select("vendor_id").eq(
+                "id", contractor_id
+            ).maybe_single().execute()
+            member = member_res.data or {}
+        except Exception as e:
+            if _is_rest_quota_error(e):
+                member = pg_select_vendor_member(actor_id=contractor_id) or {}
+            else:
+                raise
         resolved_vendor_id = member.get("vendor_id") or vendor_id
-        response = supabase.table("contractors").select("id, stripe_account_id, connect_status").eq("vendor_id", resolved_vendor_id).maybe_single().execute()
+        contractor = _load_contractor(resolved_vendor_id)
     else:
-        response = supabase.table("contractors").select("id, stripe_account_id, connect_status").eq("vendor_id", vendor_id).maybe_single().execute()
-    contractor = response.data
+        contractor = _load_contractor(vendor_id)
 
     if not contractor or not contractor.get("stripe_account_id"):
         raise ValueError(f"Stripe account not found for vendor: {vendor_id} contractor: {contractor_id}")
@@ -179,18 +210,44 @@ async def create_connect_account_and_link(
 
     After Account.create, connect_status stays pending until Stripe reports payout-ready.
     """
-    response = supabase.table("contractors").select("id, stripe_account_id").eq("vendor_id", vendor_id).maybe_single().execute()
-    contractor = response.data
+    from app.shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_insert_contractor,
+        pg_select_contractor_by_vendor_id,
+        pg_update_contractor,
+    )
+
+    try:
+        response = supabase.table("contractors").select("id, stripe_account_id").eq(
+            "vendor_id", vendor_id
+        ).maybe_single().execute()
+        contractor = response.data
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            contractor = pg_select_contractor_by_vendor_id(vendor_id)
+        else:
+            raise
 
     if not contractor:
-        insert_res = supabase.table("contractors").insert({
+        payload = {
             "vendor_id": vendor_id,
             "full_name": full_name or vendor_id,
             "email": email or f"{vendor_id}@bricks.internal",
-        }).execute()
-        if not insert_res.data:
-            raise ValueError(f"Could not create contractor record for vendor: {vendor_id}")
-        contractor = insert_res.data[0]
+        }
+        try:
+            insert_res = supabase.table("contractors").insert(payload).execute()
+            if not insert_res.data:
+                raise ValueError(f"Could not create contractor record for vendor: {vendor_id}")
+            contractor = insert_res.data[0]
+        except Exception as e:
+            if _is_rest_quota_error(e):
+                contractor = pg_insert_contractor(payload)
+                if not contractor:
+                    raise ValueError(
+                        f"Could not create contractor record for vendor: {vendor_id}"
+                    ) from e
+            else:
+                raise
 
     stripe_account_id = contractor.get("stripe_account_id")
     if not stripe_account_id:
@@ -201,10 +258,22 @@ async def create_connect_account_and_link(
             email=email or None,
         )
         stripe_account_id = account.id
-        supabase.table("contractors").update({
+        update_fields = {
             "stripe_account_id": stripe_account_id,
             "connect_status": "pending",
-        }).eq("id", contractor["id"]).execute()
+        }
+        try:
+            supabase.table("contractors").update(update_fields).eq(
+                "id", contractor["id"]
+            ).execute()
+        except Exception as e:
+            if _is_rest_quota_error(e):
+                if not pg_update_contractor(contractor["id"], update_fields):
+                    raise RuntimeError(
+                        "Could not persist Stripe account id (Fair-Use PG failed)"
+                    ) from e
+            else:
+                raise
 
     account_link = stripe_lib.AccountLink.create(
         account=stripe_account_id,

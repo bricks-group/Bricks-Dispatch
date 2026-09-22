@@ -25,10 +25,17 @@ async def get_stripe_connect_status(
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
-    res = await (await get_db()).table("contractors").select(
-        "id, stripe_account_id, connect_status"
-    ).eq("vendor_id", vendor_id).maybe_single().execute()
-    row = res.data or {}
+    try:
+        res = await (await get_db()).table("contractors").select(
+            "id, stripe_account_id, connect_status"
+        ).eq("vendor_id", vendor_id).maybe_single().execute()
+        row = res.data or {}
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_contractor_by_vendor_id
+        if _is_rest_quota_error(e):
+            row = pg_select_contractor_by_vendor_id(vendor_id) or {}
+        else:
+            raise
     account_id = row.get("stripe_account_id") or ""
     if not account_id:
         return {
