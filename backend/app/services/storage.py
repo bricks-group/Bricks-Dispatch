@@ -67,6 +67,9 @@ async def upload_file(
     sign on demand via get_signed_download_url.
     thumbnail_b64_200 is a 200-char base64 preview for in-line display.
     qc_variant_path is None for non-image uploads (e.g. onboarding PDFs).
+
+    Fair-Use: when Supabase Storage fails (e.g. 402), fall back to private
+    Vercel Blob the same way upload_bytes does, if BLOB_READ_WRITE_TOKEN is set.
     """
     # filename is client-supplied (multipart Form field) -- strip any path
     # components before it goes into a storage object key. Supabase Storage
@@ -113,6 +116,40 @@ async def upload_file(
             qc_path = None
 
     except Exception:
+        # Fair-Use / Storage 402: same Blob fallback path as upload_bytes.
+        _logger.warning(
+            "upload_file Supabase failed — Blob fallback path=%s", file_path
+        )
+        if blob_fallback_enabled():
+            ok = await _blob_put(
+                file_path,
+                file_bytes,
+                content_type=mime_type or "application/octet-stream",
+                upsert=True,
+            )
+            if ok:
+                try:
+                    thumb_bytes = _make_thumbnail_bytes(file_bytes)
+                    thumb_b64 = base64.b64encode(thumb_bytes).decode()[:200]
+                    if not await _blob_put(
+                        thumb_path, thumb_bytes, content_type="image/jpeg", upsert=True
+                    ):
+                        thumb_path = None
+                except Exception:
+                    thumb_path = None
+                    thumb_b64 = base64.b64encode(file_bytes[:150]).decode()[:200]
+
+                try:
+                    qc_bytes = make_qc_variant_bytes(file_bytes)
+                    if not await _blob_put(
+                        qc_path, qc_bytes, content_type="image/jpeg", upsert=True
+                    ):
+                        qc_path = None
+                except Exception:
+                    qc_path = None
+
+                return file_path, thumb_path, thumb_b64, qc_path
+
         try:
             thumb_bytes = _make_thumbnail_bytes(file_bytes)
             thumb_b64 = base64.b64encode(thumb_bytes).decode()[:200]

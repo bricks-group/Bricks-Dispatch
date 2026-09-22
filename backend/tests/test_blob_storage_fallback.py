@@ -138,3 +138,75 @@ def test_download_bytes_falls_back_when_supabase_raises(monkeypatch):
     data = asyncio.run(st.download_bytes("capture/sid/stations/0/equirect.jpg"))
     assert data == b"from-blob"
     assert got == ["capture/sid/stations/0/equirect.jpg"]
+
+
+def _tiny_jpeg_bytes():
+    from io import BytesIO
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (8, 8), color=(40, 80, 120)).save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+def test_upload_file_falls_back_to_blob_when_supabase_raises(monkeypatch):
+    async def boom(*_a, **_k):
+        raise RuntimeError("exceed_storage_size_quota")
+
+    fake_db = MagicMock()
+    fake_db.storage.from_.return_value.upload = boom
+
+    async def fake_get_db():
+        return fake_db
+
+    put_calls = []
+
+    async def fake_blob_put(path, data, content_type="application/octet-stream", upsert=True):
+        put_calls.append((path, len(data), content_type, upsert))
+        return True
+
+    monkeypatch.setattr(st, "get_db", fake_get_db)
+    monkeypatch.setattr(st, "_blob_put", fake_blob_put)
+
+    jpeg = _tiny_jpeg_bytes()
+    job_id, upload_id = "job-abc", "up-xyz"
+    file_path, thumb_path, thumb_b64, qc_path = asyncio.run(
+        st.upload_file(jpeg, job_id, upload_id, "still.jpg", "image/jpeg")
+    )
+
+    expected_prefix = f"bricks-go/jobs/{job_id}/{upload_id}/"
+    assert file_path is not None
+    assert file_path.startswith(expected_prefix)
+    assert file_path.endswith("still.jpg")
+    assert thumb_b64
+    assert put_calls, "expected at least one _blob_put for main file"
+    assert put_calls[0][0] == file_path
+    assert put_calls[0][2] == "image/jpeg"
+    # Prefer thumb + qc also landed on Blob for images
+    put_paths = [c[0] for c in put_calls]
+    assert file_path in put_paths
+    assert thumb_path in put_paths
+    assert qc_path in put_paths
+
+
+def test_upload_file_returns_none_without_blob_token(monkeypatch):
+    monkeypatch.delenv("BLOB_READ_WRITE_TOKEN", raising=False)
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("exceed_storage_size_quota")
+
+    fake_db = MagicMock()
+    fake_db.storage.from_.return_value.upload = boom
+
+    async def fake_get_db():
+        return fake_db
+
+    monkeypatch.setattr(st, "get_db", fake_get_db)
+
+    jpeg = _tiny_jpeg_bytes()
+    file_path, thumb_path, thumb_b64, qc_path = asyncio.run(
+        st.upload_file(jpeg, "job-1", "up-1", "still.jpg", "image/jpeg")
+    )
+    assert file_path is None
+    assert thumb_path is None
+    assert qc_path is None
+    assert thumb_b64  # best-effort preview still produced
