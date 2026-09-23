@@ -1,8 +1,11 @@
 from app.services.media_intake import (
     delivery_route,
     infer_media_type,
+    is_photo_delivery_candidate,
     is_photo_file,
     is_video_file,
+    is_visit_file,
+    pick_visit_upload,
     stills_storage_path,
     wants_staging,
 )
@@ -46,3 +49,51 @@ def test_delivery_routes():
 def test_stills_path_stays_under_job():
     path = stills_storage_path("job-1", "up-9", "../../other/x.jpg")
     assert path == "bricks-go/jobs/job-1/up-9/x.jpg"
+
+
+
+def test_visit_exts_all_three():
+    for name in ("tour.splat", "scan.PLY", "cloud.spz", "Visit.SPZ"):
+        assert is_visit_file(name)
+        assert not is_photo_delivery_candidate(name)
+        assert not is_photo_file(name)
+    assert is_photo_delivery_candidate("living-01.jpg")
+    assert delivery_route({"file_url": "p/a.ply", "filename": "a.ply"}) == "visit"
+    assert delivery_route({"file_url": "p/a.spz", "filename": "a.spz"}) == "visit"
+
+
+def test_pick_visit_upload_prefers_splat_then_ply_then_spz():
+    assert pick_visit_upload([]) is None
+    assert pick_visit_upload([{"filename": "a.jpg"}]) is None
+
+    only_spz = pick_visit_upload([{"id": "1", "filename": "room.spz"}])
+    assert only_spz["id"] == "1"
+
+    only_ply = pick_visit_upload([{"id": "2", "filename": "room.ply"}, {"id": "3", "filename": "a.jpg"}])
+    assert only_ply["id"] == "2"
+
+    mixed = pick_visit_upload([
+        {"id": "spz", "filename": "a.spz"},
+        {"id": "ply", "filename": "b.ply"},
+        {"id": "splat", "filename": "c.splat"},
+        {"id": "jpg", "filename": "d.jpg"},
+    ])
+    assert mixed["id"] == "splat"
+
+    ply_over_spz = pick_visit_upload([
+        {"id": "spz", "filename": "a.spz"},
+        {"id": "ply", "filename": "b.ply"},
+    ])
+    assert ply_over_spz["id"] == "ply"
+
+
+def test_filter_photo_delivery_excludes_all_visit_exts():
+    uploads = [
+        {"filename": "living.jpg"},
+        {"filename": "tour.splat"},
+        {"filename": "scan.ply"},
+        {"filename": "cloud.spz"},
+        {"filename": "reel.mp4"},
+    ]
+    photos = [u for u in uploads if is_photo_delivery_candidate(u.get("filename"))]
+    assert [u["filename"] for u in photos] == ["living.jpg", "reel.mp4"]

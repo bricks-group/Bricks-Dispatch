@@ -105,7 +105,7 @@ def delivery_route(asset: Optional[dict] = None) -> str:
     vendor_photo  — Fotello / Autoenhance / in-house enhance
     staging       — BoxBrownie virtual staging (or original if no keys)
     as_is         — drone / reel / video, no photo edit
-    visit         — .ply/.splat, not a listing still
+    visit         — .ply/.splat/.spz, not a listing still
     skip          — no file
     """
     row = asset or {}
@@ -125,3 +125,29 @@ def delivery_route(asset: Optional[dict] = None) -> str:
 def stills_storage_path(job_id: str, upload_id: str, filename: str) -> str:
     safe = (filename or "still.jpg").replace("\\", "/").split("/")[-1].lstrip(".") or "still.jpg"
     return f"bricks-go/jobs/{job_id}/{upload_id}/{safe}"
+
+
+# Prefer .splat (native gsplat), then .ply, then .spz when multiple visit assets exist.
+_VISIT_PICK_ORDER = (".splat", ".ply", ".spz")
+
+
+def _visit_pick_rank(filename: Any = None) -> int:
+    name = _lower(filename)
+    for i, ext in enumerate(_VISIT_PICK_ORDER):
+        if name.endswith(ext):
+            return i
+    return len(_VISIT_PICK_ORDER)
+
+
+def is_photo_delivery_candidate(filename: Any = None) -> bool:
+    """False for Visit/3D assets that must not land in listing still delivery_urls."""
+    return not is_visit_file(filename)
+
+
+def pick_visit_upload(uploads: list | None) -> Optional[dict]:
+    """First Visit upload for property_visits registration (.splat > .ply > .spz)."""
+    visits = [u for u in (uploads or []) if is_visit_file((u or {}).get("filename"))]
+    if not visits:
+        return None
+    visits.sort(key=lambda u: _visit_pick_rank((u or {}).get("filename")))
+    return visits[0]

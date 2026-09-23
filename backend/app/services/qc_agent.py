@@ -25,6 +25,7 @@ from typing import Optional
 
 import httpx
 
+from .media_intake import VIDEO_EXTS, is_visit_file
 from .qc_vision_provider import is_configured as _vision_qc_configured, run_vision_qc
 
 logger = logging.getLogger(__name__)
@@ -195,8 +196,8 @@ async def run_qc_for_job(job_id: str) -> dict:
 
     for u in uploads:
         filename = (u.get("filename") or "").lower()
-        # Skip 3D assets — not reviewable by vision model
-        if filename.endswith((".splat", ".ply", ".mp4", ".mov")):
+        # Skip Visit/3D + video — not reviewable by vision model
+        if is_visit_file(filename) or filename.endswith(VIDEO_EXTS):
             await db.table("uploads").update({
                 "qc_status": "passed",
                 "qc_score": 100,

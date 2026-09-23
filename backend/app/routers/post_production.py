@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
+from ..services.media_intake import is_photo_delivery_candidate, pick_visit_upload
 from ..services.qc_agent import run_qc_for_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.auth import get_own_internal_api_key
@@ -114,10 +115,9 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         if u.get("processing_status") == "failed":
             logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — processing failed")
             continue
-        # Skip 3D assets — .splat/.ply files are stored separately as splat_url, not photo files
-        _fname = (u.get("filename") or "").lower()
-        if _fname.endswith(".splat") or _fname.endswith(".ply"):
-            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded from photo list — 3D asset")
+        # Skip Visit/3D assets — .splat/.ply/.spz register via property_visits, not listing stills
+        if not is_photo_delivery_candidate(u.get("filename")):
+            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded from photo list — Visit/3D asset")
             continue
         path = u.get("processed_url") or u.get("file_url")
         if not path:
@@ -148,7 +148,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         }).eq("id", job_id).execute()
         return
 
-    # Find the first .splat upload for this job (if any) to register as a property
+    # Find the first Visit upload (.splat > .ply > .spz) to register as a property
     # visit after delivery -- see the post-upsert block below. NOTE: this used to sign
     # a splat_url and write it into media_delivery below; media_delivery has no
     # splat_url column on the live DB (confirmed via BRICKS_STATUS.md, 2026-08-02)
@@ -156,10 +156,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     # of this function (job never reaches "delivered", payout never triggers, agent
     # never notified) -- a real, currently-live bug for any such job, now fixed by
     # removing the dead field rather than by working around it.
-    splat_upload = next(
-        (u for u in uploads if (u.get("filename") or "").lower().endswith(".splat")),
-        None,
-    )
+    splat_upload = pick_visit_upload(uploads)
 
     # Upsert media_delivery row (idempotent)
     delivery_row = {
@@ -187,7 +184,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         # register_property_visit expects an internal storage path (Bricks-OS re-signs it
         # at read time) -- an already-external https:// URL isn't one; same discriminator
         # used above for delivery_urls. Not handling the external-URL case here (no
-        # evidence a raw .splat/.ply upload ever produces one, unlike processed photos).
+        # evidence a raw Visit (.splat/.ply/.spz) upload ever produces one, unlike processed photos).
         if splat_path and not splat_path.startswith("https://"):
             try:
                 from ..services.client_comms import register_property_visit
@@ -457,7 +454,8 @@ async def reconcile_stuck_uploads(
             from ..services.photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
             from ..services.storage import get_signed_download_url as _sign_url
 
-            _SPLAT_EXTS = (".mp4", ".mov", ".avi", ".zip", ".tar", ".ply", ".splat")
+            # Non-photo assets (Visit + video/archives) — keep .spz with .splat/.ply
+            _SPLAT_EXTS = (".mp4", ".mov", ".avi", ".zip", ".tar", ".ply", ".splat", ".spz")
             _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
 
             for upload in stuck:
