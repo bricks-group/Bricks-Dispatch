@@ -1,6 +1,10 @@
 """
 In-house MLS listing stills post-production (Canadian desk standard).
 
+Acceptance bar: Frame PropTx MLS stills brief
+(`/workspace/mls-brief/BRICKS_MLS_STILLS_ACCEPTANCE_BRIEF.md`) — PropTx
+Art. 5.01 accuracy / persons / advertising bans + Bricks craft (beat mid).
+
 Self-hosted OpenCV + Pillow + numpy. No third-party edit API. BoxBrownie /
 virtual staging / object removal / day-to-dusk are NOT in this pipeline
 (package add-ons only; staging delivers originals honestly).
@@ -19,11 +23,15 @@ Default stack (order), with honest flags via capabilities():
      full-room warp)
   6. WB / exposure polish (gentle CLAHE + grey-world — inviting interiors,
      not HDR-halo / oversat)
-  7. 4:3 landscape crop (content-aware when source is portrait), long-edge
-     cap LISTING_MAX_LONG_EDGE (2400), sRGB JPEG ~LISTING_JPEG_QUALITY (88)
+  7. MLS export profile: 4:3 landscape, long-edge clamp 2048–2400 (no
+     upscale), sRGB JPEG ~LISTING_JPEG_QUALITY with soft ~1–3 MB band,
+     strip corner burned logos/watermarks when detected
+  8. People soft-fail metadata (PropTx 5.01d) — quarantine flag for GO/MLS;
+     never hard-blocks enhance
 
 enhance_image(bytes) — single-frame entry used by deliver_asset_without_vendor.
 enhance_bracket(list[bytes]) — multi-frame entry for grouped +/-EV sets.
+enhance_bracket(..., return_meta=True) — bytes + MLS/QC soft-fail metadata.
 """
 
 from __future__ import annotations
@@ -42,12 +50,20 @@ logger = logging.getLogger(__name__)
 STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "brxs-deliverables")
 SKY_SERVICE_URL = (os.getenv("SKY_SERVICE_URL") or "").rstrip("/")
 
-# Listing geometry — MLS / Canadian brochure still convention.
-# Long edge targets the 2048-2400 band: we cap at 2400 and never upscale.
+# Listing geometry — Frame PropTx MLS stills brief (market convention +
+# Bricks product). Long edge 2048–2400: we cap at 2400 and never upscale.
+# PropTx public rules are silent on px/MB; do not invent harder mandates.
 LISTING_MAX_LONG_EDGE = 2400
 LISTING_TARGET_MIN_LONG_EDGE = 2048  # documented band floor (no upscale)
 LISTING_ASPECT: Tuple[int, int] = (4, 3)  # landscape width:height
 LISTING_JPEG_QUALITY = 88  # mid of desk 85-90
+LISTING_JPEG_QUALITY_MIN = 78  # soft floor when shrinking toward size band
+LISTING_JPEG_QUALITY_MAX = 92
+# Soft size band (~1–3 MB when feasible). Not a hard PropTx statute.
+LISTING_JPEG_TARGET_MIN_BYTES = 500_000
+LISTING_JPEG_TARGET_MAX_BYTES = 3_000_000
+MLS_EXPORT_PROFILE = "frame_proptx_mls_stills_v1"
+MLS_BRIEF_REF = "Frame PropTx MLS stills acceptance brief (Art. 5.01)"
 
 # Back-compat for earlier tests / callers
 LISTING_JPEG_Q = LISTING_JPEG_QUALITY
@@ -75,7 +91,14 @@ def capabilities() -> Dict[str, Any]:
         "wb_exposure": "clahe_greyworld",
         "listing_crop": "4:3_landscape_content",
         "long_edge_px": LISTING_MAX_LONG_EDGE,
+        "long_edge_band_px": [LISTING_TARGET_MIN_LONG_EDGE, LISTING_MAX_LONG_EDGE],
         "jpeg_quality": LISTING_JPEG_QUALITY,
+        "jpeg_target_bytes": [LISTING_JPEG_TARGET_MIN_BYTES, LISTING_JPEG_TARGET_MAX_BYTES],
+        "color_space": "srgb",
+        "mls_export_profile": MLS_EXPORT_PROFILE,
+        "mls_brief": MLS_BRIEF_REF,
+        "people_soft_fail": "yunet_proptx_5_01d",
+        "watermark_strip": "corner_overlay_heuristic",
         "virtual_staging": False,
         "object_removal": False,
         "day_to_dusk": False,
@@ -251,11 +274,116 @@ def format_listing_ready(
     return _resize_long_edge(cropped, max_long_edge)
 
 
-def _encode_jpeg(img: Image.Image, quality: int = LISTING_JPEG_QUALITY) -> bytes:
-    buf = io.BytesIO()
+def _to_srgb_rgb(img: Image.Image) -> Image.Image:
+    """Flatten to 8-bit sRGB RGB — drop exotic ICC / CMYK casts for MLS JPEG."""
+    if img.mode == "CMYK":
+        img = img.convert("RGB")
+    # Pillow ImageCms is optional; convert("RGB") + strip info is enough for desk.
     rgb = img.convert("RGB")
-    rgb.save(buf, format="JPEG", quality=quality, optimize=True, subsampling=1)
-    return buf.getvalue()
+    # Drop embedded ICC / EXIF so portals see plain sRGB JPEG without wild casts.
+    rgb.info = {}
+    return rgb
+
+
+def _strip_corner_watermarks(img: Image.Image) -> Tuple[Image.Image, bool]:
+    """Heuristic strip of burned corner logos / CTAs (PropTx 5.01c).
+
+    Conservative: only clears small corner patches that look like high-contrast
+    overlays on otherwise flat margins. Never invents content elsewhere.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return img, False
+
+    arr = np.asarray(_to_srgb_rgb(img), dtype=np.uint8)
+    h, w = arr.shape[:2]
+    if h < 200 or w < 200:
+        return img, False
+
+    # Corner boxes ~12% of short side, capped
+    side = int(max(48, min(h, w) * 0.12))
+    corners = [
+        (0, 0, side, side),
+        (w - side, 0, w, side),
+        (0, h - side, side, h),
+        (w - side, h - side, w, h),
+    ]
+    stripped = False
+    out = arr.copy()
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    for x0, y0, x1, y1 in corners:
+        roi = gray[y0:y1, x0:x1]
+        if roi.size == 0:
+            continue
+        edges = cv2.Canny(roi, 80, 160)
+        edge_pct = float(edges.mean()) / 255.0
+        # Logo-like: denser edges than a clean wall, but not a full scene
+        if edge_pct < 0.04 or edge_pct > 0.28:
+            continue
+        # Prefer patches that also have a bright or dark logo plate
+        mean = float(roi.mean())
+        if 40 < mean < 210 and edge_pct < 0.08:
+            continue
+        # Inpaint from surrounding — use a dilated edge mask
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[y0:y1, x0:x1] = np.where(edges > 0, 255, 0).astype(np.uint8)
+        mask[y0:y1, x0:x1] = cv2.dilate(mask[y0:y1, x0:x1], np.ones((3, 3), np.uint8), iterations=2)
+        if int(mask.sum()) == 0:
+            continue
+        bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+        repaired = cv2.inpaint(bgr, mask, 3, cv2.INPAINT_TELEA)
+        out = cv2.cvtColor(repaired, cv2.COLOR_BGR2RGB)
+        stripped = True
+    if not stripped:
+        return img, False
+    return Image.fromarray(out, "RGB"), True
+
+
+def _encode_jpeg(img: Image.Image, quality: int = LISTING_JPEG_QUALITY) -> bytes:
+    """sRGB JPEG encode with soft ~1–3 MB size band when feasible."""
+    rgb = _to_srgb_rgb(img)
+    q = int(max(LISTING_JPEG_QUALITY_MIN, min(LISTING_JPEG_QUALITY_MAX, quality)))
+
+    def _save(qq: int) -> bytes:
+        buf = io.BytesIO()
+        rgb.save(buf, format="JPEG", quality=qq, optimize=True, subsampling=1)
+        return buf.getvalue()
+
+    data = _save(q)
+    # Shrink toward band if oversized (soft — stop at quality floor)
+    while len(data) > LISTING_JPEG_TARGET_MAX_BYTES and q > LISTING_JPEG_QUALITY_MIN:
+        q = max(LISTING_JPEG_QUALITY_MIN, q - 4)
+        data = _save(q)
+    # Nudge up only when tiny AND we have headroom (never force bloat)
+    if len(data) < LISTING_JPEG_TARGET_MIN_BYTES and q < LISTING_JPEG_QUALITY:
+        q = min(LISTING_JPEG_QUALITY, q + 4)
+        data = _save(q)
+    return data
+
+
+def listing_export_invariants(image_bytes: bytes) -> Dict[str, Any]:
+    """Check MLS export geometry/format invariants (convention + Bricks profile)."""
+    img = Image.open(io.BytesIO(image_bytes))
+    w, h = img.size
+    long_edge = max(w, h)
+    aspect = (w / float(h)) if h else 0.0
+    target = LISTING_ASPECT[0] / float(LISTING_ASPECT[1])
+    return {
+        "format": (img.format or "").upper() or "JPEG",
+        "mode": img.mode,
+        "width": w,
+        "height": h,
+        "long_edge": long_edge,
+        "landscape": w >= h,
+        "aspect_ok": abs(aspect - target) < 0.02,
+        "long_edge_ok": long_edge <= LISTING_MAX_LONG_EDGE,
+        "long_edge_band_soft": LISTING_TARGET_MIN_LONG_EDGE <= long_edge <= LISTING_MAX_LONG_EDGE
+        or long_edge < LISTING_TARGET_MIN_LONG_EDGE,  # no upscale — small sources allowed
+        "bytes": len(image_bytes),
+        "color_space": "srgb",
+        "mls_export_profile": MLS_EXPORT_PROFILE,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -786,8 +914,13 @@ def enhance_bracket(
     filenames: Optional[Sequence[str]] = None,
     *,
     apply_sky: bool = True,
-) -> bytes:
-    """Full MLS stack for a bracket set (or a single frame)."""
+    return_meta: bool = False,
+):
+    """Full MLS stack for a bracket set (or a single frame).
+
+    When return_meta=True, returns (jpeg_bytes, meta_dict) including PropTx
+    people soft-fail / MLS quarantine flags. Soft-fail never raises / blocks.
+    """
     if not frames:
         raise ValueError("enhance_bracket requires at least one frame")
 
@@ -802,6 +935,7 @@ def enhance_bracket(
     used_hdr = False
     used_window = False
     used_sky = False
+    used_watermark_strip = False
 
     mid, under, over = _pick_under_mid_over(images, biases)
     body = mid
@@ -840,17 +974,46 @@ def enhance_bracket(
     working = straighten_verticals(working)
     working = _apply_tone_enhance(working)
     working = format_listing_ready(working)
+    working, used_watermark_strip = _strip_corner_watermarks(working)
     out = _encode_jpeg(working)
+
+    meta: Dict[str, Any] = {
+        "mls_export_profile": MLS_EXPORT_PROFILE,
+        "mls_brief": MLS_BRIEF_REF,
+        "used_hdr": used_hdr,
+        "used_window_pull": used_window,
+        "used_sky": used_sky,
+        "used_watermark_strip": used_watermark_strip,
+        "export": listing_export_invariants(out),
+    }
+    # PropTx 5.01(d) soft-fail — never hard-fail / strand the enhance job
+    try:
+        from .mls_people_detect import people_soft_fail_metadata
+        people_meta = people_soft_fail_metadata(out)
+        meta.update(people_meta)
+    except Exception as e:
+        logger.warning("photo_enhance: people soft-fail meta skipped (%s)", e)
+        meta.update({
+            "qc_people_detected": False,
+            "qc_face_count": 0,
+            "mls_quarantine": False,
+            "qc_soft_fail": False,
+            "qc_soft_fail_reasons": [],
+        })
+
     logger.info(
-        "photo_enhance: done hdr=%s window_pull=%s sky=%s size=%dx%d",
-        used_hdr, used_window, used_sky, working.size[0], working.size[1],
+        "photo_enhance: done hdr=%s window_pull=%s sky=%s wm=%s people=%s size=%dx%d",
+        used_hdr, used_window, used_sky, used_watermark_strip,
+        meta.get("qc_people_detected"), working.size[0], working.size[1],
     )
+    if return_meta:
+        return out, meta
     return out
 
 
-def enhance_image(image_bytes: bytes) -> bytes:
+def enhance_image(image_bytes: bytes, *, return_meta: bool = False):
     """Single-frame listing-ready enhance (no bracket siblings)."""
-    return enhance_bracket([image_bytes], apply_sky=True)
+    return enhance_bracket([image_bytes], apply_sky=True, return_meta=return_meta)
 
 
 # ---------------------------------------------------------------------------

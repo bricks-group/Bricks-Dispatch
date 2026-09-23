@@ -261,3 +261,153 @@ def test_mid_biased_body_keeps_bright_sky_on_mid():
     assert top[:, :, 2].mean() > top[:, :, 0].mean()
     assert abs(float(top.mean()) - 245) < 25
 
+
+
+# ---------------------------------------------------------------------------
+# Frame PropTx MLS export profile (P1) + people soft-fail (P2)
+# ---------------------------------------------------------------------------
+
+from app.services.photo_enhance_service import (
+    LISTING_TARGET_MIN_LONG_EDGE,
+    LISTING_JPEG_TARGET_MAX_BYTES,
+    MLS_EXPORT_PROFILE,
+    listing_export_invariants,
+    _strip_corner_watermarks,
+    _to_srgb_rgb,
+)
+from app.services.mls_people_detect import (
+    FIELD_FACE_COUNT,
+    FIELD_MLS_QUARANTINE,
+    FIELD_PEOPLE_DETECTED,
+    FIELD_SOFT_FAIL,
+    FIELD_SOFT_FAIL_REASONS,
+    REASON_PERSONS,
+    people_soft_fail_metadata,
+    merge_people_into_qc,
+)
+from app.services.qc_opencv import analyze_image_cv
+
+
+def test_capabilities_proptx_export_profile():
+    caps = capabilities()
+    assert caps["mls_export_profile"] == MLS_EXPORT_PROFILE
+    assert "PropTx" in caps["mls_brief"]
+    assert caps["color_space"] == "srgb"
+    assert caps["long_edge_band_px"] == [LISTING_TARGET_MIN_LONG_EDGE, LISTING_MAX_LONG_EDGE]
+    assert caps["people_soft_fail"] == "yunet_proptx_5_01d"
+    assert caps["watermark_strip"] == "corner_overlay_heuristic"
+    assert caps["jpeg_target_bytes"][1] == LISTING_JPEG_TARGET_MAX_BYTES
+
+
+def test_export_invariants_4_3_srgb_band():
+    out = enhance_image(_jpeg(4000, 3000, (80, 90, 100)))
+    inv = listing_export_invariants(out)
+    assert inv["format"] == "JPEG"
+    assert inv["landscape"] is True
+    assert inv["aspect_ok"] is True
+    assert inv["long_edge_ok"] is True
+    assert inv["long_edge"] <= LISTING_MAX_LONG_EDGE
+    assert inv["mls_export_profile"] == MLS_EXPORT_PROFILE
+    # Soft size band: synthetic flats may be small — only enforce upper soft cap
+    assert inv["bytes"] <= LISTING_JPEG_TARGET_MAX_BYTES
+    assert out[:2] == b"\xff\xd8"
+
+
+def test_no_upscale_below_target_min():
+    """Sources already under 2048 stay as-is on long edge (no upscale mandate)."""
+    out = enhance_image(_jpeg(1600, 1200))
+    result = Image.open(io.BytesIO(out))
+    assert max(result.size) <= 1600 + 2  # crop may trim slightly; never upscale
+
+
+def test_srgb_flatten_strips_info():
+    img = Image.new("RGB", (64, 48), (10, 20, 30))
+    img.info["icc_profile"] = b"not-a-real-profile"
+    flat = _to_srgb_rgb(img)
+    assert flat.mode == "RGB"
+    assert not flat.info.get("icc_profile")
+
+
+def test_watermark_strip_noop_on_clean():
+    clean = Image.new("RGB", (800, 600), (120, 120, 120))
+    out, stripped = _strip_corner_watermarks(clean)
+    assert stripped is False
+    assert out.size == clean.size
+
+
+def test_enhance_return_meta_soft_fail_fields():
+    out, meta = enhance_image(_jpeg(1200, 900, (90, 100, 110)), return_meta=True)
+    assert out[:2] == b"\xff\xd8"
+    assert meta["mls_export_profile"] == MLS_EXPORT_PROFILE
+    assert FIELD_PEOPLE_DETECTED in meta
+    assert FIELD_MLS_QUARANTINE in meta
+    assert FIELD_SOFT_FAIL in meta
+    assert FIELD_SOFT_FAIL_REASONS in meta
+    assert FIELD_FACE_COUNT in meta
+    # Clean synthetic flat — no faces
+    assert meta[FIELD_PEOPLE_DETECTED] is False
+    assert meta[FIELD_MLS_QUARANTINE] is False
+    assert meta[FIELD_SOFT_FAIL] is False
+    assert meta["export"]["aspect_ok"] is True
+
+
+def test_people_soft_fail_metadata_empty_scene():
+    meta = people_soft_fail_metadata(_jpeg(640, 480, (40, 50, 60)))
+    assert meta[FIELD_PEOPLE_DETECTED] is False
+    assert meta[FIELD_FACE_COUNT] == 0
+    assert meta[FIELD_MLS_QUARANTINE] is False
+    assert meta[FIELD_SOFT_FAIL] is False
+    assert meta[FIELD_SOFT_FAIL_REASONS] == []
+
+
+def test_people_soft_fail_does_not_hard_reject():
+    """merge_people_into_qc flags / quarantines — never status=rejected for people alone."""
+    base = {
+        "score": 95,
+        "status": "passed",
+        "source": "opencv",
+        "issues": [],
+        "metrics": {},
+    }
+    # Force detected faces via patch
+    fake = {
+        FIELD_PEOPLE_DETECTED: True,
+        FIELD_FACE_COUNT: 2,
+        FIELD_MLS_QUARANTINE: True,
+        FIELD_SOFT_FAIL: True,
+        FIELD_SOFT_FAIL_REASONS: [REASON_PERSONS],
+        "people_detector": "test",
+        "people_faces": [{"x": 1, "y": 1, "w": 10, "h": 10, "score": 0.9}],
+    }
+    with patch("app.services.mls_people_detect.people_soft_fail_metadata", return_value=fake):
+        from app.services.mls_people_detect import merge_people_into_qc as merge
+        # Call merge with patched metadata by patching detect path inside merge
+        with patch("app.services.mls_people_detect.people_soft_fail_metadata", return_value=fake):
+            out = merge(base, b"fake")
+    assert out["status"] == "flagged"
+    assert out["status"] != "rejected"
+    assert out[FIELD_MLS_QUARANTINE] is True
+    assert out[FIELD_PEOPLE_DETECTED] is True
+    assert "persons_detected" in out["issues"]
+    assert REASON_PERSONS in out[FIELD_SOFT_FAIL_REASONS]
+    assert out["score"] <= 85
+
+
+def test_analyze_image_cv_includes_people_fields():
+    result = analyze_image_cv(_jpeg(800, 600, (70, 80, 90)))
+    assert FIELD_PEOPLE_DETECTED in result
+    assert FIELD_MLS_QUARANTINE in result
+    assert FIELD_SOFT_FAIL in result
+    # Empty scene must not quarantine
+    assert result[FIELD_PEOPLE_DETECTED] is False
+    assert result["status"] in ("passed", "flagged", "rejected")
+
+
+def test_soft_fail_field_names_contract_for_frame_go():
+    """Exact field names Frame/GO should read — do not rename without brief update."""
+    assert FIELD_PEOPLE_DETECTED == "qc_people_detected"
+    assert FIELD_FACE_COUNT == "qc_face_count"
+    assert FIELD_MLS_QUARANTINE == "mls_quarantine"
+    assert FIELD_SOFT_FAIL == "qc_soft_fail"
+    assert FIELD_SOFT_FAIL_REASONS == "qc_soft_fail_reasons"
+    assert REASON_PERSONS == "proptx_5_01d_persons"

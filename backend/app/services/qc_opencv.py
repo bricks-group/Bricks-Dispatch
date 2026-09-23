@@ -59,9 +59,10 @@ def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False) -> dict:
         score -= 25
 
     hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+    hist_flat = hist.reshape(-1)
     total_pixels = gray.size
-    dark_pixel_pct = float(hist[0][0]) / total_pixels
-    bright_pixel_pct = float(hist[255][0]) / total_pixels
+    dark_pixel_pct = float(hist_flat[0]) / total_pixels
+    bright_pixel_pct = float(hist_flat[255]) / total_pixels
 
     if dark_pixel_pct > 0.05:
         issues.append("crushed_blacks")
@@ -84,7 +85,7 @@ def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False) -> dict:
     else:
         status = "rejected"
 
-    return {
+    result = {
         "score": score,
         "status": status,
         "source": "opencv",
@@ -96,6 +97,13 @@ def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False) -> dict:
             "aspect_ratio": round(aspect_ratio, 4),
         },
     }
+    # PropTx 5.01(d) people soft-fail — quarantine for GO/MLS, never hard-reject here
+    try:
+        from .mls_people_detect import merge_people_into_qc
+        result = merge_people_into_qc(result, image_bytes)
+    except Exception as e:
+        logger.warning("qc_opencv: people soft-fail skipped (%s)", e)
+    return result
 
 
 def verify_deliverable_count(package: str, image_count: int) -> dict:

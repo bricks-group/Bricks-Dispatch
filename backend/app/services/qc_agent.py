@@ -68,6 +68,37 @@ async def _fetch_image_bytes(url: str) -> Optional[bytes]:
         return None
 
 
+
+def _qc_payload(status, score, notes, source, cv_result=None) -> dict:
+    """QC row fields + PropTx people soft-fail metadata for Frame/GO."""
+    payload = {
+        "qc_status": status,
+        "qc_score": score,
+        "qc_notes": (notes or "")[:500],
+        "qc_source": source,
+    }
+    cv_result = cv_result or {}
+    # Soft-fail fields (exact names for Frame/GO MLS quarantine)
+    for key in (
+        "qc_people_detected",
+        "qc_face_count",
+        "mls_quarantine",
+        "qc_soft_fail",
+        "qc_soft_fail_reasons",
+    ):
+        if key in cv_result:
+            payload[key] = cv_result[key]
+    if cv_result.get("mls_quarantine") or cv_result.get("qc_people_detected"):
+        # Ensure flagged path for GO; never escalate to rejected solely for people
+        if payload["qc_status"] == "passed":
+            payload["qc_status"] = "flagged"
+            payload["qc_score"] = min(int(payload.get("qc_score") or 85), 85)
+        extra = " PropTx 5.01(d) persons/faces — mls_quarantine soft-fail"
+        if extra.strip() not in (payload.get("qc_notes") or ""):
+            payload["qc_notes"] = ((payload.get("qc_notes") or "") + extra)[:500]
+    return payload
+
+
 async def run_qc_on_upload(
     upload_id: str,
     image_url: str,
@@ -104,12 +135,7 @@ async def run_qc_on_upload(
             if cv_result.get("issues"):
                 notes += " Issues: " + "; ".join(cv_result["issues"])
             logger.info(f"QC upload {upload_id}: OpenCV passed — vision QC skipped (package={package or 'unknown'})")
-            return {
-                "qc_status": "passed",
-                "qc_score": cv_result.get("score", 100),
-                "qc_notes": notes[:500],
-                "qc_source": "opencv",
-            }
+            return _qc_payload("passed", cv_result.get("score", 100), notes, "opencv", cv_result)
 
         # OpenCV flagged/rejected or high-value package: fall through to vision QC
         if cv_source == "opencv":
@@ -130,7 +156,14 @@ async def run_qc_on_upload(
             notes = notes + " Issues: " + "; ".join(issues)
 
         logger.info(f"QC upload {upload_id}: score={score} status={status} source=vision")
-        return {"qc_status": status, "qc_score": score, "qc_notes": notes[:500], "qc_source": "vision"}
+        # Re-run lightweight people soft-fail on bytes so vision path also carries flags
+        cv_people = {}
+        try:
+            from .mls_people_detect import people_soft_fail_metadata
+            cv_people = people_soft_fail_metadata(image_bytes)
+        except Exception:
+            pass
+        return _qc_payload(status, score, notes, "vision", cv_people)
 
     except Exception as e:
         logger.error(f"QC: vision provider call failed for upload {upload_id}: {e}")
@@ -189,10 +222,15 @@ async def run_qc_for_job(job_id: str) -> dict:
         is_exterior = any(kw in filename for kw in ("ext", "exterior", "front", "back", "drone"))
 
         qc = await run_qc_on_upload(u["id"], signed_url, package=package_name, is_exterior=is_exterior)
-        await db.table("uploads").update({
-            **qc,
+        # Soft-fail metadata (mls_quarantine / qc_people_*) is returned to callers
+        # and summarized in qc_notes — only known uploads columns are persisted.
+        persist = {
+            "qc_status": qc["qc_status"],
+            "qc_score": qc["qc_score"],
+            "qc_notes": qc["qc_notes"],
             "qc_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", u["id"]).execute()
+        }
+        await db.table("uploads").update(persist).eq("id", u["id"]).execute()
 
         status = qc["qc_status"]
         counts["total"] += 1

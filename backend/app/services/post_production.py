@@ -249,7 +249,9 @@ async def deliver_bracket_group_without_vendor(db, job_id: str, group: list) -> 
     primary_id = primary.get("id")
 
     try:
-        enhanced = enhance_bracket(frames, filenames, apply_sky=True)
+        enhanced, enhance_meta = enhance_bracket(
+            frames, filenames, apply_sky=True, return_meta=True
+        )
         processed = await upload_enhanced(db.storage, job_id, primary_id, enhanced)
         qc_path = await upload_qc_variant(db.storage, job_id, primary_id, enhanced)
         provider = "bricks_inhouse"
@@ -270,6 +272,13 @@ async def deliver_bracket_group_without_vendor(db, job_id: str, group: list) -> 
         }
         if is_primary and qc_path:
             update["qc_variant_url"] = qc_path
+        # PropTx people soft-fail: flag primary for GO/MLS quarantine (not hard-fail)
+        if is_primary and enhance_meta.get("mls_quarantine"):
+            update["qc_status"] = "flagged"
+            update["qc_notes"] = (
+                "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
+                f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
+            )[:500]
         await db.table("uploads").update(update).eq("id", uid).execute()
 
 
@@ -304,13 +313,15 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     processed = file_path
     provider = "as_is"
     qc_path = asset.get("qc_variant_url")
+    enhance_meta = {}
 
     if route in ("vendor_photo", "staging"):
         try:
             from .photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
             original = await download_bytes(file_path)
+            enhance_meta = {}
             if original:
-                enhanced = enhance_image(original)
+                enhanced, enhance_meta = enhance_image(original, return_meta=True)
                 processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
                 qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
                 provider = "bricks_inhouse"
@@ -332,4 +343,10 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     }
     if qc_path:
         update["qc_variant_url"] = qc_path
+    if enhance_meta.get("mls_quarantine"):
+        update["qc_status"] = "flagged"
+        update["qc_notes"] = (
+            "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
+            f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
+        )[:500]
     await db.table("uploads").update(update).eq("id", upload_id).execute()
