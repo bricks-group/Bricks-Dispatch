@@ -23,6 +23,7 @@ from app.services.photo_enhance_service import (
     format_listing_ready,
     group_assets_by_bracket,
     merge_brackets_mertens,
+    replace_sky_opencv,
     sky_region_likely,
     straighten_verticals,
     window_pull_from_brackets,
@@ -57,7 +58,7 @@ def test_capabilities_honest_flags():
     assert caps["object_removal"] is False
     assert caps["day_to_dusk"] is False
     assert caps["exif_orient"] is True
-    assert caps["sky_replace"] in ("http_sky_service", "unavailable")
+    assert caps["sky_replace"] in ("http_sky_service", "opencv_heuristic", "unavailable")
     assert caps["listing_crop"] == "4:3_landscape_content"
 
 
@@ -151,6 +152,23 @@ def test_enhance_bracket_multi_frame():
     assert abs((result.size[0] / result.size[1]) - (4 / 3)) < 0.02
 
 
+def _synthetic_blue_sky_jpeg(width: int = 800, height: int = 600) -> bytes:
+    """Exterior-like still: blue upper sky + green/brown ground (no network)."""
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    sky_h = height // 2
+    # Vertical blue gradient in upper half
+    for y in range(sky_h):
+        t = y / max(1, sky_h - 1)
+        arr[y, :, 0] = int(90 + 40 * t)
+        arr[y, :, 1] = int(145 + 30 * t)
+        arr[y, :, 2] = int(225 - 15 * t)
+    arr[sky_h:, :, :] = (70, 95, 55)  # ground / foliage
+    img = Image.fromarray(arr, "RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
 def test_sky_region_heuristic_and_service_optional():
     blue_sky = Image.new("RGB", (800, 600), (90, 140, 220))
     # Make top band clearly sky-like
@@ -163,9 +181,45 @@ def test_sky_region_heuristic_and_service_optional():
     indoor = Image.new("RGB", (800, 600), (90, 80, 70))
     assert not bool(sky_region_likely(indoor))
 
-    # When SKY_SERVICE_URL is unset, enhance still succeeds (sky skipped).
+    # When SKY_SERVICE_URL is unset, OpenCV fallback still yields listing JPEG.
     out = enhance_image(_jpeg(1200, 800, (100, 150, 220)))
     assert out[:2] == b"\xff\xd8"
+
+
+def test_opencv_sky_fallback_on_synthetic_blue_sky():
+    """In-process sky replace when URL unset — no network, synthetic JPEG."""
+    raw = _synthetic_blue_sky_jpeg()
+    src = Image.open(io.BytesIO(raw)).convert("RGB")
+    assert bool(sky_region_likely(src))
+
+    replaced = replace_sky_opencv(src)
+    assert replaced is not None
+    assert replaced.size == src.size
+    # Upper band should still be blue-ish after replace (procedural sky)
+    top = np.asarray(replaced)[: src.size[1] // 5, :, :].astype(np.float32)
+    r, g, b = top[:, :, 0].mean(), top[:, :, 1].mean(), top[:, :, 2].mean()
+    assert b > r + 5 and b > g
+    # Ground band should stay mostly green (not washed into neon sky)
+    ground = np.asarray(replaced)[src.size[1] * 2 // 3 :, :, :].astype(np.float32)
+    assert ground[:, :, 1].mean() > ground[:, :, 2].mean() - 10
+
+    # Full enhance path (no SKY_SERVICE_URL) still listing-ready
+    with patch.dict("os.environ", {"SKY_SERVICE_URL": ""}, clear=False):
+        # Force module-level URL empty for this call path via patch on the binding
+        with patch("app.services.photo_enhance_service.SKY_SERVICE_URL", ""):
+            out = enhance_image(raw)
+    result = Image.open(io.BytesIO(out))
+    assert result.format == "JPEG"
+    assert max(result.size) <= LISTING_MAX_LONG_EDGE
+    assert abs((result.size[0] / result.size[1]) - (4 / 3)) < 0.02
+
+    caps = capabilities()
+    assert caps["sky_replace"] in ("opencv_heuristic", "http_sky_service")
+
+
+def test_opencv_sky_skips_indoor():
+    indoor = Image.new("RGB", (800, 600), (90, 80, 70))
+    assert replace_sky_opencv(indoor) is None
 
 
 def test_straighten_noop_on_blank():

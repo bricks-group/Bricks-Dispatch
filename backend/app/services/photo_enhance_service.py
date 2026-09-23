@@ -12,8 +12,9 @@ Default stack (order), with honest flags via capabilities():
      otherwise single-frame continue (honest — no invented exposures)
   3. Window pull from under/over bracket frames where available; soft
      single-frame highlight recovery otherwise (does not invent glass detail)
-  4. Exterior sky replacement via SKY_SERVICE_URL (sky-service HTTP) when
-     sky is detected; skipped cleanly when the service is unset/down
+  4. Exterior sky replacement when sky is detected: SKY_SERVICE_URL HTTP
+     first; in-process OpenCV heuristic fallback when URL unset/down
+     (natural blue gradient — desk-standard, no separate host required)
   5. Straighten verticals / level horizon (mild Hough-based rotate; no mushy
      full-room warp)
   6. WB / exposure polish (gentle CLAHE + grey-world — inviting interiors,
@@ -54,12 +55,17 @@ LISTING_JPEG_Q = LISTING_JPEG_QUALITY
 
 def capabilities() -> Dict[str, Any]:
     """Honest flags for what this build actually does."""
-    sky = "http_sky_service" if SKY_SERVICE_URL else "unavailable"
     try:
         import cv2  # noqa: F401
         cv = True
     except ImportError:
         cv = False
+    if SKY_SERVICE_URL:
+        sky = "http_sky_service"
+    elif cv:
+        sky = "opencv_heuristic"
+    else:
+        sky = "unavailable"
     return {
         "exif_orient": True,
         "hdr_merge": "opencv_mertens" if cv else "unavailable",
@@ -436,7 +442,7 @@ def _apply_tone_enhance(img: Image.Image) -> Image.Image:
 
 
 # ---------------------------------------------------------------------------
-# Sky replace (HTTP -> sky-service; never invent staging)
+# Sky replace (HTTP sky-service, then in-process OpenCV heuristic)
 # ---------------------------------------------------------------------------
 
 def sky_region_likely(img: Image.Image) -> bool:
@@ -472,6 +478,131 @@ def replace_sky_via_service(image_bytes: bytes, timeout_s: float = 45.0) -> Opti
     except Exception as e:
         logger.warning("photo_enhance: sky-service call failed: %s", e)
         return None
+
+
+def _generate_procedural_sky(width: int, height: int, seed: int = 42) -> Image.Image:
+    """Subtle real-estate blue gradient (desk-standard — not neon)."""
+    rng = np.random.default_rng(seed)
+    # Clear blue at zenith → soft near-horizon (matches sky-service phase2 tones)
+    top_color = np.array([95, 155, 220], dtype=np.float32)
+    horizon_color = np.array([195, 215, 235], dtype=np.float32)
+    t = np.linspace(0, 1, height, dtype=np.float32)[:, None, None]
+    gradient = top_color[None, None, :] * (1.0 - t) + horizon_color[None, None, :] * t
+    gradient = np.broadcast_to(gradient, (height, width, 3)).copy()
+    # Very subtle cloud noise — brightening/darkening only
+    nh, nw = max(1, height // 8), max(1, width // 8)
+    noise = rng.normal(0, 1, size=(nh, nw)).astype(np.float32)
+    nmin, nmax = float(noise.min()), float(noise.max())
+    if nmax > nmin:
+        noise_u8 = ((noise - nmin) / (nmax - nmin) * 255.0).astype(np.uint8)
+    else:
+        noise_u8 = np.full((nh, nw), 128, dtype=np.uint8)
+    noise_img = Image.fromarray(noise_u8, "L").resize((width, height), Image.Resampling.BICUBIC)
+    blur_r = max(2.0, max(width, height) / 60.0)
+    noise_img = noise_img.filter(ImageFilter.GaussianBlur(radius=blur_r))
+    clouds = np.asarray(noise_img, dtype=np.float32) / 255.0
+    cloud_strength = (clouds[..., None] - 0.5) * 28.0
+    sky = np.clip(gradient + cloud_strength, 0, 255).astype(np.uint8)
+    return Image.fromarray(sky, "RGB")
+
+
+def _sky_mask_opencv(img: Image.Image) -> Optional[np.ndarray]:
+    """Soft float mask [0,1] for blue/bright upper sky. None if too little sky."""
+    try:
+        import cv2
+    except ImportError:
+        return None
+
+    arr = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    h, w = arr.shape[:2]
+    if h < 32 or w < 32:
+        return None
+
+    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    # Blue / cyan sky hues (OpenCV H is 0-179)
+    blue = cv2.inRange(hsv, (90, 25, 120), (135, 255, 255))
+    # Pale / overcast bright sky (low sat, high value) — still sky-like
+    pale = cv2.inRange(hsv, (0, 0, 200), (179, 55, 255))
+    # RGB blue-dominant + bright (catches some JPEG quirk hues)
+    rf, gf, bf = arr[:, :, 0].astype(np.float32), arr[:, :, 1].astype(np.float32), arr[:, :, 2].astype(np.float32)
+    bright = (rf + gf + bf) / 3.0
+    rgb_blue = ((bf > rf + 6) & (bf > gf + 3) & (bright > 130)).astype(np.uint8) * 255
+
+    raw = cv2.bitwise_or(blue, pale)
+    raw = cv2.bitwise_or(raw, rgb_blue)
+
+    # Prefer upper region: zero out bottom ~40%, ramp mid
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    height_gate = np.clip(1.0 - (yy - 0.35) / 0.35, 0.0, 1.0)  # 1 above ~35%, 0 below ~70%
+    gated = (raw.astype(np.float32) / 255.0) * height_gate
+    gated_u8 = np.clip(gated * 255.0, 0, 255).astype(np.uint8)
+
+    # Clean speckles; keep largest upper blob
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    cleaned = cv2.morphologyEx(gated_u8, cv2.MORPH_OPEN, kernel)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+
+    # Soft feather
+    feather = max(3, min(w, h) // 80)
+    soft = cv2.GaussianBlur(cleaned, (0, 0), sigmaX=float(feather), sigmaY=float(feather))
+    mask = soft.astype(np.float32) / 255.0
+
+    sky_frac = float(mask.mean())
+    top_frac = float(mask[: max(1, h // 5), :].mean())
+    # Need meaningful sky coverage in the upper band
+    if top_frac < 0.12 or sky_frac < 0.04:
+        return None
+    return mask
+
+
+def _match_sky_ambient(sky: Image.Image, scene: Image.Image, mask: np.ndarray) -> Image.Image:
+    """Scale sky brightness toward non-sky scene (sky-service phase2 idea)."""
+    scene_arr = np.asarray(scene.convert("RGB"), dtype=np.float32)
+    weights = (1.0 - mask)[..., None]
+    wsum = float(weights.sum())
+    if wsum < 1e-3:
+        return sky
+    scene_brightness = float((scene_arr * weights).sum() / (wsum * 3.0))
+    sky_arr = np.asarray(sky, dtype=np.float32)
+    sky_brightness = float(sky_arr.mean())
+    if sky_brightness < 1e-3:
+        return sky
+    factor = float(np.clip(scene_brightness / sky_brightness, 0.75, 1.25))
+    matched = np.clip(sky_arr * factor, 0, 255).astype(np.uint8)
+    return Image.fromarray(matched, "RGB")
+
+
+def replace_sky_opencv(img: Image.Image) -> Optional[Image.Image]:
+    """In-process heuristic sky replace. Returns RGB Image or None if skipped."""
+    try:
+        import cv2  # noqa: F401
+    except ImportError:
+        return None
+    if not sky_region_likely(img):
+        return None
+    mask = _sky_mask_opencv(img)
+    if mask is None:
+        return None
+    w, h = img.size
+    sky = _generate_procedural_sky(w, h)
+    sky = _match_sky_ambient(sky, img, mask)
+    scene = np.asarray(img.convert("RGB"), dtype=np.float32)
+    sky_arr = np.asarray(sky, dtype=np.float32)
+    alpha = mask[..., None]
+    out = scene * (1.0 - alpha) + sky_arr * alpha
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+def replace_sky(image_bytes: bytes, img: Optional[Image.Image] = None) -> Optional[Image.Image]:
+    """HTTP sky-service when configured; OpenCV heuristic fallback otherwise."""
+    if SKY_SERVICE_URL:
+        replaced = replace_sky_via_service(image_bytes)
+        if replaced:
+            return _load_rgb(replaced)
+        logger.info("photo_enhance: sky-service unavailable — trying OpenCV fallback")
+    working = img if img is not None else _load_rgb(image_bytes)
+    return replace_sky_opencv(working)
 
 
 # ---------------------------------------------------------------------------
@@ -522,9 +653,9 @@ def enhance_bracket(
     working = mid
     if apply_sky and sky_region_likely(working):
         probe = _encode_jpeg(working, quality=90)
-        replaced = replace_sky_via_service(probe)
-        if replaced:
-            working = _load_rgb(replaced)
+        replaced_img = replace_sky(probe, working)
+        if replaced_img is not None:
+            working = replaced_img
             used_sky = True
 
     working = straighten_verticals(working)
