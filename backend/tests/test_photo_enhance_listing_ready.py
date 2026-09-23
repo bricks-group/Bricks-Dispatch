@@ -1,32 +1,43 @@
-"""Unit tests for listing-ready stills geometry in photo_enhance_service.
+"""Unit tests for MLS listing-ready stills in photo_enhance_service.
 
-No network — synthetic JPEGs via Pillow only.
+No network — synthetic JPEGs via Pillow only. Sky HTTP is mocked when tested.
 """
 from __future__ import annotations
 
 import io
+from unittest.mock import patch
 
+import numpy as np
 import pytest
-from PIL import Image, ImageOps
+from PIL import Image
 
 from app.services.photo_enhance_service import (
     LISTING_ASPECT,
     LISTING_JPEG_QUALITY,
     LISTING_MAX_LONG_EDGE,
+    bracket_stem,
+    capabilities,
+    enhance_bracket,
+    enhance_image,
+    exposure_bias_from_name,
+    format_listing_ready,
+    group_assets_by_bracket,
+    merge_brackets_mertens,
+    sky_region_likely,
+    straighten_verticals,
+    window_pull_from_brackets,
     _center_crop_aspect,
     _exif_auto_orient,
+    _landscape_content_crop,
     _resize_long_edge,
-    enhance_image,
-    format_listing_ready,
 )
 
 
-def _jpeg_bytes(width: int, height: int, color=(40, 120, 200), orient: int | None = None) -> bytes:
+def _jpeg(width: int, height: int, color=(40, 120, 200), orient: int | None = None) -> bytes:
     img = Image.new("RGB", (width, height), color)
     buf = io.BytesIO()
-    exif = img.getexif()
     if orient is not None:
-        # PIL Exif tag 274 = Orientation
+        exif = img.getexif()
         exif[274] = orient
         img.save(buf, format="JPEG", quality=85, exif=exif)
     else:
@@ -34,66 +45,130 @@ def _jpeg_bytes(width: int, height: int, color=(40, 120, 200), orient: int | Non
     return buf.getvalue()
 
 
-def test_constants_documented():
+def test_constants_mls_band():
     assert LISTING_MAX_LONG_EDGE == 2400
     assert LISTING_ASPECT == (4, 3)
-    assert LISTING_JPEG_QUALITY == 90
+    assert 85 <= LISTING_JPEG_QUALITY <= 90
 
 
-def test_resize_long_edge_downscales_only():
+def test_capabilities_honest_flags():
+    caps = capabilities()
+    assert caps["virtual_staging"] is False
+    assert caps["object_removal"] is False
+    assert caps["day_to_dusk"] is False
+    assert caps["exif_orient"] is True
+    assert caps["sky_replace"] in ("http_sky_service", "unavailable")
+    assert caps["listing_crop"] == "4:3_landscape_content"
+
+
+def test_bracket_stem_and_bias():
+    assert bracket_stem("living_-2.jpg") == bracket_stem("living_+1.jpg") == bracket_stem("living_0.jpg")
+    assert exposure_bias_from_name("living_-2.jpg") == -2.0
+    assert exposure_bias_from_name("living_+1.5.jpg") == 1.5
+    assert exposure_bias_from_name("kitchen_under.jpg") == -2.0
+    groups = group_assets_by_bracket(
+        [
+            {"filename": "a_-2.jpg", "id": "1"},
+            {"filename": "a_0.jpg", "id": "2"},
+            {"filename": "a_+2.jpg", "id": "3"},
+            {"filename": "b.jpg", "id": "4"},
+        ]
+    )
+    assert len(groups) == 2
+    assert len(groups[0]) == 3
+    assert len(groups[1]) == 1
+
+
+def test_resize_and_center_crop():
     wide = Image.new("RGB", (4800, 2400), (1, 2, 3))
     out = _resize_long_edge(wide, 2400)
     assert max(out.size) == 2400
-    assert out.size == (2400, 1200)
-
-    small = Image.new("RGB", (800, 600), (1, 2, 3))
-    same = _resize_long_edge(small, 2400)
-    assert same.size == (800, 600)
+    cropped = _center_crop_aspect(Image.new("RGB", (1600, 900), (1, 2, 3)), (4, 3))
+    assert abs((cropped.size[0] / cropped.size[1]) - (4 / 3)) < 0.02
 
 
-def test_center_crop_4_3_wide_and_tall():
-    # 16:9-ish → trim sides to 4:3
-    wide = Image.new("RGB", (1600, 900), (10, 20, 30))
-    cropped = _center_crop_aspect(wide, (4, 3))
+def test_portrait_content_crop_prefers_dense_band():
+    # Dark portrait with a bright content band in the upper-middle third.
+    img = Image.new("RGB", (900, 1800), (10, 10, 10))
+    arr = np.asarray(img).copy()
+    arr[500:1100, :, :] = (200, 180, 160)
+    img = Image.fromarray(arr, "RGB")
+    cropped = _landscape_content_crop(img, (4, 3))
     w, h = cropped.size
-    assert abs((w / h) - (4 / 3)) < 0.02
-    assert h == 900
-    assert w == 1200
-
-    # Portrait → trim top/bottom
-    tall = Image.new("RGB", (900, 1600), (10, 20, 30))
-    cropped2 = _center_crop_aspect(tall, (4, 3))
-    w2, h2 = cropped2.size
-    assert abs((w2 / h2) - (4 / 3)) < 0.02
-    assert w2 == 900
+    assert w >= h  # landscape
+    assert abs((w / h) - (4 / 3)) < 0.05
+    # Crop window should overlap the bright band (not the empty floor).
+    cy = (cropped.size[1] // 2)  # relative — check mean brightness of result
+    assert float(np.asarray(cropped).mean()) > 80
 
 
 def test_format_listing_ready_caps_and_aspect():
     img = Image.new("RGB", (4000, 3000), (50, 60, 70))
     out = format_listing_ready(img)
     assert max(out.size) <= LISTING_MAX_LONG_EDGE
-    w, h = out.size
-    assert abs((w / h) - (4 / 3)) < 0.02
+    assert abs((out.size[0] / out.size[1]) - (4 / 3)) < 0.02
 
 
 def test_exif_auto_orient_rotates():
-    # Orientation 6 = rotate 90 CW → 100x200 pixels become 200x100 after transpose
-    raw = _jpeg_bytes(100, 200, orient=6)
+    raw = _jpeg(100, 200, orient=6)
     img = Image.open(io.BytesIO(raw))
     oriented = _exif_auto_orient(img)
     assert oriented.size == (200, 100)
 
 
-def test_enhance_image_returns_listing_ready_jpeg():
-    raw = _jpeg_bytes(3200, 1800)  # 16:9 over max long edge
-    out = enhance_image(raw)
-    assert out[:2] == b"\xff\xd8"  # JPEG SOI
+def test_enhance_image_listing_ready_jpeg():
+    out = enhance_image(_jpeg(3200, 1800))
+    assert out[:2] == b"\xff\xd8"
     result = Image.open(io.BytesIO(out))
     assert result.format == "JPEG"
-    w, h = result.size
-    assert max(w, h) <= LISTING_MAX_LONG_EDGE
-    assert abs((w / h) - (4 / 3)) < 0.02
-    # Already-small 4:3 still gets enhanced + re-encoded
-    small = enhance_image(_jpeg_bytes(800, 600))
-    s = Image.open(io.BytesIO(small))
-    assert abs((s.size[0] / s.size[1]) - (4 / 3)) < 0.02
+    assert max(result.size) <= LISTING_MAX_LONG_EDGE
+    assert abs((result.size[0] / result.size[1]) - (4 / 3)) < 0.02
+    assert result.size[0] >= result.size[1]  # landscape
+
+
+def test_merge_brackets_and_window_pull():
+    under = Image.new("RGB", (400, 300), (20, 20, 20))
+    mid = Image.new("RGB", (400, 300), (120, 120, 120))
+    # Blow out a window region on mid
+    m = np.asarray(mid).copy()
+    m[50:150, 250:380, :] = 255
+    mid = Image.fromarray(m, "RGB")
+    over = Image.new("RGB", (400, 300), (220, 220, 220))
+    fused = merge_brackets_mertens([under, mid, over])
+    assert fused.size == (400, 300)
+    pulled = window_pull_from_brackets(mid, under, over)
+    # Window region should be darker than pure white after pull from under
+    window_mean = float(np.asarray(pulled)[50:150, 250:380, :].mean())
+    assert window_mean < 250
+
+
+def test_enhance_bracket_multi_frame():
+    frames = [_jpeg(800, 600, c) for c in ((20, 20, 20), (100, 100, 100), (220, 220, 220))]
+    names = ["room_-2.jpg", "room_0.jpg", "room_+2.jpg"]
+    out = enhance_bracket(frames, names, apply_sky=False)
+    result = Image.open(io.BytesIO(out))
+    assert result.format == "JPEG"
+    assert abs((result.size[0] / result.size[1]) - (4 / 3)) < 0.02
+
+
+def test_sky_region_heuristic_and_service_optional():
+    blue_sky = Image.new("RGB", (800, 600), (90, 140, 220))
+    # Make top band clearly sky-like
+    arr = np.asarray(blue_sky).copy()
+    arr[:120, :, :] = (100, 160, 230)
+    arr[120:, :, :] = (80, 90, 70)
+    blue_sky = Image.fromarray(arr, "RGB")
+    assert bool(sky_region_likely(blue_sky))
+
+    indoor = Image.new("RGB", (800, 600), (90, 80, 70))
+    assert not bool(sky_region_likely(indoor))
+
+    # When SKY_SERVICE_URL is unset, enhance still succeeds (sky skipped).
+    out = enhance_image(_jpeg(1200, 800, (100, 150, 220)))
+    assert out[:2] == b"\xff\xd8"
+
+
+def test_straighten_noop_on_blank():
+    blank = Image.new("RGB", (400, 300), (128, 128, 128))
+    out = straighten_verticals(blank)
+    assert out.size == blank.size

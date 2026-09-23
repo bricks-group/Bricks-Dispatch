@@ -172,8 +172,8 @@ async def process_job_assets(job_id: str):
     # Without vendor keys (or for drone/reel), leftover stills used to sit in
     # processing forever — finalize never ran. Deliver them now so the listing
     # file / client share is not a hollow path.
-    for asset in leftover:
-        await deliver_asset_without_vendor(db, job_id, asset)
+    # Group photo leftovers by bracket stem so +/-EV bursts HDR-merge once.
+    await _deliver_leftovers_with_brackets(db, job_id, leftover)
 
     if not results:
         try:
@@ -181,6 +181,96 @@ async def process_job_assets(job_id: str):
             await _finalize_job_if_complete(job_id)
         except Exception as e:
             logger.error(f"Job {job_id}: finalize after local deliver failed: {e}")
+
+
+
+async def _deliver_leftovers_with_brackets(db, job_id: str, leftover: list) -> None:
+    """Deliver leftovers; fuse photo brackets into one listing still per stem."""
+    from .media_intake import delivery_route
+    from .photo_enhance_service import group_assets_by_bracket
+
+    photos = []
+    others = []
+    for asset in leftover:
+        route = delivery_route(asset)
+        if route in ("vendor_photo", "staging"):
+            photos.append(asset)
+        else:
+            others.append(asset)
+
+    for asset in others:
+        await deliver_asset_without_vendor(db, job_id, asset)
+
+    for group in group_assets_by_bracket(photos):
+        if len(group) <= 1:
+            await deliver_asset_without_vendor(db, job_id, group[0])
+            continue
+        # Primary = closest to 0 EV (or middle); siblings share processed_url.
+        await deliver_bracket_group_without_vendor(db, job_id, group)
+
+
+async def deliver_bracket_group_without_vendor(db, job_id: str, group: list) -> None:
+    """HDR-merge + window-pull a +/-EV set; mark all siblings done."""
+    from .photo_enhance_service import (
+        enhance_bracket,
+        exposure_bias_from_name,
+        upload_enhanced,
+        upload_qc_variant,
+    )
+    from .storage import download_bytes
+
+    now = datetime.now(timezone.utc).isoformat()
+    frames = []
+    filenames = []
+    loaded = []
+    for asset in group:
+        path = asset.get("file_url")
+        if not path:
+            continue
+        raw = await download_bytes(path)
+        if not raw:
+            continue
+        frames.append(raw)
+        filenames.append(str(asset.get("filename") or ""))
+        loaded.append(asset)
+
+    if not loaded:
+        return
+    if len(frames) == 1:
+        await deliver_asset_without_vendor(db, job_id, loaded[0])
+        return
+
+    # Pick primary: bias closest to 0, else middle of sorted group.
+    def _bias_key(item):
+        b = exposure_bias_from_name(str(item.get("filename") or ""))
+        return (999.0 if b is None else abs(b), str(item.get("filename") or ""))
+
+    primary = sorted(loaded, key=_bias_key)[0]
+    primary_id = primary.get("id")
+
+    try:
+        enhanced = enhance_bracket(frames, filenames, apply_sky=True)
+        processed = await upload_enhanced(db.storage, job_id, primary_id, enhanced)
+        qc_path = await upload_qc_variant(db.storage, job_id, primary_id, enhanced)
+        provider = "bricks_inhouse"
+    except Exception as e:
+        logger.error(f"Bracket enhance failed for job {job_id}: {e} — delivering originals")
+        for asset in loaded:
+            await deliver_asset_without_vendor(db, job_id, asset)
+        return
+
+    for asset in loaded:
+        uid = asset.get("id")
+        is_primary = uid == primary_id
+        update = {
+            "processing_status": "done",
+            "processed_url": processed,
+            "provider": provider if is_primary else "bracket_sibling",
+            "processed_at": now,
+        }
+        if is_primary and qc_path:
+            update["qc_variant_url"] = qc_path
+        await db.table("uploads").update(update).eq("id", uid).execute()
 
 
 async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
