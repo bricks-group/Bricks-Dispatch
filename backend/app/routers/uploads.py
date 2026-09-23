@@ -73,9 +73,15 @@ async def _actor_job(authorization, x_user_id, job_id: str):
 
 
 def _maybe_start_post(background_tasks, job: dict, new_uploaded: int, job_id: str) -> None:
+    """Start post-prod when the declared stills count is met on a completed job.
+
+    When deliverables_count is unset (0), vendor_os's completed transition
+    starts process_job_assets — firing here on every still would process a
+    partial set and the atomic gate would skip later completes.
+    """
     deliverables = job.get("deliverables_count") or 0
     status = (job.get("status") or "")
-    if status == "completed" and (not deliverables or new_uploaded >= deliverables):
+    if status == "completed" and deliverables and new_uploaded >= deliverables:
         background_tasks.add_task(process_job_assets, job_id)
 
 
@@ -388,7 +394,7 @@ async def create_upload(
     # "completed" status transition in vendor_os.py instead — triggering here on every
     # upload would fire before all files arrive, processing only a partial set.
     deliverables = job_row.get("deliverables_count") or 0
-    if deliverables and new_uploaded == deliverables:
+    if deliverables and new_uploaded >= deliverables:
         job_status = job_row.get("status", "")
         try:
             res_fresh = await db.table("jobs").select("status").eq("id", job_id).maybe_single().execute()

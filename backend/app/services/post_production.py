@@ -198,7 +198,17 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     route = delivery_route(asset)
     if not upload_id or not file_path:
         return
+    # Visit (.splat/.ply) is not a listing still, but must leave "pending"
+    # or finalize blocks forever on in_flight. Mark done with the raw path;
+    # _finalize_job_if_complete still excludes these from photo delivery_urls
+    # and registers property_visits from the splat row separately.
     if route == "visit":
+        await db.table("uploads").update({
+            "processing_status": "done",
+            "processed_url": file_path,
+            "provider": "visit",
+            "processed_at": now,
+        }).eq("id", upload_id).execute()
         return
 
     processed = file_path

@@ -8,7 +8,9 @@ processing tier, not just a last-resort fallback (see post_production.py
 routing, and project_bricks_inhouse_post_production memory for the
 decision context).
 
-Pipeline:
+Pipeline (listing-ready stills):
+  0. EXIF auto-orient (ImageOps.exif_transpose) so phone/camera rotations
+     land upright before any math.
   1. CLAHE on the L channel (LAB color space) -- local contrast/shadow-
      highlight recovery, the "HDR look" without needing bracketed
      exposures (Bricks captures single-frame-per-shot; there is no
@@ -19,6 +21,10 @@ Pipeline:
   3. Grey-world white balance (carried over from local_enhance.py --
      CLAHE only touches luminance, so this still matters for color cast).
   4. Light unsharp mask for final crispness.
+  5. Long-edge resize to LISTING_MAX_LONG_EDGE (2400px) — MLS / share
+     friendly without shipping multi-megabyte camera originals.
+  6. Center-crop to LISTING_ASPECT (4:3) — standard listing still frame.
+  7. Encode JPEG at LISTING_JPEG_QUALITY (~90).
 
 Falls back to the plain PIL/numpy pipeline (auto-levels + unsharp +
 grey-world, no OpenCV) if cv2 is unavailable for any reason, so a
@@ -29,14 +35,90 @@ pipeline.
 import io
 import logging
 import os
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageOps
 
 logger = logging.getLogger(__name__)
 
 STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "brxs-deliverables")
+
+# Listing-delivery geometry (documented constants — change deliberately).
+# Long edge capped so OS/Companion share downloads stay lean; 4:3 matches
+# the MLS / brochure still convention Bricks ships on the listing file.
+LISTING_MAX_LONG_EDGE = 2400
+LISTING_ASPECT: Tuple[int, int] = (4, 3)  # width:height
+LISTING_JPEG_QUALITY = 90
+
+
+# ---------------------------------------------------------------------------
+# Geometry helpers (listing-ready format / crop)
+# ---------------------------------------------------------------------------
+
+def _exif_auto_orient(img: Image.Image) -> Image.Image:
+    """Apply EXIF Orientation so the pixel grid matches what the shooter saw."""
+    try:
+        oriented = ImageOps.exif_transpose(img)
+        return oriented if oriented is not None else img
+    except Exception:
+        logger.warning("photo_enhance_service: EXIF transpose failed — using raw pixels")
+        return img
+
+
+def _resize_long_edge(img: Image.Image, max_long_edge: int = LISTING_MAX_LONG_EDGE) -> Image.Image:
+    """Downscale so the longer side is at most max_long_edge. Never upscales."""
+    w, h = img.size
+    long_edge = max(w, h)
+    if long_edge <= max_long_edge or long_edge == 0:
+        return img
+    scale = max_long_edge / float(long_edge)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+
+def _center_crop_aspect(
+    img: Image.Image,
+    aspect: Tuple[int, int] = LISTING_ASPECT,
+) -> Image.Image:
+    """Center-crop to the target aspect ratio (prefer center over letterbox)."""
+    aw, ah = aspect
+    if aw <= 0 or ah <= 0:
+        return img
+    target = aw / float(ah)
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return img
+    current = w / float(h)
+    if abs(current - target) < 1e-6:
+        return img
+    if current > target:
+        # Too wide — trim left/right
+        new_w = max(1, int(round(h * target)))
+        left = max(0, (w - new_w) // 2)
+        return img.crop((left, 0, left + new_w, h))
+    # Too tall — trim top/bottom
+    new_h = max(1, int(round(w / target)))
+    top = max(0, (h - new_h) // 2)
+    return img.crop((0, top, w, top + new_h))
+
+
+def format_listing_ready(
+    img: Image.Image,
+    *,
+    max_long_edge: int = LISTING_MAX_LONG_EDGE,
+    aspect: Tuple[int, int] = LISTING_ASPECT,
+) -> Image.Image:
+    """Resize long-edge then center-crop to listing aspect. Pure geometry."""
+    return _center_crop_aspect(_resize_long_edge(img, max_long_edge), aspect)
+
+
+def _encode_jpeg(img: Image.Image, quality: int = LISTING_JPEG_QUALITY) -> bytes:
+    buf = io.BytesIO()
+    rgb = img.convert("RGB")
+    rgb.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -90,14 +172,8 @@ def _enhance_with_pil_only(img: Image.Image) -> Image.Image:
     return Image.fromarray(arr.astype(np.uint8), "RGB")
 
 
-def enhance_image(image_bytes: bytes) -> bytes:
-    """
-    In-house photo enhancement: CLAHE + edge-aware detail enhancement +
-    grey-world white balance + unsharp mask. Returns enhanced JPEG bytes.
-    Self-hosted, free/open-source only -- no external API call.
-    """
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
+def _apply_tone_enhance(img: Image.Image) -> Image.Image:
+    """CLAHE / detail / WB / unsharp — no geometry. img must already be RGB."""
     try:
         import cv2
 
@@ -106,15 +182,23 @@ def enhance_image(image_bytes: bytes) -> bytes:
         arr_bgr = _enhance_with_opencv(arr_bgr)
         arr_rgb = cv2.cvtColor(arr_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
         arr_rgb = _grey_world_white_balance(arr_rgb)
-        img = Image.fromarray(arr_rgb.astype(np.uint8), "RGB")
-        img = img.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=3))
+        out = Image.fromarray(arr_rgb.astype(np.uint8), "RGB")
+        return out.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=3))
     except ImportError:
         logger.warning("photo_enhance_service: cv2 unavailable, falling back to PIL-only pipeline")
-        img = _enhance_with_pil_only(img)
+        return _enhance_with_pil_only(img)
 
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90)
-    return buf.getvalue()
+
+def enhance_image(image_bytes: bytes) -> bytes:
+    """
+    Listing-ready in-house enhance: EXIF orient → tone enhance → long-edge
+    resize (max 2400) → center-crop 4:3 → JPEG ~90. Self-hosted only.
+    """
+    img = Image.open(io.BytesIO(image_bytes))
+    img = _exif_auto_orient(img).convert("RGB")
+    img = _apply_tone_enhance(img)
+    img = format_listing_ready(img)
+    return _encode_jpeg(img)
 
 
 # ---------------------------------------------------------------------------
