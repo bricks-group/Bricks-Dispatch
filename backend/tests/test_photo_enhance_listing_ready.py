@@ -439,6 +439,89 @@ def test_low_conf_glass_leaves_mid_not_half_dirty():
     assert float(p[60:120, 70:170].mean()) > 240.0
 
 
+
+def test_dark_ev_low_conf_pane_leaves_mid():
+    """v7: dark −EV + low/patchy conf → leave mid (blown white), never half-dirty."""
+    from PIL import Image
+
+    h, w = 200, 280
+    mid = np.full((h, w, 3), 120, dtype=np.uint8)
+    under = np.full((h, w, 3), 30, dtype=np.uint8)
+    mid[40:160, 50:230, :] = 255
+    # Very dark −EV with only sparse speckles of structure (patchy/low-conf)
+    under[40:160, 50:230, :] = (8, 12, 6)
+    for i in range(55, 150, 28):  # sparse — must not half-pull
+        under[i : i + 1, 80:120, :] = (20, 50, 18)
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    assert float(matte[70:130, 80:200].mean()) < 0.05, "dark low-conf must leave mid"
+    mid_img = Image.fromarray(mid, "RGB")
+    und_img = Image.fromarray(under, "RGB")
+    pulled = window_pull_from_brackets(mid_img, und_img, None, reference_mid=mid_img)
+    p = np.asarray(pulled, dtype=np.float32)
+    assert float(p[70:130, 80:200].mean()) > 240.0, "pane must stay blown mid-white"
+
+
+def test_mullion_pixels_stay_mid_after_pull_v7():
+    """v7: after pull, mullion luma stays ~mid (no dark fringe / matte bleed)."""
+    from PIL import Image
+
+    h, w = 220, 360
+    mid = np.full((h, w, 3), 140, dtype=np.uint8)
+    under = np.full((h, w, 3), 50, dtype=np.uint8)
+    mid[40:180, 40:150, :] = 255
+    mid[40:180, 190:300, :] = 255
+    under[40:180, 40:150, :] = (40, 115, 50)
+    under[40:180, 190:300, :] = (35, 105, 45)
+    for i in range(50, 170, 10):
+        under[i : i + 2, 55:140, :] = (30, 80, 35)
+        under[i : i + 2, 205:290, :] = (28, 75, 32)
+    mid[40:180, 150:190, :] = 250
+    under[40:180, 150:190, :] = (95, 94, 92)
+
+    mid_img = Image.fromarray(mid, "RGB")
+    und_img = Image.fromarray(under, "RGB")
+    pulled = window_pull_from_brackets(mid_img, und_img, None, reference_mid=mid_img)
+    p = np.asarray(pulled, dtype=np.float32)
+    m = mid.astype(np.float32)
+    mullion = (slice(60, 160), slice(155, 185))
+    mid_luma = m[mullion].mean(axis=2)
+    desk_luma = p[mullion].mean(axis=2)
+    drop = mid_luma - desk_luma
+    dirty_ratio = float((drop >= 40.0).mean())
+    assert dirty_ratio < 0.02, f"mullion dirty_white ratio {dirty_ratio}"
+    assert float(desk_luma.mean()) > float(mid_luma.mean()) - 10.0
+
+
+def test_uneven_pane_family_prefers_leave_mid():
+    """v7: one solid pane + one patchy dark pane → patchy leaves mid (no blotch family)."""
+    h, w = 220, 400
+    mid = np.full((h, w, 3), 130, dtype=np.uint8)
+    under = np.full((h, w, 3), 45, dtype=np.uint8)
+    # Solid recoverable left pane
+    mid[40:180, 30:160, :] = 255
+    under[40:180, 30:160, :] = (40, 120, 50)
+    for i in range(50, 170, 8):
+        under[i : i + 2, 45:145, :] = (30, 85, 35)
+    # Right pane: blown mid but almost-useless dark speckled −EV (must leave mid)
+    mid[40:180, 220:360, :] = 255
+    under[40:180, 220:360, :] = (5, 8, 4)
+    under[90:93, 260:280, :] = (25, 40, 20)  # feeble cue only
+    # White mullion between
+    mid[40:180, 160:220, :] = 248
+    under[40:180, 160:220, :] = (90, 90, 88)
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    left = float(matte[70:150, 50:140].mean())
+    right = float(matte[70:150, 240:340].mean())
+    mullion = float(matte[70:150, 170:210].mean())
+    # Patchy dark pane must leave mid; family may also leave the solid sibling
+    # mid (consistent leave-mid preferred over blotchy greenery on some only).
+    assert right < 0.05, f"patchy right must leave mid: {right}"
+    assert mullion < 0.08, f"mullion leaked: {mullion}"
+    # If left pulls, it must be solid — never a half-dirty residue
+    if left > 0.05:
+        assert left > 0.20, f"left half-dirty: {left}"
+
+
 def test_wall_ghost_still_killed_after_edge_lock():
     """Regression: beige wall between banks must stay matte 0 after v6 edge-lock."""
     h, w = 280, 480

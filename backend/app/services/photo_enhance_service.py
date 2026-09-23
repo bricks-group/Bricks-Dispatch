@@ -700,12 +700,14 @@ def _glass_only_matte(
     mid_rgb: np.ndarray,
     under_rgb: np.ndarray,
 ) -> np.ndarray:
-    """Strict per-pane glass confidence matte (Frame v6 P0 edge-lock).
+    """Strict per-pane glass confidence matte (Frame v7 P0 leave-mid).
 
-    −EV only inside blown glass panes. Morphologically protect mullions,
-    pillars, curtains, walls (erode matte off mid-white frames). Never
-    grey-fill. Low-confidence → leave mid (blown white ok). Hard-fail:
-    any interior wall getting −EV paint (wall ghost).
+    −EV only inside blown glass panes. Morphologically protect mullions /
+    transoms first (stronger erode off mid-white frames), then curtains /
+    plants. Never grey-fill. Low-confidence OR much-darker −EV with
+    patchy coverage → leave mid (blown white ok). Prefer consistent
+    leave-mid over blotchy greenery on some panes only. Hard-fail: any
+    interior wall getting −EV paint (wall ghost).
     """
     import cv2
 
@@ -806,8 +808,8 @@ def _glass_only_matte(
     seed = seed * (1.0 - np.clip(frame * 1.15, 0.0, 1.0))
     seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=0.7)
 
-    # Higher gate than v5: half-dirty low-conf pulls → leave mid (blown white ok)
-    conf_thresh = 0.18
+    # Higher gate than v6: half-dirty / low-conf pulls → leave mid (blown white ok)
+    conf_thresh = 0.20
     binary = (seed >= conf_thresh).astype(np.uint8) * 255
     # Light open: kill single-pixel wall speckles without erasing pane seeds
     k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -815,14 +817,15 @@ def _glass_only_matte(
     # Light close to rejoin pane speckles — keep small so mullions stay split
     k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close, iterations=1)
-    # Split at frames after morph
-    binary = np.where(frame > 0.28, 0, binary).astype(np.uint8)
+    # Split at frames after morph (v7: tighter split so transoms stay mid)
+    binary = np.where(frame > 0.25, 0, binary).astype(np.uint8)
     # Absolute glass floor
     binary = np.where(luma_m < GLASS_FLOOR, 0, binary).astype(np.uint8)
 
     n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
     min_area = max(55, int(0.00018 * h * w))
     keep = np.zeros_like(seed, dtype=np.float32)
+    accepted = []  # (comp_mask, mean_conf, mean_lu, mean_lm, cx, cy)
     for i in range(1, n_labels):
         area = int(stats[i, cv2.CC_STAT_AREA])
         if area < min_area:
@@ -830,7 +833,7 @@ def _glass_only_matte(
         comp = labels == i
         mean_conf = float(seed[comp].mean()) if comp.any() else 0.0
         # Per-pane consistency: weak / patchy panes leave mid entirely
-        if mean_conf < conf_thresh * 0.98:
+        if mean_conf < conf_thresh * 1.00:
             continue
         bw = int(stats[i, cv2.CC_STAT_WIDTH])
         bh = int(stats[i, cv2.CC_STAT_HEIGHT])
@@ -871,28 +874,84 @@ def _glass_only_matte(
         exterior_chroma = mean_cu > 18.0 and mean_cm < 12.0 and float(warm_under[comp].mean()) < 0.25
         if mean_novel < 0.010 and not exterior_chroma:
             continue
+        # v7: much-darker −EV only rejects when ALSO patchy/weak (solid
+        # high-conf dark foliage pulls still allowed; mottled half-pulls leave mid)
+        delta_lu = mean_lm - mean_lu
+        cov_seed = float((seed[comp] >= conf_thresh).mean())
+        if cov_seed < 0.55:
+            continue  # patchy seed → leave mid entire pane
+        if delta_lu > 110.0 and cov_seed < 0.72 and mean_conf < 0.32:
+            continue
+        if mean_lu < 40.0 and cov_seed < 0.75 and mean_conf < 0.34:
+            continue
+        cx = int(stats[i, cv2.CC_STAT_LEFT] + bw / 2)
+        cy = int(stats[i, cv2.CC_STAT_TOP] + bh / 2)
+        accepted.append((comp, mean_conf, mean_lu, mean_lm, cx, cy, cov_seed))
+
+    # Uneven pane family: prefer consistent leave-mid over blotchy greenery
+    # on some panes only. Weak siblings near strong ones → drop the weak.
+    if len(accepted) >= 2:
+        confs = np.array([a[1] for a in accepted], dtype=np.float32)
+        med = float(np.median(confs))
+        kept_acc = []
+        for a in accepted:
+            comp, mean_conf, mean_lu, mean_lm, cx, cy, cov_seed = a
+            # Far below family median → leave mid (avoid one blotchy pane)
+            if mean_conf < med * 0.65 and mean_conf < 0.30:
+                continue
+            if cov_seed < 0.60 and mean_conf < med * 0.80:
+                continue
+            kept_acc.append(a)
+        accepted = kept_acc
+
+    for a in accepted:
+        comp = a[0]
         keep[comp] = seed[comp]
 
-    # Per-pane erode: pull matte off mullions/pillars without wiping panes
-    # (Frame v6: stronger morphology so mid-white frames stay mid-white)
+    # --- Frames locked white FIRST (v7 order) --------------------------------
+    # Stronger erode of matte off mullions/transoms before any plant/curtain
+    # protect, so white frames never inherit soft −EV fringe.
     if float(keep.max()) > 0:
-        pane_bin = (keep > 0.14).astype(np.uint8)
-        k_er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        pane_bin = (keep > 0.16).astype(np.uint8)
+        k_er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         eroded = cv2.erode(pane_bin, k_er, iterations=2)
-        # Fallback to lighter erode if panes would vanish
-        if int(eroded.sum()) < max(20, int(0.20 * int(pane_bin.sum()))):
+        # Fallback cascade if panes would vanish
+        if int(eroded.sum()) < max(20, int(0.18 * int(pane_bin.sum()))):
+            k_er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            eroded = cv2.erode(pane_bin, k_er, iterations=2)
+        if int(eroded.sum()) < max(16, int(0.15 * int(pane_bin.sum()))):
             k_er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
             eroded = cv2.erode(pane_bin, k_er, iterations=1)
-        if int(eroded.sum()) >= max(16, int(0.18 * int(pane_bin.sum()))):
+        if int(eroded.sum()) >= max(12, int(0.14 * int(pane_bin.sum()))):
             keep = np.where(eroded > 0, keep, 0.0).astype(np.float32)
-        # Hard-zero residual on frame lock after erode
-        keep = keep * (1.0 - np.clip(frame * 1.25, 0.0, 1.0))
+        # Hard-zero residual on frame lock after erode (stronger than v6)
+        keep = keep * (1.0 - np.clip(frame * 1.35, 0.0, 1.0))
+        # Mid-white mullion / transom body → never −EV
+        white_bar = (luma_m >= 218.0) & (chroma_m < 20.0) & (frame > 0.18)
+        keep = np.where(white_bar, 0.0, keep).astype(np.float32)
+
+    # Protect curtains / plants ONLY AFTER frames are locked white
+    if float(keep.max()) > 0:
+        # Curtain: warm mid chroma, not blown flat glass
+        curtain_mid = (
+            (chroma_m > 22.0)
+            & (luma_m < 210.0)
+            & (mid[:, :, 0] > mid[:, :, 2] + 8.0)
+        )
+        # Plant: green-dominant mid (interior foliage in front of glass)
+        plant_mid = (
+            (mid[:, :, 1] > mid[:, :, 0] + 6.0)
+            & (mid[:, :, 1] > mid[:, :, 2] + 4.0)
+            & (chroma_m > 18.0)
+            & (luma_m < 200.0)
+        )
+        keep = np.where(curtain_mid | plant_mid, 0.0, keep).astype(np.float32)
 
     # NO soft dilate expand into walls (v4 wall-ghost path). Optional 1px
     # refill only into already-bright glass neighbors — never onto frames.
     if float(keep.max()) > 0:
         expand = cv2.dilate(
-            (keep > 0.18).astype(np.uint8),
+            (keep > 0.20).astype(np.uint8),
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
             iterations=1,
         )
@@ -900,20 +959,21 @@ def _glass_only_matte(
             (luma_m >= GLASS_SEED)
             & (luma_u < 200.0)
             & ((luma_m - luma_u) > 30.0)
-            & (frame < 0.15)
+            & (frame < 0.12)
             & (wallish < 0.25)
             & (interior < 0.40)
             & (below_floor < 0.5)
+            & (chroma_m < 16.0)
         )
         keep = np.where(
-            (expand > 0) & gate & (keep < 0.18),
-            np.maximum(keep, seed * 0.85),
+            (expand > 0) & gate & (keep < 0.20),
+            np.maximum(keep, seed * 0.80),
             keep,
         ).astype(np.float32)
 
     # Soft bay blend — tighter sigma so feather stays off mullions
-    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=0.85)
-    matte = matte * (1.0 - np.clip(frame * 1.20, 0.0, 1.0))
+    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=0.70)
+    matte = matte * (1.0 - np.clip(frame * 1.30, 0.0, 1.0))
     matte = matte * (1.0 - below_floor)
     # Absolute hard fails: wall ghost / furniture / dim interior
     matte = np.where(luma_m < GLASS_FLOOR, 0.0, matte)
@@ -926,15 +986,48 @@ def _glass_only_matte(
     matte = np.where((interior > 0.75) & (chroma_m > 18.0) & (luma_m < 230.0), 0.0, matte)
     # Mid-white frame body with weak exterior cues → never dirty (edge-lock)
     white_frame_body = (
-        (luma_m >= 220.0)
-        & (chroma_m < 18.0)
-        & (novel_under < 0.012)
-        & (chroma_u < 12.0)
-        & (interior > 0.40)
+        (luma_m >= 218.0)
+        & (chroma_m < 20.0)
+        & (novel_under < 0.014)
+        & (chroma_u < 14.0)
+        & ((interior > 0.35) | (frame > 0.15))
     )
     matte = np.where(white_frame_body, 0.0, matte)
     # Low-confidence → leave mid pane (never grey fill / half-dirty)
-    matte = np.where(matte >= 0.20, matte, 0.0).astype(np.float32)
+    matte = np.where(matte >= 0.22, matte, 0.0).astype(np.float32)
+
+    # v7: blown-glass components with partial matte → leave mid entirely
+    # (honest blown white beats mottled half-dirty greenery)
+    if float(matte.max()) > 0:
+        blown = (
+            (luma_m >= 228.0)
+            & (chroma_m < 22.0)
+            & (frame < 0.40)
+        ).astype(np.uint8) * 255
+        n_b, lab_b, st_b, _ = cv2.connectedComponentsWithStats(blown, connectivity=8)
+        pane_min = max(40, int(0.00012 * h * w))
+        for i in range(1, n_b):
+            area = int(st_b[i, cv2.CC_STAT_AREA])
+            if area < pane_min:
+                continue
+            comp = lab_b == i
+            cov = float((matte[comp] >= 0.22).mean())
+            mean_m = float(matte[comp].mean())
+            mean_lu = float(luma_u[comp].mean())
+            mean_lm = float(luma_m[comp].mean())
+            # Partial / mottled coverage → leave mid (erode shrinks good
+            # panes ~10–30%; only kill clearly half-dirty <35%)
+            if 0.0 < cov < 0.35:
+                matte[comp] = 0.0
+                continue
+            # Much-darker −EV with weak fill → leave mid (avoid mottled dark)
+            if (mean_lm - mean_lu) > 120.0 and cov < 0.45 and mean_m < 0.28:
+                matte[comp] = 0.0
+                continue
+            # Near-zero mean matte on pane → leave mid (no half-dirty speckles)
+            if 0.0 < mean_m < 0.10:
+                matte[comp] = 0.0
+
     return np.clip(matte, 0.0, 1.0)
 
 
@@ -982,12 +1075,28 @@ def window_pull_from_brackets(
             & (u_luma < 160.0)
             & (interior > 0.55)
         )
+        # v7: stronger mid-white mullion/transom restore after matte
         white_mullion = (
-            (ref_luma >= 218.0)
-            & (ref_chroma < 20.0)
-            & ((frame_lock > 0.22) | paint_under)
+            (ref_luma >= 215.0)
+            & (ref_chroma < 22.0)
+            & ((frame_lock > 0.18) | paint_under)
         )
         matte = np.where(white_mullion, 0.0, matte).astype(np.float32)
+        # Curtains/plants after frames locked: never −EV onto green/warm mid bodies
+        plant_or_curtain = (
+            (
+                (ref[:, :, 1] > ref[:, :, 0] + 6.0)
+                & (ref[:, :, 1] > ref[:, :, 2] + 4.0)
+                & (ref_chroma > 18.0)
+                & (ref_luma < 200.0)
+            )
+            | (
+                (ref_chroma > 22.0)
+                & (ref_luma < 210.0)
+                & (ref[:, :, 0] > ref[:, :, 2] + 8.0)
+            )
+        )
+        matte = np.where(plant_or_curtain, 0.0, matte).astype(np.float32)
         matte = matte[..., None]
         # Where matte is 0, canvas unchanged — never invent grey fill / wall paint
         out = out * (1.0 - matte) + u * matte
