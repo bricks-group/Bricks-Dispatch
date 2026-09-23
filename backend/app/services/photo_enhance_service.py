@@ -989,10 +989,17 @@ def _pick_under_mid_over(
 ) -> Tuple[Image.Image, Optional[Image.Image], Optional[Image.Image]]:
     if len(images) == 1:
         return images[0], None, None
+    # When any frame carries an EV name/exif bias, treat missing bias as 0.0
+    # (base plate). Never mix EV stops with raw luminance — that mis-ranks
+    # e.g. Lighthouse.jpg (None→~144) above Lighthouse_over (+2) so over
+    # becomes "mid" and cove sky mid-bias regresses.
+    known_ev = any(b is not None for b in biases)
     scored = []
     for im, bias in zip(images, biases):
         if bias is not None:
             scored.append((float(bias), im))
+        elif known_ev:
+            scored.append((0.0, im))
         else:
             mean = float(np.asarray(im.convert("L"), dtype=np.float32).mean())
             scored.append((mean, im))

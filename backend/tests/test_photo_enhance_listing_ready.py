@@ -29,6 +29,7 @@ from app.services.photo_enhance_service import (
     sky_region_likely,
     straighten_verticals,
     window_pull_from_brackets,
+    _pick_under_mid_over,
     _detect_corner_overlays,
     _glass_only_matte,
     _mid_biased_body,
@@ -372,6 +373,22 @@ def test_glass_only_rejects_bright_wall_panel_ghost():
     wall = float(matte[60:140, 175:245].mean())
     assert glass > 0.20, f"glass weak: {glass}"
     assert wall < 0.02, f"WALL GHOST on bright panel: {wall}"
+
+
+
+def test_pick_under_mid_over_unnamed_base_with_ev_siblings():
+    """Cove-style names: Lighthouse.jpg + _under + _over → mid is the base plate."""
+    under = Image.new("RGB", (64, 48), (20, 20, 20))
+    mid = Image.new("RGB", (64, 48), (120, 120, 120))
+    over = Image.new("RGB", (64, 48), (240, 240, 240))
+    # Biases as exposure_bias_from_name would yield
+    picked_mid, picked_under, picked_over = _pick_under_mid_over(
+        [mid, over, under], [None, 2.0, -2.0]
+    )
+    import numpy as np
+    assert tuple(np.asarray(picked_mid)[0, 0]) == (120, 120, 120)
+    assert tuple(np.asarray(picked_under)[0, 0]) == (20, 20, 20)
+    assert tuple(np.asarray(picked_over)[0, 0]) == (240, 240, 240)
 
 def test_mid_biased_body_keeps_bright_sky_on_mid():
     """Upper bright flat sky must not absorb fused mud."""
