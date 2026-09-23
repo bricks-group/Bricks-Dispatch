@@ -24,8 +24,9 @@ Default stack (order), with honest flags via capabilities():
   6. WB / exposure polish (gentle CLAHE + grey-world — inviting interiors,
      not HDR-halo / oversat)
   7. MLS export profile: 4:3 landscape, long-edge clamp 2048–2400 (no
-     upscale), sRGB JPEG ~LISTING_JPEG_QUALITY with soft ~1–3 MB band,
-     strip corner burned logos/watermarks when detected
+     upscale), sRGB JPEG ~LISTING_JPEG_QUALITY with soft ~1–3 MB band;
+     corner overlay detect → qc_soft_fail by default (aggressive inpaint
+     OFF unless WATERMARK_STRIP=1)
   8. People soft-fail metadata (PropTx 5.01d) — quarantine flag for GO/MLS;
      never hard-blocks enhance
 
@@ -65,6 +66,13 @@ LISTING_JPEG_TARGET_MAX_BYTES = 3_000_000
 MLS_EXPORT_PROFILE = "frame_proptx_mls_stills_v1"
 MLS_BRIEF_REF = "Frame PropTx MLS stills acceptance brief (Art. 5.01)"
 
+# Aggressive corner inpaint is OFF by default (Frame v3 cove: smudged rocks).
+# Detect → qc_soft_fail reason only. Set WATERMARK_STRIP=1 to enable strip.
+WATERMARK_STRIP_ENABLED = (os.getenv("WATERMARK_STRIP") or "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+REASON_CORNER_OVERLAY = "possible_corner_overlay"
+
 # Back-compat for earlier tests / callers
 LISTING_JPEG_Q = LISTING_JPEG_QUALITY
 
@@ -98,7 +106,7 @@ def capabilities() -> Dict[str, Any]:
         "mls_export_profile": MLS_EXPORT_PROFILE,
         "mls_brief": MLS_BRIEF_REF,
         "people_soft_fail": "yunet_proptx_5_01d",
-        "watermark_strip": "corner_overlay_heuristic",
+        "watermark_strip": ("corner_inpaint_opt_in" if WATERMARK_STRIP_ENABLED else "detect_soft_fail"),
         "virtual_staging": False,
         "object_removal": False,
         "day_to_dusk": False,
@@ -111,7 +119,9 @@ def capabilities() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _EV_SUFFIX = re.compile(
-    r"(?P<stem>.+?)(?:[_-](?:ev)?(?P<ev>[+-]?\d+(?:\.\d+)?)|_m(?P<m>\d+)|_p(?P<p>\d+)|_und(?:er)?|_over|_ov)$",
+    r"(?P<stem>.+?)(?:[_-](?:ev)?(?P<ev>[+-]?\d+(?:\.\d+)?)|"
+    r"[_-](?P<sign>minus|plus)(?P<mp>\d+(?:\.\d+)?)(?:ev)?|"
+    r"_m(?P<m>\d+)|_p(?P<p>\d+)|_und(?:er)?|_over|_ov|_normal)$",
     re.IGNORECASE,
 )
 
@@ -137,11 +147,20 @@ def exposure_bias_from_name(filename: str) -> Optional[float]:
             return float(m.group("ev"))
         except ValueError:
             return None
+    if m.group("mp") is not None:
+        try:
+            mag = float(m.group("mp"))
+        except ValueError:
+            return None
+        sign = (m.group("sign") or "").lower()
+        return -mag if sign == "minus" else mag
     if m.group("m") is not None:
         return -float(m.group("m"))
     if m.group("p") is not None:
         return float(m.group("p"))
     low = name.lower()
+    if low.endswith("_normal") or low.endswith("-normal"):
+        return 0.0
     if "und" in low:
         return -2.0
     if "over" in low or low.endswith("_ov"):
@@ -285,50 +304,106 @@ def _to_srgb_rgb(img: Image.Image) -> Image.Image:
     return rgb
 
 
-def _strip_corner_watermarks(img: Image.Image) -> Tuple[Image.Image, bool]:
-    """Heuristic strip of burned corner logos / CTAs (PropTx 5.01c).
+def _detect_corner_overlays(img: Image.Image) -> List[Dict[str, Any]]:
+    """Detect possible burned corner logos/CTAs without mutating pixels.
 
-    Conservative: only clears small corner patches that look like high-contrast
-    overlays on otherwise flat margins. Never invents content elsewhere.
+    High-confidence only. Texture-rich corners (rocks, foliage, furniture)
+    are rejected so we never soft-fail real scene content as overlay.
     """
     try:
         import cv2
     except ImportError:
-        return img, False
+        return []
 
     arr = np.asarray(_to_srgb_rgb(img), dtype=np.uint8)
     h, w = arr.shape[:2]
     if h < 200 or w < 200:
-        return img, False
+        return []
 
-    # Corner boxes ~12% of short side, capped
-    side = int(max(48, min(h, w) * 0.12))
+    # Smaller than v3 (~8%) — logos sit tight in corners; rocks fill large boxes
+    side = int(max(40, min(h, w) * 0.08))
     corners = [
-        (0, 0, side, side),
-        (w - side, 0, w, side),
-        (0, h - side, side, h),
-        (w - side, h - side, w, h),
+        ("tl", 0, 0, side, side),
+        ("tr", w - side, 0, w, side),
+        ("bl", 0, h - side, side, h),
+        ("br", w - side, h - side, w, h),
     ]
-    stripped = False
-    out = arr.copy()
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    for x0, y0, x1, y1 in corners:
+    found: List[Dict[str, Any]] = []
+    for name, x0, y0, x1, y1 in corners:
         roi = gray[y0:y1, x0:x1]
         if roi.size == 0:
             continue
-        edges = cv2.Canny(roi, 80, 160)
+        edges = cv2.Canny(roi, 90, 180)
         edge_pct = float(edges.mean()) / 255.0
-        # Logo-like: denser edges than a clean wall, but not a full scene
-        if edge_pct < 0.04 or edge_pct > 0.28:
+        # Logo plate: moderate edge density on otherwise flatter margin
+        if edge_pct < 0.055 or edge_pct > 0.22:
             continue
-        # Prefer patches that also have a bright or dark logo plate
         mean = float(roi.mean())
-        if 40 < mean < 210 and edge_pct < 0.08:
+        std = float(roi.std())
+        # Reject textured natural content (rocks/foliage → high local std)
+        if std > 42.0:
             continue
-        # Inpaint from surrounding — use a dilated edge mask
+        # Prefer bright/dark plate overlays, not mid-tone rock faces
+        if 55 < mean < 200 and edge_pct < 0.09:
+            continue
+        # Flat-ish surround with localized high-contrast glyph
+        lap = cv2.Laplacian(roi, cv2.CV_64F)
+        lap_std = float(lap.std())
+        if lap_std < 12.0 or lap_std > 85.0:
+            continue
+        found.append({
+            "corner": name,
+            "edge_pct": round(edge_pct, 4),
+            "mean": round(mean, 1),
+            "std": round(std, 1),
+        })
+    return found
+
+
+def _strip_corner_watermarks(
+    img: Image.Image,
+    *,
+    apply: Optional[bool] = None,
+) -> Tuple[Image.Image, bool, List[str]]:
+    """Corner overlay handling (PropTx 5.01c).
+
+    Default (Frame v3 P0): detect only → soft-fail reasons; do NOT inpaint.
+    Opt-in strip via apply=True or WATERMARK_STRIP=1. Never invent content
+    outside high-conf corner plates.
+    """
+    do_apply = WATERMARK_STRIP_ENABLED if apply is None else bool(apply)
+    hits = _detect_corner_overlays(img)
+    reasons: List[str] = [REASON_CORNER_OVERLAY] if hits else []
+    if not hits or not do_apply:
+        return img, False, reasons
+
+    try:
+        import cv2
+    except ImportError:
+        return img, False, reasons
+
+    arr = np.asarray(_to_srgb_rgb(img), dtype=np.uint8)
+    h, w = arr.shape[:2]
+    side = int(max(40, min(h, w) * 0.08))
+    corner_boxes = {
+        "tl": (0, 0, side, side),
+        "tr": (w - side, 0, w, side),
+        "bl": (0, h - side, side, h),
+        "br": (w - side, h - side, w, h),
+    }
+    out = arr.copy()
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    stripped = False
+    for hit in hits:
+        x0, y0, x1, y1 = corner_boxes[hit["corner"]]
+        roi = gray[y0:y1, x0:x1]
+        edges = cv2.Canny(roi, 90, 180)
         mask = np.zeros((h, w), dtype=np.uint8)
         mask[y0:y1, x0:x1] = np.where(edges > 0, 255, 0).astype(np.uint8)
-        mask[y0:y1, x0:x1] = cv2.dilate(mask[y0:y1, x0:x1], np.ones((3, 3), np.uint8), iterations=2)
+        mask[y0:y1, x0:x1] = cv2.dilate(
+            mask[y0:y1, x0:x1], np.ones((3, 3), np.uint8), iterations=1
+        )
         if int(mask.sum()) == 0:
             continue
         bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
@@ -336,8 +411,8 @@ def _strip_corner_watermarks(img: Image.Image) -> Tuple[Image.Image, bool]:
         out = cv2.cvtColor(repaired, cv2.COLOR_BGR2RGB)
         stripped = True
     if not stripped:
-        return img, False
-    return Image.fromarray(out, "RGB"), True
+        return img, False, reasons
+    return Image.fromarray(out, "RGB"), True, reasons
 
 
 def _encode_jpeg(img: Image.Image, quality: int = LISTING_JPEG_QUALITY) -> bytes:
@@ -418,6 +493,33 @@ def merge_brackets_mertens(images: Sequence[Image.Image]) -> Image.Image:
     return Image.fromarray(rgb, "RGB")
 
 
+def _sky_region_weight(rgb: np.ndarray) -> np.ndarray:
+    """Soft weight for bright / highlight sky (incl. sunset family).
+
+    Prefer mid plate here — never green-yellow reconstruct from fusion/−EV.
+    """
+    arr = rgb.astype(np.float32)
+    luma = arr.mean(axis=2)
+    chroma = arr.max(axis=2) - arr.min(axis=2)
+    h = luma.shape[0]
+    yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+    upper = np.clip(1.0 - yy * 1.05, 0.0, 1.0)
+
+    highlight = np.clip((luma - 185.0) / 55.0, 0.0, 1.0)
+    flat = np.clip((40.0 - chroma) / 40.0, 0.0, 1.0)
+    # Sunset / dawn family: warm mid-chroma still sky (pink/peach/gold)
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    warm = np.clip((r - b) / 40.0, 0.0, 1.0) * np.clip((r + g) / 2.0 / 180.0, 0.0, 1.0)
+    sunsetish = np.clip((luma - 140.0) / 70.0, 0.0, 1.0) * warm * np.clip(
+        (70.0 - np.abs(r - g)) / 70.0, 0.0, 1.0
+    )
+    cool_bright = highlight * flat
+    w = np.maximum(cool_bright, sunsetish * 0.85) * np.clip(0.35 + 0.65 * upper, 0.0, 1.0)
+    # Also catch mid-frame bright blowouts that are still open sky (cove sun)
+    w = np.maximum(w, highlight * flat * 0.55)
+    return np.clip(w, 0.0, 1.0).astype(np.float32)
+
+
 def _mid_biased_body(
     mid: Image.Image,
     fused: Optional[Image.Image],
@@ -426,8 +528,8 @@ def _mid_biased_body(
 ) -> Image.Image:
     """Room/exterior body stays mostly mid; fusion only where mid is weak.
 
-    Frame v2 P0 — bright sky / sun-adjacent: bias harder to mid (never average
-    highlight stress into muddy yellow-grey).
+    Frame v2/v3 P0 — bright sky / sun-adjacent: bias harder to mid (never
+    average highlight stress into muddy yellow-grey / green-yellow).
     """
     if fused is None:
         return mid
@@ -437,19 +539,16 @@ def _mid_biased_body(
         dtype=np.float32,
     )
     luma = a.mean(axis=2)
-    h = luma.shape[0]
-    yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
 
     # Shadows: allow a little fused lift
     w = np.clip((50.0 - luma) / 50.0, 0.0, 1.0) * 0.45
 
-    # Highlight stress: prefer mid plate, not fused mud (Frame cove P0)
-    highlight = np.clip((luma - 200.0) / 40.0, 0.0, 1.0)
-    # Upper-frame bright = likely sky — zero out fusion there
-    skyish = highlight * np.clip(1.0 - yy * 1.15, 0.0, 1.0)
-    w = w * (1.0 - skyish)
-    # Also kill fusion anywhere mid is already bright + low-chroma (sky/window blow)
+    # Sky / highlight: zero fusion — keep mid plate (Frame cove sky mid-bias)
+    sky_w = _sky_region_weight(a)
+    w = w * (1.0 - sky_w)
+
     chroma = a.max(axis=2) - a.min(axis=2)
+    highlight = np.clip((luma - 200.0) / 40.0, 0.0, 1.0)
     bright_flat = highlight * np.clip((28.0 - chroma) / 28.0, 0.0, 1.0)
     w = w * (1.0 - bright_flat)
 
@@ -458,15 +557,135 @@ def _mid_biased_body(
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
 
 
+def _green_yellow_mud(rgb: np.ndarray) -> np.ndarray:
+    """Dirtiness score: green-yellow reconstruct vs natural cool/sunset sky."""
+    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+    # Yellow-green: G high vs B, and G competitive with R
+    return (
+        np.clip((g - b) / 40.0, 0.0, 1.0)
+        * np.clip((g + 10.0 - r) / 35.0, 0.0, 1.0)
+    ).astype(np.float32)
+
+
+def _sky_mid_bias_restore(
+    working: Image.Image,
+    mid: Image.Image,
+    under: Optional[Image.Image] = None,
+) -> Image.Image:
+    """Force bright/highlight sky back toward mid (or under if mid blown).
+
+    Fail criterion (Frame): desk sky must not be dirtier/weirder than mid.
+    Never green-yellow reconstruct. Sunset family preserved from mid plate.
+    Does not undo intentional −EV glass foliage (interior bays).
+    """
+    a = np.asarray(working.convert("RGB"), dtype=np.float32)
+    m = np.asarray(
+        mid.convert("RGB").resize(working.size, Image.Resampling.LANCZOS),
+        dtype=np.float32,
+    )
+    sky_w = _sky_region_weight(m)
+    h = sky_w.shape[0]
+    yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+    upper = np.clip(1.0 - yy * 1.25, 0.0, 1.0)
+    # Bias restore to upper sky; keep lower/mid-frame glass pulls intact
+    sky_w = sky_w * np.clip(0.25 + 0.75 * upper, 0.0, 1.0)
+    if float(sky_w.max()) < 0.12:
+        return working
+
+    # Only restore where working is dirtier/weirder OR strongly diverged from mid
+    mud_a = _green_yellow_mud(a)
+    mud_m = _green_yellow_mud(m)
+    dirtier = np.clip((mud_a - mud_m) + 0.05, 0.0, 1.0)
+    diverged = np.clip(np.abs(a - m).mean(axis=2) / 45.0, 0.0, 1.0)
+    need = np.clip(np.maximum(dirtier * 1.5, diverged * upper), 0.0, 1.0)
+
+    # Interior glass guard: under foliage chroma under blown mid → leave pull
+    if under is not None:
+        u = np.asarray(
+            under.convert("RGB").resize(working.size, Image.Resampling.LANCZOS),
+            dtype=np.float32,
+        )
+        chroma_u = u.max(axis=2) - u.min(axis=2)
+        foliage = np.clip((chroma_u - 25.0) / 40.0, 0.0, 1.0) * np.clip(
+            (u[:, :, 1] - u[:, :, 2]) / 30.0, 0.0, 1.0
+        )
+        mid_blown = np.clip((m.mean(axis=2) - 230.0) / 20.0, 0.0, 1.0)
+        glass_pull = foliage * mid_blown * (1.0 - upper * 0.7)
+        need = need * (1.0 - glass_pull)
+    else:
+        u = None
+
+    # When working is clearly muddier in a sky-ish region, near-full mid copy
+    # (sky_w alone caps ~0.6 — must not leave green-yellow linger)
+    muddy_sky = (sky_w > 0.12) & (dirtier > 0.15)
+    hard = np.where(
+        muddy_sky,
+        np.clip(0.92 + 0.08 * dirtier, 0.0, 1.0),
+        sky_w * np.clip(dirtier * 2.2, 0.0, 1.0),
+    ).astype(np.float32)
+    w = np.maximum(sky_w * need, hard).astype(np.float32)
+    w = np.clip(w, 0.0, 1.0)
+    if float(w.max()) < 0.08:
+        return working
+
+    src = m.copy()
+    # Where mid is fully blown, soft-fall to under ONLY if under is not muddier
+    if u is not None:
+        mid_luma = m.mean(axis=2)
+        blown = np.clip((mid_luma - 245.0) / 10.0, 0.0, 1.0)
+        mid_chroma = m.max(axis=2) - m.min(axis=2)
+        under_g_bias = np.clip((u[:, :, 1] - u[:, :, 2]) / 35.0, 0.0, 1.0)
+        mid_g_bias = np.clip((m[:, :, 1] - m[:, :, 2]) / 35.0, 0.0, 1.0)
+        mud = np.clip(under_g_bias - mid_g_bias, 0.0, 1.0)
+        use_under = blown * (1.0 - mud) * np.clip((25.0 - mid_chroma) / 25.0, 0.0, 1.0)
+        src = m * (1.0 - use_under[..., None]) + u * use_under[..., None]
+
+    ww = w[..., None]
+    out = a * (1.0 - ww) + src * ww
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+def _frame_edge_lock_mask(mid_rgb: np.ndarray) -> np.ndarray:
+    """1 where mullion / frame / pillar edges must stay mid (exclude −EV).
+
+    Strong near-vertical and near-horizontal structure on the mid plate —
+    white bay frames, curtains folds at edges, wall pillars.
+    """
+    import cv2
+
+    gray = cv2.cvtColor(
+        np.clip(mid_rgb, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY
+    )
+    # Soft denoise so glass glare noise does not look like frames
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(gray, 60, 140)
+    # Prefer long axis-aligned structure
+    h, w = edges.shape
+    kx = max(9, (w // 80) | 1)
+    ky = max(9, (h // 80) | 1)
+    horiz = cv2.morphologyEx(
+        edges, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (kx, 1))
+    )
+    vert = cv2.morphologyEx(
+        edges, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, ky))
+    )
+    struct = cv2.bitwise_or(horiz, vert)
+    # Dilate so feather never paints onto the frame itself (keep tight — bay mullions)
+    rad = max(1, min(h, w) // 400)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rad * 2 + 1, rad * 2 + 1))
+    struct = cv2.dilate(struct, k, iterations=1)
+    return (struct.astype(np.float32) / 255.0)
+
+
 def _glass_only_matte(
     mid_rgb: np.ndarray,
     under_rgb: np.ndarray,
 ) -> np.ndarray:
-    """Glass-only soft matte. Wall/trim/plant leaks hard-rejected (Frame v2 P0).
+    """Strict glass-pane confidence matte (Frame v3 P0).
 
-    Seeds on blown low-chroma mid + usable −EV exterior, then morphologically
-    opens away thin bleeds, erodes so feather stays inside glass, drops weak
-    components. Low confidence → 0 (keep mid pane — never grey fill).
+    NEVER paint wall / curtain / mullion / pillar. Low-conf → leave mid pane.
+    Soft bay blend inside panes only. Frame-edge lock excludes axis-aligned
+    mullions from −EV. Open exterior sky is not treated as interior glass.
     """
     import cv2
 
@@ -476,36 +695,73 @@ def _glass_only_matte(
     luma_u = under.mean(axis=2)
     chroma_m = mid.max(axis=2) - mid.min(axis=2)
     chroma_u = under.max(axis=2) - under.min(axis=2)
+    h, w = luma_m.shape
 
-    # Mid: blown / near-white and relatively flat (glass glare, not painted wall)
-    hi = np.clip((luma_m - 210.0) / 35.0, 0.0, 1.0)
-    flat = np.clip((32.0 - chroma_m) / 32.0, 0.0, 1.0)
+    # Mid: bright glass band (recoverable ~170–230; pure 255 often still blown on −EV)
+    hi = np.clip((luma_m - 168.0) / 50.0, 0.0, 1.0)
+    flat = np.clip((40.0 - chroma_m) / 40.0, 0.0, 1.0)
 
-    # Under: has exterior content (foliage chroma or mid-tone structure)
-    under_ok = np.clip((luma_u - 20.0) / 35.0, 0.0, 1.0) * np.clip((215.0 - luma_u) / 50.0, 0.0, 1.0)
-    under_detail = np.clip(chroma_u / 40.0, 0.0, 1.0)
-    # Real DR: under darker than blown mid
-    delta = np.clip((luma_m - luma_u) / 50.0, 0.0, 1.0)
+    # Wall/curtain reject: mid that still has paint chroma and is not glass-bright
+    wallish = np.clip((chroma_m - 22.0) / 28.0, 0.0, 1.0) * np.clip(
+        (195.0 - luma_m) / 45.0, 0.0, 1.0
+    )
 
-    seed = hi * flat * under_ok * np.clip(0.25 + delta + 0.35 * under_detail, 0.0, 1.0)
-    seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=1.2)
+    # Under: dark–mid exterior with DR vs mid. Reject still-blown −EV (useless).
+    under_ok = np.clip((luma_u - 4.0) / 22.0, 0.0, 1.0) * np.clip(
+        (175.0 - luma_u) / 55.0, 0.0, 1.0
+    )
+    under_detail = np.clip(chroma_u / 35.0, 0.0, 1.0)
+    delta = np.clip((luma_m - luma_u) / 45.0, 0.0, 1.0)
+    # Structure: chroma OR edges OR strong local variance (dark foliage still counts)
+    under_u8 = np.clip(under, 0, 255).astype(np.uint8)
+    under_gray = cv2.cvtColor(under_u8, cv2.COLOR_RGB2GRAY)
+    under_edges = cv2.Canny(under_gray, 30, 90).astype(np.float32) / 255.0
+    blur = cv2.GaussianBlur(under_gray.astype(np.float32), (0, 0), sigmaX=2.0)
+    local_var = cv2.GaussianBlur(under_gray.astype(np.float32) ** 2, (0, 0), sigmaX=2.0) - blur ** 2
+    var_n = np.clip(local_var / 180.0, 0.0, 1.0)
+    under_struct = np.clip(0.35 * under_detail + 0.45 * under_edges + 0.55 * var_n, 0.0, 1.0)
+    under_struct = cv2.GaussianBlur(under_struct, (0, 0), sigmaX=1.2)
+    # Flat grey mullion under: low struct — keep near 0
+    under_struct = np.where(under_struct >= 0.08, under_struct, 0.0)
 
-    # Binary for component cleanup
-    conf_thresh = 0.42
+    seed = hi * flat * under_ok * np.clip(0.2 + 0.85 * under_struct, 0.0, 1.0) * np.clip(
+        0.2 + delta, 0.0, 1.0
+    )
+    seed = seed * (1.0 - wallish)
+
+    # Exterior open-sky suppress ONLY (upper + under looks like sky).
+    # Interior bay glass is bright/flat too — do NOT treat as sky.
+    sky_w = _sky_region_weight(mid)
+    yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+    upper = np.clip(1.0 - yy * 1.2, 0.0, 1.0)
+    under_skyish = (
+        np.clip((luma_u - 50.0) / 90.0, 0.0, 1.0)
+        * np.clip((30.0 - chroma_u) / 30.0, 0.0, 1.0)
+    )
+    seed = seed * (
+        1.0 - sky_w * upper * np.clip(0.35 + 0.65 * under_skyish, 0.0, 1.0)
+    )
+
+    # Frame / mullion / pillar edge lock
+    frame = _frame_edge_lock_mask(mid)
+    seed = seed * (1.0 - np.clip(frame * 1.25, 0.0, 1.0))
+
+    seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=0.9)
+
+    conf_thresh = 0.22
     binary = (seed >= conf_thresh).astype(np.uint8) * 255
-    # Open: kill thin wall/pillar smudges and plant edge leaks
-    k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    # Open: kill single-pixel wall speckles
+    k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, k_open, iterations=1)
-    # Close small muntin gaps inside a pane (keep as one pane)
+    # Soft bay: rejoin pane speckles; frame lock after splits mullions
     k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close, iterations=1)
-    # Erode so feather stays inside glass (not onto trim/curtains)
-    k_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    binary = cv2.erode(binary, k_erode, iterations=1)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close, iterations=2)
+    # Re-apply frame lock after morph (splits panes at mullions)
+    binary = np.where(frame > 0.40, 0, binary).astype(np.uint8)
 
     n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    h, w = binary.shape
-    min_area = max(80, int(0.0008 * h * w))
+    # Real bay panes fragment under frame lock — keep modest components
+    min_area = max(40, int(0.00015 * h * w))
     keep = np.zeros_like(seed, dtype=np.float32)
     for i in range(1, n_labels):
         area = int(stats[i, cv2.CC_STAT_AREA])
@@ -513,20 +769,48 @@ def _glass_only_matte(
             continue
         comp = labels == i
         mean_conf = float(seed[comp].mean()) if comp.any() else 0.0
-        # Weak / wall-bleed components → discard (fall back to mid)
-        if mean_conf < conf_thresh:
+        if mean_conf < conf_thresh * 0.9:
             continue
-        # Aspect sanity: reject huge full-wall blobs (matte painted the room)
         bw = int(stats[i, cv2.CC_STAT_WIDTH])
         bh = int(stats[i, cv2.CC_STAT_HEIGHT])
-        if bw > 0.85 * w and bh > 0.55 * h:
+        # Reject huge full-wall / curtain slabs
+        if bw > 0.72 * w and bh > 0.45 * h:
+            continue
+        # Reject tall thin pillars / curtain drops
+        if bh > 0.55 * h and bw < 0.08 * w:
+            continue
+        # Reject wide thin ledge bleeds
+        if bw > 0.55 * w and bh < 0.08 * h:
+            continue
+        # Component must still be bright glass on mid (not dim wall)
+        if float(luma_m[comp].mean()) < 175.0:
             continue
         keep[comp] = seed[comp]
 
-    # Soft feather inside glass only
-    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=2.0)
-    # Hard floor: below confidence → exact mid (no grey slab)
-    matte = np.where(matte >= 0.28, matte, 0.0).astype(np.float32)
+    # Soft bay expand: grow into bright+DR neighbors only (never walls/frames)
+    if float(keep.max()) > 0:
+        expand = cv2.dilate(
+            (keep > 0.12).astype(np.uint8),
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+            iterations=1,
+        )
+        gate = (
+            (luma_m > 165.0)
+            & (luma_u < 155.0)
+            & ((luma_m - luma_u) > 28.0)
+            & (frame < 0.40)
+            & (wallish < 0.40)
+        )
+        keep = np.where(
+            (expand > 0) & gate,
+            np.maximum(keep, seed * 0.9),
+            keep,
+        ).astype(np.float32)
+
+    # Soft bay blend — modest sigma, hard floor (low-conf → mid pane)
+    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=1.6)
+    matte = matte * (1.0 - np.clip(frame * 1.05, 0.0, 1.0))
+    matte = np.where(matte >= 0.20, matte, 0.0).astype(np.float32)
     return np.clip(matte, 0.0, 1.0)
 
 
@@ -534,19 +818,30 @@ def window_pull_from_brackets(
     mid: Image.Image,
     under: Optional[Image.Image],
     over: Optional[Image.Image],
+    *,
+    reference_mid: Optional[Image.Image] = None,
 ) -> Image.Image:
-    """−EV on glass only; muntins/curtains/walls stay mid. Low matte → mid pane."""
+    """−EV on glass only; muntins/curtains/walls stay mid. Low matte → mid pane.
+
+    Matte is always computed on the true mid plate (reference_mid) so fusion
+    body glow cannot expand −EV onto walls. Pixels written onto `mid` canvas.
+    """
     if under is None and over is None:
         return mid
-    arr = np.asarray(mid.convert("RGB"), dtype=np.float32)
-    out = arr.copy()
-    luma = arr.mean(axis=2)
+    canvas = np.asarray(mid.convert("RGB"), dtype=np.float32)
+    ref_img = reference_mid if reference_mid is not None else mid
+    ref = np.asarray(
+        ref_img.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS),
+        dtype=np.float32,
+    )
+    out = canvas.copy()
+    luma = ref.mean(axis=2)
 
     if under is not None:
         u_img = under.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS)
         u = np.asarray(u_img, dtype=np.float32)
-        matte = _glass_only_matte(arr, u)[..., None]
-        # Where matte is 0, mid is unchanged — never invent grey fill
+        matte = _glass_only_matte(ref, u)[..., None]
+        # Where matte is 0, canvas unchanged — never invent grey fill / wall paint
         out = out * (1.0 - matte) + u * matte
 
     if over is not None:
@@ -951,10 +1246,13 @@ def enhance_bracket(
         # Mid-biased body (Frame P0) — do not replace room with equal HDR
         body = _mid_biased_body(mid, fused, fused_mix=0.35)
 
-        pulled = window_pull_from_brackets(body, under, over)
+        pulled = window_pull_from_brackets(body, under, over, reference_mid=mid)
         if pulled is not body:
             body = pulled
             used_window = under is not None or over is not None
+
+        # Cove/exterior: bright sky must stay mid-biased (never dirtier than mid)
+        body = _sky_mid_bias_restore(body, mid, under)
 
         body = restore_black_point(body)
         # Slight midtone punch for exteriors (Frame v2 P1); interiors stay gentler
@@ -974,7 +1272,8 @@ def enhance_bracket(
     working = straighten_verticals(working)
     working = _apply_tone_enhance(working)
     working = format_listing_ready(working)
-    working, used_watermark_strip = _strip_corner_watermarks(working)
+    # Corner overlay: default detect → soft-fail; inpaint only if WATERMARK_STRIP=1
+    working, used_watermark_strip, wm_reasons = _strip_corner_watermarks(working)
     out = _encode_jpeg(working)
 
     meta: Dict[str, Any] = {
@@ -1000,6 +1299,15 @@ def enhance_bracket(
             "qc_soft_fail": False,
             "qc_soft_fail_reasons": [],
         })
+
+    # Merge watermark detect soft-fail (does not quarantine MLS by itself)
+    if wm_reasons:
+        reasons = list(meta.get("qc_soft_fail_reasons") or [])
+        for r in wm_reasons:
+            if r not in reasons:
+                reasons.append(r)
+        meta["qc_soft_fail_reasons"] = reasons
+        meta["qc_soft_fail"] = True
 
     logger.info(
         "photo_enhance: done hdr=%s window_pull=%s sky=%s wm=%s people=%s size=%dx%d",

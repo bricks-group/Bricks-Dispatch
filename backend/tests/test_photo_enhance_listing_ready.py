@@ -15,6 +15,8 @@ from app.services.photo_enhance_service import (
     LISTING_ASPECT,
     LISTING_JPEG_QUALITY,
     LISTING_MAX_LONG_EDGE,
+    REASON_CORNER_OVERLAY,
+    WATERMARK_STRIP_ENABLED,
     bracket_stem,
     capabilities,
     enhance_bracket,
@@ -27,8 +29,11 @@ from app.services.photo_enhance_service import (
     sky_region_likely,
     straighten_verticals,
     window_pull_from_brackets,
+    _detect_corner_overlays,
     _glass_only_matte,
     _mid_biased_body,
+    _sky_mid_bias_restore,
+    _sky_region_weight,
     _center_crop_aspect,
     _exif_auto_orient,
     _landscape_content_crop,
@@ -248,6 +253,29 @@ def test_glass_only_matte_rejects_wall_bleed():
     assert wall < 0.05
 
 
+def test_glass_only_matte_does_not_expand_into_walls_or_mullions():
+    """Synthetic bay: glass panes high; wall + white mullion bars stay ~0."""
+    h, w = 240, 360
+    mid = np.full((h, w, 3), 130, dtype=np.uint8)  # painted wall
+    under = np.full((h, w, 3), 45, dtype=np.uint8)
+    # Two blown panes with a vertical mullion gap between them
+    mid[50:180, 40:150, :] = 255
+    mid[50:180, 170:290, :] = 255
+    under[50:180, 40:150, :] = (40, 110, 50)
+    under[50:180, 170:290, :] = (35, 100, 45)
+    # Bright white mullion + wall pillar (must not receive −EV)
+    mid[50:180, 150:170, :] = 250  # mullion
+    mid[40:190, 20:35, :] = 200  # wall trim / pillar (not blown flat)
+    under[50:180, 150:170, :] = (80, 80, 80)
+    matte = _glass_only_matte(mid, under)
+    pane = float(matte[80:150, 70:130].mean())
+    wall = float(matte[80:150, 0:18].mean())
+    mullion = float(matte[80:150, 152:168].mean())
+    assert pane > 0.30
+    assert wall < 0.05, f"wall matte leaked: {wall}"
+    assert mullion < 0.12, f"mullion matte leaked: {mullion}"
+
+
 def test_mid_biased_body_keeps_bright_sky_on_mid():
     """Upper bright flat sky must not absorb fused mud."""
     mid = Image.new("RGB", (200, 160), (100, 150, 220))
@@ -260,6 +288,50 @@ def test_mid_biased_body_keeps_bright_sky_on_mid():
     # Stay near mid plate (cool), not fused yellow
     assert top[:, :, 2].mean() > top[:, :, 0].mean()
     assert abs(float(top.mean()) - 245) < 25
+
+
+def test_sky_region_prefers_mid_on_bright_low_chroma():
+    """Bright low-chroma sky: restore toward mid, never keep green-yellow mud."""
+    mid = Image.new("RGB", (300, 200), (80, 90, 70))
+    m = np.asarray(mid).copy()
+    m[:90, :, :] = (235, 240, 248)  # bright cool sky
+    mid = Image.fromarray(m, "RGB")
+    # Working plate dirtied with green-yellow reconstruct in sky
+    dirty = m.copy()
+    dirty[:90, :, :] = (200, 210, 120)
+    working = Image.fromarray(dirty, "RGB")
+    out = _sky_mid_bias_restore(working, mid, under=None)
+    top = np.asarray(out)[:70, :, :].astype(np.float32)
+    # Prefer mid cool sky (B high) over green-yellow mud
+    assert top[:, :, 2].mean() > top[:, :, 1].mean() - 5
+    assert float(top.mean()) > 220
+    # Weight helper marks bright low-chroma
+    w = _sky_region_weight(m.astype(np.float32))
+    assert float(w[:70, :].mean()) > 0.2
+
+
+def test_watermark_strip_default_off_soft_fail_path():
+    """Aggressive corner inpaint OFF by default; clean frames stay untouched."""
+    assert WATERMARK_STRIP_ENABLED is False
+    clean = Image.new("RGB", (800, 600), (120, 120, 120))
+    from app.services.photo_enhance_service import _strip_corner_watermarks
+    out, stripped, reasons = _strip_corner_watermarks(clean)
+    assert stripped is False
+    assert reasons == []
+    assert out.size == clean.size
+    # Fake high-contrast corner glyph on flat margin → detect soft-fail, no inpaint
+    arr = np.asarray(clean).copy()
+    arr[10:50, 10:70, :] = 20
+    arr[18:28, 18:60, :] = 240  # bright bar (logo-like)
+    marked = Image.fromarray(arr, "RGB")
+    out2, stripped2, reasons2 = _strip_corner_watermarks(marked, apply=False)
+    assert stripped2 is False
+    # Detection may or may not fire on synthetic; pixels must be unchanged when apply=False
+    assert np.array_equal(np.asarray(out2), np.asarray(marked))
+    # Opt-in apply still returns tuple of 3
+    out3, stripped3, _ = _strip_corner_watermarks(marked, apply=True)
+    assert out3.size == marked.size
+    assert isinstance(stripped3, bool)
 
 
 
@@ -295,7 +367,7 @@ def test_capabilities_proptx_export_profile():
     assert caps["color_space"] == "srgb"
     assert caps["long_edge_band_px"] == [LISTING_TARGET_MIN_LONG_EDGE, LISTING_MAX_LONG_EDGE]
     assert caps["people_soft_fail"] == "yunet_proptx_5_01d"
-    assert caps["watermark_strip"] == "corner_overlay_heuristic"
+    assert caps["watermark_strip"] in ("detect_soft_fail", "corner_inpaint_opt_in")
     assert caps["jpeg_target_bytes"][1] == LISTING_JPEG_TARGET_MAX_BYTES
 
 
@@ -330,8 +402,9 @@ def test_srgb_flatten_strips_info():
 
 def test_watermark_strip_noop_on_clean():
     clean = Image.new("RGB", (800, 600), (120, 120, 120))
-    out, stripped = _strip_corner_watermarks(clean)
+    out, stripped, reasons = _strip_corner_watermarks(clean)
     assert stripped is False
+    assert reasons == []
     assert out.size == clean.size
 
 
@@ -411,3 +484,12 @@ def test_soft_fail_field_names_contract_for_frame_go():
     assert FIELD_SOFT_FAIL == "qc_soft_fail"
     assert FIELD_SOFT_FAIL_REASONS == "qc_soft_fail_reasons"
     assert REASON_PERSONS == "proptx_5_01d_persons"
+
+
+def test_enhance_meta_wm_strip_false_by_default():
+    """Default path never sets used_watermark_strip; may soft-fail on overlays."""
+    out, meta = enhance_image(_jpeg(1200, 900, (100, 110, 120)), return_meta=True)
+    assert out[:2] == b"\xff\xd8"
+    assert meta["used_watermark_strip"] is False
+    assert REASON_CORNER_OVERLAY == "possible_corner_overlay"
+
