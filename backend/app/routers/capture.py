@@ -1043,11 +1043,16 @@ async def _notify_capture_session_delivered(db, job: dict, sid: str, kind: str, 
             url = public_tour_embed_url(job_id, sid)
             if url:
                 delivery_urls.append({"url": url, "filename": "3D tour"})
-        elif kind == "floorplan" and output_path:
-            from ..services.storage import get_signed_download_url
-            signed = await get_signed_download_url(output_path, expiry=60 * 60 * 24)
-            if signed:
-                delivery_urls.append({"url": signed, "filename": "Floor plan"})
+        elif kind == "floorplan":
+            from ..services.capture_worker import public_floorplan_url
+            url = public_floorplan_url(job_id, sid)
+            if url:
+                delivery_urls.append({"url": url, "filename": "Floor plan"})
+            elif output_path:
+                from ..services.storage import get_signed_download_url
+                signed = await get_signed_download_url(output_path, expiry=60 * 60 * 24)
+                if signed:
+                    delivery_urls.append({"url": signed, "filename": "Floor plan"})
     except Exception:
         delivery_urls = []
     try:

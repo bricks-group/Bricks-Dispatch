@@ -53,6 +53,16 @@ def public_tour_embed_url(job_id: str, session_id: str) -> Optional[str]:
     return f"{os_url}/api/public/tours/{job_id}/{session_id}"
 
 
+def public_floorplan_url(job_id: str, session_id: str) -> Optional[str]:
+    """Public floor-plan PNG URL on the OS API (Blob-safe; same identity as tours)."""
+    os_url = (os.environ.get("BRICKS_OS_API_URL") or "").strip().rstrip("/")
+    if not os_url:
+        os_url = _DEFAULT_OS_API_URL
+    if not job_id or not session_id:
+        return None
+    return f"{os_url}/api/public/floorplans/{job_id}/{session_id}"
+
+
 def _data(res) -> list:
     data = getattr(res, "data", None)
     if data is None and isinstance(res, dict):

@@ -126,18 +126,27 @@ async def register_property_visit(
     if body["type"] == "url" and not embed_url:
         logger.warning("visit-ready skipped — type=url needs embed_url")
         return False
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{os_url}/api/internal/visit-ready",
-                headers={"X-Internal-Api-Key": api_key},
-                json=body,
-            )
-            resp.raise_for_status()
-            return True
-    except Exception as e:
-        logger.error(f"visit-ready call for property {property_id} failed: {e}")
-        return False
+    # One retry on transient network / 5xx — avoid hollow listing when OS blips.
+    last_err: Exception | None = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{os_url}/api/internal/visit-ready",
+                    headers={"X-Internal-Api-Key": api_key},
+                    json=body,
+                )
+                resp.raise_for_status()
+                return True
+        except Exception as e:
+            last_err = e
+            if attempt == 0:
+                logger.warning(
+                    "visit-ready retry for property %s after: %s", property_id, e
+                )
+                continue
+    logger.error(f"visit-ready call for property {property_id} failed: {last_err}")
+    return False
 
 
 async def _load_job(job_id: str, columns: str) -> dict:
