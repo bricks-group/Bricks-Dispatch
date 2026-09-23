@@ -140,8 +140,27 @@ def _visit_pick_rank(filename: Any = None) -> int:
 
 
 def is_photo_delivery_candidate(filename: Any = None) -> bool:
-    """False for Visit/3D assets that must not land in listing still delivery_urls."""
+    """False for Visit/3D assets that must not land in listing still delivery_urls.
+
+    Filename-only helper kept for backward compatibility. Prefer
+    ``is_listing_still_delivery_row`` when the upload row is available so
+    HDR bracket siblings are also excluded.
+    """
     return not is_visit_file(filename)
+
+
+def is_listing_still_delivery_row(upload: Any = None) -> bool:
+    """True when this upload should appear once in listing still delivery.
+
+    Excludes Visit/3D filenames and HDR bracket siblings (non-primary frames
+    that share the primary's processed_url after merge).
+    """
+    row = upload if isinstance(upload, dict) else {}
+    if is_visit_file(row.get("filename")):
+        return False
+    if _lower(row.get("provider")) == "bracket_sibling":
+        return False
+    return True
 
 
 def pick_visit_upload(uploads: list | None) -> Optional[dict]:

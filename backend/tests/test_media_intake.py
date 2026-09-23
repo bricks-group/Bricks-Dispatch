@@ -1,6 +1,7 @@
 from app.services.media_intake import (
     delivery_route,
     infer_media_type,
+    is_listing_still_delivery_row,
     is_photo_delivery_candidate,
     is_photo_file,
     is_video_file,
@@ -97,3 +98,43 @@ def test_filter_photo_delivery_excludes_all_visit_exts():
     ]
     photos = [u for u in uploads if is_photo_delivery_candidate(u.get("filename"))]
     assert [u["filename"] for u in photos] == ["living.jpg", "reel.mp4"]
+
+
+def test_listing_still_delivery_excludes_bracket_siblings():
+    """HDR −/0/+ merge marks non-primary frames provider=bracket_sibling."""
+    primary = {
+        "filename": "living-0.jpg",
+        "provider": "bricks_inhouse",
+        "processed_url": "jobs/j/merged.jpg",
+    }
+    sibling_minus = {
+        "filename": "living--1.jpg",
+        "provider": "bracket_sibling",
+        "processed_url": "jobs/j/merged.jpg",
+    }
+    sibling_plus = {
+        "filename": "living-+1.jpg",
+        "provider": "bracket_sibling",
+        "processed_url": "jobs/j/merged.jpg",
+    }
+    visit = {"filename": "tour.splat", "provider": "bricks_inhouse"}
+    assert is_listing_still_delivery_row(primary)
+    assert is_listing_still_delivery_row({"filename": "a.jpg"})  # no provider → include
+    assert not is_listing_still_delivery_row(sibling_minus)
+    assert not is_listing_still_delivery_row(sibling_plus)
+    assert not is_listing_still_delivery_row(visit)
+    # filename-only helper still Visit-only (backward compatible)
+    assert is_photo_delivery_candidate(sibling_minus["filename"])
+    assert not is_photo_delivery_candidate("tour.ply")
+
+
+def test_filter_listing_stills_keeps_one_per_bracket():
+    uploads = [
+        {"filename": "living--1.jpg", "provider": "bracket_sibling"},
+        {"filename": "living-0.jpg", "provider": "bricks_inhouse"},
+        {"filename": "living-+1.jpg", "provider": "bracket_sibling"},
+        {"filename": "kitchen.jpg", "provider": "bricks_inhouse"},
+        {"filename": "tour.splat", "provider": "bricks_inhouse"},
+    ]
+    kept = [u["filename"] for u in uploads if is_listing_still_delivery_row(u)]
+    assert kept == ["living-0.jpg", "kitchen.jpg"]

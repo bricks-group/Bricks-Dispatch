@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from ..services.media_intake import is_photo_delivery_candidate, pick_visit_upload
+from ..services.media_intake import is_listing_still_delivery_row, pick_visit_upload
 from ..services.qc_agent import run_qc_for_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.auth import get_own_internal_api_key
@@ -65,7 +65,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     db = await get_db()
 
     res_uploads = await db.table("uploads").select(
-        "id, filename, file_url, processed_url, processing_status"
+        "id, filename, file_url, processed_url, processing_status, provider"
     ).eq("job_id", job_id).execute()
     uploads = res_uploads.data or []
 
@@ -97,7 +97,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
 
     # Re-fetch uploads after QC (qc_status now populated)
     res_uploads = await db.table("uploads").select(
-        "id, filename, file_url, processed_url, processing_status, qc_status"
+        "id, filename, file_url, processed_url, processing_status, qc_status, provider"
     ).eq("job_id", job_id).execute()
     uploads = res_uploads.data or []
 
@@ -115,9 +115,10 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         if u.get("processing_status") == "failed":
             logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — processing failed")
             continue
-        # Skip Visit/3D assets — .splat/.ply/.spz register via property_visits, not listing stills
-        if not is_photo_delivery_candidate(u.get("filename")):
-            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded from photo list — Visit/3D asset")
+        # Skip Visit/3D + HDR bracket siblings (non-primary share primary processed_url)
+        if not is_listing_still_delivery_row(u):
+            reason = "bracket sibling" if str(u.get("provider") or "").lower() == "bracket_sibling" else "Visit/3D asset"
+            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded from photo list — {reason}")
             continue
         path = u.get("processed_url") or u.get("file_url")
         if not path:
