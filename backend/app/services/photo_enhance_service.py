@@ -649,7 +649,7 @@ def _frame_edge_lock_mask(mid_rgb: np.ndarray) -> np.ndarray:
     """1 where mullion / frame / pillar edges must stay mid (exclude −EV).
 
     Strong near-vertical and near-horizontal structure on the mid plate —
-    white bay frames, curtains folds at edges, wall pillars.
+    white bay frames, curtain folds at edges, wall pillars.
     """
     import cv2
 
@@ -658,11 +658,10 @@ def _frame_edge_lock_mask(mid_rgb: np.ndarray) -> np.ndarray:
     )
     # Soft denoise so glass glare noise does not look like frames
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    edges = cv2.Canny(gray, 60, 140)
-    # Prefer long axis-aligned structure
+    edges = cv2.Canny(gray, 55, 130)
     h, w = edges.shape
-    kx = max(9, (w // 80) | 1)
-    ky = max(9, (h // 80) | 1)
+    kx = max(11, (w // 70) | 1)
+    ky = max(11, (h // 70) | 1)
     horiz = cv2.morphologyEx(
         edges, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (kx, 1))
     )
@@ -670,22 +669,41 @@ def _frame_edge_lock_mask(mid_rgb: np.ndarray) -> np.ndarray:
         edges, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, ky))
     )
     struct = cv2.bitwise_or(horiz, vert)
-    # Dilate so feather never paints onto the frame itself (keep tight — bay mullions)
-    rad = max(1, min(h, w) // 400)
+    # Dilate so feather never paints onto the frame itself
+    rad = max(2, min(h, w) // 320)
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rad * 2 + 1, rad * 2 + 1))
-    struct = cv2.dilate(struct, k, iterations=1)
-    return (struct.astype(np.float32) / 255.0)
+    struct = cv2.dilate(struct, k, iterations=2)
+    return struct.astype(np.float32) / 255.0
+
+
+def _interior_same_chromaticity(
+    mid_rgb: np.ndarray, under_rgb: np.ndarray
+) -> np.ndarray:
+    """1 where under is just a darker mid (wall/curtain/furniture), not exterior.
+
+    Blown glass mid is near-neutral; −EV foliage shifts chromaticity. Painted
+    walls keep the same beige ratios when darkened.
+    """
+    mid = mid_rgb.astype(np.float32)
+    under = under_rgb.astype(np.float32)
+    lm = mid.mean(axis=2, keepdims=True) + 1e-3
+    lu = under.mean(axis=2, keepdims=True) + 1e-3
+    mid_n = mid / lm
+    und_n = under / lu
+    shift = np.abs(mid_n - und_n).mean(axis=2)
+    # Low shift → same paint; scale so ~0.04–0.10 is the wall band
+    return np.clip((0.09 - shift) / 0.09, 0.0, 1.0)
 
 
 def _glass_only_matte(
     mid_rgb: np.ndarray,
     under_rgb: np.ndarray,
 ) -> np.ndarray:
-    """Strict glass-pane confidence matte (Frame v3 P0).
+    """Strict per-pane glass confidence matte (Frame v5 P0).
 
-    NEVER paint wall / curtain / mullion / pillar. Low-conf → leave mid pane.
-    Soft bay blend inside panes only. Frame-edge lock excludes axis-aligned
-    mullions from −EV. Open exterior sky is not treated as interior glass.
+    −EV only inside blown glass panes. Morphologically protect mullions,
+    pillars, curtains, walls. Never grey-fill. Low-confidence → leave mid.
+    Hard-fail: any interior wall getting −EV paint (wall ghost).
     """
     import cv2
 
@@ -697,40 +715,79 @@ def _glass_only_matte(
     chroma_u = under.max(axis=2) - under.min(axis=2)
     h, w = luma_m.shape
 
-    # Mid: bright glass band (recoverable ~170–230; pure 255 often still blown on −EV)
-    hi = np.clip((luma_m - 168.0) / 50.0, 0.0, 1.0)
-    flat = np.clip((40.0 - chroma_m) / 40.0, 0.0, 1.0)
+    # --- Hard glass brightness: walls/furniture sit well below this ---------
+    # Absolute floor 200 kills wall ghost; seed ~205 catches recoverable panes.
+    GLASS_FLOOR = 200.0
+    GLASS_SEED = 200.0
+    hi = np.clip((luma_m - 198.0) / 36.0, 0.0, 1.0)
+    flat = np.clip((42.0 - chroma_m) / 42.0, 0.0, 1.0)  # blown glass is flat
 
-    # Wall/curtain reject: mid that still has paint chroma and is not glass-bright
-    wallish = np.clip((chroma_m - 22.0) / 28.0, 0.0, 1.0) * np.clip(
-        (195.0 - luma_m) / 45.0, 0.0, 1.0
+    # Wall / curtain / furniture reject on mid plate
+    wallish = np.clip((chroma_m - 14.0) / 30.0, 0.0, 1.0) * np.clip(
+        (GLASS_FLOOR - luma_m) / 40.0 + 0.35, 0.0, 1.0
     )
+    # Anything below glass floor is never a candidate (hard)
+    below_floor = (luma_m < GLASS_FLOOR).astype(np.float32)
 
-    # Under: dark–mid exterior with DR vs mid. Reject still-blown −EV (useless).
-    under_ok = np.clip((luma_u - 4.0) / 22.0, 0.0, 1.0) * np.clip(
-        (175.0 - luma_u) / 55.0, 0.0, 1.0
+    # Under must be useful −EV (not still blown white, not empty black)
+    # Allow brighter −EV when foliage chroma/structure is present (left bank).
+    under_ok = np.clip((luma_u - 6.0) / 24.0, 0.0, 1.0) * np.clip(
+        (230.0 - luma_u) / 55.0, 0.0, 1.0
     )
-    under_detail = np.clip(chroma_u / 35.0, 0.0, 1.0)
-    delta = np.clip((luma_m - luma_u) / 45.0, 0.0, 1.0)
-    # Structure: chroma OR edges OR strong local variance (dark foliage still counts)
+    # Still-blown −EV with no chroma → leave mid pane (no invent)
+    still_blown = np.clip((luma_u - 225.0) / 18.0, 0.0, 1.0) * np.clip(
+        (14.0 - chroma_u) / 14.0, 0.0, 1.0
+    )
+    delta = np.clip((luma_m - luma_u) / 40.0, 0.0, 1.0)
+
     under_u8 = np.clip(under, 0, 255).astype(np.uint8)
     under_gray = cv2.cvtColor(under_u8, cv2.COLOR_RGB2GRAY)
-    under_edges = cv2.Canny(under_gray, 30, 90).astype(np.float32) / 255.0
+    mid_gray = cv2.cvtColor(np.clip(mid, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    under_edges = cv2.Canny(under_gray, 28, 85).astype(np.float32) / 255.0
+    mid_edges = cv2.Canny(mid_gray, 40, 120).astype(np.float32) / 255.0
+    # Novel under structure: branch/foliage edges absent on blown mid.
+    # Bright walls share paneling edges mid↔under → novel ~0 (kills wall ghost).
+    mid_edge_d = cv2.dilate(mid_edges, np.ones((5, 5), np.uint8))
+    novel_under = under_edges * (1.0 - mid_edge_d)
+    novel_under = cv2.GaussianBlur(novel_under, (0, 0), sigmaX=1.2)
     blur = cv2.GaussianBlur(under_gray.astype(np.float32), (0, 0), sigmaX=2.0)
-    local_var = cv2.GaussianBlur(under_gray.astype(np.float32) ** 2, (0, 0), sigmaX=2.0) - blur ** 2
-    var_n = np.clip(local_var / 180.0, 0.0, 1.0)
-    under_struct = np.clip(0.35 * under_detail + 0.45 * under_edges + 0.55 * var_n, 0.0, 1.0)
-    under_struct = cv2.GaussianBlur(under_struct, (0, 0), sigmaX=1.2)
-    # Flat grey mullion under: low struct — keep near 0
-    under_struct = np.where(under_struct >= 0.08, under_struct, 0.0)
-
-    seed = hi * flat * under_ok * np.clip(0.2 + 0.85 * under_struct, 0.0, 1.0) * np.clip(
-        0.2 + delta, 0.0, 1.0
+    local_var = (
+        cv2.GaussianBlur(under_gray.astype(np.float32) ** 2, (0, 0), sigmaX=2.0)
+        - blur ** 2
     )
-    seed = seed * (1.0 - wallish)
+    var_n = np.clip(local_var / 160.0, 0.0, 1.0)
+    under_detail = np.clip(chroma_u / 28.0, 0.0, 1.0)
+    under_struct = np.clip(
+        0.45 * under_detail
+        + 0.25 * under_edges
+        + 0.35 * var_n
+        + 0.70 * novel_under,
+        0.0,
+        1.0,
+    )
+    under_struct = cv2.GaussianBlur(under_struct, (0, 0), sigmaX=1.0)
+    under_struct = np.where(under_struct >= 0.10, under_struct, 0.0)
+
+    # Interior chromaticity: wall/curtain under is darker paint, not foliage
+    interior = _interior_same_chromaticity(mid, under)
+    # Warm beige/grey wall under (R>B, R>=G) — classic wall-ghost cue vs exterior
+    warm_under = np.clip((under[:, :, 0] - under[:, :, 2]) / 25.0, 0.0, 1.0) * np.clip(
+        (under[:, :, 0] - under[:, :, 1]) / 20.0 + 0.35, 0.0, 1.0
+    )
+
+    seed = hi * flat * under_ok * np.clip(0.15 + 0.90 * under_struct, 0.0, 1.0)
+    seed = seed * np.clip(0.15 + delta, 0.0, 1.0)
+    seed = seed * (1.0 - wallish) * (1.0 - below_floor) * (1.0 - still_blown)
+    # Interior reject only on paint-like mid (chroma). Blown flat glass mid
+    # shares no paint ratios with foliage — do not kill those panes.
+    paint_mid = np.clip((chroma_m - 10.0) / 25.0, 0.0, 1.0) * np.clip(
+        (235.0 - luma_m) / 35.0, 0.0, 1.0
+    )
+    seed = seed * (1.0 - np.clip(interior * paint_mid, 0.0, 1.0))
+    # Kill bright white wall panels (pass glass floor but warm under)
+    seed = seed * (1.0 - np.clip(warm_under * 1.20, 0.0, 1.0))
 
     # Exterior open-sky suppress ONLY (upper + under looks like sky).
-    # Interior bay glass is bright/flat too — do NOT treat as sky.
     sky_w = _sky_region_weight(mid)
     yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
     upper = np.clip(1.0 - yy * 1.2, 0.0, 1.0)
@@ -744,24 +801,24 @@ def _glass_only_matte(
 
     # Frame / mullion / pillar edge lock
     frame = _frame_edge_lock_mask(mid)
-    seed = seed * (1.0 - np.clip(frame * 1.25, 0.0, 1.0))
+    seed = seed * (1.0 - np.clip(frame * 1.10, 0.0, 1.0))
+    seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=0.8)
 
-    seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=0.9)
-
-    conf_thresh = 0.22
+    conf_thresh = 0.16
     binary = (seed >= conf_thresh).astype(np.uint8) * 255
-    # Open: kill single-pixel wall speckles
+    # Light open: kill single-pixel wall speckles without erasing pane seeds
     k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, k_open, iterations=1)
-    # Soft bay: rejoin pane speckles; frame lock after splits mullions
-    k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close, iterations=2)
-    # Re-apply frame lock after morph (splits panes at mullions)
-    binary = np.where(frame > 0.40, 0, binary).astype(np.uint8)
+    # Light close to rejoin pane speckles — keep small so mullions stay split
+    k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close, iterations=1)
+    # Split at frames after morph
+    binary = np.where(frame > 0.30, 0, binary).astype(np.uint8)
+    # Absolute glass floor
+    binary = np.where(luma_m < GLASS_FLOOR, 0, binary).astype(np.uint8)
 
     n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    # Real bay panes fragment under frame lock — keep modest components
-    min_area = max(40, int(0.00015 * h * w))
+    min_area = max(55, int(0.00018 * h * w))
     keep = np.zeros_like(seed, dtype=np.float32)
     for i in range(1, n_labels):
         area = int(stats[i, cv2.CC_STAT_AREA])
@@ -769,48 +826,95 @@ def _glass_only_matte(
             continue
         comp = labels == i
         mean_conf = float(seed[comp].mean()) if comp.any() else 0.0
-        if mean_conf < conf_thresh * 0.9:
+        if mean_conf < conf_thresh * 0.95:
             continue
         bw = int(stats[i, cv2.CC_STAT_WIDTH])
         bh = int(stats[i, cv2.CC_STAT_HEIGHT])
         # Reject huge full-wall / curtain slabs
-        if bw > 0.72 * w and bh > 0.45 * h:
+        if bw > 0.65 * w and bh > 0.40 * h:
             continue
-        # Reject tall thin pillars / curtain drops
-        if bh > 0.55 * h and bw < 0.08 * w:
+        # Reject tall thin pillars / curtain drops / mullion strips
+        if bh > 0.45 * h and bw < 0.10 * w:
+            continue
+        if bw <= max(6, int(0.012 * w)) and bh > 2.5 * max(bw, 1):
             continue
         # Reject wide thin ledge bleeds
-        if bw > 0.55 * w and bh < 0.08 * h:
+        if bw > 0.50 * w and bh < 0.08 * h:
             continue
-        # Component must still be bright glass on mid (not dim wall)
-        if float(luma_m[comp].mean()) < 175.0:
+        # Component must be bright glass on mid (hard wall ghost kill)
+        mean_lm = float(luma_m[comp].mean())
+        if mean_lm < GLASS_FLOOR + 2.0:
+            continue
+        # Under must actually help (skip still-blown / useless −EV)
+        mean_lu = float(luma_u[comp].mean())
+        mean_cu = float(chroma_u[comp].mean())
+        mean_cm = float(chroma_m[comp].mean())
+        if mean_lu > 230.0 and mean_cu < 8.0:
+            continue  # low-conf leave mid
+        if (mean_lm - mean_lu) < 15.0 and mean_cu < 10.0:
+            continue
+        # Textured bright wall / art (not flat blown glass)
+        if mean_cm > 14.0:
+            continue
+        # Warm under majority → wall/curtain ghost
+        if float(warm_under[comp].mean()) > 0.28:
+            continue
+        # Interior paint majority on non-flat mid → wall ghost
+        if mean_cm > 12.0 and float(interior[comp].mean()) > 0.60:
+            continue
+        # Require novel under edges OR strong exterior chroma on flat glass
+        mean_novel = float(novel_under[comp].mean())
+        exterior_chroma = mean_cu > 18.0 and mean_cm < 12.0 and float(warm_under[comp].mean()) < 0.25
+        if mean_novel < 0.010 and not exterior_chroma:
             continue
         keep[comp] = seed[comp]
 
-    # Soft bay expand: grow into bright+DR neighbors only (never walls/frames)
+    # Per-pane erode: pull matte off mullions/pillars (1px) without wiping panes
+    if float(keep.max()) > 0:
+        pane_bin = (keep > 0.12).astype(np.uint8)
+        k_er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        eroded = cv2.erode(pane_bin, k_er, iterations=1)
+        if int(eroded.sum()) >= max(20, int(0.25 * int(pane_bin.sum()))):
+            keep = np.where(eroded > 0, keep, 0.0).astype(np.float32)
+
+    # NO soft dilate expand into walls (v4 wall-ghost path). Optional 1px
+    # refill only into already-bright glass neighbors.
     if float(keep.max()) > 0:
         expand = cv2.dilate(
-            (keep > 0.12).astype(np.uint8),
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+            (keep > 0.15).astype(np.uint8),
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
             iterations=1,
         )
         gate = (
-            (luma_m > 165.0)
-            & (luma_u < 155.0)
-            & ((luma_m - luma_u) > 28.0)
-            & (frame < 0.40)
-            & (wallish < 0.40)
+            (luma_m >= GLASS_SEED)
+            & (luma_u < 200.0)
+            & ((luma_m - luma_u) > 30.0)
+            & (frame < 0.25)
+            & (wallish < 0.25)
+            & (interior < 0.40)
+            & (below_floor < 0.5)
         )
         keep = np.where(
-            (expand > 0) & gate,
-            np.maximum(keep, seed * 0.9),
+            (expand > 0) & gate & (keep < 0.15),
+            np.maximum(keep, seed * 0.85),
             keep,
         ).astype(np.float32)
 
-    # Soft bay blend — modest sigma, hard floor (low-conf → mid pane)
-    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=1.6)
+    # Soft bay blend — tight sigma; hard floors after blur
+    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=1.2)
     matte = matte * (1.0 - np.clip(frame * 1.05, 0.0, 1.0))
-    matte = np.where(matte >= 0.20, matte, 0.0).astype(np.float32)
+    matte = matte * (1.0 - below_floor)
+    # Absolute hard fails: wall ghost / furniture / dim interior
+    matte = np.where(luma_m < GLASS_FLOOR, 0.0, matte)
+    matte = np.where(warm_under > 0.38, 0.0, matte)
+    matte = np.where((chroma_m > 20.0) & (luma_m < 235.0), 0.0, matte)
+    # Final wall-ghost kill: no novel exterior structure AND no foliage chroma
+    no_exterior = (novel_under < 0.008) & (chroma_u < 16.0)
+    matte = np.where(no_exterior, 0.0, matte)
+    # Only kill high-interior when mid looks painted (not blown glass)
+    matte = np.where((interior > 0.75) & (chroma_m > 18.0) & (luma_m < 230.0), 0.0, matte)
+    # Low-confidence → leave mid pane (never grey fill)
+    matte = np.where(matte >= 0.18, matte, 0.0).astype(np.float32)
     return np.clip(matte, 0.0, 1.0)
 
 
@@ -840,7 +944,11 @@ def window_pull_from_brackets(
     if under is not None:
         u_img = under.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS)
         u = np.asarray(u_img, dtype=np.float32)
-        matte = _glass_only_matte(ref, u)[..., None]
+        matte = _glass_only_matte(ref, u)
+        # Absolute wall-ghost kill: never −EV-paint non-blown interior
+        ref_luma = ref.mean(axis=2)
+        matte = np.where(ref_luma < 200.0, 0.0, matte).astype(np.float32)
+        matte = matte[..., None]
         # Where matte is 0, canvas unchanged — never invent grey fill / wall paint
         out = out * (1.0 - matte) + u * matte
 

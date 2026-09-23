@@ -276,6 +276,103 @@ def test_glass_only_matte_does_not_expand_into_walls_or_mullions():
     assert mullion < 0.12, f"mullion matte leaked: {mullion}"
 
 
+def test_multi_pane_left_bank_does_not_paint_wall_between_panes():
+    """Left-bank multi-pane: −EV on glass only; wall between bank and bay stays 0."""
+    h, w = 280, 480
+    # Beige interior wall (same chromaticity mid/under — classic wall ghost bait)
+    mid = np.zeros((h, w, 3), dtype=np.uint8)
+    mid[:, :] = (168, 158, 142)
+    under = np.zeros((h, w, 3), dtype=np.uint8)
+    under[:, :] = (95, 88, 78)
+    # Left bank: 2x2 panes with mullions
+    panes = [(50, 120, 40, 120), (50, 120, 140, 220), (140, 210, 40, 120), (140, 210, 140, 220)]
+    for y0, y1, x0, x1 in panes:
+        mid[y0:y1, x0:x1, :] = 255
+        under[y0:y1, x0:x1, :] = (42, 118, 48)
+    # Mullions / pillar between panes (white frame)
+    mid[50:210, 120:140, :] = 248
+    under[50:210, 120:140, :] = (90, 90, 88)
+    mid[120:140, 40:220, :] = 248
+    under[120:140, 40:220, :] = (90, 90, 88)
+    # Wall gap between left bank and bay (must NEVER get −EV)
+    mid[40:220, 240:300, :] = (175, 165, 148)
+    under[40:220, 240:300, :] = (100, 92, 82)
+    # Bay panes (right) — should also pull
+    mid[55:200, 320:450, :] = 255
+    under[55:200, 320:450, :] = (38, 105, 50)
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    left_glass = float(matte[70:110, 60:100].mean())
+    bay_glass = float(matte[90:160, 350:420].mean())
+    between_wall = float(matte[70:180, 250:290].mean())
+    mullion = float(matte[70:110, 124:136].mean())
+    assert left_glass > 0.25, f"left bank glass too weak: {left_glass}"
+    assert bay_glass > 0.25, f"bay glass too weak: {bay_glass}"
+    assert between_wall < 0.02, f"WALL GHOST between bank and bay: {between_wall}"
+    assert mullion < 0.12, f"mullion painted: {mullion}"
+
+
+def test_glass_only_low_conf_leaves_mid_pane():
+    """Still-blown −EV (no recoverable detail) → matte ~0, leave mid."""
+    mid = np.full((180, 240, 3), 120, dtype=np.uint8)
+    under = np.full((180, 240, 3), 50, dtype=np.uint8)
+    mid[40:140, 60:180, :] = 255
+    under[40:140, 60:180, :] = 250  # still blown, useless
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    assert float(matte[60:120, 80:160].mean()) < 0.05
+
+
+def test_glass_only_protects_pillar_and_curtain():
+    """Pillar + curtain between panes stay mid; only glass receives −EV."""
+    h, w = 220, 340
+    mid = np.full((h, w, 3), (160, 150, 135), dtype=np.uint8)
+    under = np.full((h, w, 3), (90, 82, 72), dtype=np.uint8)
+    # Two panes
+    mid[40:180, 30:130, :] = 255
+    mid[40:180, 200:300, :] = 255
+    under[40:180, 30:130, :] = (40, 110, 55)
+    under[40:180, 200:300, :] = (35, 100, 50)
+    # Pillar (medium bright, painted)
+    mid[30:190, 140:175, :] = (190, 180, 165)
+    under[30:190, 140:175, :] = (110, 100, 90)
+    # Curtain (warm chroma)
+    mid[30:190, 175:198, :] = (170, 140, 100)
+    under[30:190, 175:198, :] = (100, 80, 55)
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    pane = float(matte[70:140, 50:110].mean())
+    pillar = float(matte[70:140, 145:170].mean())
+    curtain = float(matte[70:140, 178:195].mean())
+    assert pane > 0.25, f"pane weak: {pane}"
+    assert pillar < 0.05, f"pillar leaked: {pillar}"
+    assert curtain < 0.05, f"curtain leaked: {curtain}"
+
+
+
+
+def test_glass_only_rejects_bright_wall_panel_ghost():
+    """Bright white wall lit by window must not get −EV (wall ghost hard fail)."""
+    h, w = 200, 300
+    mid = np.full((h, w, 3), (170, 160, 145), dtype=np.uint8)
+    under = np.full((h, w, 3), (95, 88, 78), dtype=np.uint8)
+    # Glass pane with novel under foliage edges
+    mid[40:160, 40:130, :] = 255
+    under[40:160, 40:130, :] = (40, 120, 50)
+    # Draw branch-like structure only on under glass
+    for i in range(50, 150, 8):
+        under[i:i+2, 50:120, :] = (30, 80, 35)
+    # Bright white wall panel (same edges mid+under — no novel structure)
+    mid[40:160, 160:260, :] = 245
+    under[40:160, 160:260, :] = (140, 130, 118)
+    # Shared paneling lines
+    mid[70:74, 170:250, :] = 220
+    under[70:74, 170:250, :] = (120, 110, 100)
+    mid[110:114, 170:250, :] = 220
+    under[110:114, 170:250, :] = (120, 110, 100)
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    glass = float(matte[60:140, 55:115].mean())
+    wall = float(matte[60:140, 175:245].mean())
+    assert glass > 0.20, f"glass weak: {glass}"
+    assert wall < 0.02, f"WALL GHOST on bright panel: {wall}"
+
 def test_mid_biased_body_keeps_bright_sky_on_mid():
     """Upper bright flat sky must not absorb fused mud."""
     mid = Image.new("RGB", (200, 160), (100, 150, 220))
