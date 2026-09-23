@@ -27,6 +27,8 @@ from app.services.photo_enhance_service import (
     sky_region_likely,
     straighten_verticals,
     window_pull_from_brackets,
+    _glass_only_matte,
+    _mid_biased_body,
     _center_crop_aspect,
     _exif_auto_orient,
     _landscape_content_crop,
@@ -59,6 +61,7 @@ def test_capabilities_honest_flags():
     assert caps["day_to_dusk"] is False
     assert caps["exif_orient"] is True
     assert caps["sky_replace"] in ("http_sky_service", "opencv_heuristic", "unavailable")
+    assert caps["window_pull"] in ("glass_only_bracket", "single_frame_soft")
     assert caps["listing_crop"] == "4:3_landscape_content"
 
 
@@ -130,15 +133,18 @@ def test_enhance_image_listing_ready_jpeg():
 def test_merge_brackets_and_window_pull():
     under = Image.new("RGB", (400, 300), (20, 20, 20))
     mid = Image.new("RGB", (400, 300), (120, 120, 120))
-    # Blow out a window region on mid
+    # Blow out a window region on mid; under holds foliage (chroma + DR)
     m = np.asarray(mid).copy()
+    u = np.asarray(under).copy()
     m[50:150, 250:380, :] = 255
+    u[50:150, 250:380, :] = (30, 90, 40)
     mid = Image.fromarray(m, "RGB")
+    under = Image.fromarray(u, "RGB")
     over = Image.new("RGB", (400, 300), (220, 220, 220))
     fused = merge_brackets_mertens([under, mid, over])
     assert fused.size == (400, 300)
     pulled = window_pull_from_brackets(mid, under, over)
-    # Window region should be darker than pure white after pull from under
+    # Glass should take −EV foliage, not stay blown white
     window_mean = float(np.asarray(pulled)[50:150, 250:380, :].mean())
     assert window_mean < 250
 
@@ -226,3 +232,32 @@ def test_straighten_noop_on_blank():
     blank = Image.new("RGB", (400, 300), (128, 128, 128))
     out = straighten_verticals(blank)
     assert out.size == blank.size
+
+
+def test_glass_only_matte_rejects_wall_bleed():
+    """Blown glass pulls −EV; painted wall next to it stays mid (no grey slab)."""
+    mid = np.full((200, 300, 3), 110, dtype=np.uint8)
+    under = np.full((200, 300, 3), 40, dtype=np.uint8)
+    # Glass pane: blown flat white on mid, foliage-ish under
+    mid[40:140, 160:270, :] = 255
+    under[40:140, 160:270, :] = (35, 95, 45)
+    matte = _glass_only_matte(mid, under)
+    glass = float(matte[60:120, 180:250].mean())
+    wall = float(matte[60:120, 20:80].mean())
+    assert glass > 0.35
+    assert wall < 0.05
+
+
+def test_mid_biased_body_keeps_bright_sky_on_mid():
+    """Upper bright flat sky must not absorb fused mud."""
+    mid = Image.new("RGB", (200, 160), (100, 150, 220))
+    fused = Image.new("RGB", (200, 160), (180, 160, 90))  # muddy yellow
+    m = np.asarray(mid).copy()
+    m[:70, :, :] = (240, 245, 250)  # blown sky band
+    mid = Image.fromarray(m, "RGB")
+    out = _mid_biased_body(mid, fused, fused_mix=0.35)
+    top = np.asarray(out)[:50, :, :].astype(np.float32)
+    # Stay near mid plate (cool), not fused yellow
+    assert top[:, :, 2].mean() > top[:, :, 0].mean()
+    assert abs(float(top.mean()) - 245) < 25
+

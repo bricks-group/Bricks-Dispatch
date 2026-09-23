@@ -69,7 +69,7 @@ def capabilities() -> Dict[str, Any]:
     return {
         "exif_orient": True,
         "hdr_merge": "opencv_mertens" if cv else "unavailable",
-        "window_pull": "bracket_blend" if cv else "single_frame_soft",
+        "window_pull": "glass_only_bracket" if cv else "single_frame_soft",
         "sky_replace": sky,
         "straighten": "hough_verticals" if cv else "unavailable",
         "wb_exposure": "clahe_greyworld",
@@ -296,7 +296,11 @@ def _mid_biased_body(
     *,
     fused_mix: float = 0.35,
 ) -> Image.Image:
-    """Room body stays mostly mid; light fusion only where mid is weak."""
+    """Room/exterior body stays mostly mid; fusion only where mid is weak.
+
+    Frame v2 P0 — bright sky / sun-adjacent: bias harder to mid (never average
+    highlight stress into muddy yellow-grey).
+    """
     if fused is None:
         return mid
     a = np.asarray(mid.convert("RGB"), dtype=np.float32)
@@ -305,27 +309,96 @@ def _mid_biased_body(
         dtype=np.float32,
     )
     luma = a.mean(axis=2)
-    # Prefer fused only in deep shadows / mild highlight stress — not globally.
-    w = np.clip((55.0 - luma) / 55.0, 0.0, 1.0) * 0.55
-    w = np.maximum(w, np.clip((luma - 235.0) / 20.0, 0.0, 1.0) * 0.25)
-    w = (w * float(np.clip(fused_mix / 0.35, 0.5, 1.2)))[..., None]
+    h = luma.shape[0]
+    yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+
+    # Shadows: allow a little fused lift
+    w = np.clip((50.0 - luma) / 50.0, 0.0, 1.0) * 0.45
+
+    # Highlight stress: prefer mid plate, not fused mud (Frame cove P0)
+    highlight = np.clip((luma - 200.0) / 40.0, 0.0, 1.0)
+    # Upper-frame bright = likely sky — zero out fusion there
+    skyish = highlight * np.clip(1.0 - yy * 1.15, 0.0, 1.0)
+    w = w * (1.0 - skyish)
+    # Also kill fusion anywhere mid is already bright + low-chroma (sky/window blow)
+    chroma = a.max(axis=2) - a.min(axis=2)
+    bright_flat = highlight * np.clip((28.0 - chroma) / 28.0, 0.0, 1.0)
+    w = w * (1.0 - bright_flat)
+
+    w = (w * float(np.clip(fused_mix / 0.35, 0.4, 1.0)))[..., None]
     out = a * (1.0 - w) + b * w
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
 
 
-def _soft_glass_matte(luma_mid: np.ndarray, luma_under: np.ndarray) -> np.ndarray:
-    """Soft matte where mid is blown and under still holds exterior detail."""
+def _glass_only_matte(
+    mid_rgb: np.ndarray,
+    under_rgb: np.ndarray,
+) -> np.ndarray:
+    """Glass-only soft matte. Wall/trim/plant leaks hard-rejected (Frame v2 P0).
+
+    Seeds on blown low-chroma mid + usable −EV exterior, then morphologically
+    opens away thin bleeds, erodes so feather stays inside glass, drops weak
+    components. Low confidence → 0 (keep mid pane — never grey fill).
+    """
     import cv2
 
-    # Mid clipped / near-white
-    hi = np.clip((luma_mid - 205.0) / 40.0, 0.0, 1.0)
-    # Under still has structure (not also blown, not empty black)
-    under_ok = np.clip((luma_under - 25.0) / 40.0, 0.0, 1.0) * np.clip((210.0 - luma_under) / 40.0, 0.0, 1.0)
-    # Prefer regions where under is darker than mid (real window DR)
-    delta = np.clip((luma_mid - luma_under) / 60.0, 0.0, 1.0)
-    matte = hi * under_ok * np.clip(0.35 + delta, 0.0, 1.0)
-    matte = cv2.GaussianBlur(matte.astype(np.float32), (0, 0), sigmaX=2.5)
-    # Feather ~2–6px equivalent already via blur; clamp
+    mid = mid_rgb.astype(np.float32)
+    under = under_rgb.astype(np.float32)
+    luma_m = mid.mean(axis=2)
+    luma_u = under.mean(axis=2)
+    chroma_m = mid.max(axis=2) - mid.min(axis=2)
+    chroma_u = under.max(axis=2) - under.min(axis=2)
+
+    # Mid: blown / near-white and relatively flat (glass glare, not painted wall)
+    hi = np.clip((luma_m - 210.0) / 35.0, 0.0, 1.0)
+    flat = np.clip((32.0 - chroma_m) / 32.0, 0.0, 1.0)
+
+    # Under: has exterior content (foliage chroma or mid-tone structure)
+    under_ok = np.clip((luma_u - 20.0) / 35.0, 0.0, 1.0) * np.clip((215.0 - luma_u) / 50.0, 0.0, 1.0)
+    under_detail = np.clip(chroma_u / 40.0, 0.0, 1.0)
+    # Real DR: under darker than blown mid
+    delta = np.clip((luma_m - luma_u) / 50.0, 0.0, 1.0)
+
+    seed = hi * flat * under_ok * np.clip(0.25 + delta + 0.35 * under_detail, 0.0, 1.0)
+    seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=1.2)
+
+    # Binary for component cleanup
+    conf_thresh = 0.42
+    binary = (seed >= conf_thresh).astype(np.uint8) * 255
+    # Open: kill thin wall/pillar smudges and plant edge leaks
+    k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, k_open, iterations=1)
+    # Close small muntin gaps inside a pane (keep as one pane)
+    k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close, iterations=1)
+    # Erode so feather stays inside glass (not onto trim/curtains)
+    k_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    binary = cv2.erode(binary, k_erode, iterations=1)
+
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    h, w = binary.shape
+    min_area = max(80, int(0.0008 * h * w))
+    keep = np.zeros_like(seed, dtype=np.float32)
+    for i in range(1, n_labels):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < min_area:
+            continue
+        comp = labels == i
+        mean_conf = float(seed[comp].mean()) if comp.any() else 0.0
+        # Weak / wall-bleed components → discard (fall back to mid)
+        if mean_conf < conf_thresh:
+            continue
+        # Aspect sanity: reject huge full-wall blobs (matte painted the room)
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        if bw > 0.85 * w and bh > 0.55 * h:
+            continue
+        keep[comp] = seed[comp]
+
+    # Soft feather inside glass only
+    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=2.0)
+    # Hard floor: below confidence → exact mid (no grey slab)
+    matte = np.where(matte >= 0.28, matte, 0.0).astype(np.float32)
     return np.clip(matte, 0.0, 1.0)
 
 
@@ -334,7 +407,7 @@ def window_pull_from_brackets(
     under: Optional[Image.Image],
     over: Optional[Image.Image],
 ) -> Image.Image:
-    """Explicit −EV plate on glass; keep curtains/frames from mid. Soft shadow lift only."""
+    """−EV on glass only; muntins/curtains/walls stay mid. Low matte → mid pane."""
     if under is None and over is None:
         return mid
     arr = np.asarray(mid.convert("RGB"), dtype=np.float32)
@@ -344,9 +417,8 @@ def window_pull_from_brackets(
     if under is not None:
         u_img = under.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS)
         u = np.asarray(u_img, dtype=np.float32)
-        u_luma = u.mean(axis=2)
-        matte = _soft_glass_matte(luma, u_luma)[..., None]
-        # Reject pull that would wash the room: only composite where matte is strong
+        matte = _glass_only_matte(arr, u)[..., None]
+        # Where matte is 0, mid is unchanged — never invent grey fill
         out = out * (1.0 - matte) + u * matte
 
     if over is not None:
@@ -751,7 +823,9 @@ def enhance_bracket(
             used_window = under is not None or over is not None
 
         body = restore_black_point(body)
-        body = gentle_s_curve(body, amount=0.10)
+        # Slight midtone punch for exteriors (Frame v2 P1); interiors stay gentler
+        curve_amt = 0.14 if (under is not None and sky_region_likely(mid)) else 0.10
+        body = gentle_s_curve(body, amount=curve_amt)
 
     working = body
     # Interiors with windows: −EV glass already carries sky — skip inventing sky.
