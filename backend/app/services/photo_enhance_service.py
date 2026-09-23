@@ -649,7 +649,8 @@ def _frame_edge_lock_mask(mid_rgb: np.ndarray) -> np.ndarray:
     """1 where mullion / frame / pillar edges must stay mid (exclude −EV).
 
     Strong near-vertical and near-horizontal structure on the mid plate —
-    white bay frames, curtain folds at edges, wall pillars.
+    white bay frames, curtain folds at edges, wall pillars. Slightly stronger
+    dilate than v5 so soft matte feather cannot dirty mid-white frames.
     """
     import cv2
 
@@ -669,8 +670,8 @@ def _frame_edge_lock_mask(mid_rgb: np.ndarray) -> np.ndarray:
         edges, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, ky))
     )
     struct = cv2.bitwise_or(horiz, vert)
-    # Dilate so feather never paints onto the frame itself
-    rad = max(2, min(h, w) // 320)
+    # Dilate so feather never paints onto the frame itself (v6: +1px vs v5)
+    rad = max(3, min(h, w) // 300)
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rad * 2 + 1, rad * 2 + 1))
     struct = cv2.dilate(struct, k, iterations=2)
     return struct.astype(np.float32) / 255.0
@@ -699,11 +700,12 @@ def _glass_only_matte(
     mid_rgb: np.ndarray,
     under_rgb: np.ndarray,
 ) -> np.ndarray:
-    """Strict per-pane glass confidence matte (Frame v5 P0).
+    """Strict per-pane glass confidence matte (Frame v6 P0 edge-lock).
 
     −EV only inside blown glass panes. Morphologically protect mullions,
-    pillars, curtains, walls. Never grey-fill. Low-confidence → leave mid.
-    Hard-fail: any interior wall getting −EV paint (wall ghost).
+    pillars, curtains, walls (erode matte off mid-white frames). Never
+    grey-fill. Low-confidence → leave mid (blown white ok). Hard-fail:
+    any interior wall getting −EV paint (wall ghost).
     """
     import cv2
 
@@ -799,12 +801,13 @@ def _glass_only_matte(
         1.0 - sky_w * upper * np.clip(0.35 + 0.65 * under_skyish, 0.0, 1.0)
     )
 
-    # Frame / mullion / pillar edge lock
+    # Frame / mullion / pillar edge lock (keep mid-white; don't wipe panes)
     frame = _frame_edge_lock_mask(mid)
-    seed = seed * (1.0 - np.clip(frame * 1.10, 0.0, 1.0))
-    seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=0.8)
+    seed = seed * (1.0 - np.clip(frame * 1.15, 0.0, 1.0))
+    seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=0.7)
 
-    conf_thresh = 0.16
+    # Higher gate than v5: half-dirty low-conf pulls → leave mid (blown white ok)
+    conf_thresh = 0.18
     binary = (seed >= conf_thresh).astype(np.uint8) * 255
     # Light open: kill single-pixel wall speckles without erasing pane seeds
     k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -813,7 +816,7 @@ def _glass_only_matte(
     k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close, iterations=1)
     # Split at frames after morph
-    binary = np.where(frame > 0.30, 0, binary).astype(np.uint8)
+    binary = np.where(frame > 0.28, 0, binary).astype(np.uint8)
     # Absolute glass floor
     binary = np.where(luma_m < GLASS_FLOOR, 0, binary).astype(np.uint8)
 
@@ -826,7 +829,8 @@ def _glass_only_matte(
             continue
         comp = labels == i
         mean_conf = float(seed[comp].mean()) if comp.any() else 0.0
-        if mean_conf < conf_thresh * 0.95:
+        # Per-pane consistency: weak / patchy panes leave mid entirely
+        if mean_conf < conf_thresh * 0.98:
             continue
         bw = int(stats[i, cv2.CC_STAT_WIDTH])
         bh = int(stats[i, cv2.CC_STAT_HEIGHT])
@@ -869,19 +873,26 @@ def _glass_only_matte(
             continue
         keep[comp] = seed[comp]
 
-    # Per-pane erode: pull matte off mullions/pillars (1px) without wiping panes
+    # Per-pane erode: pull matte off mullions/pillars without wiping panes
+    # (Frame v6: stronger morphology so mid-white frames stay mid-white)
     if float(keep.max()) > 0:
-        pane_bin = (keep > 0.12).astype(np.uint8)
-        k_er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        eroded = cv2.erode(pane_bin, k_er, iterations=1)
-        if int(eroded.sum()) >= max(20, int(0.25 * int(pane_bin.sum()))):
+        pane_bin = (keep > 0.14).astype(np.uint8)
+        k_er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        eroded = cv2.erode(pane_bin, k_er, iterations=2)
+        # Fallback to lighter erode if panes would vanish
+        if int(eroded.sum()) < max(20, int(0.20 * int(pane_bin.sum()))):
+            k_er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            eroded = cv2.erode(pane_bin, k_er, iterations=1)
+        if int(eroded.sum()) >= max(16, int(0.18 * int(pane_bin.sum()))):
             keep = np.where(eroded > 0, keep, 0.0).astype(np.float32)
+        # Hard-zero residual on frame lock after erode
+        keep = keep * (1.0 - np.clip(frame * 1.25, 0.0, 1.0))
 
     # NO soft dilate expand into walls (v4 wall-ghost path). Optional 1px
-    # refill only into already-bright glass neighbors.
+    # refill only into already-bright glass neighbors — never onto frames.
     if float(keep.max()) > 0:
         expand = cv2.dilate(
-            (keep > 0.15).astype(np.uint8),
+            (keep > 0.18).astype(np.uint8),
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
             iterations=1,
         )
@@ -889,20 +900,20 @@ def _glass_only_matte(
             (luma_m >= GLASS_SEED)
             & (luma_u < 200.0)
             & ((luma_m - luma_u) > 30.0)
-            & (frame < 0.25)
+            & (frame < 0.15)
             & (wallish < 0.25)
             & (interior < 0.40)
             & (below_floor < 0.5)
         )
         keep = np.where(
-            (expand > 0) & gate & (keep < 0.15),
+            (expand > 0) & gate & (keep < 0.18),
             np.maximum(keep, seed * 0.85),
             keep,
         ).astype(np.float32)
 
-    # Soft bay blend — tight sigma; hard floors after blur
-    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=1.2)
-    matte = matte * (1.0 - np.clip(frame * 1.05, 0.0, 1.0))
+    # Soft bay blend — tighter sigma so feather stays off mullions
+    matte = cv2.GaussianBlur(keep, (0, 0), sigmaX=0.85)
+    matte = matte * (1.0 - np.clip(frame * 1.20, 0.0, 1.0))
     matte = matte * (1.0 - below_floor)
     # Absolute hard fails: wall ghost / furniture / dim interior
     matte = np.where(luma_m < GLASS_FLOOR, 0.0, matte)
@@ -913,8 +924,17 @@ def _glass_only_matte(
     matte = np.where(no_exterior, 0.0, matte)
     # Only kill high-interior when mid looks painted (not blown glass)
     matte = np.where((interior > 0.75) & (chroma_m > 18.0) & (luma_m < 230.0), 0.0, matte)
-    # Low-confidence → leave mid pane (never grey fill)
-    matte = np.where(matte >= 0.18, matte, 0.0).astype(np.float32)
+    # Mid-white frame body with weak exterior cues → never dirty (edge-lock)
+    white_frame_body = (
+        (luma_m >= 220.0)
+        & (chroma_m < 18.0)
+        & (novel_under < 0.012)
+        & (chroma_u < 12.0)
+        & (interior > 0.40)
+    )
+    matte = np.where(white_frame_body, 0.0, matte)
+    # Low-confidence → leave mid pane (never grey fill / half-dirty)
+    matte = np.where(matte >= 0.20, matte, 0.0).astype(np.float32)
     return np.clip(matte, 0.0, 1.0)
 
 
@@ -947,7 +967,27 @@ def window_pull_from_brackets(
         matte = _glass_only_matte(ref, u)
         # Absolute wall-ghost kill: never −EV-paint non-blown interior
         ref_luma = ref.mean(axis=2)
+        ref_chroma = ref.max(axis=2) - ref.min(axis=2)
         matte = np.where(ref_luma < 200.0, 0.0, matte).astype(np.float32)
+        # Edge-lock restore: mid-white mullions/pillars stay mid (not −EV dirty).
+        # Only kill when frame-locked OR under looks like same interior paint
+        # (not low-chroma exterior foliage/branches).
+        frame_lock = _frame_edge_lock_mask(ref)
+        interior = _interior_same_chromaticity(ref, u)
+        u_chroma = u.max(axis=2) - u.min(axis=2)
+        u_luma = u.mean(axis=2)
+        paint_under = (
+            (u_chroma < 16.0)
+            & (u_luma > 40.0)
+            & (u_luma < 160.0)
+            & (interior > 0.55)
+        )
+        white_mullion = (
+            (ref_luma >= 218.0)
+            & (ref_chroma < 20.0)
+            & ((frame_lock > 0.22) | paint_under)
+        )
+        matte = np.where(white_mullion, 0.0, matte).astype(np.float32)
         matte = matte[..., None]
         # Where matte is 0, canvas unchanged — never invent grey fill / wall paint
         out = out * (1.0 - matte) + u * matte

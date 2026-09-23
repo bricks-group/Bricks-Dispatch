@@ -32,6 +32,7 @@ from app.services.photo_enhance_service import (
     _pick_under_mid_over,
     _detect_corner_overlays,
     _glass_only_matte,
+    _frame_edge_lock_mask,
     _mid_biased_body,
     _sky_mid_bias_restore,
     _sky_region_weight,
@@ -373,6 +374,103 @@ def test_glass_only_rejects_bright_wall_panel_ghost():
     wall = float(matte[60:140, 175:245].mean())
     assert glass > 0.20, f"glass weak: {glass}"
     assert wall < 0.02, f"WALL GHOST on bright panel: {wall}"
+
+
+
+
+def test_white_frame_pixels_near_panes_stay_mid_after_pull():
+    """Frame v6: mid-white mullions/pillars near panes must not dirty ~70 luma."""
+    from PIL import Image
+
+    h, w = 220, 360
+    mid = np.full((h, w, 3), 140, dtype=np.uint8)
+    under = np.full((h, w, 3), 50, dtype=np.uint8)
+    # Two blown panes with recoverable foliage under
+    mid[40:180, 40:150, :] = 255
+    mid[40:180, 190:300, :] = 255
+    under[40:180, 40:150, :] = (40, 115, 50)
+    under[40:180, 190:300, :] = (35, 105, 45)
+    for i in range(50, 170, 10):
+        under[i : i + 2, 55:140, :] = (30, 80, 35)
+        under[i : i + 2, 205:290, :] = (28, 75, 32)
+    # Bright white mullion between panes (must stay mid after pull)
+    mid[40:180, 150:190, :] = 250
+    under[40:180, 150:190, :] = (95, 94, 92)
+
+    mid_img = Image.fromarray(mid, "RGB")
+    und_img = Image.fromarray(under, "RGB")
+    pulled = window_pull_from_brackets(mid_img, und_img, None, reference_mid=mid_img)
+    p = np.asarray(pulled, dtype=np.float32)
+    m = mid.astype(np.float32)
+    mullion = (slice(60, 160), slice(155, 185))
+    mid_luma = m[mullion].mean(axis=2)
+    desk_luma = p[mullion].mean(axis=2)
+    drop = mid_luma - desk_luma
+    # Almost no mullion pixels should darken by ~70
+    dirty = drop >= 70.0
+    dirty_ratio = float(dirty.mean())
+    assert dirty_ratio < 0.02, f"dirty_white mullion ratio {dirty_ratio}"
+    assert float(desk_luma.mean()) > float(mid_luma.mean()) - 12.0, (
+        f"mullion mean darkened too much: mid={mid_luma.mean():.1f} desk={desk_luma.mean():.1f}"
+    )
+    # Glass still pulls
+    pane = p[70:140, 60:120].mean(axis=2)
+    assert float(pane.mean()) < 180.0, f"pane did not pull: {pane.mean()}"
+
+
+def test_low_conf_glass_leaves_mid_not_half_dirty():
+    """Weak / still-blown −EV panes leave mid (blown white ok), no half-dirty."""
+    from PIL import Image
+
+    h, w = 180, 240
+    mid = np.full((h, w, 3), 120, dtype=np.uint8)
+    under = np.full((h, w, 3), 50, dtype=np.uint8)
+    mid[40:140, 50:190, :] = 255
+    # Mostly useless −EV: still very bright, tiny chroma, almost no structure
+    under[40:140, 50:190, :] = 235
+    under[80:84, 90:150, :] = (220, 225, 218)  # feeble cue — must not half-pull
+    mid_img = Image.fromarray(mid, "RGB")
+    und_img = Image.fromarray(under, "RGB")
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    assert float(matte[60:120, 70:170].mean()) < 0.05
+    pulled = window_pull_from_brackets(mid_img, und_img, None, reference_mid=mid_img)
+    p = np.asarray(pulled, dtype=np.float32)
+    # Stay near mid white, not muddy grey mid-pull
+    assert float(p[60:120, 70:170].mean()) > 240.0
+
+
+def test_wall_ghost_still_killed_after_edge_lock():
+    """Regression: beige wall between banks must stay matte 0 after v6 edge-lock."""
+    h, w = 280, 480
+    mid = np.zeros((h, w, 3), dtype=np.uint8)
+    mid[:, :] = (168, 158, 142)
+    under = np.zeros((h, w, 3), dtype=np.uint8)
+    under[:, :] = (95, 88, 78)
+    panes = [(50, 120, 40, 120), (50, 120, 140, 220), (140, 210, 40, 120), (140, 210, 140, 220)]
+    for y0, y1, x0, x1 in panes:
+        mid[y0:y1, x0:x1, :] = 255
+        under[y0:y1, x0:x1, :] = (42, 118, 48)
+        for i in range(y0 + 5, y1 - 5, 8):
+            under[i : i + 2, x0 + 10 : x1 - 10, :] = (30, 80, 35)
+    mid[50:210, 120:140, :] = 248
+    under[50:210, 120:140, :] = (90, 90, 88)
+    mid[120:140, 40:220, :] = 248
+    under[120:140, 40:220, :] = (90, 90, 88)
+    mid[40:220, 240:300, :] = (175, 165, 148)
+    under[40:220, 240:300, :] = (100, 92, 82)
+    mid[55:200, 320:450, :] = 255
+    under[55:200, 320:450, :] = (38, 105, 50)
+    for i in range(60, 190, 9):
+        under[i : i + 2, 330:440, :] = (28, 75, 32)
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    between_wall = float(matte[70:180, 250:290].mean())
+    mullion = float(matte[70:110, 124:136].mean())
+    assert between_wall < 0.02, f"WALL GHOST: {between_wall}"
+    assert mullion < 0.08, f"mullion matte: {mullion}"
+    assert float(matte[70:110, 60:100].mean()) > 0.20, "left glass too weak"
+    # Frame lock may be edge-heavy when bars touch panes; matte must still be 0
+    frame = _frame_edge_lock_mask(mid.astype(np.float32))
+    assert float(frame.mean()) > 0.0
 
 
 
