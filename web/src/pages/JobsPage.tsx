@@ -6,6 +6,12 @@ import type { CaptureKind } from '../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
 import { STILLS_TYPES, uploadStillFile, type StillsType } from '../lib/stills-upload';
+import {
+  BRACKET_HINT,
+  requiresBracketSet,
+  validateHdrBracketSelection,
+  validateHdrUploadsForComplete,
+} from '../lib/bracket-require';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -206,6 +212,7 @@ function JobListingPanel({
   const [uploads, setUploads] = useState<{ id: string; filename: string; media_type?: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const [stillsType, setStillsType] = useState<StillsType>('hdr');
+  const [allowIncompleteBrackets, setAllowIncompleteBrackets] = useState(false);
   const [pick, setPick] = useState(job.assignee_id || '');
   const [arriveAt, setArriveAt] = useState((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
   const [noShowOpen, setNoShowOpen] = useState(false);
@@ -268,7 +275,19 @@ function JobListingPanel({
     setUploading(true);
     setErr('');
     try {
+      if (requiresBracketSet(stillsType)) {
+        const issue = validateHdrBracketSelection(
+          files.map((f) => f.name),
+          uploads.map((u) => u.filename),
+          { allowIncomplete: isAdmin && allowIncompleteBrackets },
+        );
+        if (issue) {
+          setErr(issue.message);
+          return;
+        }
+      }
       for (const file of files) {
+        // Preserve original filename (±EV / under / over) for backend group_brackets.
         const rec = await uploadStillFile(job.id, file, stillsType);
         setUploads((list) => [...list, rec]);
         onPatched({ ...job, uploaded_count: (job.uploaded_count || 0) + 1 });
@@ -444,6 +463,13 @@ function JobListingPanel({
               onClick={async () => {
                 setBusy(true); setErr('');
                 try {
+                  const bracketBlock = validateHdrUploadsForComplete(uploads, {
+                    allowIncomplete: isAdmin && allowIncompleteBrackets,
+                  });
+                  if (bracketBlock) {
+                    setErr(bracketBlock.message);
+                    return;
+                  }
                   await api.put(`/api/vendor-os/jobs/${job.id}/status`, { status: 'completed' });
                   onPatched({ ...job, status: 'completed' });
                 } catch (e) { setErr((e as Error).message); }
@@ -498,6 +524,11 @@ function JobListingPanel({
           <p className="muted" style={{ padding: 0, margin: '4px 0 8px', fontSize: 12 }}>
             HDR stills stay on the camera. After the shoot, upload JPEG / RAW / MP4 here — files go straight to storage (not the 4MB API cap).
           </p>
+          {requiresBracketSet(stillsType) ? (
+            <p style={{ padding: 0, margin: '0 0 8px', fontSize: 13, color: 'var(--c-brick, #D2542B)' }}>
+              {BRACKET_HINT} Minimum 3 exposures per room/angle. Single frames are rejected.
+            </p>
+          ) : null}
           <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
             {uploads.length === 0 ? <li className="muted">None yet</li> : uploads.map((u) => (
               <li key={u.id}>{u.filename}{u.media_type ? <span className="muted"> · {u.media_type}</span> : null}</li>
@@ -520,6 +551,16 @@ function JobListingPanel({
             />
             {uploading && <span className="muted"> Uploading…</span>}
           </div>
+          {isAdmin ? (
+            <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
+              <input
+                type="checkbox"
+                checked={allowIncompleteBrackets}
+                onChange={(e) => setAllowIncompleteBrackets(e.target.checked)}
+              />
+              Admin override: allow incomplete HDR brackets
+            </label>
+          ) : null}
         </div>
         <form className="row" onSubmit={search}>
           <input

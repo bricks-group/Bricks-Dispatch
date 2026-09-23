@@ -25,7 +25,8 @@ async function authHeaders(): Promise<HeadersInit> {
   return headers;
 }
 
-/** Camera JPEG / drone / reel → Storage via signed PUT (not the 4MB Vercel POST). */
+/** Camera JPEG / drone / reel → Storage via signed PUT (not the 4MB Vercel POST).
+ * Always pass the camera filename (stem + ±EV) so backend group_brackets can cluster. */
 export async function uploadStillFile(jobId: string, file: File, mediaType: StillsType) {
   const signRes = await fetch(`${API_BASE}/api/uploads/sign`, {
     method: 'POST',
