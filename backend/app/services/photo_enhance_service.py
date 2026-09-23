@@ -270,7 +270,7 @@ def _to_bgr_float(img: Image.Image) -> np.ndarray:
 
 
 def merge_brackets_mertens(images: Sequence[Image.Image]) -> Image.Image:
-    """Exposure-fuse bracket set with OpenCV MergeMertens. Needs >=2 frames."""
+    """Soft exposure fusion. Biases mid contrast; do not rely on this alone for MLS."""
     import cv2
 
     if len(images) < 2:
@@ -282,11 +282,51 @@ def merge_brackets_mertens(images: Sequence[Image.Image]) -> Image.Image:
         if m.shape[0] != h0 or m.shape[1] != w0:
             m = cv2.resize(m, (w0, h0), interpolation=cv2.INTER_AREA)
         aligned.append(m)
-    merge = cv2.createMergeMertens()
+    # Lower contrast weight → less "HDR crunch"; keep exposure/sat moderate.
+    merge = cv2.createMergeMertens(contrast_weight=0.35, saturation_weight=0.2, exposure_weight=1.0)
     fused = merge.process(aligned)
     fused_u8 = np.clip(fused * 255.0, 0, 255).astype(np.uint8)
     rgb = cv2.cvtColor(fused_u8, cv2.COLOR_BGR2RGB)
     return Image.fromarray(rgb, "RGB")
+
+
+def _mid_biased_body(
+    mid: Image.Image,
+    fused: Optional[Image.Image],
+    *,
+    fused_mix: float = 0.35,
+) -> Image.Image:
+    """Room body stays mostly mid; light fusion only where mid is weak."""
+    if fused is None:
+        return mid
+    a = np.asarray(mid.convert("RGB"), dtype=np.float32)
+    b = np.asarray(
+        fused.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS),
+        dtype=np.float32,
+    )
+    luma = a.mean(axis=2)
+    # Prefer fused only in deep shadows / mild highlight stress — not globally.
+    w = np.clip((55.0 - luma) / 55.0, 0.0, 1.0) * 0.55
+    w = np.maximum(w, np.clip((luma - 235.0) / 20.0, 0.0, 1.0) * 0.25)
+    w = (w * float(np.clip(fused_mix / 0.35, 0.5, 1.2)))[..., None]
+    out = a * (1.0 - w) + b * w
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+def _soft_glass_matte(luma_mid: np.ndarray, luma_under: np.ndarray) -> np.ndarray:
+    """Soft matte where mid is blown and under still holds exterior detail."""
+    import cv2
+
+    # Mid clipped / near-white
+    hi = np.clip((luma_mid - 205.0) / 40.0, 0.0, 1.0)
+    # Under still has structure (not also blown, not empty black)
+    under_ok = np.clip((luma_under - 25.0) / 40.0, 0.0, 1.0) * np.clip((210.0 - luma_under) / 40.0, 0.0, 1.0)
+    # Prefer regions where under is darker than mid (real window DR)
+    delta = np.clip((luma_mid - luma_under) / 60.0, 0.0, 1.0)
+    matte = hi * under_ok * np.clip(0.35 + delta, 0.0, 1.0)
+    matte = cv2.GaussianBlur(matte.astype(np.float32), (0, 0), sigmaX=2.5)
+    # Feather ~2–6px equivalent already via blur; clamp
+    return np.clip(matte, 0.0, 1.0)
 
 
 def window_pull_from_brackets(
@@ -294,7 +334,7 @@ def window_pull_from_brackets(
     under: Optional[Image.Image],
     over: Optional[Image.Image],
 ) -> Image.Image:
-    """Recover window detail from under where mid is clipped; lift shadows from over."""
+    """Explicit −EV plate on glass; keep curtains/frames from mid. Soft shadow lift only."""
     if under is None and over is None:
         return mid
     arr = np.asarray(mid.convert("RGB"), dtype=np.float32)
@@ -302,22 +342,42 @@ def window_pull_from_brackets(
     luma = arr.mean(axis=2)
 
     if under is not None:
-        u = np.asarray(
-            under.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS),
-            dtype=np.float32,
-        )
-        w_hi = np.clip((luma - 220.0) / 35.0, 0.0, 1.0)[..., None]
-        out = out * (1.0 - w_hi) + u * w_hi
+        u_img = under.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS)
+        u = np.asarray(u_img, dtype=np.float32)
+        u_luma = u.mean(axis=2)
+        matte = _soft_glass_matte(luma, u_luma)[..., None]
+        # Reject pull that would wash the room: only composite where matte is strong
+        out = out * (1.0 - matte) + u * matte
 
     if over is not None:
         o = np.asarray(
             over.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS),
             dtype=np.float32,
         )
-        w_lo = np.clip((40.0 - luma) / 40.0, 0.0, 1.0)[..., None]
-        out = out * (1.0 - w_lo * 0.65) + o * (w_lo * 0.65)
+        # Gentle shadow open only — do not milk blacks (Frame P0)
+        w_lo = np.clip((28.0 - luma) / 28.0, 0.0, 1.0)[..., None]
+        out = out * (1.0 - w_lo * 0.35) + o * (w_lo * 0.35)
 
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+def restore_black_point(img: Image.Image, *, percentile: float = 1.2) -> Image.Image:
+    """Re-seat blacks after fusion so furniture keeps depth."""
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+    # Per-channel soft black: don't crush to pure 0 globally
+    for c in range(3):
+        lo = float(np.percentile(arr[:, :, c], percentile))
+        arr[:, :, c] = np.clip((arr[:, :, c] - lo) * (255.0 / max(255.0 - lo, 1.0)), 0, 255)
+    return Image.fromarray(arr.astype(np.uint8), "RGB")
+
+
+def gentle_s_curve(img: Image.Image, amount: float = 0.12) -> Image.Image:
+    """Mild contrast curve without milking mids."""
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
+    # smoothstep-ish S around mid
+    x = arr
+    curved = x + amount * (x - 0.5) * (1.0 - (2.0 * (x - 0.5)) ** 2)
+    return Image.fromarray(np.clip(curved * 255.0, 0, 255).astype(np.uint8), "RGB")
 
 
 def _pick_under_mid_over(
@@ -343,6 +403,22 @@ def _pick_under_mid_over(
 # ---------------------------------------------------------------------------
 # Straighten + tone
 # ---------------------------------------------------------------------------
+
+def _crop_black_wedges(img: Image.Image, *, thresh: int = 12) -> Image.Image:
+    """Drop near-black borders left by rotate(expand=True)."""
+    arr = np.asarray(img.convert("RGB"))
+    if arr.size == 0:
+        return img
+    mask = arr.max(axis=2) > thresh
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    if len(rows) < 8 or len(cols) < 8:
+        return img
+    top, bottom = int(rows[0]), int(rows[-1]) + 1
+    left, right = int(cols[0]), int(cols[-1]) + 1
+    # Keep a 1px pad if content fills almost all
+    return img.crop((left, top, right, bottom))
+
 
 def straighten_verticals(img: Image.Image, max_degrees: float = 4.0) -> Image.Image:
     """Mild rotate to level dominant near-verticals. Skips if signal is weak."""
@@ -379,7 +455,8 @@ def straighten_verticals(img: Image.Image, max_degrees: float = 4.0) -> Image.Im
     median = float(np.median(angles))
     if abs(median) < 0.15 or abs(median) > max_degrees:
         return img
-    return img.rotate(-median, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=(0, 0, 0))
+    rotated = img.rotate(-median, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=(0, 0, 0))
+    return _crop_black_wedges(rotated)
 
 
 def _enhance_with_opencv(arr_bgr) -> np.ndarray:
@@ -387,27 +464,44 @@ def _enhance_with_opencv(arr_bgr) -> np.ndarray:
 
     lab = cv2.cvtColor(arr_bgr, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=1.6, tileGridSize=(8, 8))
+    # Frame P0: cap local contrast — old 1.6 + detailEnhance → muddy HDR crunch
+    clahe = cv2.createCLAHE(clipLimit=1.15, tileGridSize=(8, 8))
     l_ch = clahe.apply(l_ch)
     lab = cv2.merge((l_ch, a_ch, b_ch))
-    bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-    bgr = cv2.detailEnhance(bgr, sigma_s=8, sigma_r=0.12)
-    return bgr
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def _wall_anchored_white_balance(arr: np.ndarray) -> np.ndarray:
+    """WB from bright-neutral wall/ceiling samples; keep practical lamp warmth."""
+    rgb = arr.astype(np.float32)
+    luma = rgb.mean(axis=2)
+    # Bright, low-chroma candidates (walls / ceiling)
+    mx = rgb.max(axis=2)
+    mn = rgb.min(axis=2)
+    chroma = mx - mn
+    mask = (luma > 140) & (luma < 245) & (chroma < 28)
+    if mask.sum() < 200:
+        # Fallback: upper third mid-bright band
+        h = rgb.shape[0]
+        band = np.zeros_like(mask)
+        band[: max(1, h // 3), :] = True
+        mask = band & (luma > 120) & (chroma < 40)
+    if mask.sum() < 50:
+        return arr  # leave alone rather than grey-world the whole room
+    samples = rgb[mask]
+    means = samples.mean(axis=0)
+    target = float(means.mean())
+    gains = np.clip(target / np.maximum(means, 1.0), 0.92, 1.08)
+    out = rgb.copy()
+    out[:, :, 0] = np.clip(out[:, :, 0] * gains[0], 0, 255)
+    out[:, :, 1] = np.clip(out[:, :, 1] * gains[1], 0, 255)
+    out[:, :, 2] = np.clip(out[:, :, 2] * gains[2], 0, 255)
+    return out
 
 
 def _grey_world_white_balance(arr: np.ndarray) -> np.ndarray:
-    r_mean = float(arr[:, :, 0].mean())
-    g_mean = float(arr[:, :, 1].mean())
-    b_mean = float(arr[:, :, 2].mean())
-    global_mean = (r_mean + g_mean + b_mean) / 3.0
-    if r_mean > 0 and g_mean > 0 and b_mean > 0:
-        def _gain(ch_mean: float) -> float:
-            return float(np.clip(global_mean / ch_mean, 0.85, 1.15))
-
-        arr[:, :, 0] = np.clip(arr[:, :, 0] * _gain(r_mean), 0, 255)
-        arr[:, :, 1] = np.clip(arr[:, :, 1] * _gain(g_mean), 0, 255)
-        arr[:, :, 2] = np.clip(arr[:, :, 2] * _gain(b_mean), 0, 255)
-    return arr
+    # Kept for PIL fallback path; prefer wall-anchored in main tone pass.
+    return _wall_anchored_white_balance(arr)
 
 
 def _enhance_with_pil_only(img: Image.Image) -> Image.Image:
@@ -433,9 +527,10 @@ def _apply_tone_enhance(img: Image.Image) -> Image.Image:
         arr_bgr = cv2.cvtColor(arr_rgb, cv2.COLOR_RGB2BGR)
         arr_bgr = _enhance_with_opencv(arr_bgr)
         arr_rgb = cv2.cvtColor(arr_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
-        arr_rgb = _grey_world_white_balance(arr_rgb)
+        arr_rgb = _wall_anchored_white_balance(arr_rgb)
         out = Image.fromarray(arr_rgb.astype(np.uint8), "RGB")
-        return out.filter(ImageFilter.UnsharpMask(radius=1, percent=100, threshold=3))
+        # Sharpen last and lightly (Frame P0)
+        return out.filter(ImageFilter.UnsharpMask(radius=0.8, percent=55, threshold=4))
     except ImportError:
         logger.warning("photo_enhance: cv2 unavailable — PIL-only tone path")
         return _enhance_with_pil_only(img)
@@ -637,21 +732,31 @@ def enhance_bracket(
     used_sky = False
 
     mid, under, over = _pick_under_mid_over(images, biases)
+    body = mid
 
     if len(images) >= 2:
+        fused = None
         try:
-            mid = merge_brackets_mertens(images)
+            fused = merge_brackets_mertens(images)
             used_hdr = True
         except Exception as e:
-            logger.warning("photo_enhance: Mertens merge failed (%s) — using mid frame", e)
+            logger.warning("photo_enhance: Mertens merge failed (%s) — mid body only", e)
 
-        pulled = window_pull_from_brackets(mid, under, over)
-        if pulled is not mid:
-            mid = pulled
+        # Mid-biased body (Frame P0) — do not replace room with equal HDR
+        body = _mid_biased_body(mid, fused, fused_mix=0.35)
+
+        pulled = window_pull_from_brackets(body, under, over)
+        if pulled is not body:
+            body = pulled
             used_window = under is not None or over is not None
 
-    working = mid
-    if apply_sky and sky_region_likely(working):
+        body = restore_black_point(body)
+        body = gentle_s_curve(body, amount=0.10)
+
+    working = body
+    # Interiors with windows: −EV glass already carries sky — skip inventing sky.
+    # Only attempt sky replace when no under plate was used and region looks like open sky.
+    if apply_sky and under is None and sky_region_likely(working):
         probe = _encode_jpeg(working, quality=90)
         replaced_img = replace_sky(probe, working)
         if replaced_img is not None:
