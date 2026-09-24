@@ -1687,7 +1687,7 @@ async def _refresh_decline_rate(db, assignee_id: str, now: str, job_id: str) -> 
         logger.error(f"decline_rate update failed for job {job_id}: {e}")
 
 
-@router.put("/jobs/{job_id}/status")
+@router.api_route("/jobs/{job_id}/status", methods=["PUT", "PATCH"])
 async def update_vendor_job_status(
     job_id: str,
     payload: JobStatusUpdate,
@@ -1726,6 +1726,37 @@ async def update_vendor_job_status(
             status_code=400,
             detail=f"Status '{new_status}' cannot be set via this endpoint — it is managed by the system",
         )
+
+
+    # Hard gate: HDR stills need full −/0/+ brackets before Mark complete.
+    # Mirrors web validateHdrUploadsForComplete; Visit/3D + drone/reel excluded.
+    if new_status == "completed" and old_status != "completed":
+        try:
+            from ..services.bracket_require import validate_hdr_uploads_for_complete
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+            uploads_rows: list = []
+            try:
+                res_up = await db.table("uploads").select(
+                    "id, filename, mime_type, provider, file_url"
+                ).eq("job_id", job_id).limit(500).execute()
+                uploads_rows = res_up.data or []
+            except Exception as e:
+                if not _is_rest_quota_error(e):
+                    raise
+                uploads_rows = pg_select_uploads_by_job_id(job_id) or []
+            bracket_issue = validate_hdr_uploads_for_complete(uploads_rows)
+            if bracket_issue:
+                api_error(400, bracket_issue["message"], "incomplete_hdr_brackets")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("HDR bracket gate failed for job %s: %s", job_id, e)
+            # Fail closed — do not mark complete when we cannot verify brackets.
+            api_error(
+                503,
+                "Could not verify HDR brackets; try again shortly",
+                "bracket_gate_unavailable",
+            )
 
     now = datetime.now(timezone.utc).isoformat()
     status_fields = {"status": new_status, "updated_at": now}

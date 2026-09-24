@@ -14,6 +14,10 @@ import { getCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind } from '../../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { formatShootWindow } from '../../lib/shoot-window';
+import {
+  BRACKET_HINT,
+  validateHdrUploadsForComplete,
+} from '../../lib/bracket-require';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
@@ -307,29 +311,60 @@ export default function JobDetailScreen() {
 
   const markComplete = async () => {
     if (!job) return;
-    Alert.alert('Mark Complete', 'Confirm that this shoot is finished?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Mark Complete',
-        onPress: async () => {
-          setActioning(true);
-          try {
-            const headers = await actorHeaders({ 'Content-Type': 'application/json' });
-            const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/status`, {
-              method: 'PATCH',
-              headers,
-              body: JSON.stringify({ status: 'completed' }),
-            });
-            if (!res.ok) throw new Error(`${res.status}`);
-            setJob(prev => prev ? { ...prev, status: 'completed' } : prev);
-          } catch {
-            Alert.alert('Error', 'Could not update job status.');
-          } finally {
-            setActioning(false);
-          }
+    setActioning(true);
+    try {
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      // Client mirror of web validateHdrUploadsForComplete; API enforces the same gate.
+      let uploads: { filename?: string; media_type?: string | null }[] = [];
+      try {
+        const upRes = await fetch(`${API}/api/uploads?job_id=${encodeURIComponent(job.id)}`, { headers });
+        if (upRes.ok) {
+          const raw = await upRes.json();
+          uploads = Array.isArray(raw) ? raw : (raw.items || raw.data || []);
+        }
+      } catch {
+        // Fall through — API will still reject incomplete brackets.
+      }
+      const bracketBlock = validateHdrUploadsForComplete(uploads);
+      if (bracketBlock) {
+        Alert.alert('Incomplete HDR brackets', bracketBlock.message || BRACKET_HINT);
+        return;
+      }
+      Alert.alert('Mark Complete', 'Confirm that this shoot is finished?', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark Complete',
+          onPress: async () => {
+            setActioning(true);
+            try {
+              const hdrs = await actorHeaders({ 'Content-Type': 'application/json' });
+              const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/status`, {
+                method: 'PUT',
+                headers: hdrs,
+                body: JSON.stringify({ status: 'completed' }),
+              });
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                const detail = err.detail;
+                const msg = (detail && typeof detail === 'object' && detail.message)
+                  || (typeof detail === 'string' ? detail : null)
+                  || `Could not update job status (${res.status}).`;
+                throw new Error(msg);
+              }
+              setJob(prev => prev ? { ...prev, status: 'completed' } : prev);
+            } catch (e: any) {
+              Alert.alert('Cannot complete', e?.message || 'Could not update job status.');
+            } finally {
+              setActioning(false);
+            }
+          },
         },
-      },
-    ]);
+      ]);
+    } catch (e: any) {
+      Alert.alert('Cannot complete', e?.message || 'Could not check uploads.');
+    } finally {
+      setActioning(false);
+    }
   };
 
   const openMaps = () => {
