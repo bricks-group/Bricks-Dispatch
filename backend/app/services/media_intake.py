@@ -152,20 +152,29 @@ def is_photo_delivery_candidate(filename: Any = None) -> bool:
 def is_listing_still_delivery_row(upload: Any = None) -> bool:
     """True when this upload should appear once in listing still delivery.
 
-    Excludes Visit/3D filenames and HDR bracket siblings (non-primary frames
-    that share the primary's processed_url after merge).
+    Excludes Visit/3D (filename or provider=visit) and HDR bracket siblings
+    (non-primary frames that share the primary's processed_url after merge).
+    Parity with OS is_listing_still_upload.
     """
     row = upload if isinstance(upload, dict) else {}
     if is_visit_file(row.get("filename")):
         return False
-    if _lower(row.get("provider")) == "bracket_sibling":
+    provider = _lower(row.get("provider"))
+    if provider in ("bracket_sibling", "visit"):
         return False
     return True
 
 
+def _is_visit_upload_row(upload: Any = None) -> bool:
+    row = upload if isinstance(upload, dict) else {}
+    if is_visit_file(row.get("filename")):
+        return True
+    return _lower(row.get("provider")) == "visit"
+
+
 def pick_visit_upload(uploads: list | None) -> Optional[dict]:
     """First Visit upload for property_visits registration (.splat > .ply > .spz)."""
-    visits = [u for u in (uploads or []) if is_visit_file((u or {}).get("filename"))]
+    visits = [u for u in (uploads or []) if _is_visit_upload_row(u)]
     if not visits:
         return None
     visits.sort(key=lambda u: _visit_pick_rank((u or {}).get("filename")))

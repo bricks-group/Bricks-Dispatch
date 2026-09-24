@@ -166,9 +166,13 @@ async def _finalize_job_if_complete(job_id: str) -> None:
                 "qc_flagged": u.get("qc_status") == "flagged",
             })
 
-    if not delivery_urls:
-        # All uploads were QC-rejected or had no path — job cannot be delivered.
-        # Advance to qc_failed so it doesn't stay stuck in processing indefinitely.
+    # Find Visit (.splat > .ply > .spz) BEFORE the empty-stills gate so Visit-only
+    # (or all-stills-rejected) jobs still register property_visits + deliver.
+    # Previously qc_failed returned here and Visit never landed on the listing.
+    splat_upload = pick_visit_upload(uploads)
+
+    if not delivery_urls and not splat_upload:
+        # Truly nothing to deliver (no listing stills, no Visit) — don't stay stuck.
         logger.error(f"Job {job_id}: no deliverable URLs after QC — marking qc_failed")
         fields = {
             "status": "qc_failed",
@@ -184,15 +188,11 @@ async def _finalize_job_if_complete(job_id: str) -> None:
                 raise
         return
 
-    # Find the first Visit upload (.splat > .ply > .spz) to register as a property
-    # visit after delivery -- see the post-upsert block below. NOTE: this used to sign
-    # a splat_url and write it into media_delivery below; media_delivery has no
-    # splat_url column on the live DB (confirmed via BRICKS_STATUS.md, 2026-08-02)
-    # and that upsert would raise on every job with a splat upload, aborting the rest
-    # of this function (job never reaches "delivered", payout never triggers, agent
-    # never notified) -- a real, currently-live bug for any such job, now fixed by
-    # removing the dead field rather than by working around it.
-    splat_upload = pick_visit_upload(uploads)
+    if not delivery_urls and splat_upload:
+        logger.info(
+            f"Job {job_id}: no listing stills after QC — delivering Visit-only "
+            f"({splat_upload.get('filename') or splat_upload.get('id')})"
+        )
 
     # Upsert media_delivery row (idempotent). Fair-Use: PostgREST 402 → Postgres
     # so enhance→listing does not hollow after Blob upload succeeds.
@@ -229,20 +229,34 @@ async def _finalize_job_if_complete(job_id: str) -> None:
 
     logger.info(f"Job {job_id}: all {len(uploads)} uploads processed → status=delivered, {len(delivery_urls)} URLs generated")
 
-    # Register the property visit on Bricks-OS now that the job is delivered (best-effort —
-    # property_visits rows aren't load-bearing for this job's own status/payout/notification).
+    # Register the property visit on Bricks-OS now that the job is delivered.
+    # Failure is logged loudly — Visit-only deliveries must not silently hollow.
     if splat_upload:
-        splat_path = splat_upload.get("processed_url") or splat_upload.get("file_url")
-        # register_property_visit expects an internal storage path (Bricks-OS re-signs it
-        # at read time) -- an already-external https:// URL isn't one; same discriminator
-        # used above for delivery_urls. Not handling the external-URL case here (no
-        # evidence a raw Visit (.splat/.ply/.spz) upload ever produces one, unlike processed photos).
-        if splat_path and not splat_path.startswith("https://"):
+        # Prefer internal storage path (file_url / non-https processed_url). OS re-signs.
+        candidates = [
+            splat_upload.get("file_url"),
+            splat_upload.get("processed_url"),
+        ]
+        splat_path = next(
+            (p for p in candidates if p and not str(p).startswith("https://")),
+            None,
+        )
+        if splat_path:
             try:
                 from ..services.client_comms import register_property_visit
-                await register_property_visit(job_id, splat_path)
+                ok = await register_property_visit(job_id, splat_path)
+                if not ok:
+                    logger.error(
+                        f"Job {job_id}: register_property_visit returned False "
+                        f"for {splat_path} — Visit missing on listing"
+                    )
             except Exception as e:
                 logger.error(f"Job {job_id}: register_property_visit failed: {e}")
+        else:
+            logger.error(
+                f"Job {job_id}: Visit upload {splat_upload.get('id')} has no "
+                f"internal storage path — skipping visit-ready"
+            )
 
     # Trigger vendor payout now that job is delivered (best-effort — payout_service is idempotent)
     try:

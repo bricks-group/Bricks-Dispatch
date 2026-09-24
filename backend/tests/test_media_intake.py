@@ -138,3 +138,23 @@ def test_filter_listing_stills_keeps_one_per_bracket():
     ]
     kept = [u["filename"] for u in uploads if is_listing_still_delivery_row(u)]
     assert kept == ["living-0.jpg", "kitchen.jpg"]
+
+
+def test_listing_still_excludes_provider_visit():
+    """Parity with OS: provider=visit must never surface as a listing still."""
+    assert not is_listing_still_delivery_row({
+        "filename": "scan.bin",
+        "provider": "visit",
+        "processed_url": "visits/j/scan.bin",
+    })
+    assert is_listing_still_delivery_row({
+        "filename": "living.jpg",
+        "provider": "bricks_inhouse",
+    })
+
+
+def test_pick_visit_upload_includes_provider_visit():
+    """GO enhance marks Visit rows provider=visit even if filename is odd."""
+    row = {"id": "v1", "filename": "mesh.bin", "provider": "visit", "file_url": "visits/j/mesh.bin"}
+    assert pick_visit_upload([{"filename": "a.jpg"}, row])["id"] == "v1"
+    assert pick_visit_upload([{"filename": "a.jpg", "provider": "bricks_inhouse"}]) is None
