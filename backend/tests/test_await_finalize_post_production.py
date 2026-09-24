@@ -313,3 +313,109 @@ def test_finalize_source_mentions_capture_only():
     assert "_list_delivered_capture_sessions" in src
     assert "capture-only finalize" in src
     assert "_unstick_processing_without_delivery" in src
+    assert "_fold_capture_into_existing_delivery" in src
+    assert "_merge_missing_capture_urls" in src
+
+
+def test_merge_missing_capture_urls_appends_by_session_id():
+    existing = [
+        {"upload_id": "u1", "url": "https://cdn.example/a.jpg", "filename": "a.jpg"},
+        {"url": "https://api.brxs.ca/api/public/floorplans/j/sess-old",
+         "filename": "Floor plan", "session_id": "sess-old", "kind": "floorplan"},
+    ]
+    capture = [
+        {"url": "https://api.brxs.ca/api/public/floorplans/j/sess-old",
+         "filename": "Floor plan", "session_id": "sess-old", "kind": "floorplan"},
+        {"url": "https://api.brxs.ca/api/public/tours/j/sess-tour",
+         "filename": "3D tour", "session_id": "sess-tour", "kind": "splat"},
+    ]
+    merged = pp._merge_missing_capture_urls(existing, capture)
+    assert merged is not None
+    assert len(merged) == 3
+    assert merged[-1]["session_id"] == "sess-tour"
+    assert pp._merge_missing_capture_urls(merged, capture) is None
+
+
+def test_merge_missing_capture_urls_parses_json_string():
+    import json
+    existing = json.dumps([{"upload_id": "u1", "url": "https://cdn.example/a.jpg"}])
+    capture = [{
+        "url": "https://api.brxs.ca/api/public/floorplans/j/sess-fp",
+        "filename": "Floor plan", "session_id": "sess-fp", "kind": "floorplan",
+    }]
+    merged = pp._merge_missing_capture_urls(existing, capture)
+    assert merged is not None
+    assert len(merged) == 2
+    assert merged[1]["kind"] == "floorplan"
+
+
+def test_finalize_folds_capture_when_media_delivery_exists(monkeypatch):
+    """Stills already delivered: late floorplan must patch media_delivery, not skip forever."""
+    existing_row = {
+        "id": "md-1",
+        "delivery_urls": [
+            {"upload_id": "u1", "url": "https://cdn.example/kitchen.jpg", "filename": "kitchen.jpg"},
+        ],
+    }
+    fp = {
+        "id": "sess-fp",
+        "kind": "floorplan",
+        "status": "delivered",
+        "output_storage_path": "capture/job-1/sess-fp/plan.png",
+    }
+    db = MagicMock()
+    uploads_tbl = _uploads_chain([
+        {"id": "u1", "filename": "kitchen.jpg", "file_url": "k.jpg",
+         "processed_url": "https://cdn.example/kitchen.jpg",
+         "processing_status": "done", "qc_status": "accepted", "provider": None},
+    ])
+    md_row = MagicMock()
+    md_row.data = existing_row
+    md_tbl = MagicMock()
+    md_tbl.select.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.maybe_single.return_value = md_tbl
+    md_tbl.update.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=md_row)
+
+    call_n = {"n": 0}
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    async def cap_exec():
+        call_n["n"] += 1
+        if call_n["n"] % 2 == 1:
+            return MagicMock(data=[fp])
+        return MagicMock(data=[])
+    cap_tbl.execute = cap_exec
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db.table.side_effect = table
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(
+        pp,
+        "_delivery_urls_from_capture_sessions",
+        lambda job_id, sessions: [
+            {"url": f"https://api.brxs.ca/api/public/floorplans/{job_id}/sess-fp",
+             "filename": "Floor plan", "session_id": "sess-fp", "kind": "floorplan"}
+        ] if sessions else [],
+    )
+
+    asyncio.run(pp._finalize_job_if_complete("job-1"))
+
+    # Must UPDATE delivery_urls (fold), never upsert a brand-new delivery / QC / payout
+    assert md_tbl.update.called
+    patch_fields = md_tbl.update.call_args[0][0]
+    assert "delivery_urls" in patch_fields
+    urls = patch_fields["delivery_urls"]
+    assert any(u.get("session_id") == "sess-fp" for u in urls)
+    assert any(u.get("upload_id") == "u1" for u in urls)
+    assert not md_tbl.upsert.called
