@@ -1190,6 +1190,36 @@ async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
         await _note_floorplan_on_job(
             db, job, job.get("id") or "", sid, n, delivered_at,
         )
+    # Capture-only jobs (no stills uploads rows): finalize so listing delivery +
+    # payout land. Skip when any uploads exist — stills finalize owns media_delivery;
+    # floor/tour still appear on the listing via capture_sessions.
+    try:
+        jid = job.get("id") or ""
+        if jid:
+            has_uploads = False
+            try:
+                res_u = await db.table("uploads").select("id").eq(
+                    "job_id", jid
+                ).limit(1).execute()
+                has_uploads = bool(getattr(res_u, "data", None) or [])
+            except Exception as e:
+                from ..shared.pg_fallback import (
+                    _is_rest_quota_error,
+                    pg_select_uploads_by_job_id,
+                )
+                if _is_rest_quota_error(e):
+                    has_uploads = bool(pg_select_uploads_by_job_id(jid) or [])
+                else:
+                    raise
+            if not has_uploads:
+                from .post_production import _finalize_job_if_complete
+                await _finalize_job_if_complete(jid)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Job %s: finalize after capture deliver failed: %s",
+            job.get("id"), e,
+        )
     session["status"] = "delivered"
     session["output_storage_path"] = output
     return output

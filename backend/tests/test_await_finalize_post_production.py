@@ -33,6 +33,16 @@ def test_finalize_source_picks_visit_before_qc_failed_gate():
     assert "delivering Visit-only" in fn
 
 
+
+def _capture_sessions_chain(rows):
+    result = MagicMock()
+    result.data = rows
+    chain = MagicMock()
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.execute = AsyncMock(return_value=result)
+    return chain
+
 def _uploads_chain(rows):
     """Fake supabase-style chain ending in .execute()."""
     result = MagicMock()
@@ -84,6 +94,8 @@ def test_finalize_visit_only_delivers_and_registers(monkeypatch):
         MagicMock(data={}),    # select for notify
     ])
 
+    cap_tbl = _capture_sessions_chain([])
+
     def table(name):
         if name == "uploads":
             return uploads_tbl
@@ -91,6 +103,8 @@ def test_finalize_visit_only_delivers_and_registers(monkeypatch):
             return md_tbl
         if name == "jobs":
             return jobs_tbl
+        if name == "capture_sessions":
+            return cap_tbl
         return MagicMock()
 
     db.table.side_effect = table
@@ -144,6 +158,8 @@ def test_finalize_no_stills_no_visit_marks_qc_failed(monkeypatch):
     jobs_tbl.eq.return_value = jobs_tbl
     jobs_tbl.execute = AsyncMock(return_value=MagicMock())
 
+    cap_tbl = _capture_sessions_chain([])
+
     def table(name):
         if name == "uploads":
             return uploads_tbl
@@ -151,6 +167,8 @@ def test_finalize_no_stills_no_visit_marks_qc_failed(monkeypatch):
             return md_tbl
         if name == "jobs":
             return jobs_tbl
+        if name == "capture_sessions":
+            return cap_tbl
         return MagicMock()
 
     db.table.side_effect = table
@@ -172,3 +190,126 @@ def test_finalize_no_stills_no_visit_marks_qc_failed(monkeypatch):
     assert register_calls == []
     update_payload = jobs_tbl.update.call_args[0][0]
     assert update_payload["status"] == "qc_failed"
+
+
+def test_finalize_capture_only_floorplan_delivers(monkeypatch):
+    """Floor-plan-only: no uploads + delivered capture_session → delivered + media_delivery."""
+    fp = {
+        "id": "sess-fp",
+        "kind": "floorplan",
+        "status": "delivered",
+        "output_storage_path": "capture/job-fp/sess-fp/plan.png",
+    }
+    db = MagicMock()
+    uploads_tbl = _uploads_chain([])
+    md_empty = MagicMock()
+    md_empty.data = None
+    md_tbl = MagicMock()
+    md_tbl.select.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.maybe_single.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=md_empty)
+    md_tbl.upsert.return_value = md_tbl
+
+    jobs_tbl = MagicMock()
+    jobs_tbl.update.return_value = jobs_tbl
+    jobs_tbl.eq.return_value = jobs_tbl
+    jobs_tbl.select.return_value = jobs_tbl
+    jobs_tbl.maybe_single.return_value = jobs_tbl
+    jobs_tbl.execute = AsyncMock(side_effect=[
+        MagicMock(data=None),  # update delivered
+        MagicMock(data={}),    # select for notify
+    ])
+
+    # floorplan kind query returns fp; splat kind returns []
+    call_n = {"n": 0}
+    def cap_execute():
+        call_n["n"] += 1
+        # two kinds queried; return fp on first (floorplan), empty on second
+        if call_n["n"] == 1:
+            return AsyncMock(return_value=MagicMock(data=[fp]))()
+        return AsyncMock(return_value=MagicMock(data=[]))()
+
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    async def cap_exec():
+        call_n["n"] += 1
+        if call_n["n"] % 2 == 1:
+            return MagicMock(data=[fp])
+        return MagicMock(data=[])
+    cap_tbl.execute = cap_exec
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "jobs":
+            return jobs_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db.table.side_effect = table
+
+    async def fake_qc(_job_id):
+        return {}
+
+    async def fake_payout(_db, _job_id):
+        return None
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(
+        pp,
+        "_delivery_urls_from_capture_sessions",
+        lambda job_id, sessions: [
+            {"url": f"https://api.brxs.ca/api/public/floorplans/{job_id}/sess-fp",
+             "filename": "Floor plan", "session_id": "sess-fp", "kind": "floorplan"}
+        ] if sessions else [],
+    )
+
+    with patch("app.services.payout_service.trigger_payout_for_job", fake_payout):
+        asyncio.run(pp._finalize_job_if_complete("job-fp"))
+
+    assert jobs_tbl.update.call_args_list[0][0][0]["status"] == "delivered"
+    upsert_row = md_tbl.upsert.call_args[0][0]
+    assert upsert_row["job_id"] == "job-fp"
+    assert any("floorplans" in (u.get("url") or "") for u in upsert_row["delivery_urls"])
+
+
+def test_finalize_no_uploads_no_capture_unsticks_processing(monkeypatch):
+    """Mark complete with nothing ready must leave completed, not processing."""
+    db = MagicMock()
+    uploads_tbl = _uploads_chain([])
+    cap_tbl = _capture_sessions_chain([])
+
+    jobs_tbl = MagicMock()
+    jobs_tbl.update.return_value = jobs_tbl
+    jobs_tbl.eq.return_value = jobs_tbl
+    jobs_tbl.execute = AsyncMock(return_value=MagicMock())
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        if name == "jobs":
+            return jobs_tbl
+        return MagicMock()
+
+    db.table.side_effect = table
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+
+    asyncio.run(pp._finalize_job_if_complete("job-empty"))
+
+    # unstick path updates jobs status=completed (via _unstick)
+    assert jobs_tbl.update.call_args[0][0]["status"] == "completed"
+
+
+def test_finalize_source_mentions_capture_only():
+    src = Path(pp.__file__).read_text()
+    assert "_list_delivered_capture_sessions" in src
+    assert "capture-only finalize" in src
+    assert "_unstick_processing_without_delivery" in src

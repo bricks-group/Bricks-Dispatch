@@ -63,6 +63,79 @@ async def _mark_upload_done(upload_id: str, processed_url: Optional[str]) -> Non
             raise
 
 
+
+async def _list_delivered_capture_sessions(db, job_id: str) -> list[dict]:
+    """Delivered floorplan / path-tour (kind=splat) sessions for capture-only finalize.
+
+    Fair-Use: PostgREST 402 → count helpers + latest-session PG reads.
+    """
+    out: list[dict] = []
+    for kind in ("floorplan", "splat"):
+        rows: list = []
+        try:
+            res = await db.table("capture_sessions").select(
+                "id, kind, status, output_storage_path"
+            ).eq("job_id", job_id).eq("kind", kind).eq("status", "delivered").execute()
+            rows = getattr(res, "data", None) or []
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_count_delivered, pg_select_session_latest
+            if not _is_rest_quota_error(e):
+                raise
+            if pg_count_delivered(job_id, kind) > 0:
+                latest = pg_select_session_latest(job_id, kind)
+                if latest and latest.get("status") == "delivered":
+                    rows = [latest]
+        for row in rows:
+            if isinstance(row, dict) and row.get("id"):
+                out.append(row)
+    return out
+
+
+def _delivery_urls_from_capture_sessions(job_id: str, sessions: list[dict]) -> list[dict]:
+    """Public OS floor/tour URLs for media_delivery (listing / Companion)."""
+    from ..services.capture_worker import public_floorplan_url, public_tour_embed_url
+
+    urls: list[dict] = []
+    for s in sessions:
+        kind = (s.get("kind") or "").strip()
+        sid = s.get("id") or ""
+        if not sid:
+            continue
+        if kind == "floorplan":
+            url = public_floorplan_url(job_id, sid)
+            if url:
+                urls.append({"url": url, "filename": "Floor plan", "session_id": sid, "kind": "floorplan"})
+        elif kind == "splat":
+            url = public_tour_embed_url(job_id, sid)
+            if url:
+                urls.append({"url": url, "filename": "3D tour", "session_id": sid, "kind": "splat"})
+    return urls
+
+
+async def _unstick_processing_without_delivery(job_id: str) -> None:
+    """Mark-complete claims processing; empty stills + no capture must not stay there."""
+    db = await get_db()
+    fields = {
+        "status": "completed",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db.table("jobs").update(fields).eq("id", job_id).eq(
+            "status", "processing"
+        ).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            logger.warning("Job %s: unstick processing failed: %s", job_id, e)
+            return
+        # PG path has no status predicate — only unstick when still processing.
+        from ..shared.pg_fallback import pg_select_job_by_id
+        row = pg_select_job_by_id(job_id) or {}
+        if row.get("status") == "processing":
+            pg_update_job(job_id, fields)
+
+
 async def _finalize_job_if_complete(job_id: str) -> None:
     """
     Called after each upload is marked done.
@@ -83,7 +156,23 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         uploads = pg_select_uploads_by_job_id(job_id)
 
     if not uploads:
-        return
+        # Floor-plan / 3D-tour-only jobs have capture_sessions, not uploads.
+        # Mark complete still claims status=processing via process_job_assets —
+        # deliver when a capture session is ready; otherwise unstick processing.
+        capture_sessions = await _list_delivered_capture_sessions(db, job_id)
+        if not capture_sessions:
+            logger.info(
+                f"Job {job_id}: no uploads and no delivered capture — unstick processing"
+            )
+            await _unstick_processing_without_delivery(job_id)
+            return
+        uploads = []  # fall through as capture-only
+        logger.info(
+            f"Job {job_id}: capture-only finalize "
+            f"({len(capture_sessions)} delivered session(s))"
+        )
+    else:
+        capture_sessions = None
 
     # Idempotency guard: if media_delivery already exists, finalization already ran.
     # Prevents duplicate QC runs, duplicate delivery emails, and double payout triggers
@@ -171,8 +260,15 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     # Previously qc_failed returned here and Visit never landed on the listing.
     splat_upload = pick_visit_upload(uploads)
 
+    if capture_sessions is None:
+        capture_sessions = await _list_delivered_capture_sessions(db, job_id)
+    capture_urls = _delivery_urls_from_capture_sessions(job_id, capture_sessions or [])
+    if capture_urls:
+        # Append floor/tour public URLs onto stills delivery (or stand alone).
+        delivery_urls = list(delivery_urls) + capture_urls
+
     if not delivery_urls and not splat_upload:
-        # Truly nothing to deliver (no listing stills, no Visit) — don't stay stuck.
+        # Truly nothing to deliver (no listing stills, no Visit, no capture) — don't stay stuck.
         logger.error(f"Job {job_id}: no deliverable URLs after QC — marking qc_failed")
         fields = {
             "status": "qc_failed",
@@ -192,6 +288,13 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         logger.info(
             f"Job {job_id}: no listing stills after QC — delivering Visit-only "
             f"({splat_upload.get('filename') or splat_upload.get('id')})"
+        )
+    elif capture_urls and not any(
+        u.get("upload_id") for u in delivery_urls if isinstance(u, dict)
+    ) and not splat_upload:
+        logger.info(
+            f"Job {job_id}: capture-only delivery "
+            f"({len(capture_urls)} floor/tour URL(s))"
         )
 
     # Upsert media_delivery row (idempotent). Fair-Use: PostgREST 402 → Postgres
