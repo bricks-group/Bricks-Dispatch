@@ -803,13 +803,11 @@ async def assign_job_to_member(
                 )
         new_assignee_id = patch.get("assignee_id")
         if new_assignee_id:
+            # Await on Vercel serverless — create_task / BackgroundTasks freeze after the
+            # HTTP response (same hollow-notify bug as paid /book assign + Mark complete).
             try:
                 from ..services.notifications import notify_assignment
-                task = asyncio.create_task(
-                    notify_assignment({**existing_job, **patch, "id": job_id}, new_assignee_id)
-                )
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
+                await notify_assignment({**existing_job, **patch, "id": job_id}, new_assignee_id)
             except Exception as _ne:
                 logger.error("Assignment notify failed for job %s: %s", job_id, _ne)
 
