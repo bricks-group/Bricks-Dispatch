@@ -1058,6 +1058,306 @@ def pg_select_uploads_by_job_id(job_id: str, *, limit: int = 500) -> list[dict]:
             pass
 
 
+
+def pg_update_upload(upload_id: str, fields: dict) -> bool:
+    """UPDATE public.uploads SET … via Postgres when PostgREST is Fair-Use 402.
+
+    Whitelist covers enhance→listing: processing_status, processed_url/at, provider,
+    provider_job_id, qc_* and qc_variant_url. Returns True when a row was updated.
+    """
+    uid = str(upload_id or "").strip()
+    if not uid or not isinstance(fields, dict) or not fields:
+        return False
+    allowed = {
+        "processing_status",
+        "provider",
+        "provider_job_id",
+        "processed_url",
+        "processed_at",
+        "qc_status",
+        "qc_score",
+        "qc_notes",
+        "qc_at",
+        "qc_variant_url",
+        "file_url",
+        "thumbnail_url",
+        "thumbnail",
+        "filename",
+        "file_size",
+        "mime_type",
+    }
+    cols: list[tuple[str, Any]] = []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        if k == "file_size":
+            try:
+                v = int(v or 0)
+            except Exception:
+                v = 0
+        elif k == "qc_score" and v is not None:
+            try:
+                v = float(v)
+            except Exception:
+                continue
+        cols.append((k, v))
+    if not cols:
+        return False
+    set_parts = [f"{c} = %s" for c, _ in cols]
+    vals: list[Any] = [v for _, v in cols]
+    vals.append(uid)
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_update_upload: no Postgres connection id=%s", uid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE public.uploads SET {', '.join(set_parts)} WHERE id = %s",
+                vals,
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_update_upload ok id=%s fields=%s",
+                    uid,
+                    [c for c, _ in cols],
+                )
+            return ok
+    except Exception as e:
+        logger.error("pg_update_upload failed id=%s: %s", uid, str(e)[:300])
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_media_delivery_by_job_id(job_id: str) -> Optional[dict]:
+    """Fetch media_delivery row for a job via Postgres (Fair-Use finalize guard)."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id::text AS id, job_id, booking_id, delivery_urls,
+                       delivered_at, notified_at, notification_status, created_at
+                FROM public.media_delivery
+                WHERE job_id = %s
+                LIMIT 1
+                """,
+                (jid,),
+            )
+            rows = _rows_from_cursor(cur)
+            if rows:
+                logger.warning("pg_select_media_delivery_by_job_id ok job=%s", jid)
+                return rows[0]
+            return None
+    except Exception as e:
+        logger.error(
+            "pg_select_media_delivery_by_job_id failed job=%s: %s",
+            jid,
+            str(e)[:300],
+        )
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_upsert_media_delivery(row: dict) -> bool:
+    """INSERT/UPSERT public.media_delivery on job_id when PostgREST is Fair-Use 402.
+
+    Lands listing delivery_urls after enhance so OS/Companion share is not hollow.
+    """
+    if not isinstance(row, dict) or not row:
+        return False
+    jid = str(row.get("job_id") or "").strip()
+    if not jid:
+        return False
+    urls = row.get("delivery_urls")
+    if urls is None:
+        urls = []
+    if isinstance(urls, (dict, list)):
+        urls_json = json.dumps(urls)
+    elif isinstance(urls, str):
+        urls_json = urls
+    else:
+        urls_json = json.dumps([])
+    delivered_at = row.get("delivered_at")
+    if not delivered_at:
+        from datetime import datetime, timezone
+        delivered_at = datetime.now(timezone.utc).isoformat()
+    notification_status = str(row.get("notification_status") or "pending")
+    booking_id = row.get("booking_id")
+    booking_id = str(booking_id).strip() if booking_id else None
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_upsert_media_delivery: no Postgres connection job=%s", jid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            if booking_id:
+                cur.execute(
+                    """
+                    INSERT INTO public.media_delivery
+                        (job_id, booking_id, delivery_urls, delivered_at, notification_status)
+                    VALUES (%s, %s, %s::jsonb, %s, %s)
+                    ON CONFLICT (job_id) DO UPDATE SET
+                        booking_id = COALESCE(EXCLUDED.booking_id, media_delivery.booking_id),
+                        delivery_urls = EXCLUDED.delivery_urls,
+                        delivered_at = EXCLUDED.delivered_at,
+                        notification_status = EXCLUDED.notification_status
+                    """,
+                    (jid, booking_id, urls_json, delivered_at, notification_status),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO public.media_delivery
+                        (job_id, delivery_urls, delivered_at, notification_status)
+                    VALUES (%s, %s::jsonb, %s, %s)
+                    ON CONFLICT (job_id) DO UPDATE SET
+                        delivery_urls = EXCLUDED.delivery_urls,
+                        delivered_at = EXCLUDED.delivered_at,
+                        notification_status = EXCLUDED.notification_status
+                    """,
+                    (jid, urls_json, delivered_at, notification_status),
+                )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_upsert_media_delivery ok job=%s urls=%s",
+                    jid,
+                    len(urls) if isinstance(urls, list) else "?",
+                )
+            return ok
+    except Exception as e:
+        logger.error("pg_upsert_media_delivery failed job=%s: %s", jid, str(e)[:400])
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_update_media_delivery(job_id: str, fields: dict) -> bool:
+    """UPDATE media_delivery notification fields via Postgres (Fair-Use)."""
+    jid = str(job_id or "").strip()
+    if not jid or not isinstance(fields, dict) or not fields:
+        return False
+    allowed = {"notification_status", "notified_at", "delivery_urls", "delivered_at", "booking_id"}
+    json_cols = {"delivery_urls"}
+    cols: list[tuple[str, Any]] = []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        if k in json_cols:
+            if isinstance(v, (dict, list)):
+                cols.append((k, json.dumps(v)))
+            elif v is None:
+                cols.append((k, json.dumps([])))
+            else:
+                cols.append((k, v if isinstance(v, str) else json.dumps(v)))
+        else:
+            cols.append((k, v))
+    if not cols:
+        return False
+    set_parts = []
+    vals: list[Any] = []
+    for c, v in cols:
+        if c in json_cols:
+            set_parts.append(f"{c} = %s::jsonb")
+        else:
+            set_parts.append(f"{c} = %s")
+        vals.append(v)
+    vals.append(jid)
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_update_media_delivery: no Postgres connection job=%s", jid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE public.media_delivery SET {', '.join(set_parts)} WHERE job_id = %s",
+                vals,
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning(
+                    "pg_update_media_delivery ok job=%s fields=%s",
+                    jid,
+                    [c for c, _ in cols],
+                )
+            return ok
+    except Exception as e:
+        logger.error("pg_update_media_delivery failed job=%s: %s", jid, str(e)[:300])
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_claim_job_for_processing(job_id: str) -> bool:
+    """Atomic jobs.status→processing gate via Postgres (Fair-Use process_job_assets).
+
+    Mirrors REST `.not_.in_("status", [processing, delivered, …])`. Returns True
+    when this caller claimed the job (row updated).
+    """
+    jid = str(job_id or "").strip()
+    if not jid:
+        return False
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_claim_job_for_processing: no Postgres connection job=%s", jid[:12])
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE public.jobs
+                SET status = %s, updated_at = %s
+                WHERE id = %s
+                  AND COALESCE(status, '') NOT IN (
+                      'processing', 'delivered', 'cancelled',
+                      'agent_no_show', 'dispatch_failed'
+                  )
+                """,
+                ("processing", now, jid),
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                logger.warning("pg_claim_job_for_processing ok job=%s", jid)
+            return ok
+    except Exception as e:
+        logger.error(
+            "pg_claim_job_for_processing failed job=%s: %s",
+            jid,
+            str(e)[:300],
+        )
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+
 def pg_create_auth_user(
     email: str,
     password: str,

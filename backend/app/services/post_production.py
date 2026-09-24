@@ -13,6 +13,20 @@ _AUTOENHANCE_API_KEY_ENV = "AUTOENHANCE_API_KEY"
 
 logger = logging.getLogger(__name__)
 
+
+async def _safe_update_upload(db, upload_id: str, update: dict) -> None:
+    """Update uploads row via REST; Postgres on Fair-Use 402 (enhance→listing)."""
+    try:
+        await db.table("uploads").update(update).eq("id", upload_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_upload
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_upload(upload_id, update):
+            raise
+
+
+
 # --- Config ---
 # BoxBrownie / third-party virtual staging is intentionally disabled (Kam 2026-09-12).
 # Staging uploads deliver originals to the listing file — never call vendors or claim furniture was staged.
@@ -101,21 +115,41 @@ async def process_job_assets(job_id: str):
     # 0 rows updated here and bail out early, preventing double-submission to providers.
     # NOTE: "completed" is the expected input state (shoot done, post-production starting),
     # so it must NOT be in the exclusion list.
-    gate = await db.table("jobs").update({
-        "status": "processing",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", job_id).not_.in_("status", ["processing", "delivered", "cancelled", "agent_no_show", "dispatch_failed"]).execute()
-    if not (gate.data):
+    claimed = False
+    try:
+        gate = await db.table("jobs").update({
+            "status": "processing",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", job_id).not_.in_("status", ["processing", "delivered", "cancelled", "agent_no_show", "dispatch_failed"]).execute()
+        claimed = bool(gate.data)
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_claim_job_for_processing
+        if not _is_rest_quota_error(e):
+            raise
+        claimed = pg_claim_job_for_processing(job_id)
+    if not claimed:
         logger.info(f"Job {job_id}: skipping process_job_assets — already processing or terminal")
         return
 
-    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    try:
+        res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        job = res_job.data
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        job = pg_select_job_by_id(job_id)
+    if not job:
         return
 
-    job = res_job.data
-    res_assets = await db.table("uploads").select("*").eq("job_id", job_id).execute()
-    assets = res_assets.data
+    try:
+        res_assets = await db.table("uploads").select("*").eq("job_id", job_id).execute()
+        assets = res_assets.data
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+        if not _is_rest_quota_error(e):
+            raise
+        assets = pg_select_uploads_by_job_id(job_id)
 
     logger.info(f"Starting post-production for job {job_id}")
 
@@ -163,11 +197,11 @@ async def process_job_assets(job_id: str):
             leftover.append(asset)
 
     for res in results:
-        await db.table("uploads").update({
+        await _safe_update_upload(db, res["asset_id"], {
             "processing_status": "processing",
             "provider": res["provider"],
-            "provider_job_id": res["provider_job_id"]
-        }).eq("id", res["asset_id"]).execute()
+            "provider_job_id": res["provider_job_id"],
+        })
 
     # Without vendor keys (or for drone/reel), leftover stills used to sit in
     # processing forever — finalize never ran. Deliver them now so the listing
@@ -279,7 +313,7 @@ async def deliver_bracket_group_without_vendor(db, job_id: str, group: list) -> 
                 "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
                 f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
             )[:500]
-        await db.table("uploads").update(update).eq("id", uid).execute()
+        await _safe_update_upload(db, uid, update)
 
 
 async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
@@ -302,12 +336,12 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     # _finalize_job_if_complete still excludes these from photo delivery_urls
     # and registers property_visits from the Visit row separately.
     if route == "visit":
-        await db.table("uploads").update({
+        await _safe_update_upload(db, upload_id, {
             "processing_status": "done",
             "processed_url": file_path,
             "provider": "visit",
             "processed_at": now,
-        }).eq("id", upload_id).execute()
+        })
         return
 
     processed = file_path
@@ -349,4 +383,4 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
             f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
         )[:500]
-    await db.table("uploads").update(update).eq("id", upload_id).execute()
+    await _safe_update_upload(db, upload_id, update)

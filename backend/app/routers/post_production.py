@@ -53,7 +53,14 @@ async def _mark_upload_done(upload_id: str, processed_url: Optional[str]) -> Non
     }
     if processed_url:
         update["processed_url"] = processed_url
-    await db.table("uploads").update(update).eq("id", upload_id).execute()
+    try:
+        await db.table("uploads").update(update).eq("id", upload_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_upload
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_upload(upload_id, update):
+            raise
 
 
 async def _finalize_job_if_complete(job_id: str) -> None:
@@ -64,10 +71,16 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     """
     db = await get_db()
 
-    res_uploads = await db.table("uploads").select(
-        "id, filename, file_url, processed_url, processing_status, provider"
-    ).eq("job_id", job_id).execute()
-    uploads = res_uploads.data or []
+    try:
+        res_uploads = await db.table("uploads").select(
+            "id, filename, file_url, processed_url, processing_status, qc_status, provider"
+        ).eq("job_id", job_id).execute()
+        uploads = res_uploads.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+        if not _is_rest_quota_error(e):
+            raise
+        uploads = pg_select_uploads_by_job_id(job_id)
 
     if not uploads:
         return
@@ -75,8 +88,16 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     # Idempotency guard: if media_delivery already exists, finalization already ran.
     # Prevents duplicate QC runs, duplicate delivery emails, and double payout triggers
     # when concurrent provider callbacks arrive close together.
-    existing_delivery = await db.table("media_delivery").select("id").eq("job_id", job_id).maybe_single().execute()
-    if existing_delivery.data:
+    existing = None
+    try:
+        existing_delivery = await db.table("media_delivery").select("id").eq("job_id", job_id).maybe_single().execute()
+        existing = existing_delivery.data
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_media_delivery_by_job_id
+        if not _is_rest_quota_error(e):
+            raise
+        existing = pg_select_media_delivery_by_job_id(job_id)
+    if existing:
         logger.info(f"Job {job_id}: media_delivery already exists — skipping duplicate finalization")
         return
 
@@ -96,10 +117,16 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         logger.error(f"Job {job_id}: QC agent failed (continuing to delivery): {e}")
 
     # Re-fetch uploads after QC (qc_status now populated)
-    res_uploads = await db.table("uploads").select(
-        "id, filename, file_url, processed_url, processing_status, qc_status, provider"
-    ).eq("job_id", job_id).execute()
-    uploads = res_uploads.data or []
+    try:
+        res_uploads = await db.table("uploads").select(
+            "id, filename, file_url, processed_url, processing_status, qc_status, provider"
+        ).eq("job_id", job_id).execute()
+        uploads = res_uploads.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+        if not _is_rest_quota_error(e):
+            raise
+        uploads = pg_select_uploads_by_job_id(job_id)
 
     # Build delivery URL list — prefer processed_url, fallback to signed original
     # Rejected uploads are excluded; flagged uploads are included with a warning label
@@ -143,10 +170,18 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         # All uploads were QC-rejected or had no path — job cannot be delivered.
         # Advance to qc_failed so it doesn't stay stuck in processing indefinitely.
         logger.error(f"Job {job_id}: no deliverable URLs after QC — marking qc_failed")
-        await db.table("jobs").update({
+        fields = {
             "status": "qc_failed",
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", job_id).execute()
+        }
+        try:
+            await db.table("jobs").update(fields).eq("id", job_id).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+            if not _is_rest_quota_error(e):
+                raise
+            if not pg_update_job(job_id, fields):
+                raise
         return
 
     # Find the first Visit upload (.splat > .ply > .spz) to register as a property
@@ -159,22 +194,38 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     # removing the dead field rather than by working around it.
     splat_upload = pick_visit_upload(uploads)
 
-    # Upsert media_delivery row (idempotent)
+    # Upsert media_delivery row (idempotent). Fair-Use: PostgREST 402 → Postgres
+    # so enhance→listing does not hollow after Blob upload succeeds.
     delivery_row = {
         "job_id": job_id,
         "delivery_urls": delivery_urls,
         "delivered_at": datetime.now(timezone.utc).isoformat(),
         "notification_status": "pending",
     }
-    await db.table("media_delivery").upsert(
-        delivery_row, on_conflict="job_id"
-    ).execute()
+    try:
+        await db.table("media_delivery").upsert(
+            delivery_row, on_conflict="job_id"
+        ).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_upsert_media_delivery
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_upsert_media_delivery(delivery_row):
+            raise
 
     # Advance job to delivered
-    await db.table("jobs").update({
+    delivered_fields = {
         "status": "delivered",
         "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", job_id).execute()
+    }
+    try:
+        await db.table("jobs").update(delivered_fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, delivered_fields):
+            raise
 
     logger.info(f"Job {job_id}: all {len(uploads)} uploads processed → status=delivered, {len(delivery_urls)} URLs generated")
 
@@ -204,14 +255,35 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     await _send_delivery_notification(job_id, delivery_urls)
 
 
+async def _patch_media_delivery(job_id: str, fields: dict) -> None:
+    """Update media_delivery via REST; Postgres on Fair-Use 402."""
+    db = await get_db()
+    try:
+        await db.table("media_delivery").update(fields).eq("job_id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_media_delivery
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_media_delivery(job_id, fields):
+            raise
+
+
 async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
     """Delegates delivery notification to Booking service (which owns the agent relationship)."""
     db = await get_db()
-    res_job = await db.table("jobs").select("booking_id, address").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    job = {}
+    try:
+        res_job = await db.table("jobs").select("booking_id, address").eq("id", job_id).maybe_single().execute()
+        job = res_job.data or {}
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        job = pg_select_job_by_id(job_id) or {}
+    if not job:
         return
 
-    booking_id = res_job.data.get("booking_id") or ""
+    booking_id = job.get("booking_id") or ""
     if not booking_id:
         logger.warning(f"Job {job_id}: no booking_id — skipping delivery notification")
         return
@@ -223,17 +295,9 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
         logger.info(f"Job {job_id}: INTERNAL_API_KEYS not set — skipping delivery notification")
         return
 
-    # Determine splat_pending: True when splat is still processing or has failed,
-    # so Booking can append "Your Virtual Visit is processing — it will arrive separately
-    # within 24h" to the agent delivery email.
+    # splat_status is not on the live media_delivery schema (Visit registers via
+    # property_visits). Keep splat_pending=False — Visit arrives separately.
     splat_pending = False
-    try:
-        res_md = await db.table("media_delivery").select("splat_status").eq("job_id", job_id).maybe_single().execute()
-        if res_md.data:
-            _splat_status = res_md.data.get("splat_status", "none")
-            splat_pending = _splat_status == "processing_failed"
-    except Exception as sp_err:
-        logger.warning(f"Job {job_id}: could not read splat_status for notification: {sp_err}")
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -243,23 +307,24 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
                 json={
                     "booking_id": booking_id,
                     "job_id": job_id,
-                    "address": res_job.data.get("address", ""),
+                    "address": job.get("address", ""),
                     "delivery_count": len(delivery_urls),
                     "delivery_urls": delivery_urls[:5],
                     "splat_pending": splat_pending,
                 },
             )
             resp.raise_for_status()
-            await db.table("media_delivery").update({
+            await _patch_media_delivery(job_id, {
                 "notified_at": datetime.now(timezone.utc).isoformat(),
                 "notification_status": "sent",
-            }).eq("job_id", job_id).execute()
+            })
             logger.info(f"Job {job_id}: delivery notification delegated to Booking service (splat_pending={splat_pending})")
     except Exception as e:
         logger.error(f"Job {job_id}: delivery notification failed: {e}")
-        await db.table("media_delivery").update({
-            "notification_status": "failed",
-        }).eq("job_id", job_id).execute()
+        try:
+            await _patch_media_delivery(job_id, {"notification_status": "failed"})
+        except Exception as e2:
+            logger.error(f"Job {job_id}: media_delivery notify-failed patch failed: {e2}")
 
 
 # ---------------------------------------------------------------------------
@@ -497,13 +562,21 @@ async def reconcile_stuck_uploads(
                     storage_path = await upload_enhanced(db.storage, upload["job_id"], upload["id"], enhanced_bytes)
                     qc_variant_path = await upload_qc_variant(db.storage, upload["job_id"], upload["id"], enhanced_bytes)
 
-                    await db.table("uploads").update({
+                    pil_fields = {
                         "processing_status": "done",
                         "processed_url": storage_path,
                         "qc_variant_url": qc_variant_path,
                         "provider": "bricks_inhouse",
                         "processed_at": datetime.now(timezone.utc).isoformat(),
-                    }).eq("id", upload["id"]).execute()
+                    }
+                    try:
+                        await db.table("uploads").update(pil_fields).eq("id", upload["id"]).execute()
+                    except Exception as up_err:
+                        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_upload
+                        if not _is_rest_quota_error(up_err):
+                            raise
+                        if not pg_update_upload(upload["id"], pil_fields):
+                            raise
 
                     if upload.get("job_id"):
                         job_ids_to_finalize.add(upload["job_id"])
@@ -533,10 +606,18 @@ async def reconcile_stuck_uploads(
             job_ids_to_finalize.add(u["job_id"])
 
     if stuck_ids:
-        await db.table("uploads").update({
+        fail_fields = {
             "processing_status": "failed",
             "processed_at": datetime.now(timezone.utc).isoformat(),
-        }).in_("id", stuck_ids).execute()
+        }
+        try:
+            await db.table("uploads").update(fail_fields).in_("id", stuck_ids).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_update_upload
+            if not _is_rest_quota_error(e):
+                raise
+            for sid in stuck_ids:
+                pg_update_upload(sid, fail_fields)
         logger.warning(f"Reconcile: marked {len(stuck_ids)} stuck uploads as failed")
 
     # Await finalize in-request. Vercel serverless drops FastAPI BackgroundTasks after the
