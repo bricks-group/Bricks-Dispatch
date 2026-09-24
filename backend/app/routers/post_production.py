@@ -23,7 +23,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from ..services.media_intake import is_listing_still_delivery_row, pick_visit_upload
 from ..services.qc_agent import run_qc_for_job
@@ -271,7 +271,6 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
 @router.post("/callback/fotello")
 async def fotello_callback(
     request: Request,
-    background_tasks: BackgroundTasks,
     secret: Optional[str] = None,
 ):
     _verify_callback_secret(secret)
@@ -298,7 +297,9 @@ async def fotello_callback(
     job_id = res.data["job_id"]
 
     await _mark_upload_done(upload_id, processed_url)
-    background_tasks.add_task(_finalize_job_if_complete, job_id)
+    # Await in-request: Vercel serverless drops FastAPI BackgroundTasks after the HTTP
+    # response (same hollow media_delivery bug as Mark complete create_task / upload-complete).
+    await _finalize_job_if_complete(job_id)
 
     return {"received": True, "upload_id": upload_id}
 
@@ -312,7 +313,6 @@ async def fotello_callback(
 @router.post("/callback/autoenhance")
 async def autoenhance_callback(
     request: Request,
-    background_tasks: BackgroundTasks,
     secret: Optional[str] = None,
 ):
     _verify_callback_secret(secret)
@@ -339,7 +339,9 @@ async def autoenhance_callback(
     job_id = res.data["job_id"]
 
     await _mark_upload_done(upload_id, processed_url)
-    background_tasks.add_task(_finalize_job_if_complete, job_id)
+    # Await in-request: Vercel serverless drops FastAPI BackgroundTasks after the HTTP
+    # response (same hollow media_delivery bug as Mark complete create_task / upload-complete).
+    await _finalize_job_if_complete(job_id)
 
     return {"received": True, "upload_id": upload_id}
 
@@ -357,7 +359,6 @@ async def autoenhance_callback(
 @router.post("/callback/boxbrownie")
 async def boxbrownie_callback(
     request: Request,
-    background_tasks: BackgroundTasks,
     secret: Optional[str] = None,
 ):
     _verify_callback_secret(secret)
@@ -385,7 +386,9 @@ async def boxbrownie_callback(
     job_id = res.data["job_id"]
 
     await _mark_upload_done(upload_id, processed_url)
-    background_tasks.add_task(_finalize_job_if_complete, job_id)
+    # Await in-request: Vercel serverless drops FastAPI BackgroundTasks after the HTTP
+    # response (same hollow media_delivery bug as Mark complete create_task / upload-complete).
+    await _finalize_job_if_complete(job_id)
 
     return {"received": True, "upload_id": upload_id}
 
@@ -397,7 +400,6 @@ async def boxbrownie_callback(
 
 @router.post("/reconcile")
 async def reconcile_stuck_uploads(
-    background_tasks: BackgroundTasks,
     x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """
@@ -412,6 +414,12 @@ async def reconcile_stuck_uploads(
 
     db = await get_db()
 
+    # Track every job that may now be fully done so we await finalize once at the end.
+    # Includes BoxBrownie poll successes, PIL/in-house rescues, and timed-out failures.
+    # (If PIL finishes every upload for a job, that job never re-enters the stuck list —
+    # without this set it would never finalize → hollow listing delivery.)
+    job_ids_to_finalize: set = set()
+
     # --- BoxBrownie: poll all in-flight uploads (no webhooks — polling only) ---
     # Run before the timeout check so completed jobs aren't falsely marked failed.
     from ..services.post_production import poll_boxbrownie_job
@@ -425,7 +433,8 @@ async def reconcile_stuck_uploads(
                 result_url = await poll_boxbrownie_job(upload["provider_job_id"])
                 if result_url:
                     await _mark_upload_done(upload["id"], result_url)
-                    background_tasks.add_task(_finalize_job_if_complete, upload["job_id"])
+                    if upload.get("job_id"):
+                        job_ids_to_finalize.add(upload["job_id"])
                     bb_completed += 1
     except Exception as e:
         logger.error(f"BoxBrownie poll sweep failed: {e}")
@@ -496,6 +505,8 @@ async def reconcile_stuck_uploads(
                         "processed_at": datetime.now(timezone.utc).isoformat(),
                     }).eq("id", upload["id"]).execute()
 
+                    if upload.get("job_id"):
+                        job_ids_to_finalize.add(upload["job_id"])
                     pil_tier3_count += 1
                     logger.info(
                         f"In-house enhance: processed upload {upload['id']} for job {upload['job_id']} "
@@ -517,7 +528,9 @@ async def reconcile_stuck_uploads(
         stuck = res_stuck.data or []
 
     stuck_ids = [u["id"] for u in stuck]
-    other_job_ids = list({u["job_id"] for u in stuck if u.get("job_id")})
+    for u in stuck:
+        if u.get("job_id"):
+            job_ids_to_finalize.add(u["job_id"])
 
     if stuck_ids:
         await db.table("uploads").update({
@@ -526,8 +539,11 @@ async def reconcile_stuck_uploads(
         }).in_("id", stuck_ids).execute()
         logger.warning(f"Reconcile: marked {len(stuck_ids)} stuck uploads as failed")
 
-    for job_id in other_job_ids:
-        background_tasks.add_task(_finalize_job_if_complete, job_id)
+    # Await finalize in-request. Vercel serverless drops FastAPI BackgroundTasks after the
+    # HTTP response (same hollow media_delivery bug as Mark complete create_task / upload-complete).
+    # Finalize is idempotent via the media_delivery guard, so order across job ids does not matter.
+    for jid in job_ids_to_finalize:
+        await _finalize_job_if_complete(jid)
 
     # Alert on jobs stuck in post-production > 4 hours (Sentry / external monitoring)
     try:
@@ -547,5 +563,5 @@ async def reconcile_stuck_uploads(
         "boxbrownie_completed": bb_completed,
         "pil_tier3_applied": pil_tier3_count,
         "timed_out": len(stuck_ids),
-        "jobs_queued_for_finalization": len(other_job_ids),
+        "jobs_queued_for_finalization": len(job_ids_to_finalize),
     }
