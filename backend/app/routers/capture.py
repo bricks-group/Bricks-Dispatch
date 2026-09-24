@@ -924,10 +924,11 @@ async def commit_frame(
 
 
 async def _note_floorplan_on_job(db, job: dict, job_id: str, sid: str, n: int, now: str) -> None:
-    """Checklist only. Phone-origin plans are Bricks-generated, not BoxBrownie.
+    """Checklist only — call after successful floorplan deliver, never before compile.
 
-    Fair-Use: when PostgREST is 402, write via Postgres so the visit checklist
-    still marks floor-plan capture complete and bumps jobs.updated_at.
+    Phone-origin plans are Bricks-generated, not BoxBrownie. Fair-Use: when
+    PostgREST is 402, write via Postgres so the visit checklist still marks
+    floor-plan capture complete and bumps jobs.updated_at.
     """
     import json as _json
     checklist = job.get("checklist") or []
@@ -1177,10 +1178,18 @@ async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
     except Exception as e:
         await _fail_session(db, sid, stage, str(e), datetime.now(timezone.utc).isoformat())
         raise CaptureWorkerError(str(e)) from e
+    delivered_at = datetime.now(timezone.utc).isoformat()
     await _deliver_session(
-        db, sid, output, kind, datetime.now(timezone.utc).isoformat(),
+        db, sid, output, kind, delivered_at,
         job=job, notify=True,
     )
+    # Checklist only AFTER successful deliver — same class as Visit finalize:
+    # never mark floor-plan "submitted" when compile failed / stub refused.
+    if kind == "floorplan":
+        n = int(session.get("frame_count") or 0)
+        await _note_floorplan_on_job(
+            db, job, job.get("id") or "", sid, n, delivered_at,
+        )
     session["status"] = "delivered"
     session["output_storage_path"] = output
     return output
@@ -1244,8 +1253,6 @@ async def submit_session(
                 sid, "Captured",
                 {"status": "done", "detail": f"{len(stations)} stations · {n} frames"},
             )
-        if kind == "floorplan":
-            await _note_floorplan_on_job(db, job, job_id, sid, n, now)
         try:
             await _compile_or_fail(db, job, session, kind, now)
             return {"ok": True, "session": await _load_session_bundle(db, job_id, session, job)}
