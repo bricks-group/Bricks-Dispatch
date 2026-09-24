@@ -1772,19 +1772,20 @@ async def update_vendor_job_status(
                 detail="Job status update unavailable (Fair Use); try again shortly",
             )
 
-    # When vendor marks completed, start post-production only when uploads are
+    # When vendor marks completed, run post-production only when uploads are
     # either not expected (deliverables_count=0) or already fully received.
     # For jobs with a count, uploads.py fires post-production when the count is
     # reached — this path is a safe fallback due to the atomic gate in process_job_assets.
+    # AWAIT on Vercel serverless (same class of bug as assigned notify): create_task /
+    # BackgroundTasks are frozen when the HTTP response returns, which left Mark
+    # complete advancing status while enhance→listing never ran (hollow media_delivery).
     if new_status == "completed" and old_status != "completed":
         _deliverables = job.get("deliverables_count") or 0
         _uploaded = job.get("uploaded_count") or 0
         if _deliverables == 0 or _uploaded >= _deliverables:
             try:
                 from ..services.post_production import process_job_assets
-                _t = asyncio.create_task(process_job_assets(job_id))
-                _background_tasks.add(_t)
-                _t.add_done_callback(_background_tasks.discard)
+                await process_job_assets(job_id)
             except Exception as e:
                 logger.error(f"Post-production trigger failed for job {job_id}: {e}")
 

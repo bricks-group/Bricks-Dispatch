@@ -72,17 +72,23 @@ async def _actor_job(authorization, x_user_id, job_id: str):
     return db, actor_id, vendor_id, job
 
 
-def _maybe_start_post(background_tasks, job: dict, new_uploaded: int, job_id: str) -> None:
-    """Start post-prod when the declared stills count is met on a completed job.
+async def _maybe_start_post(job: dict, new_uploaded: int, job_id: str) -> None:
+    """Run post-prod when the declared stills count is met on a completed job.
 
     When deliverables_count is unset (0), vendor_os's completed transition
     starts process_job_assets — firing here on every still would process a
     partial set and the atomic gate would skip later completes.
+
+    Await on Vercel serverless — BackgroundTasks often never run after the
+    response (same hollow-delivery bug as Mark complete create_task).
     """
     deliverables = job.get("deliverables_count") or 0
     status = (job.get("status") or "")
     if status == "completed" and deliverables and new_uploaded >= deliverables:
-        background_tasks.add_task(process_job_assets, job_id)
+        try:
+            await process_job_assets(job_id)
+        except Exception as e:
+            logger.error("Post-production trigger failed for job %s: %s", job_id, e)
 
 
 async def _insert_upload_row(db, payload_row: dict) -> None:
@@ -229,7 +235,7 @@ async def complete_stills_upload(
         else:
             logger.warning("complete stills fresh job select failed: %s", str(e)[:200])
     fresh["uploaded_count"] = new_uploaded
-    _maybe_start_post(background_tasks, fresh, new_uploaded, job_id)
+    await _maybe_start_post(fresh, new_uploaded, job_id)
     return record.dict()
 
 
@@ -405,7 +411,10 @@ async def create_upload(
                 fresh = pg_select_job_by_id(job_id) or {}
                 job_status = fresh.get("status", "") or job_status
         if job_status == "completed":
-            background_tasks.add_task(process_job_assets, job_id)
+            try:
+                await process_job_assets(job_id)
+            except Exception as e:
+                logger.error("Post-production trigger failed for job %s: %s", job_id, e)
 
     return record.dict()
 

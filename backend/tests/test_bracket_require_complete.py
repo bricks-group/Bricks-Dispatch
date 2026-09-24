@@ -1,6 +1,8 @@
 """HDR bracket gate for Mark complete — parity with web/frontend bracket-require."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
@@ -239,6 +241,11 @@ def test_update_vendor_job_status_allows_full_brackets(monkeypatch):
     monkeypatch.setattr(vos, "get_db", AsyncMock(return_value=Db()))
     # Avoid background post-prod / webhook side effects
     monkeypatch.setattr(vos, "send_dispatch_status_update_webhook", AsyncMock())
+    post_prod = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.post_production.process_job_assets",
+        post_prod,
+    )
 
     # After update the handler continues into on_time_rate etc. — stub member select path
     # by making vendor_members lookups soft-fail via empty member.
@@ -253,3 +260,14 @@ def test_update_vendor_job_status_allows_full_brackets(monkeypatch):
     )
     assert updated and updated[0]["status"] == "completed"
     assert result is not None
+    post_prod.assert_awaited_once_with("job-ok")
+
+
+def test_mark_complete_awaits_process_job_assets_not_create_task():
+    """Regression: Vercel freezes create_task after response — Mark complete must await."""
+    src = Path(vos.__file__).read_text()
+    # Narrow to the completed→post-prod block
+    assert "await process_job_assets(job_id)" in src
+    # The hollow fire-and-forget must not remain on this path
+    assert "create_task(process_job_assets" not in src
+
