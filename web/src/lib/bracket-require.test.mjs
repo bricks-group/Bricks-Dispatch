@@ -18,6 +18,8 @@ execSync(
 const {
   bracketStem,
   exposureBiasFromName,
+  bracketHasUnderMidOver,
+  inferMediaType,
   validateHdrBracketSelection,
   validateHdrUploadsForComplete,
   requiresBracketSet,
@@ -31,12 +33,20 @@ assert.equal(exposureBiasFromName('living_-2.jpg'), -2);
 assert.equal(exposureBiasFromName('living_+1.5.jpg'), 1.5);
 assert.equal(exposureBiasFromName('kitchen_under.jpg'), -2);
 assert.equal(exposureBiasFromName('kitchen_over.jpg'), 2);
+assert.equal(exposureBiasFromName('kitchen_normal.jpg'), 0);
 assert.equal(exposureBiasFromName('plain.jpg'), null);
+
+assert.equal(inferMediaType('DJI_0123.jpg', 'image/jpeg'), 'drone');
+assert.equal(inferMediaType('clip.mp4', 'video/mp4'), 'reel');
+assert.equal(inferMediaType('living_0.jpg', 'image/jpeg'), 'hdr');
 
 assert.equal(requiresBracketSet('hdr'), true);
 assert.equal(requiresBracketSet('drone'), false);
 assert.equal(HDR_BRACKET_MIN, 3);
 assert.ok(BRACKET_HINT.includes('bracketed'));
+
+assert.equal(bracketHasUnderMidOver(['a_-2.jpg', 'a_0.jpg', 'a_+2.jpg']), true);
+assert.equal(bracketHasUnderMidOver(['a_+1.jpg', 'a_+2.jpg', 'a_+3.jpg']), false);
 
 const alone = validateHdrBracketSelection(['living.jpg'], []);
 assert.ok(alone);
@@ -47,6 +57,13 @@ const complete = validateHdrBracketSelection(
   [],
 );
 assert.equal(complete, null);
+
+const sameSide = validateHdrBracketSelection(
+  ['room_+1.jpg', 'room_+2.jpg', 'room_+3.jpg'],
+  [],
+);
+assert.ok(sameSide);
+assert.match(sameSide.message, /under, mid, and over/i);
 
 const topUp = validateHdrBracketSelection(
   ['living_+2.jpg'],
@@ -77,5 +94,22 @@ const okComplete = validateHdrUploadsForComplete([
   { filename: 'clip.mp4', media_type: 'reel' },
 ]);
 assert.equal(okComplete, null);
+
+// GO/API parity: DJI without media_type must not false-block beside full HDR
+const withDrone = validateHdrUploadsForComplete([
+  { filename: 'living_-2.jpg', mime_type: 'image/jpeg' },
+  { filename: 'living_0.jpg', mime_type: 'image/jpeg' },
+  { filename: 'living_+2.jpg', mime_type: 'image/jpeg' },
+  { filename: 'DJI_0123.jpg', mime_type: 'image/jpeg' },
+]);
+assert.equal(withDrone, null);
+
+const overOnly = validateHdrUploadsForComplete([
+  { filename: 'room_+1.jpg', mime_type: 'image/jpeg' },
+  { filename: 'room_+2.jpg', mime_type: 'image/jpeg' },
+  { filename: 'room_+3.jpg', mime_type: 'image/jpeg' },
+]);
+assert.ok(overOnly);
+assert.match(overOnly.message, /under, mid, and over/i);
 
 console.log('bracket-require tests passed');

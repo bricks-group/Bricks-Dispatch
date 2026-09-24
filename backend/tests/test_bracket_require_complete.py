@@ -13,6 +13,7 @@ from app.services.bracket_require import (
     BRACKET_HINT,
     HDR_BRACKET_MIN,
     basename,
+    bracket_has_under_mid_over,
     group_by_bracket_stem,
     is_image_name,
     validate_hdr_uploads_for_complete,
@@ -109,6 +110,63 @@ def test_validate_allow_incomplete_bypass():
 def test_validate_empty_uploads_ok():
     assert validate_hdr_uploads_for_complete([]) is None
     assert validate_hdr_uploads_for_complete(None) is None
+
+
+
+
+def test_bracket_has_under_mid_over():
+    assert bracket_has_under_mid_over(["a_-2.jpg", "a_0.jpg", "a_+2.jpg"])
+    assert bracket_has_under_mid_over(["kit_under.jpg", "kit_0.jpg", "kit_over.jpg"])
+    assert not bracket_has_under_mid_over(["a_+1.jpg", "a_+2.jpg", "a_+3.jpg"])
+    assert not bracket_has_under_mid_over(["a_-1.jpg", "a_-2.jpg", "a_0.jpg"])  # no over
+    assert not bracket_has_under_mid_over(["a_1.jpg", "a_2.jpg", "a_0.jpg"])  # no under
+    assert not bracket_has_under_mid_over(["plain.jpg", "plain2.jpg", "plain3.jpg"])
+
+
+def test_validate_blocks_same_side_three_frame_bracket():
+    """Count≥3 is not enough — need real − / 0 / + coverage."""
+    issue = validate_hdr_uploads_for_complete(
+        [
+            {"filename": "room_+1.jpg", "media_type": "hdr"},
+            {"filename": "room_+2.jpg", "media_type": "hdr"},
+            {"filename": "room_+3.jpg", "media_type": "hdr"},
+        ]
+    )
+    assert issue is not None
+    assert issue["count"] == 3
+    assert "under, mid, and over" in issue["message"]
+
+
+def test_validate_ok_full_ev_ignores_incomplete_drone_stem():
+    """GO/API parity: DJI frames must not false-block beside a full HDR set.
+
+    media_type is not a DB column — infer drone from filename so Mark complete
+    does not treat DJI_0123.jpg as an incomplete HDR stem.
+    """
+    issue = validate_hdr_uploads_for_complete(
+        [
+            {"filename": "living_-2.jpg", "mime_type": "image/jpeg"},
+            {"filename": "living_0.jpg", "mime_type": "image/jpeg"},
+            {"filename": "living_+2.jpg", "mime_type": "image/jpeg"},
+            {"filename": "DJI_0123.jpg", "mime_type": "image/jpeg"},
+        ]
+    )
+    assert issue is None
+
+
+def test_list_uploads_annotates_inferred_media_type():
+    from app.routers.uploads import _annotate_inferred_media_type
+
+    rows = _annotate_inferred_media_type(
+        [
+            {"id": "1", "filename": "DJI_9.jpg", "mime_type": "image/jpeg"},
+            {"id": "2", "filename": "living_0.jpg", "mime_type": "image/jpeg", "media_type": "hdr"},
+            {"id": "3", "filename": "clip.mp4", "mime_type": "video/mp4"},
+        ]
+    )
+    assert rows[0]["media_type"] == "drone"
+    assert rows[1]["media_type"] == "hdr"
+    assert rows[2]["media_type"] == "reel"
 
 
 class _QuotaErr(Exception):

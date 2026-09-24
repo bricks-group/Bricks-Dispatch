@@ -240,6 +240,27 @@ async def complete_stills_upload(
 
 
 @router.get("")
+
+def _annotate_inferred_media_type(rows: list | None) -> list:
+    """Attach inferred media_type for GO Mark complete (not a DB column).
+
+    GO validateHdrUploadsForComplete used to default missing media_type → hdr,
+    so DJI/reel frames false-blocked complete beside a full −/0/+ stills set.
+    Annotating here keeps older clients honest until the TS infer ship lands.
+    """
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        annotated = dict(row)
+        if not str(annotated.get("media_type") or "").strip():
+            annotated["media_type"] = infer_media_type(
+                annotated.get("filename"), annotated.get("mime_type"), None
+            )
+        out.append(annotated)
+    return out
+
+
 async def list_uploads(
     job_id: Optional[str] = None,
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
@@ -281,12 +302,13 @@ async def list_uploads(
         try:
             query = sb.table("uploads").select("*").eq("job_id", job_id)
             res = await query.order("created_at", desc=True).limit(500).execute()
-            return res.data
+            rows = res.data or []
         except Exception as e:
             from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
             if not _is_rest_quota_error(e):
                 raise
-            return pg_select_uploads_by_job_id(job_id)
+            rows = pg_select_uploads_by_job_id(job_id) or []
+        return _annotate_inferred_media_type(rows)
     else:
         try:
             res_jobs = await sb.table("jobs").select("id").eq("vendor_id", vendor_id).execute()
@@ -303,7 +325,7 @@ async def list_uploads(
             return []
         query = sb.table("uploads").select("*").in_("job_id", job_ids)
         res = await query.order("created_at", desc=True).limit(500).execute()
-        return res.data
+        return _annotate_inferred_media_type(res.data or [])
 
 
 @router.post("")

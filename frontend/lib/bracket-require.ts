@@ -1,7 +1,8 @@
 /**
  * Product law: HDR stills must be uploaded as bracket sets (±EV / under-mid-over).
  * Mirrors backend photo_enhance_service.bracket_stem / exposure_bias_from_name
- * so client grouping matches post-prod group_assets_by_bracket.
+ * and backend bracket_require.validate_hdr_uploads_for_complete so client
+ * grouping matches post-prod + Mark complete API gate.
  */
 
 export const HDR_BRACKET_MIN = 3;
@@ -9,9 +10,12 @@ export const HDR_BRACKET_MIN = 3;
 export const BRACKET_HINT =
   'Upload bracketed exposures for each angle (− / 0 / +).';
 
+/** Near-zero band for "mid" plate (parity with backend _MID_ABS). */
+const MID_ABS = 0.5;
+
 /** Name patterns the backend clusters on (stem + ±EV / under / over). */
 const EV_SUFFIX =
-  /^(?<stem>.+?)(?:[_-](?:ev)?(?<ev>[+-]?\d+(?:\.\d+)?)|_m(?<m>\d+)|_p(?<p>\d+)|_und(?:er)?|_over|_ov)$/i;
+  /^(?<stem>.+?)(?:[_-](?:ev)?(?<ev>[+-]?\d+(?:\.\d+)?)|_m(?<m>\d+)|_p(?<p>\d+)|_und(?:er)?|_over|_ov|_normal)$/i;
 
 export type BracketFileLike = { name: string };
 
@@ -39,6 +43,8 @@ export function bracketStem(filename: string): string {
 export function exposureBiasFromName(filename: string): number | null {
   const base = basename(filename);
   const name = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base;
+  const low = name.toLowerCase();
+  if (low.endsWith('_normal') || low.endsWith('-normal')) return 0;
   const m = name.match(EV_SUFFIX);
   if (!m?.groups) return null;
   if (m.groups.ev != null && m.groups.ev !== '') {
@@ -47,9 +53,9 @@ export function exposureBiasFromName(filename: string): number | null {
   }
   if (m.groups.m != null && m.groups.m !== '') return -Number(m.groups.m);
   if (m.groups.p != null && m.groups.p !== '') return Number(m.groups.p);
-  const low = name.toLowerCase();
   if (low.includes('und')) return -2;
   if (low.includes('over') || low.endsWith('_ov')) return 2;
+  if (low.endsWith('_normal') || low.endsWith('-normal')) return 0;
   return null;
 }
 
@@ -66,8 +72,115 @@ export function groupByBracketStem(filenames: string[]): Map<string, string[]> {
   return buckets;
 }
 
+/** True when filenames cover under (<0), mid (~0), and over (>0). */
+export function bracketHasUnderMidOver(filenames: string[]): boolean {
+  const biases: number[] = [];
+  for (const raw of filenames) {
+    const b = exposureBiasFromName(basename(raw));
+    if (b != null && Number.isFinite(b)) biases.push(b);
+  }
+  if (!biases.length) return false;
+  const hasUnder = biases.some((b) => b < -0.05);
+  const hasMid = biases.some((b) => Math.abs(b) <= MID_ABS);
+  const hasOver = biases.some((b) => b > 0.05);
+  return hasUnder && hasMid && hasOver;
+}
+
 function isImageName(name: string): boolean {
   return /\.(jpe?g|png|tif{1,2}|webp|heic|dng|cr2|nef|arw|raf|orf)$/i.test(name);
+}
+
+function isVisitName(name: string): boolean {
+  return /\.(splat|ply|spz)$/i.test(name);
+}
+
+/**
+ * Mirror backend media_intake.infer_media_type — media_type is NOT a DB column,
+ * so Mark complete must infer drone/reel/etc. from filename/mime instead of
+ * defaulting every image to hdr (that false-blocked complete when DJI frames
+ * sat beside a full −/0/+ stills set).
+ */
+export function inferMediaType(
+  filename?: string | null,
+  mimeType?: string | null,
+  explicit?: string | null,
+): string {
+  const raw = String(explicit || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  const aliases: Record<string, string> = {
+    photos: 'hdr',
+    still: 'hdr',
+    stills: 'hdr',
+    photography: 'hdr',
+    aerial: 'drone',
+    dji: 'drone',
+    video: 'reel',
+    cinematic: 'reel',
+    cinematic_reel: 'reel',
+    dusk: 'twilight',
+    day_to_dusk: 'twilight',
+    virtual_staging: 'staging',
+    stage: 'staging',
+    photo: 'hdr',
+  };
+  const known = new Set(['hdr', 'photo', 'drone', 'reel', 'twilight', 'staging']);
+  if (known.has(raw)) return raw === 'photo' ? 'hdr' : raw;
+  if (aliases[raw]) return aliases[raw];
+
+  const name = String(filename || '').toLowerCase();
+  const mime = String(mimeType || '').toLowerCase();
+  if (name.includes('stag')) return 'staging';
+  if (name.includes('twilight') || name.includes('dusk') || name.includes('golden')) {
+    return 'twilight';
+  }
+  if (name.includes('drone') || name.includes('aerial') || name.startsWith('dji')) {
+    return 'drone';
+  }
+  if (mime.startsWith('video/') || /\.(mp4|mov|m4v|webm|avi)$/i.test(name)) {
+    return 'reel';
+  }
+  return 'hdr';
+}
+
+function isHdrStillUpload(u: {
+  filename?: string | null;
+  media_type?: string | null;
+  mime_type?: string | null;
+}): boolean {
+  const filename = u.filename || '';
+  const name = basename(filename);
+  if (!name || isVisitName(name) || !isImageName(name)) return false;
+  const rawMt = String(u.media_type || '').trim().toLowerCase();
+  if (rawMt) {
+    return rawMt === 'hdr' || rawMt === 'photo' || rawMt === 'stills' || rawMt === '';
+  }
+  return inferMediaType(filename, u.mime_type, null) === 'hdr';
+}
+
+function issueForStem(stem: string, files: string[], min: number): BracketIssue {
+  const n = files.length;
+  if (n < min) {
+    return {
+      stem,
+      count: n,
+      filenames: files,
+      message:
+        `Cannot complete: HDR angle "${stem}" has only ${n} exposure` +
+        `${n === 1 ? '' : 's'} (need ≥${min}). ` +
+        BRACKET_HINT,
+    };
+  }
+  return {
+    stem,
+    count: n,
+    filenames: files,
+    message:
+      `Cannot complete: HDR angle "${stem}" needs under, mid, and over ` +
+      `exposures (− / 0 / +), not ${n} same-side frames. ` +
+      `Name files with ±EV (e.g. ${stem}_-2.jpg, ${stem}_0.jpg, ${stem}_+2.jpg).`,
+  };
 }
 
 /**
@@ -96,16 +209,29 @@ export function validateHdrBracketSelection(
     const prior = existingByStem.get(stem) || [];
     // Dedupe by basename so re-selecting already-uploaded names doesn't inflate.
     const merged = Array.from(new Set([...prior, ...files]));
-    if (merged.length < min) {
+    if (merged.length < min || !bracketHasUnderMidOver(merged)) {
+      if (merged.length < min) {
+        return {
+          stem,
+          count: merged.length,
+          filenames: merged,
+          message:
+            `HDR stills need a bracket of at least ${min} exposures (− / 0 / +) per angle. ` +
+            `"${stem}" has ${merged.length} frame${merged.length === 1 ? '' : 's'}` +
+            (merged.length === 1
+              ? ' — single frames are not accepted.'
+              : ` (need ${min - merged.length} more).`) +
+            ` Name files with ±EV (e.g. living_-2.jpg, living_0.jpg, living_+2.jpg).`,
+        };
+      }
       return {
         stem,
         count: merged.length,
         filenames: merged,
         message:
-          `HDR stills need a bracket of at least ${min} exposures (− / 0 / +) per angle. ` +
-          `"${stem}" has ${merged.length} frame${merged.length === 1 ? '' : 's'}` +
-          (merged.length === 1 ? ' — single frames are not accepted.' : ` (need ${min - merged.length} more).`) +
-          ` Name files with ±EV (e.g. living_-2.jpg, living_0.jpg, living_+2.jpg).`,
+          `HDR stills need under, mid, and over exposures (− / 0 / +) per angle. ` +
+          `"${stem}" has ${merged.length} frames but is missing a side of the bracket. ` +
+          `Name files with ±EV (e.g. living_-2.jpg, living_0.jpg, living_+2.jpg).`,
       };
     }
   }
@@ -114,18 +240,21 @@ export function validateHdrBracketSelection(
 
 /**
  * Block Mark complete / submit when any HDR stem on the job is incomplete.
+ * Parity with backend bracket_require.validate_hdr_uploads_for_complete:
+ * infer media_type when absent (DB has no media_type column) and require −/0/+.
  */
 export function validateHdrUploadsForComplete(
-  uploads: { filename?: string; media_type?: string | null }[],
+  uploads: {
+    filename?: string | null;
+    media_type?: string | null;
+    mime_type?: string | null;
+  }[],
   opts?: { allowIncomplete?: boolean; min?: number },
 ): BracketIssue | null {
   if (opts?.allowIncomplete) return null;
   const min = opts?.min ?? HDR_BRACKET_MIN;
-  const hdrNames = uploads
-    .filter((u) => {
-      const mt = String(u.media_type || 'hdr').toLowerCase();
-      return mt === 'hdr' || mt === 'photo' || mt === 'stills' || mt === '';
-    })
+  const hdrNames = (uploads || [])
+    .filter(isHdrStillUpload)
     .map((u) => basename(u.filename || ''))
     .filter((n) => n && isImageName(n));
 
@@ -133,16 +262,8 @@ export function validateHdrUploadsForComplete(
 
   const groups = groupByBracketStem(hdrNames);
   for (const [stem, files] of groups) {
-    if (files.length < min) {
-      return {
-        stem,
-        count: files.length,
-        filenames: files,
-        message:
-          `Cannot complete: HDR angle "${stem}" has only ${files.length} exposure` +
-          `${files.length === 1 ? '' : 's'} (need ≥${min}). ` +
-          BRACKET_HINT,
-      };
+    if (files.length < min || !bracketHasUnderMidOver(files)) {
+      return issueForStem(stem, files, min);
     }
   }
   return null;

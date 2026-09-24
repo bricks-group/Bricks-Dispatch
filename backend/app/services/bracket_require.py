@@ -4,6 +4,10 @@ Product law: vendors must upload bracketed stills (− / 0 / +) per room/angle
 before a job can be marked complete. Soft-fail people/overlays stay soft;
 missing brackets are a hard reject.
 
+Count alone is not enough — three over-only (or under-only) frames must not
+pass. Each stem needs at least one under, one mid, and one over exposure
+(from ±EV / under / over filename tags).
+
 Visit/3D (.splat/.ply/.spz) are not listing stills — never counted toward
 or against the stills bracket requirement. Drone/reel inferred from name/mime
 are excluded. media_type is not a DB column; infer when absent.
@@ -14,10 +18,13 @@ import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from .media_intake import infer_media_type, is_visit_file
-from .photo_enhance_service import bracket_stem
+from .photo_enhance_service import bracket_stem, exposure_bias_from_name
 
 HDR_BRACKET_MIN = 3
 BRACKET_HINT = "Upload bracketed exposures for each angle (− / 0 / +)."
+
+# Near-zero band for "mid" plate (matches enhance under/mid/over pick tolerance).
+_MID_ABS = 0.5
 
 _IMAGE_EXT = re.compile(
     r"\.(jpe?g|png|tif{1,2}|webp|heic|dng|cr2|nef|arw|raf|orf)$",
@@ -48,6 +55,21 @@ def group_by_bracket_stem(filenames: Sequence[str]) -> Dict[str, List[str]]:
     return buckets
 
 
+def bracket_has_under_mid_over(filenames: Sequence[str]) -> bool:
+    """True when filenames cover under (<0), mid (~0), and over (>0) exposures."""
+    biases: List[float] = []
+    for raw in filenames:
+        b = exposure_bias_from_name(basename(str(raw)))
+        if b is not None:
+            biases.append(float(b))
+    if not biases:
+        return False
+    has_under = any(b < -0.05 for b in biases)
+    has_mid = any(abs(b) <= _MID_ABS for b in biases)
+    has_over = any(b > 0.05 for b in biases)
+    return has_under and has_mid and has_over
+
+
 def _is_hdr_still_row(row: dict) -> bool:
     """True when this upload should be checked as an HDR listing still."""
     filename = row.get("filename") or ""
@@ -64,6 +86,32 @@ def _is_hdr_still_row(row: dict) -> bool:
     # DB rows omit media_type — infer so drone/reel/twilight/staging skip the gate.
     inferred = infer_media_type(filename, row.get("mime_type"), None)
     return inferred == "hdr"
+
+
+def _issue_for_stem(stem: str, files: List[str], minimum: int) -> Dict[str, Any]:
+    n = len(files)
+    if n < minimum:
+        return {
+            "stem": stem,
+            "count": n,
+            "filenames": files,
+            "message": (
+                f'Cannot complete: HDR angle "{stem}" has only {n} exposure'
+                f'{"s" if n != 1 else ""} (need ≥{minimum}). '
+                f"{BRACKET_HINT}"
+            ),
+        }
+    # Count ok but missing − / 0 / + coverage (e.g. three over-only frames).
+    return {
+        "stem": stem,
+        "count": n,
+        "filenames": files,
+        "message": (
+            f'Cannot complete: HDR angle "{stem}" needs under, mid, and over '
+            f"exposures (− / 0 / +), not {n} same-side frames. "
+            f"Name files with ±EV (e.g. {stem}_-2.jpg, {stem}_0.jpg, {stem}_+2.jpg)."
+        ),
+    }
 
 
 def validate_hdr_uploads_for_complete(
@@ -94,16 +142,6 @@ def validate_hdr_uploads_for_complete(
 
     groups = group_by_bracket_stem(hdr_names)
     for stem, files in groups.items():
-        if len(files) < minimum:
-            n = len(files)
-            return {
-                "stem": stem,
-                "count": n,
-                "filenames": files,
-                "message": (
-                    f'Cannot complete: HDR angle "{stem}" has only {n} exposure'
-                    f'{"s" if n != 1 else ""} (need ≥{minimum}). '
-                    f"{BRACKET_HINT}"
-                ),
-            }
+        if len(files) < minimum or not bracket_has_under_mid_over(files):
+            return _issue_for_stem(stem, files, minimum)
     return None
