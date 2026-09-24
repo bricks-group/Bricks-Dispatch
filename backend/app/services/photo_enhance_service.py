@@ -1593,13 +1593,27 @@ def enhance_image(image_bytes: bytes, *, return_meta: bool = False):
 # ---------------------------------------------------------------------------
 
 async def upload_enhanced(storage_client, job_id: str, asset_id: str, enhanced_bytes: bytes) -> str:
+    """Write MLS-ready JPEG via storage.upload_bytes (Supabase → Vercel Blob on Fair Use).
+
+    storage_client is unused (kept for call-site compatibility). Under Canada Storage
+    402 the old bucket.upload path hollowed the desk — download_bytes already had
+    Blob fallback but enhanced/{job}/{id}.jpg never landed on the listing.
+    """
+    from .storage import upload_bytes
+
+    _ = storage_client  # call sites still pass db.storage
     storage_path = f"enhanced/{job_id}/{asset_id}.jpg"
-    bucket = storage_client.from_(STORAGE_BUCKET)
-    await bucket.upload(
-        path=storage_path,
-        file=enhanced_bytes,
-        file_options={"content-type": "image/jpeg", "upsert": "true"},
+    ok = await upload_bytes(
+        storage_path,
+        enhanced_bytes,
+        content_type="image/jpeg",
+        upsert=True,
     )
+    if not ok:
+        raise RuntimeError(
+            f"In-house enhance upload failed for {storage_path} "
+            "(Supabase Storage and Blob fallback both unavailable)"
+        )
     logger.info(
         "In-house enhance: uploaded to %s/%s (%s bytes)",
         STORAGE_BUCKET, storage_path, f"{len(enhanced_bytes):,}",
@@ -1608,8 +1622,10 @@ async def upload_enhanced(storage_client, job_id: str, asset_id: str, enhanced_b
 
 
 async def upload_qc_variant(storage_client, job_id: str, asset_id: str, enhanced_bytes: bytes) -> Optional[str]:
-    from .storage import make_qc_variant_bytes
+    """QC JPEG beside the enhanced still; Blob fallback via upload_bytes (same as upload_enhanced)."""
+    from .storage import make_qc_variant_bytes, upload_bytes
 
+    _ = storage_client
     try:
         qc_bytes = make_qc_variant_bytes(enhanced_bytes)
     except Exception:
@@ -1617,10 +1633,16 @@ async def upload_qc_variant(storage_client, job_id: str, asset_id: str, enhanced
         return None
 
     storage_path = f"enhanced/{job_id}/qc_{asset_id}.jpg"
-    bucket = storage_client.from_(STORAGE_BUCKET)
-    await bucket.upload(
-        path=storage_path,
-        file=qc_bytes,
-        file_options={"content-type": "image/jpeg", "upsert": "true"},
+    ok = await upload_bytes(
+        storage_path,
+        qc_bytes,
+        content_type="image/jpeg",
+        upsert=True,
     )
+    if not ok:
+        logger.warning(
+            "In-house enhance: QC variant upload failed for %s (continuing without qc_variant_url)",
+            storage_path,
+        )
+        return None
     return storage_path

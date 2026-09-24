@@ -210,3 +210,77 @@ def test_upload_file_returns_none_without_blob_token(monkeypatch):
     assert thumb_path is None
     assert qc_path is None
     assert thumb_b64  # best-effort preview still produced
+
+def test_upload_enhanced_falls_back_to_blob_when_supabase_raises(monkeypatch):
+    """MLS desk write must land on Blob under Storage 402 — not hollow to original only."""
+    from app.services import photo_enhance_service as pe
+
+    put_calls = []
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("exceed_storage_size_quota")
+
+    fake_db = MagicMock()
+    fake_db.storage.from_.return_value.upload = boom
+
+    async def fake_get_db():
+        return fake_db
+
+    async def fake_blob_put(path, data, content_type="application/octet-stream", upsert=True):
+        put_calls.append((path, data, content_type, upsert))
+        return True
+
+    monkeypatch.setattr(st, "get_db", fake_get_db)
+    monkeypatch.setattr(st, "_blob_put", fake_blob_put)
+
+    jpeg = _tiny_jpeg_bytes()
+    path = asyncio.run(pe.upload_enhanced(None, "job-enh-1", "asset-9", jpeg))
+    assert path == "enhanced/job-enh-1/asset-9.jpg"
+    assert put_calls and put_calls[0][0] == path
+    assert put_calls[0][2] == "image/jpeg"
+
+
+def test_upload_enhanced_raises_when_supabase_and_blob_fail(monkeypatch):
+    from app.services import photo_enhance_service as pe
+
+    monkeypatch.delenv("BLOB_READ_WRITE_TOKEN", raising=False)
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("exceed_storage_size_quota")
+
+    fake_db = MagicMock()
+    fake_db.storage.from_.return_value.upload = boom
+
+    async def fake_get_db():
+        return fake_db
+
+    monkeypatch.setattr(st, "get_db", fake_get_db)
+
+    with pytest.raises(RuntimeError, match="Blob fallback both unavailable"):
+        asyncio.run(pe.upload_enhanced(None, "job-x", "a1", _tiny_jpeg_bytes()))
+
+
+def test_upload_qc_variant_falls_back_to_blob(monkeypatch):
+    from app.services import photo_enhance_service as pe
+
+    put_calls = []
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("exceed_storage_size_quota")
+
+    fake_db = MagicMock()
+    fake_db.storage.from_.return_value.upload = boom
+
+    async def fake_get_db():
+        return fake_db
+
+    async def fake_blob_put(path, data, content_type="application/octet-stream", upsert=True):
+        put_calls.append((path, data, content_type, upsert))
+        return True
+
+    monkeypatch.setattr(st, "get_db", fake_get_db)
+    monkeypatch.setattr(st, "_blob_put", fake_blob_put)
+
+    path = asyncio.run(pe.upload_qc_variant(None, "job-enh-1", "asset-9", _tiny_jpeg_bytes()))
+    assert path == "enhanced/job-enh-1/qc_asset-9.jpg"
+    assert put_calls and put_calls[0][0] == path
