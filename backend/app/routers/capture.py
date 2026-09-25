@@ -1741,6 +1741,18 @@ async def deliver_virtual_visit(
             "Job %s: Virtual Visit delivery notification failed: %s", job_id, e
         )
 
+    # Mirror floor/tour compile: finalize after successful Visit deliver.
+    # Polycam bridge creates no uploads row — without visit_bridge, finalize
+    # would unstick processing and skip media_delivery / delivered / payout.
+    try:
+        from .post_production import _finalize_job_if_complete
+        await _finalize_job_if_complete(job_id, visit_bridge=True)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Job %s: finalize after Visit deliver failed: %s", job_id, e
+        )
+
     return {
         "ok": True,
         "job_id": job_id,

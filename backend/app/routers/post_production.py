@@ -289,11 +289,17 @@ async def _unstick_processing_without_delivery(job_id: str) -> None:
             pg_update_job(job_id, fields)
 
 
-async def _finalize_job_if_complete(job_id: str) -> None:
+async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False) -> None:
     """
     Called after each upload is marked done.
     If all uploads for the job are in state 'done', generate delivery
     record, sign URLs, update job status, and send notification.
+
+    visit_bridge=True: GO /visit/deliver already registered property_visits
+    (Polycam URL or signed .ply/.splat/.spz). No uploads row exists for that
+    path, so without this flag empty-uploads would unstick without
+    media_delivery / delivered / payout. Skip re-register and agent photo
+    email (notify_capture_delivered already ran for Virtual Visit).
     """
     db = await get_db()
 
@@ -312,18 +318,26 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         # Floor-plan / 3D-tour-only jobs have capture_sessions, not uploads.
         # Mark complete still claims status=processing via process_job_assets —
         # deliver when a capture session is ready; otherwise unstick processing.
+        # Visit Polycam bridge (/visit/deliver) has neither uploads nor capture
+        # sessions — visit_bridge keeps us from unsticking without delivery.
         capture_sessions = await _list_delivered_capture_sessions(db, job_id)
-        if not capture_sessions:
+        if not capture_sessions and not visit_bridge:
             logger.info(
                 f"Job {job_id}: no uploads and no delivered capture — unstick processing"
             )
             await _unstick_processing_without_delivery(job_id)
             return
-        uploads = []  # fall through as capture-only
-        logger.info(
-            f"Job {job_id}: capture-only finalize "
-            f"({len(capture_sessions)} delivered session(s))"
-        )
+        uploads = []  # fall through as capture-only / Visit-bridge
+        if capture_sessions:
+            logger.info(
+                f"Job {job_id}: capture-only finalize "
+                f"({len(capture_sessions)} delivered session(s))"
+            )
+        elif visit_bridge:
+            logger.info(
+                f"Job {job_id}: Visit-bridge finalize "
+                f"(property_visits already registered; no uploads)"
+            )
     else:
         capture_sessions = None
 
@@ -434,7 +448,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         # Append floor/tour public URLs onto stills delivery (or stand alone).
         delivery_urls = list(delivery_urls) + capture_urls
 
-    if not delivery_urls and not splat_upload:
+    if not delivery_urls and not splat_upload and not visit_bridge:
         # Truly nothing to deliver (no listing stills, no Visit, no capture) — don't stay stuck.
         logger.error(f"Job {job_id}: no deliverable URLs after QC — marking qc_failed")
         fields = {
@@ -455,6 +469,11 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         logger.info(
             f"Job {job_id}: no listing stills after QC — delivering Visit-only "
             f"({splat_upload.get('filename') or splat_upload.get('id')})"
+        )
+    elif not delivery_urls and visit_bridge:
+        logger.info(
+            f"Job {job_id}: no listing stills — delivering Visit-bridge "
+            f"(property_visits already registered)"
         )
     elif capture_urls and not any(
         u.get("upload_id") for u in delivery_urls if isinstance(u, dict)
@@ -501,7 +520,8 @@ async def _finalize_job_if_complete(job_id: str) -> None:
 
     # Register the property visit on Bricks-OS now that the job is delivered.
     # Failure is logged loudly — Visit-only deliveries must not silently hollow.
-    if splat_upload:
+    # visit_bridge: /visit/deliver already called register_property_visit.
+    if splat_upload and not visit_bridge:
         # Prefer internal storage path (file_url / non-https processed_url). OS re-signs.
         candidates = [
             splat_upload.get("file_url"),
@@ -535,8 +555,11 @@ async def _finalize_job_if_complete(job_id: str) -> None:
     except Exception as e:
         logger.error(f"Job {job_id}: payout trigger failed after delivery: {e}")
 
-    # Notify booking agent via Resend (best-effort)
-    await _send_delivery_notification(job_id, delivery_urls)
+    # Notify booking agent via Resend (best-effort).
+    # visit_bridge: notify_capture_delivered already emailed Virtual Visit —
+    # skip the photo-delivery template so agents are not double-messaged.
+    if not visit_bridge:
+        await _send_delivery_notification(job_id, delivery_urls)
 
 
 async def _patch_media_delivery(job_id: str, fields: dict) -> None:

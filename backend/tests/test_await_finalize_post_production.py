@@ -28,9 +28,11 @@ def test_finalize_source_picks_visit_before_qc_failed_gate():
     fail_idx = fn.find('status": "qc_failed"')
     assert pick_idx != -1 and fail_idx != -1
     assert pick_idx < fail_idx
-    assert "not delivery_urls and not splat_upload" in fn
+    assert "not delivery_urls and not splat_upload and not visit_bridge" in fn
     assert "register_property_visit returned False" in fn
     assert "delivering Visit-only" in fn
+    assert "visit_bridge" in fn
+    assert "Visit-bridge finalize" in fn
 
 
 
@@ -584,3 +586,98 @@ def test_finalize_folds_reconciled_still_into_partial_delivery(monkeypatch):
     urls = md_tbl.update.call_args[0][0]["delivery_urls"]
     assert {u.get("upload_id") for u in urls if u.get("upload_id")} == {"u1", "u2"}
     assert not md_tbl.upsert.called
+
+
+def test_finalize_source_visit_bridge_skips_unstick_and_double_notify():
+    """Polycam /visit/deliver path must not unstick without media_delivery."""
+    src = Path(pp.__file__).read_text()
+    fn = src.split("async def _finalize_job_if_complete")[1].split("async def _patch_media_delivery")[0]
+    assert "visit_bridge: bool = False" in src.split("async def _finalize_job_if_complete")[0][-80:] + src.split("async def _finalize_job_if_complete")[1][:200] or "visit_bridge: bool = False" in src
+    assert "and not visit_bridge" in fn  # empty-uploads unstick gated
+    assert "if splat_upload and not visit_bridge:" in fn
+    assert "if not visit_bridge:" in fn
+    assert "_send_delivery_notification" in fn
+
+
+def test_visit_deliver_awaits_finalize_with_visit_bridge():
+    """GO /visit/deliver must finalize like floor/tour compile (media_delivery + payout)."""
+    cap = Path(__file__).resolve().parents[1] / "app/routers/capture.py"
+    src = cap.read_text()
+    fn = src.split("async def deliver_virtual_visit")[1].split("@router.put")[0]
+    assert "visit_bridge=True" in fn
+    assert "await _finalize_job_if_complete" in fn
+    # After successful register, before return
+    reg_fail = fn.find("visit_register_failed")
+    fin = fn.find("visit_bridge=True")
+    assert reg_fail != -1 and fin != -1 and fin > reg_fail
+
+
+def test_finalize_visit_bridge_no_uploads_delivers(monkeypatch):
+    """Visit Polycam bridge: no uploads → media_delivery + delivered + payout; no re-register/email."""
+    db = MagicMock()
+    uploads_tbl = _uploads_chain([])
+    md_empty = MagicMock()
+    md_empty.data = None
+    md_tbl = MagicMock()
+    md_tbl.select.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.maybe_single.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=md_empty)
+    md_tbl.upsert.return_value = md_tbl
+
+    jobs_tbl = MagicMock()
+    jobs_tbl.update.return_value = jobs_tbl
+    jobs_tbl.eq.return_value = jobs_tbl
+    jobs_tbl.select.return_value = jobs_tbl
+    jobs_tbl.maybe_single.return_value = jobs_tbl
+    jobs_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    cap_tbl = _capture_sessions_chain([])
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "jobs":
+            return jobs_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db.table.side_effect = table
+
+    register_calls = []
+    notify_calls = []
+    payout_calls = []
+
+    async def fake_register(job_id, storage_path="", **kwargs):
+        register_calls.append((job_id, storage_path, kwargs))
+        return True
+
+    async def fake_qc(_job_id):
+        return {"approved": 0, "rejected": 0, "flagged": 0}
+
+    async def fake_payout(_db, job_id):
+        payout_calls.append(job_id)
+        return None
+
+    async def fake_notify(job_id, delivery_urls):
+        notify_calls.append((job_id, delivery_urls))
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(pp, "_send_delivery_notification", fake_notify)
+
+    with patch("app.services.client_comms.register_property_visit", fake_register), \
+         patch("app.services.payout_service.trigger_payout_for_job", fake_payout):
+        asyncio.run(pp._finalize_job_if_complete("job-vb", visit_bridge=True))
+
+    assert register_calls == []
+    assert notify_calls == []
+    assert payout_calls == ["job-vb"]
+    assert md_tbl.upsert.called
+    upsert_row = md_tbl.upsert.call_args[0][0]
+    assert upsert_row["job_id"] == "job-vb"
+    assert upsert_row["delivery_urls"] == []
+    assert jobs_tbl.update.call_args[0][0]["status"] == "delivered"
