@@ -227,7 +227,8 @@ async def _deliver_leftovers_with_brackets(db, job_id: str, leftover: list) -> N
     others = []
     for asset in leftover:
         route = delivery_route(asset)
-        if route in ("vendor_photo", "staging"):
+        # Staging must never enter HDR bracket merge — deliver as original via others.
+        if route == "vendor_photo":
             photos.append(asset)
         else:
             others.append(asset)
@@ -344,12 +345,26 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         })
         return
 
+    # Staging: honest original only — no in-house enhance, no third-party virtual staging.
+    if route == "staging":
+        await _safe_update_upload(db, upload_id, {
+            "processing_status": "done",
+            "processed_url": file_path,
+            "provider": "as_is",
+            "processed_at": now,
+        })
+        logger.info(
+            f"Job {job_id}: staging upload {upload_id} delivered as_is "
+            "(original file — no enhance, no virtual staging; owned pipeline later)"
+        )
+        return
+
     processed = file_path
     provider = "as_is"
     qc_path = asset.get("qc_variant_url")
     enhance_meta = {}
 
-    if route in ("vendor_photo", "staging"):
+    if route == "vendor_photo":
         try:
             from .photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
             original = await download_bytes(file_path)
@@ -363,11 +378,6 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             logger.error(f"In-house enhance failed for {upload_id}: {e} — delivering original")
             processed = file_path
             provider = "original"
-        if route == "staging":
-            logger.info(
-                f"Job {job_id}: staging upload {upload_id} delivered as original "
-                "(no third-party virtual staging — owned pipeline later)"
-            )
 
     update = {
         "processing_status": "done",
