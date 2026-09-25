@@ -158,24 +158,112 @@ def _merge_missing_capture_urls(existing_urls, capture_urls: list[dict]) -> list
     return existing + added
 
 
-async def _fold_capture_into_existing_delivery(job_id: str, existing: dict) -> bool:
-    """If media_delivery exists, merge any newly delivered floor/tour URLs. No payout/email."""
+def _merge_missing_still_urls(existing_urls, still_urls: list[dict]) -> list[dict] | None:
+    """Append listing stills missing from an existing media_delivery.delivery_urls.
+
+    Capture-only (or Visit-only / partial) finalize can create media_delivery before
+    enhance finishes more stills. Later enhance/reconcile must fold those photos in
+    without re-running QC, payout, or agent email. Returns None when nothing new.
+    """
+    existing = list(existing_urls or []) if isinstance(existing_urls, list) else []
+    if isinstance(existing_urls, str):
+        import json
+        try:
+            parsed = json.loads(existing_urls)
+            existing = list(parsed) if isinstance(parsed, list) else []
+        except Exception:
+            existing = []
+    seen_uids = {
+        str(u.get("upload_id") or u.get("id") or "")
+        for u in existing
+        if isinstance(u, dict) and (u.get("upload_id") or u.get("id"))
+    }
+    added: list[dict] = []
+    for su in still_urls or []:
+        if not isinstance(su, dict):
+            continue
+        uid = str(su.get("upload_id") or su.get("id") or "")
+        if not uid or uid in seen_uids:
+            continue
+        added.append(su)
+        seen_uids.add(uid)
+    if not added:
+        return None
+    return existing + added
+
+
+async def _listing_still_delivery_urls(uploads: list) -> list[dict]:
+    """Build photo delivery_urls entries from listing still uploads (not Visit/siblings)."""
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=SIGNED_URL_EXPIRY)).isoformat()
+    out: list[dict] = []
+    for u in uploads or []:
+        if not isinstance(u, dict):
+            continue
+        if u.get("qc_status") == "rejected":
+            continue
+        if u.get("processing_status") == "failed":
+            continue
+        # Do not fold in-flight stills — wait until enhance marks them done.
+        if u.get("processing_status") in ("processing", "pending"):
+            continue
+        if not is_listing_still_delivery_row(u):
+            continue
+        path = u.get("processed_url") or u.get("file_url")
+        if not path:
+            continue
+        if str(path).startswith("https://"):
+            url = path
+        else:
+            url = await get_signed_download_url(path)
+        if not url:
+            continue
+        out.append({
+            "upload_id": u["id"],
+            "filename": u.get("filename", ""),
+            "url": url,
+            "expires_at": expires_at,
+            "qc_flagged": u.get("qc_status") == "flagged",
+        })
+    return out
+
+
+async def _fold_late_into_existing_delivery(job_id: str, existing: dict) -> bool:
+    """If media_delivery exists, merge newly completed stills + late floor/tour. No payout/email."""
     db = await get_db()
+    try:
+        res_uploads = await db.table("uploads").select(
+            "id, filename, file_url, processed_url, processing_status, qc_status, provider"
+        ).eq("job_id", job_id).execute()
+        uploads = res_uploads.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+        if not _is_rest_quota_error(e):
+            raise
+        uploads = pg_select_uploads_by_job_id(job_id)
+
+    still_urls = await _listing_still_delivery_urls(uploads)
     sessions = await _list_delivered_capture_sessions(db, job_id)
     capture_urls = _delivery_urls_from_capture_sessions(job_id, sessions or [])
-    if not capture_urls:
-        return False
     raw_urls = existing.get("delivery_urls") if isinstance(existing, dict) else None
-    merged = _merge_missing_capture_urls(raw_urls, capture_urls)
-    if merged is None:
+
+    merged_stills = _merge_missing_still_urls(raw_urls, still_urls)
+    cur = merged_stills if merged_stills is not None else raw_urls
+    merged_capture = _merge_missing_capture_urls(cur, capture_urls)
+    if merged_stills is None and merged_capture is None:
         return False
+    merged = merged_capture if merged_capture is not None else merged_stills
     await _patch_media_delivery(job_id, {"delivery_urls": merged})
     logger.info(
-        "Job %s: folded late capture into existing media_delivery (%s URL(s) total)",
+        "Job %s: folded late stills/capture into existing media_delivery (%s URL(s) total)",
         job_id,
         len(merged),
     )
     return True
+
+
+# Back-compat alias for older call sites / tests
+async def _fold_capture_into_existing_delivery(job_id: str, existing: dict) -> bool:
+    return await _fold_late_into_existing_delivery(job_id, existing)
 
 
 async def _unstick_processing_without_delivery(job_id: str) -> None:
@@ -240,7 +328,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         capture_sessions = None
 
     # Idempotency: if media_delivery already exists, do not re-run QC / email / payout.
-    # Still fold late floor/tour capture URLs (stills often finalize before compile).
+    # Still fold late listing stills (capture-first / reconcile) + late floor/tour.
     existing = None
     try:
         existing_delivery = await db.table("media_delivery").select(
@@ -254,10 +342,10 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         existing = pg_select_media_delivery_by_job_id(job_id)
     if existing:
         try:
-            folded = await _fold_capture_into_existing_delivery(job_id, existing)
+            folded = await _fold_late_into_existing_delivery(job_id, existing)
             if folded:
                 logger.info(
-                    f"Job {job_id}: media_delivery existed — merged late capture; skip full finalize"
+                    f"Job {job_id}: media_delivery existed — merged late stills/capture; skip full finalize"
                 )
             else:
                 logger.info(
@@ -265,7 +353,7 @@ async def _finalize_job_if_complete(job_id: str) -> None:
                 )
         except Exception as e:
             logger.warning(
-                f"Job {job_id}: fold capture into existing media_delivery failed: {e}"
+                f"Job {job_id}: fold late stills/capture into existing media_delivery failed: {e}"
             )
         return
 

@@ -313,8 +313,11 @@ def test_finalize_source_mentions_capture_only():
     assert "_list_delivered_capture_sessions" in src
     assert "capture-only finalize" in src
     assert "_unstick_processing_without_delivery" in src
-    assert "_fold_capture_into_existing_delivery" in src
+    assert "_fold_late_into_existing_delivery" in src
+    assert "_fold_capture_into_existing_delivery" in src  # alias
     assert "_merge_missing_capture_urls" in src
+    assert "_merge_missing_still_urls" in src
+    assert "_listing_still_delivery_urls" in src
 
 
 def test_merge_missing_capture_urls_appends_by_session_id():
@@ -418,4 +421,166 @@ def test_finalize_folds_capture_when_media_delivery_exists(monkeypatch):
     urls = patch_fields["delivery_urls"]
     assert any(u.get("session_id") == "sess-fp" for u in urls)
     assert any(u.get("upload_id") == "u1" for u in urls)
+    assert not md_tbl.upsert.called
+
+
+def test_merge_missing_still_urls_appends_by_upload_id():
+    existing = [
+        {"url": "https://api.brxs.ca/api/public/floorplans/j/sess-fp",
+         "filename": "Floor plan", "session_id": "sess-fp", "kind": "floorplan"},
+    ]
+    stills = [
+        {"upload_id": "u1", "url": "https://cdn.example/a.jpg", "filename": "a.jpg"},
+        {"upload_id": "u2", "url": "https://cdn.example/b.jpg", "filename": "b.jpg"},
+    ]
+    merged = pp._merge_missing_still_urls(existing, stills)
+    assert merged is not None
+    assert len(merged) == 3
+    assert merged[1]["upload_id"] == "u1"
+    assert merged[2]["upload_id"] == "u2"
+    # idempotent
+    assert pp._merge_missing_still_urls(merged, stills) is None
+
+
+def test_merge_missing_still_urls_skips_already_present():
+    existing = [
+        {"upload_id": "u1", "url": "https://cdn.example/a.jpg", "filename": "a.jpg"},
+    ]
+    stills = [
+        {"upload_id": "u1", "url": "https://cdn.example/a-new.jpg", "filename": "a.jpg"},
+        {"upload_id": "u2", "url": "https://cdn.example/b.jpg", "filename": "b.jpg"},
+    ]
+    merged = pp._merge_missing_still_urls(existing, stills)
+    assert merged is not None
+    assert len(merged) == 2
+    assert merged[1]["upload_id"] == "u2"
+
+
+def test_finalize_folds_stills_when_capture_only_media_delivery_exists(monkeypatch):
+    """Capture-first media_delivery: late enhance stills must patch delivery_urls."""
+    existing_row = {
+        "id": "md-cap",
+        "delivery_urls": [
+            {"url": "https://api.brxs.ca/api/public/floorplans/job-2/sess-fp",
+             "filename": "Floor plan", "session_id": "sess-fp", "kind": "floorplan"},
+        ],
+    }
+    still = {
+        "id": "u-new",
+        "filename": "living.jpg",
+        "file_url": "raw/living.jpg",
+        "processed_url": "https://cdn.example/living.jpg",
+        "processing_status": "done",
+        "qc_status": "accepted",
+        "provider": None,
+    }
+    db = MagicMock()
+    uploads_tbl = _uploads_chain([still])
+    md_row = MagicMock()
+    md_row.data = existing_row
+    md_tbl = MagicMock()
+    md_tbl.select.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.maybe_single.return_value = md_tbl
+    md_tbl.update.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=md_row)
+
+    call_n = {"n": 0}
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    async def cap_exec():
+        call_n["n"] += 1
+        return MagicMock(data=[])
+    cap_tbl.execute = cap_exec
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db.table.side_effect = table
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(
+        pp,
+        "_delivery_urls_from_capture_sessions",
+        lambda job_id, sessions: [],
+    )
+
+    asyncio.run(pp._finalize_job_if_complete("job-2"))
+
+    assert md_tbl.update.called
+    patch_fields = md_tbl.update.call_args[0][0]
+    urls = patch_fields["delivery_urls"]
+    assert any(u.get("upload_id") == "u-new" for u in urls)
+    assert any(u.get("session_id") == "sess-fp" for u in urls)
+    assert not md_tbl.upsert.called
+
+
+def test_finalize_folds_reconciled_still_into_partial_delivery(monkeypatch):
+    """Partial stills already delivered: reconcile-done still must fold in."""
+    existing_row = {
+        "id": "md-partial",
+        "delivery_urls": [
+            {"upload_id": "u1", "url": "https://cdn.example/a.jpg", "filename": "a.jpg"},
+        ],
+    }
+    rows = [
+        {
+            "id": "u1",
+            "filename": "a.jpg",
+            "file_url": "a.jpg",
+            "processed_url": "https://cdn.example/a.jpg",
+            "processing_status": "done",
+            "qc_status": "accepted",
+            "provider": None,
+        },
+        {
+            "id": "u2",
+            "filename": "b.jpg",
+            "file_url": "b.jpg",
+            "processed_url": "https://cdn.example/b.jpg",
+            "processing_status": "done",
+            "qc_status": "accepted",
+            "provider": None,
+        },
+    ]
+    db = MagicMock()
+    uploads_tbl = _uploads_chain(rows)
+    md_row = MagicMock()
+    md_row.data = existing_row
+    md_tbl = MagicMock()
+    md_tbl.select.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.maybe_single.return_value = md_tbl
+    md_tbl.update.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=md_row)
+
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    cap_tbl.execute = AsyncMock(return_value=MagicMock(data=[]))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db.table.side_effect = table
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+
+    asyncio.run(pp._finalize_job_if_complete("job-3"))
+
+    assert md_tbl.update.called
+    urls = md_tbl.update.call_args[0][0]["delivery_urls"]
+    assert {u.get("upload_id") for u in urls if u.get("upload_id")} == {"u1", "u2"}
     assert not md_tbl.upsert.called
