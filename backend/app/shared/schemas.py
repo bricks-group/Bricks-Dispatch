@@ -387,7 +387,7 @@ class VendorApplicationCreate(BaseModel):
     # Ontario Regions: GTA, York, Peel, Halton, Durham, Hamilton, Waterloo, Ottawa, etc.
     preferred_regions: List[str] = []
     accepted_terms: bool
-    ic_agreement_version: str = "1.5"
+    ic_agreement_version: str = "1.6"
     hst_number: Optional[str] = None
     # CRA small-supplier exemption: under $30,000 CAD/year across all clients,
     # registration for GST/HST isn't legally required. Lets an applicant pass

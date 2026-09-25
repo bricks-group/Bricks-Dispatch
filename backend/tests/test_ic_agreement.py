@@ -1,4 +1,4 @@
-"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.5 verbatim."""
+"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.6 verbatim."""
 import ast
 from pathlib import Path
 
@@ -23,15 +23,15 @@ def _assignment_value(path: Path, name: str):
     raise AssertionError(f"{name} not found in {path}")
 
 
-def test_ic_agreement_constants_are_v15():
+def test_ic_agreement_constants_are_v16():
     version = _assignment_value(ONBOARDING, "_IC_AGREEMENT_VERSION")
     effective = _assignment_value(ONBOARDING, "_IC_AGREEMENT_EFFECTIVE_DATE")
     text = _assignment_value(ONBOARDING, "_IC_AGREEMENT_TEXT")
 
-    assert version == "1.5"
-    assert effective == "2026-09-06"
-    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.5")
-    assert "Effective: September 6, 2026" in text
+    assert version == "1.6"
+    assert effective == "2026-09-25"
+    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.6")
+    assert "Effective: September 25, 2026" in text
     assert 'Contracting party: Bricks Group ("Bricks")' in text
     assert "Questions: booking@brxs.ca" in text
     assert text.endswith("Bricks Group · Ontario, Canada")
@@ -49,6 +49,9 @@ def test_ic_agreement_constants_are_v15():
     assert "Story / Showcase" in text
     assert "Full suite" in text
     assert "Virtual Visit (free-roam Gaussian splat) is always a paid add-on" in text
+    assert "standard 24–48 hour target from shoot end" in text
+    assert "times are targets, not guarantees" in text
+    assert "standard 24 hours from shoot end" not in text
     assert "Standard —" not in text
     assert "Premium —" not in text
     assert "Luxury —" not in text
@@ -68,7 +71,7 @@ def test_get_ic_agreement_returns_version_date_text():
     assert "ic_agreement_version=_IC_AGREEMENT_VERSION" in src
 
 
-def test_application_schema_defaults_to_v15():
+def test_application_schema_defaults_to_v16():
     src = SCHEMAS.read_text()
-    assert 'ic_agreement_version: str = "1.5"' in src
+    assert 'ic_agreement_version: str = "1.6"' in src
     assert 'ic_agreement_version: str = "1.1"' not in src
