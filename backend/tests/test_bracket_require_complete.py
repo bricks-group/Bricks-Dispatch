@@ -154,6 +154,64 @@ def test_validate_ok_full_ev_ignores_incomplete_drone_stem():
     assert issue is None
 
 
+
+
+def test_validate_blocks_incomplete_twilight_explicit():
+    """Explicit media_type=twilight must require −/0/+ like HDR."""
+    issue = validate_hdr_uploads_for_complete(
+        [
+            {"filename": "dusk_-2.jpg", "media_type": "twilight"},
+            {"filename": "dusk_0.jpg", "media_type": "twilight"},
+        ]
+    )
+    assert issue is not None
+    assert issue["count"] == 2
+    assert "Cannot complete" in issue["message"]
+    assert "still angle" in issue["message"]
+
+
+def test_validate_blocks_incomplete_inferred_twilight_filename():
+    """Durable twilight_*.jpg with no media_type still gates Mark complete."""
+    issue = validate_hdr_uploads_for_complete(
+        [{"filename": "twilight_front.jpg", "mime_type": "image/jpeg"}]
+    )
+    assert issue is not None
+    assert issue["count"] == 1
+
+
+def test_validate_ok_complete_twilight_bracket():
+    issue = validate_hdr_uploads_for_complete(
+        [
+            {"filename": "twilight_front_-2.jpg", "media_type": "twilight"},
+            {"filename": "twilight_front_0.jpg", "media_type": "twilight"},
+            {"filename": "twilight_front_+2.jpg", "media_type": "twilight"},
+        ]
+    )
+    assert issue is None
+
+
+def test_validate_skips_staging_aerial_dji_for_twilight_parity():
+    """Staging / aerial_ / DJI still skip the bracket gate (unchanged)."""
+    assert (
+        validate_hdr_uploads_for_complete(
+            [{"filename": "staging_living.jpg", "media_type": "staging"}]
+        )
+        is None
+    )
+    assert (
+        validate_hdr_uploads_for_complete(
+            [{"filename": "aerial_roof.jpg", "mime_type": "image/jpeg"}]
+        )
+        is None
+    )
+    assert (
+        validate_hdr_uploads_for_complete(
+            [{"filename": "DJI_0456.jpg", "mime_type": "image/jpeg"}]
+        )
+        is None
+    )
+
+
 def test_list_uploads_annotates_inferred_media_type():
     from app.routers.uploads import _annotate_inferred_media_type
 

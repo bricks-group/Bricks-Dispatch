@@ -1,16 +1,18 @@
-"""HDR bracket gate for Mark complete — mirrors web/frontend lib/bracket-require.ts.
+"""Bracket gate for Mark complete — mirrors web/frontend lib/bracket-require.ts.
 
 Product law: vendors must upload bracketed stills (− / 0 / +) per room/angle
-before a job can be marked complete. Soft-fail people/overlays stay soft;
-missing brackets are a hard reject.
+for HDR and twilight before a job can be marked complete. Soft-fail
+people/overlays stay soft; missing brackets are a hard reject.
 
 Count alone is not enough — three over-only (or under-only) frames must not
 pass. Each stem needs at least one under, one mid, and one over exposure
 (from ±EV / under / over filename tags).
 
 Visit/3D (.splat/.ply/.spz) are not listing stills — never counted toward
-or against the stills bracket requirement. Drone/reel inferred from name/mime
-are excluded. media_type is not a DB column; infer when absent.
+or against the stills bracket requirement. Staging/drone/reel inferred from
+name/mime are excluded. Twilight brackets are required (durable twilight_/
+dusk cues when media_type is absent). media_type is not a DB column; infer
+when absent.
 """
 from __future__ import annotations
 
@@ -31,8 +33,9 @@ _IMAGE_EXT = re.compile(
     re.IGNORECASE,
 )
 
-# Client media_type values that participate in the HDR stills bracket gate.
-_HDR_MEDIA = frozenset({"hdr", "photo", "stills", ""})
+# Client media_type values that participate in the stills bracket gate
+# (HDR + twilight). Staging/drone/reel stay excluded.
+_HDR_MEDIA = frozenset({"hdr", "photo", "stills", "twilight", ""})
 
 
 def basename(path_or_name: str) -> str:
@@ -71,7 +74,7 @@ def bracket_has_under_mid_over(filenames: Sequence[str]) -> bool:
 
 
 def _is_hdr_still_row(row: dict) -> bool:
-    """True when this upload should be checked as an HDR listing still."""
+    """True when this upload should be checked as a bracket-gated listing still."""
     filename = row.get("filename") or ""
     if is_visit_file(filename):
         return False
@@ -83,9 +86,10 @@ def _is_hdr_still_row(row: dict) -> bool:
     if raw_mt:
         return raw_mt in _HDR_MEDIA
 
-    # DB rows omit media_type — infer so drone/reel/twilight/staging skip the gate.
+    # DB rows omit media_type — infer so drone/reel/staging skip the gate;
+    # twilight_/dusk cues participate (same as explicit media_type=twilight).
     inferred = infer_media_type(filename, row.get("mime_type"), None)
-    return inferred == "hdr"
+    return inferred in ("hdr", "twilight")
 
 
 def _issue_for_stem(stem: str, files: List[str], minimum: int) -> Dict[str, Any]:
@@ -96,7 +100,7 @@ def _issue_for_stem(stem: str, files: List[str], minimum: int) -> Dict[str, Any]
             "count": n,
             "filenames": files,
             "message": (
-                f'Cannot complete: HDR angle "{stem}" has only {n} exposure'
+                f'Cannot complete: still angle "{stem}" has only {n} exposure'
                 f'{"s" if n != 1 else ""} (need ≥{minimum}). '
                 f"{BRACKET_HINT}"
             ),
@@ -107,7 +111,7 @@ def _issue_for_stem(stem: str, files: List[str], minimum: int) -> Dict[str, Any]
         "count": n,
         "filenames": files,
         "message": (
-            f'Cannot complete: HDR angle "{stem}" needs under, mid, and over '
+            f'Cannot complete: still angle "{stem}" needs under, mid, and over '
             f"exposures (− / 0 / +), not {n} same-side frames. "
             f"Name files with ±EV (e.g. {stem}_-2.jpg, {stem}_0.jpg, {stem}_+2.jpg)."
         ),
@@ -120,7 +124,7 @@ def validate_hdr_uploads_for_complete(
     allow_incomplete: bool = False,
     min_count: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return an issue dict when any HDR stem is incomplete; else None.
+    """Return an issue dict when any HDR/twilight stem is incomplete; else None.
 
     Issue shape matches the TS BracketIssue for client parity:
       { stem, count, filenames, message }

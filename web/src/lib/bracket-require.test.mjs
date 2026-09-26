@@ -41,7 +41,9 @@ assert.equal(inferMediaType('clip.mp4', 'video/mp4'), 'reel');
 assert.equal(inferMediaType('living_0.jpg', 'image/jpeg'), 'hdr');
 
 assert.equal(requiresBracketSet('hdr'), true);
+assert.equal(requiresBracketSet('twilight'), true);
 assert.equal(requiresBracketSet('drone'), false);
+assert.equal(requiresBracketSet('staging'), false);
 assert.equal(HDR_BRACKET_MIN, 3);
 assert.ok(BRACKET_HINT.includes('bracketed'));
 
@@ -111,5 +113,42 @@ const overOnly = validateHdrUploadsForComplete([
 ]);
 assert.ok(overOnly);
 assert.match(overOnly.message, /under, mid, and over/i);
+
+
+// Twilight explicit media_type — incomplete blocks Mark complete
+const twilightShort = validateHdrUploadsForComplete([
+  { filename: 'dusk_-2.jpg', media_type: 'twilight' },
+  { filename: 'dusk_0.jpg', media_type: 'twilight' },
+]);
+assert.ok(twilightShort);
+assert.match(twilightShort.message, /still angle|bracket/i);
+
+// Inferred durable twilight_*.jpg (no media_type) also gated
+const twilightInferred = validateHdrUploadsForComplete([
+  { filename: 'twilight_front.jpg', mime_type: 'image/jpeg' },
+]);
+assert.ok(twilightInferred);
+
+// Complete twilight −/0/+ passes
+const twilightOk = validateHdrUploadsForComplete([
+  { filename: 'twilight_front_-2.jpg', media_type: 'twilight' },
+  { filename: 'twilight_front_0.jpg', media_type: 'twilight' },
+  { filename: 'twilight_front_+2.jpg', media_type: 'twilight' },
+]);
+assert.equal(twilightOk, null);
+
+// Staging / aerial_ / DJI still skip gate
+assert.equal(
+  validateHdrUploadsForComplete([{ filename: 'staging_living.jpg', media_type: 'staging' }]),
+  null,
+);
+assert.equal(
+  validateHdrUploadsForComplete([{ filename: 'aerial_roof.jpg', mime_type: 'image/jpeg' }]),
+  null,
+);
+assert.equal(
+  validateHdrUploadsForComplete([{ filename: 'DJI_0456.jpg', mime_type: 'image/jpeg' }]),
+  null,
+);
 
 console.log('bracket-require tests passed');

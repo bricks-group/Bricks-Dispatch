@@ -1,5 +1,6 @@
 /**
- * Product law: HDR stills must be uploaded as bracket sets (±EV / under-mid-over).
+ * Product law: bracketed stills (HDR + twilight) must be uploaded as
+ * bracket sets (±EV / under-mid-over). Staging/drone/reel are excluded.
  * Mirrors backend photo_enhance_service.bracket_stem / exposure_bias_from_name
  * and backend bracket_require.validate_hdr_uploads_for_complete so client
  * grouping matches post-prod + Mark complete API gate.
@@ -144,7 +145,8 @@ export function inferMediaType(
   return 'hdr';
 }
 
-function isHdrStillUpload(u: {
+/** True when this upload participates in the −/0/+ bracket gate (HDR + twilight). */
+export function isHdrStillUpload(u: {
   filename?: string | null;
   media_type?: string | null;
   mime_type?: string | null;
@@ -154,9 +156,16 @@ function isHdrStillUpload(u: {
   if (!name || isVisitName(name) || !isImageName(name)) return false;
   const rawMt = String(u.media_type || '').trim().toLowerCase();
   if (rawMt) {
-    return rawMt === 'hdr' || rawMt === 'photo' || rawMt === 'stills' || rawMt === '';
+    return (
+      rawMt === 'hdr' ||
+      rawMt === 'photo' ||
+      rawMt === 'stills' ||
+      rawMt === 'twilight' ||
+      rawMt === ''
+    );
   }
-  return inferMediaType(filename, u.mime_type, null) === 'hdr';
+  const inferred = inferMediaType(filename, u.mime_type, null);
+  return inferred === 'hdr' || inferred === 'twilight';
 }
 
 function issueForStem(stem: string, files: string[], min: number): BracketIssue {
@@ -167,7 +176,7 @@ function issueForStem(stem: string, files: string[], min: number): BracketIssue 
       count: n,
       filenames: files,
       message:
-        `Cannot complete: HDR angle "${stem}" has only ${n} exposure` +
+        `Cannot complete: still angle "${stem}" has only ${n} exposure` +
         `${n === 1 ? '' : 's'} (need ≥${min}). ` +
         BRACKET_HINT,
     };
@@ -177,15 +186,15 @@ function issueForStem(stem: string, files: string[], min: number): BracketIssue 
     count: n,
     filenames: files,
     message:
-      `Cannot complete: HDR angle "${stem}" needs under, mid, and over ` +
+      `Cannot complete: still angle "${stem}" needs under, mid, and over ` +
       `exposures (− / 0 / +), not ${n} same-side frames. ` +
       `Name files with ±EV (e.g. ${stem}_-2.jpg, ${stem}_0.jpg, ${stem}_+2.jpg).`,
   };
 }
 
 /**
- * Validate a proposed HDR upload batch against already-registered filenames.
- * Returns null when OK; otherwise an issue describing incomplete brackets.
+ * Validate a proposed bracketed stills upload batch against already-registered
+ * filenames. Returns null when OK; otherwise an issue describing incomplete brackets.
  * Soft bypass: pass allowIncomplete=true (admin override only).
  */
 export function validateHdrBracketSelection(
@@ -216,7 +225,7 @@ export function validateHdrBracketSelection(
           count: merged.length,
           filenames: merged,
           message:
-            `HDR stills need a bracket of at least ${min} exposures (− / 0 / +) per angle. ` +
+            `Bracketed stills need a bracket of at least ${min} exposures (− / 0 / +) per angle. ` +
             `"${stem}" has ${merged.length} frame${merged.length === 1 ? '' : 's'}` +
             (merged.length === 1
               ? ' — single frames are not accepted.'
@@ -229,7 +238,7 @@ export function validateHdrBracketSelection(
         count: merged.length,
         filenames: merged,
         message:
-          `HDR stills need under, mid, and over exposures (− / 0 / +) per angle. ` +
+          `Bracketed stills need under, mid, and over exposures (− / 0 / +) per angle. ` +
           `"${stem}" has ${merged.length} frames but is missing a side of the bracket. ` +
           `Name files with ±EV (e.g. living_-2.jpg, living_0.jpg, living_+2.jpg).`,
       };
@@ -239,7 +248,7 @@ export function validateHdrBracketSelection(
 }
 
 /**
- * Block Mark complete / submit when any HDR stem on the job is incomplete.
+ * Block Mark complete / submit when any HDR/twilight stem on the job is incomplete.
  * Parity with backend bracket_require.validate_hdr_uploads_for_complete:
  * infer media_type when absent (DB has no media_type column) and require −/0/+.
  */
@@ -271,5 +280,5 @@ export function validateHdrUploadsForComplete(
 
 export function requiresBracketSet(mediaType: string | null | undefined): boolean {
   const mt = String(mediaType || '').toLowerCase();
-  return mt === 'hdr' || mt === 'photo' || mt === 'stills';
+  return mt === 'hdr' || mt === 'photo' || mt === 'stills' || mt === 'twilight';
 }

@@ -1,5 +1,6 @@
 /**
- * Staging must be a first-class stills upload kind so GO/web can tag vacant/
+ * Staging must be a first-class stills upload kind (no brackets).
+ * Twilight requires −/0/+ brackets (real dusk honesty). so GO/web can tag vacant/
  * staged rooms. Backend durable staging_ filename + leftover route=staging
  * deliver originals (no enhance / no virtual staging).
  *
@@ -28,6 +29,6 @@ execSync(
 const { requiresBracketSet } = await import(`${out}?t=${Date.now()}`);
 assert.equal(requiresBracketSet('staging'), false);
 assert.equal(requiresBracketSet('hdr'), true);
-assert.equal(requiresBracketSet('twilight'), false);
+assert.equal(requiresBracketSet('twilight'), true);
 
 console.log('stills-upload staging picker tests passed');

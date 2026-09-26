@@ -327,7 +327,7 @@ export default function JobDetailScreen() {
       }
       const bracketBlock = validateHdrUploadsForComplete(uploads);
       if (bracketBlock) {
-        Alert.alert('Incomplete HDR brackets', bracketBlock.message || BRACKET_HINT);
+        Alert.alert('Incomplete brackets', bracketBlock.message || BRACKET_HINT);
         return;
       }
       Alert.alert('Mark Complete', 'Confirm that this shoot is finished?', [
@@ -784,7 +784,7 @@ export default function JobDetailScreen() {
             style={s.captureStartChip}
             onPress={() => router.push('/(tabs)/uploads' as any)}
           >
-            <Text style={s.captureStartChipText}>Upload stills · drone · reel · staging</Text>
+            <Text style={s.captureStartChipText}>Upload stills · drone · reel · twilight · staging</Text>
           </PressScale>
         ) : null}
 

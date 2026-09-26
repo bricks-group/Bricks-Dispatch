@@ -203,11 +203,18 @@ export default function UploadsScreen() {
           contentContainerStyle={s.scroll}
         >
           <Text style={s.title}>Upload</Text>
-          <Text style={s.subtitle}>Camera JPEG, drone, reel, twilight, staging — signed upload, no 4MB cap.</Text>
+          <Text style={s.subtitle}>Camera JPEG, drone, reel, twilight, staging — signed upload, no 4MB cap. Tag Twilight for real dusk (no blue-sky / day-to-dusk).</Text>
           {requiresBracketSet(stillsType) ? (
-            <Text style={{ fontSize: 12, color: TOKENS.brickSoft, marginBottom: 14 }}>
-              {BRACKET_HINT} Minimum 3 exposures per angle. Single frames are rejected.
-            </Text>
+            <>
+              <Text style={{ fontSize: 12, color: TOKENS.brickSoft, marginBottom: stillsType === 'twilight' ? 6 : 14 }}>
+                {BRACKET_HINT} Minimum 3 exposures per angle. Single frames are rejected.
+              </Text>
+              {stillsType === 'twilight' ? (
+                <Text style={{ fontSize: 12, color: TOKENS.moonFaint, marginBottom: 14 }}>
+                  Real dusk only — enhance keeps the dusk sky (no blue-sky / day-to-dusk).
+                </Text>
+              ) : null}
+            </>
           ) : stillsType === 'staging' ? (
             <Text style={{ fontSize: 12, color: TOKENS.moonFaint, marginBottom: 14 }}>
               Staging delivers the original to the listing (no enhance, no virtual staging).
@@ -253,7 +260,7 @@ export default function UploadsScreen() {
                 <Text style={s.dropTitle}>Tap to select files</Text>
                 <Text style={s.dropMeta}>
                   {requiresBracketSet(stillsType)
-                    ? `HDR brackets (− / 0 / +) · ${stillsType.toUpperCase()}`
+                    ? `Bracketed stills (− / 0 / +) · ${stillsType.toUpperCase()}`
                     : `JPEG / MP4 from the camera card · ${stillsType.toUpperCase()}`}
                 </Text>
                 <View style={s.chooseBtn}>

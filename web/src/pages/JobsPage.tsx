@@ -520,14 +520,21 @@ function JobListingPanel({
         <JobShootChecklist job={job} />
         <CaptureStatusBlock job={job} />
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS · CAMERA / DRONE / REEL / STAGING</p>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS · CAMERA / DRONE / REEL / TWILIGHT / STAGING</p>
           <p className="muted" style={{ padding: 0, margin: '4px 0 8px', fontSize: 12 }}>
-            HDR stills stay on the camera. After the shoot, upload JPEG / RAW / MP4 here — files go straight to storage (not the 4MB API cap). Tag Staging for vacant/staged rooms so listing delivery keeps the original (no enhance).
+            HDR stills stay on the camera. After the shoot, upload JPEG / RAW / MP4 here — files go straight to storage (not the 4MB API cap). Tag Twilight for real dusk so listing enhance keeps dusk sky (no blue-sky / day-to-dusk). Tag Staging for vacant/staged rooms so listing delivery keeps the original (no enhance).
           </p>
           {requiresBracketSet(stillsType) ? (
-            <p style={{ padding: 0, margin: '0 0 8px', fontSize: 13, color: 'var(--c-brick, #D2542B)' }}>
-              {BRACKET_HINT} Minimum 3 exposures per room/angle. Single frames are rejected.
-            </p>
+            <>
+              <p style={{ padding: 0, margin: '0 0 8px', fontSize: 13, color: 'var(--c-brick, #D2542B)' }}>
+                {BRACKET_HINT} Minimum 3 exposures per room/angle. Single frames are rejected.
+              </p>
+              {stillsType === 'twilight' ? (
+                <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
+                  Real dusk only — enhance keeps the dusk sky (no blue-sky / day-to-dusk).
+                </p>
+              ) : null}
+            </>
           ) : stillsType === 'staging' ? (
             <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
               Staging delivers the original to the listing (no enhance, no virtual staging).
@@ -562,7 +569,7 @@ function JobListingPanel({
                 checked={allowIncompleteBrackets}
                 onChange={(e) => setAllowIncompleteBrackets(e.target.checked)}
               />
-              Admin override: allow incomplete HDR brackets
+              Admin override: allow incomplete brackets
             </label>
           ) : null}
         </div>
