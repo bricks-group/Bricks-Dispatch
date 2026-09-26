@@ -44,6 +44,12 @@ def test_delivery_routes():
     assert delivery_route({"file_url": "p/a.jpg", "filename": "dusk-rear.jpg", "media_type": "dusk"}) == "twilight"
     assert delivery_route({"file_url": "p/a.jpg", "filename": "golden-hour.jpg"}) == "twilight"
     assert delivery_route({"file_url": "p/a.mp4", "filename": "drone.mp4", "media_type": "drone"}) == "as_is"
+    # media_type is not a DB column — filename inference must keep aerial JPEGs as_is
+    # (never vendor_photo + HDR/sky invent on drone stills).
+    assert delivery_route({"file_url": "p/a.jpg", "filename": "aerial-front.jpg"}) == "as_is"
+    assert delivery_route({"file_url": "p/a.jpg", "filename": "DJI_0042.JPG"}) == "as_is"
+    assert delivery_route({"file_url": "p/a.jpg", "filename": "drone-front.jpg"}) == "as_is"
+    assert delivery_route({"file_url": "p/a.jpg", "filename": "aerial-front.jpg", "media_type": "drone"}) == "as_is"
     assert delivery_route({"file_url": "p/a.splat", "filename": "visit.splat"}) == "visit"
     assert delivery_route({"filename": "a.jpg"}) == "skip"
     assert wants_staging({"requires_staging": True})

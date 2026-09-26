@@ -102,14 +102,17 @@ def wants_staging(asset: Optional[dict] = None) -> bool:
 def delivery_route(asset: Optional[dict] = None) -> str:
     """How this upload should leave post-production.
 
-    Order: skip → visit → staging → twilight → as_is (video) → vendor_photo → as_is.
+    Order: skip → visit → staging → twilight → as_is (drone/reel/video) → vendor_photo → as_is.
 
     skip          — no file
     visit         — .ply/.splat/.spz, not a listing still
     staging       — honest original (no virtual staging / no enhance)
     twilight      — real dusk shot; in-house enhance with apply_sky=False (no blue-sky / day-to-dusk)
-    as_is         — drone / reel / video, no photo edit
+    as_is         — drone / reel / video, no photo edit (incl. aerial JPEGs)
     vendor_photo  — Fotello / Autoenhance / in-house enhance (may apply sky)
+
+    media_type is not a DB column — always use infer_media_type (filename/mime/explicit)
+    so DJI_/aerial_/*.mp4 stills never fall through to vendor_photo + sky replace.
     """
     row = asset or {}
     if not (row.get("file_url") or row.get("storage_path")):
@@ -121,6 +124,9 @@ def delivery_route(asset: Optional[dict] = None) -> str:
     mt = infer_media_type(row.get("filename"), row.get("mime_type"), row.get("media_type"))
     if mt == "twilight":
         return "twilight"
+    # Use inferred mt (not raw row media_type) — uploads table has no media_type col.
+    if mt in AS_IS_TYPES:
+        return "as_is"
     if is_video_file(row.get("filename"), row.get("mime_type"), row.get("media_type")):
         return "as_is"
     if is_photo_file(row.get("filename"), row.get("mime_type"), row.get("media_type")):

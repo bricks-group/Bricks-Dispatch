@@ -232,8 +232,8 @@ async def _deliver_leftovers_with_brackets(db, job_id: str, leftover: list) -> N
     others = []
     for asset in leftover:
         route = delivery_route(asset)
-        # Staging + twilight must never enter HDR photos group (no blue-sky / day-to-dusk).
-        # Only vendor_photo leftovers go through bracket merge.
+        # Staging / twilight / drone-aerial / reel must never enter HDR photos group
+        # (no blue-sky invent on dusk or aerial JPEGs). Only vendor_photo leftovers bracket-merge.
         if route == "vendor_photo":
             photos.append(asset)
         else:
