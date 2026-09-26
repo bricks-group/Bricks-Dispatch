@@ -35,6 +35,9 @@ from app.services.photo_enhance_service import (
     _frame_edge_lock_mask,
     _mid_biased_body,
     _sky_mid_bias_restore,
+    _highlight_cap_vs_mid,
+    _neutralize_magenta_highlights,
+    _body_beat_mid,
     _sky_region_weight,
     _center_crop_aspect,
     _exif_auto_orient,
@@ -493,7 +496,7 @@ def test_mullion_pixels_stay_mid_after_pull_v7():
 
 
 def test_uneven_pane_family_prefers_leave_mid():
-    """v7: one solid pane + one patchy dark pane → patchy leaves mid (no blotch family)."""
+    """v8: solid pane pulls −EV; patchy dark sibling leaves mid (no blotch)."""
     h, w = 220, 400
     mid = np.full((h, w, 3), 130, dtype=np.uint8)
     under = np.full((h, w, 3), 45, dtype=np.uint8)
@@ -513,13 +516,10 @@ def test_uneven_pane_family_prefers_leave_mid():
     left = float(matte[70:150, 50:140].mean())
     right = float(matte[70:150, 240:340].mean())
     mullion = float(matte[70:150, 170:210].mean())
-    # Patchy dark pane must leave mid; family may also leave the solid sibling
-    # mid (consistent leave-mid preferred over blotchy greenery on some only).
+    # v8: solid high-conf left MUST pull; patchy right leaves mid
+    assert left > 0.20, f"solid left must pull −EV (not leave-mid bank): {left}"
     assert right < 0.05, f"patchy right must leave mid: {right}"
     assert mullion < 0.08, f"mullion leaked: {mullion}"
-    # If left pulls, it must be solid — never a half-dirty residue
-    if left > 0.05:
-        assert left > 0.20, f"left half-dirty: {left}"
 
 
 def test_wall_ghost_still_killed_after_edge_lock():
@@ -628,6 +628,132 @@ def test_watermark_strip_default_off_soft_fail_path():
     assert out3.size == marked.size
     assert isinstance(stripped3, bool)
 
+
+
+
+def test_good_conf_exterior_prefers_ev_pull_v8():
+    """v8: readable −EV exterior with solid conf must pull, not leave-mid bank."""
+    h, w = 220, 360
+    mid = np.full((h, w, 3), 140, dtype=np.uint8)
+    under = np.full((h, w, 3), 50, dtype=np.uint8)
+    # Multi-pane bank with solid foliage under (lawn/trees family)
+    panes = [(40, 100, 40, 150), (40, 100, 170, 280), (120, 180, 40, 150), (120, 180, 170, 280)]
+    for y0, y1, x0, x1 in panes:
+        mid[y0:y1, x0:x1, :] = 255
+        under[y0:y1, x0:x1, :] = (45, 125, 55)
+        for i in range(y0 + 4, y1 - 4, 7):
+            under[i : i + 2, x0 + 8 : x1 - 8, :] = (30, 90, 35)
+    # Mullions
+    mid[40:180, 150:170, :] = 250
+    under[40:180, 150:170, :] = (95, 94, 92)
+    mid[100:120, 40:280, :] = 250
+    under[100:120, 40:280, :] = (95, 94, 92)
+    matte = _glass_only_matte(mid.astype(np.float32), under.astype(np.float32))
+    for y0, y1, x0, x1 in panes:
+        pane = float(matte[y0 + 10 : y1 - 10, x0 + 15 : x1 - 15].mean())
+        assert pane > 0.20, f"good-conf pane leave-mid wrongly: {pane} @ {(y0,x0)}"
+    assert float(matte[50:90, 155:165].mean()) < 0.10
+
+
+def test_highlight_cap_vs_mid_preserves_exterior_detail():
+    """v8: desk glass must not clip harder than mid when mid still has lawn/trees."""
+    h, w = 160, 240
+    mid = np.full((h, w, 3), 120, dtype=np.uint8)
+    # Mid glass still has exterior (not pure white)
+    mid[30:130, 40:200, :] = (210, 215, 200)
+    mid[50:90, 70:170, :] = (160, 190, 120)  # lawn/trees chroma
+    # Desk over-clips to near-pure white (v7 failure mode)
+    desk = mid.copy()
+    desk[30:130, 40:200, :] = 252
+    under = np.full((h, w, 3), 40, dtype=np.uint8)
+    under[30:130, 40:200, :] = (50, 130, 55)
+    out = _highlight_cap_vs_mid(
+        Image.fromarray(desk, "RGB"),
+        Image.fromarray(mid, "RGB"),
+        under=Image.fromarray(under, "RGB"),
+    )
+    o = np.asarray(out, dtype=np.float32)
+    m = mid.astype(np.float32)
+    glass = (slice(40, 120), slice(60, 180))
+    desk_l = float(o[glass].mean())
+    mid_l = float(m[glass].mean())
+    assert desk_l < 245.0, f"desk still near-pure white: {desk_l}"
+    assert desk_l <= mid_l + 12.0, f"desk clips harder than mid: desk={desk_l} mid={mid_l}"
+    # Exterior chroma family preserved (not washed to neutral white)
+    chroma = o[glass].max(axis=2) - o[glass].min(axis=2)
+    assert float(chroma.mean()) > 8.0, f"exterior chroma washed out: {chroma.mean()}"
+
+
+
+
+def test_neutralize_magenta_highlights_kills_pink_sky():
+    """Clipped magenta/pink sky → neutral grey/white (no invent blue)."""
+    h, w = 120, 180
+    img = np.full((h, w, 3), 80, dtype=np.uint8)
+    # Blown pink sky patch (classic demosaic fail)
+    img[10:50, 30:150, 0] = 252
+    img[10:50, 30:150, 1] = 190
+    img[10:50, 30:150, 2] = 245
+    out = np.asarray(_neutralize_magenta_highlights(Image.fromarray(img, "RGB")), dtype=np.float32)
+    patch = out[15:45, 40:140]
+    mag = (patch[:, :, 0] + patch[:, :, 2]) / 2.0 - patch[:, :, 1]
+    assert float(mag.mean()) < 6.0, f"magenta remains: {mag.mean()}"
+    # Stays near-white/grey, not blue invent
+    assert float(patch[:, :, 2].mean() - patch[:, :, 0].mean()) < 8.0
+    # Interior body unchanged
+    assert abs(float(out[80:110, 40:140].mean()) - 80.0) < 3.0
+
+
+def test_body_beat_mid_lifts_crushed_sofa_not_glass():
+    """Crushed interior lifts toward mid; blown glass stays capped (no milk)."""
+    h, w = 160, 220
+    mid = np.full((h, w, 3), 130, dtype=np.uint8)
+    # Readable mid body (sofa family)
+    mid[90:150, 20:200, :] = (160, 150, 140)
+    # Mid glass still has exterior detail
+    mid[20:70, 30:190, :] = (205, 210, 200)
+    mid[35:55, 60:160, :] = (150, 175, 110)
+    desk = mid.copy()
+    desk[90:150, 20:200, :] = 18  # crushed sofa silhouette
+    desk[20:70, 30:190, :] = 252  # over-clipped glass
+    out = _body_beat_mid(
+        Image.fromarray(desk, "RGB"),
+        Image.fromarray(mid, "RGB"),
+        amount=0.28,
+    )
+    o = np.asarray(out, dtype=np.float32)
+    body = float(o[100:140, 40:180].mean())
+    glass = float(o[25:65, 40:180].mean())
+    glass_in = float(desk[25:65, 40:180].astype(np.float32).mean())
+    assert body > 90.0, f"body still crushed: {body}"
+    assert body > 18.0 + 40.0
+    # Body lift must not bloom glass further (highlight_cap owns glass)
+    assert glass <= glass_in + 1.5, f"glass bloomed by body lift: {glass} from {glass_in}"
+
+
+def test_cove_sky_mid_bias_still_locked_after_v8():
+    """Cove ACCEPT: bright sky stays mid-biased (never dirtier/pinker than mid)."""
+    h, w = 140, 200
+    mid = np.full((h, w, 3), 100, dtype=np.uint8)
+    # Upper sky band — clean mid plate (cove sun family)
+    mid[0:45, :, :] = (230, 235, 245)
+    working = mid.copy()
+    # Dirtier/weirder desk sky (green-yellow mud)
+    working[0:45, :, :] = (180, 200, 140)
+    out = _sky_mid_bias_restore(
+        Image.fromarray(working, "RGB"),
+        Image.fromarray(mid, "RGB"),
+        under=None,
+    )
+    o = np.asarray(out, dtype=np.float32)
+    sky = o[5:35, 20:180]
+    msky = mid[5:35, 20:180].astype(np.float32)
+    # Restored toward mid (not left muddy)
+    assert float(np.abs(sky - msky).mean()) < 25.0, f"cove sky not mid-biased: {np.abs(sky-msky).mean()}"
+    # Not pinker than mid
+    mag_o = (sky[:, :, 0] + sky[:, :, 2]) / 2 - sky[:, :, 1]
+    mag_m = (msky[:, :, 0] + msky[:, :, 2]) / 2 - msky[:, :, 1]
+    assert float(mag_o.mean()) <= float(mag_m.mean()) + 4.0
 
 
 # ---------------------------------------------------------------------------

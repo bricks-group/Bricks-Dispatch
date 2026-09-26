@@ -14,8 +14,10 @@ Default stack (order), with honest flags via capabilities():
   1. EXIF auto-orient
   2. HDR merge when bracket siblings are provided (OpenCV MergeMertens);
      otherwise single-frame continue (honest — no invented exposures)
-  3. Window pull from under/over bracket frames where available; soft
-     single-frame highlight recovery otherwise (does not invent glass detail)
+  3. Magenta/pink clipped-highlight neutralize (neutral grey/white — no invent
+     sky/dusk); window pull from under/over where available (prefer readable
+     −EV when conf good; leave-mid only for mottled low-conf); soft single-frame
+     highlight recovery otherwise. Highlight-cap vs mid; body beat-mid.
   4. Exterior sky replacement when sky is detected: SKY_SERVICE_URL HTTP
      first; in-process OpenCV heuristic fallback when URL unset/down
      (natural blue gradient — desk-standard, no separate host required)
@@ -700,14 +702,13 @@ def _glass_only_matte(
     mid_rgb: np.ndarray,
     under_rgb: np.ndarray,
 ) -> np.ndarray:
-    """Strict per-pane glass confidence matte (Frame v7 P0 leave-mid).
+    """Strict per-pane glass confidence matte (Frame v8 P0 −EV preference).
 
     −EV only inside blown glass panes. Morphologically protect mullions /
-    transoms first (stronger erode off mid-white frames), then curtains /
-    plants. Never grey-fill. Low-confidence OR much-darker −EV with
-    patchy coverage → leave mid (blown white ok). Prefer consistent
-    leave-mid over blotchy greenery on some panes only. Hard-fail: any
-    interior wall getting −EV paint (wall ghost).
+    transoms first (frames locked white before curtain/plant protect).
+    Prefer readable −EV exterior when confidence is good. Leave-mid /
+    blown only for true low-conf mottled risk — never default for whole
+    pane banks. Hard-fail: any interior wall getting −EV paint (wall ghost).
     """
     import cv2
 
@@ -808,8 +809,8 @@ def _glass_only_matte(
     seed = seed * (1.0 - np.clip(frame * 1.15, 0.0, 1.0))
     seed = cv2.GaussianBlur(seed.astype(np.float32), (0, 0), sigmaX=0.7)
 
-    # Higher gate than v6: half-dirty / low-conf pulls → leave mid (blown white ok)
-    conf_thresh = 0.20
+    # v8: prefer −EV when conf good; leave-mid only for true mottled low-conf
+    conf_thresh = 0.18
     binary = (seed >= conf_thresh).astype(np.uint8) * 255
     # Light open: kill single-pixel wall speckles without erasing pane seeds
     k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -874,32 +875,30 @@ def _glass_only_matte(
         exterior_chroma = mean_cu > 18.0 and mean_cm < 12.0 and float(warm_under[comp].mean()) < 0.25
         if mean_novel < 0.010 and not exterior_chroma:
             continue
-        # v7: much-darker −EV only rejects when ALSO patchy/weak (solid
-        # high-conf dark foliage pulls still allowed; mottled half-pulls leave mid)
+        # v8: leave-mid only for true mottled / sparse seed — never default
+        # whole banks. Solid high-conf dark foliage still pulls.
         delta_lu = mean_lm - mean_lu
         cov_seed = float((seed[comp] >= conf_thresh).mean())
-        if cov_seed < 0.55:
-            continue  # patchy seed → leave mid entire pane
-        if delta_lu > 110.0 and cov_seed < 0.72 and mean_conf < 0.32:
+        if cov_seed < 0.38 and mean_conf < 0.26:
+            continue  # truly sparse mottled → leave mid
+        if delta_lu > 130.0 and cov_seed < 0.50 and mean_conf < 0.26:
             continue
-        if mean_lu < 40.0 and cov_seed < 0.75 and mean_conf < 0.34:
+        if mean_lu < 28.0 and cov_seed < 0.48 and mean_conf < 0.26:
             continue
         cx = int(stats[i, cv2.CC_STAT_LEFT] + bw / 2)
         cy = int(stats[i, cv2.CC_STAT_TOP] + bh / 2)
         accepted.append((comp, mean_conf, mean_lu, mean_lm, cx, cy, cov_seed))
 
-    # Uneven pane family: prefer consistent leave-mid over blotchy greenery
-    # on some panes only. Weak siblings near strong ones → drop the weak.
+    # Uneven pane family (v8): drop only clearly mottled weak siblings —
+    # never force solid high-conf panes to leave-mid for "consistency".
     if len(accepted) >= 2:
         confs = np.array([a[1] for a in accepted], dtype=np.float32)
         med = float(np.median(confs))
         kept_acc = []
         for a in accepted:
             comp, mean_conf, mean_lu, mean_lm, cx, cy, cov_seed = a
-            # Far below family median → leave mid (avoid one blotchy pane)
-            if mean_conf < med * 0.65 and mean_conf < 0.30:
-                continue
-            if cov_seed < 0.60 and mean_conf < med * 0.80:
+            # Only kill obviously mottled weak vs strong family median
+            if mean_conf < med * 0.45 and mean_conf < 0.22 and cov_seed < 0.42:
                 continue
             kept_acc.append(a)
         accepted = kept_acc
@@ -994,10 +993,10 @@ def _glass_only_matte(
     )
     matte = np.where(white_frame_body, 0.0, matte)
     # Low-confidence → leave mid pane (never grey fill / half-dirty)
-    matte = np.where(matte >= 0.22, matte, 0.0).astype(np.float32)
+    matte = np.where(matte >= 0.20, matte, 0.0).astype(np.float32)
 
-    # v7: blown-glass components with partial matte → leave mid entirely
-    # (honest blown white beats mottled half-dirty greenery)
+    # v8: leave-mid only for true mottled residue — erode shrinks good panes
+    # ~10–30%; do NOT wipe recoverable −EV banks that still have solid fill.
     if float(matte.max()) > 0:
         blown = (
             (luma_m >= 228.0)
@@ -1011,24 +1010,213 @@ def _glass_only_matte(
             if area < pane_min:
                 continue
             comp = lab_b == i
-            cov = float((matte[comp] >= 0.22).mean())
+            cov = float((matte[comp] >= 0.20).mean())
             mean_m = float(matte[comp].mean())
             mean_lu = float(luma_u[comp].mean())
             mean_lm = float(luma_m[comp].mean())
-            # Partial / mottled coverage → leave mid (erode shrinks good
-            # panes ~10–30%; only kill clearly half-dirty <35%)
-            if 0.0 < cov < 0.35:
+            # Truly sparse / half-dirty speckles only
+            if 0.0 < cov < 0.18:
                 matte[comp] = 0.0
                 continue
-            # Much-darker −EV with weak fill → leave mid (avoid mottled dark)
-            if (mean_lm - mean_lu) > 120.0 and cov < 0.45 and mean_m < 0.28:
+            if (mean_lm - mean_lu) > 145.0 and cov < 0.28 and mean_m < 0.16:
                 matte[comp] = 0.0
                 continue
-            # Near-zero mean matte on pane → leave mid (no half-dirty speckles)
-            if 0.0 < mean_m < 0.10:
+            if 0.0 < mean_m < 0.06:
                 matte[comp] = 0.0
 
     return np.clip(matte, 0.0, 1.0)
+
+
+def _highlight_cap_vs_mid(
+    working: Image.Image,
+    mid: Image.Image,
+    under: Optional[Image.Image] = None,
+) -> Image.Image:
+    """Cap desk glass/sky highlights vs mid (Frame v8 P0).
+
+    Desk must not clip harder than mid when mid still has exterior detail
+    (lawn/trees). Preserve mid exterior detail family. When mid is already
+    blown, equal clip is OK. Does not invent sky/dusk. Body beat-mid outside
+    glass/sky regions is preserved.
+    """
+    import cv2
+
+    a = np.asarray(working.convert("RGB"), dtype=np.float32)
+    m = np.asarray(
+        mid.convert("RGB").resize(working.size, Image.Resampling.LANCZOS),
+        dtype=np.float32,
+    )
+    luma_a = a.mean(axis=2)
+    luma_m = m.mean(axis=2)
+    chroma_m = m.max(axis=2) - m.min(axis=2)
+    chroma_a = a.max(axis=2) - a.min(axis=2)
+
+    glassish = ((luma_m >= 175.0) & (chroma_m < 40.0)) | (
+        (luma_a >= 210.0) & (chroma_a < 30.0) & (luma_m >= 155.0)
+    )
+    sky_w = _sky_region_weight(m)
+    region = np.clip(
+        np.maximum(glassish.astype(np.float32), sky_w * 0.90), 0.0, 1.0
+    )
+    region = cv2.GaussianBlur(region, (0, 0), sigmaX=1.2)
+    region = np.clip(region, 0.0, 1.0)
+
+    # Mid still has exterior detail family (not pure blown)
+    mid_detail = np.clip((252.0 - luma_m) / 30.0, 0.0, 1.0)
+    mid_detail = mid_detail * np.clip(chroma_m / 18.0 + 0.25, 0.0, 1.0)
+    u = None
+    if under is not None:
+        u = np.asarray(
+            under.convert("RGB").resize(working.size, Image.Resampling.LANCZOS),
+            dtype=np.float32,
+        )
+        chroma_u = u.max(axis=2) - u.min(axis=2)
+        mid_detail = np.maximum(
+            mid_detail,
+            np.clip((chroma_u - 6.0) / 26.0, 0.0, 1.0)
+            * np.clip((luma_m - 160.0) / 55.0, 0.0, 1.0),
+        )
+
+    # Prefer mid (or useful −EV) wherever desk is brighter in glass/sky
+    over = np.clip((luma_a - luma_m) / 10.0, 0.0, 1.0)
+    need = region * over * np.clip(0.40 + 0.60 * mid_detail, 0.0, 1.0)
+    near = cv2.dilate(
+        (region > 0.20).astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)),
+        iterations=1,
+    ).astype(np.float32)
+    bloom = near * np.clip((luma_a - luma_m - 2.0) / 16.0, 0.0, 1.0) * 0.75
+    need = np.maximum(need, bloom * np.clip(region + 0.30, 0.0, 1.0))
+    need = cv2.GaussianBlur(need.astype(np.float32), (0, 0), sigmaX=0.8)
+    need = np.clip(need, 0.0, 1.0)
+    if float(need.max()) < 0.05:
+        return working
+
+    src = m.copy()
+    if u is not None:
+        mid_blown = np.clip((luma_m - 228.0) / 20.0, 0.0, 1.0)
+        u_luma = u.mean(axis=2)
+        u_chroma = u.max(axis=2) - u.min(axis=2)
+        useful_u = (
+            np.clip((230.0 - u_luma) / 100.0, 0.0, 1.0)
+            * np.clip((u_chroma - 5.0) / 20.0, 0.0, 1.0)
+        )
+        use_u = mid_blown * useful_u * region
+        src = m * (1.0 - use_u[..., None]) + u * use_u[..., None]
+
+    ww = np.clip(need * 1.25, 0.0, 1.0)[..., None]
+    out = a * (1.0 - ww) + src * ww
+
+    # Absolute per-pixel ceiling in glass/sky: desk ≤ mid (+tiny slack)
+    # when mid still has exterior detail — never clip harder than mid.
+    out_l = out.mean(axis=2)
+    slack = 3.0 + 10.0 * (1.0 - np.clip(mid_detail, 0.0, 1.0))
+    cap = luma_m + slack
+    # Where mid is already blown (no detail), allow desk == mid (no extra blow)
+    blown_mid = (luma_m >= 248.0) & (chroma_m < 12.0)
+    cap = np.where(blown_mid, np.maximum(cap, luma_m), cap)
+    enforce = np.clip(region * np.maximum(mid_detail, 0.35), 0.0, 1.0)
+    # When desk over mid in region, hard-min toward mid plate
+    ratio = np.where(out_l > cap, cap / np.maximum(out_l, 1e-3), 1.0)
+    ratio = np.clip(ratio, 0.70, 1.0)
+    # Also lerp toward mid RGB where enforced (preserves exterior chroma)
+    mix = enforce * (1.0 - ratio) * 0.85 + enforce * over * 0.55
+    mix = np.clip(mix, 0.0, 1.0)[..., None]
+    out = out * (1.0 - mix) + m * mix
+    # Final luma clamp soft-scale inside region
+    out_l2 = out.mean(axis=2)
+    ratio2 = np.where(out_l2 > cap, cap / np.maximum(out_l2, 1e-3), 1.0)
+    ratio2 = np.clip(ratio2, 0.72, 1.0)
+    ratio2 = 1.0 - enforce * (1.0 - ratio2)
+    out = out * ratio2[..., None]
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+
+
+def _neutralize_magenta_highlights(img: Image.Image) -> Image.Image:
+    """Kill pink/magenta clipped-channel sky before window pull (desk P0).
+
+    Upstream CR3→JPEG (libraw blend, camera JPEG, vendor export) often leaves
+    magenta in blown sky/glass. Force those pixels to neutral grey/white —
+    never invent blue sky or dusk. No-ops when OpenCV missing.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return img
+
+    a = np.asarray(img.convert("RGB"), dtype=np.float32)
+    r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+    mx = a.max(axis=2)
+    mn = a.min(axis=2)
+    luma = a.mean(axis=2)
+    mag = np.clip((r + b) / 2.0 - g, 0.0, None)
+    clipish = (mx >= 228.0) & (mag >= 4.0)
+    bright_pink = (luma >= 180.0) & (mag >= 6.0) & ((mx - mn) < 55.0)
+    chan_pink = (
+        (r >= 218.0) & (b >= 198.0) & (g < r - 5.0) & (g < b - 3.0) & (luma >= 155.0)
+    )
+    mid_pink = (luma >= 135.0) & (mag >= 14.0) & (r > g + 8.0) & (b > g + 5.0)
+    mask = (clipish | bright_pink | chan_pink | mid_pink).astype(np.float32)
+    if float(mask.max()) < 0.05:
+        return img
+    mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=1.3)
+    mask = np.clip(mask, 0.0, 1.0)[..., None]
+    # Neutral grey at scene luma; hard-clip → white (readable −EV sky family)
+    target_y = np.where(mx >= 248.0, 255.0, np.clip(luma + mag * 0.12, 0.0, 255.0))
+    neut = np.stack([target_y, target_y, target_y], axis=-1)
+    out = a * (1.0 - mask) + neut * mask
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+def _body_beat_mid(
+    working: Image.Image,
+    mid: Image.Image,
+    *,
+    amount: float = 0.28,
+) -> Image.Image:
+    """Lift crushed interior body toward/above mid (Heroes-class readable).
+
+    Glass/sky excluded. No milk/bloom on highlights. Does not invent sky.
+    Cove/sky mid-bias is applied separately and stays locked.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return working
+
+    a = np.asarray(working.convert("RGB"), dtype=np.float32)
+    m = np.asarray(
+        mid.convert("RGB").resize(working.size, Image.Resampling.LANCZOS),
+        dtype=np.float32,
+    )
+    luma_a = a.mean(axis=2)
+    luma_m = m.mean(axis=2)
+    chroma_m = m.max(axis=2) - m.min(axis=2)
+    # Glass/sky: leave for window pull / highlight cap / cove restore
+    glass = (
+        ((luma_m >= 185.0) & (chroma_m < 45.0))
+        | (luma_a >= 220.0)
+        | ((luma_m >= 210.0) & (chroma_m < 55.0))
+    )
+    body = (~glass) & (luma_a < 205.0)
+    # Where desk lags mid (crushed sofa), lift toward mid * 1.04 (slight beat)
+    lag = np.clip((luma_m + 10.0 - luma_a) / 45.0, 0.0, 1.0) * body.astype(np.float32)
+    if float(lag.max()) < 0.04:
+        return working
+    lag = cv2.GaussianBlur(lag, (0, 0), sigmaX=2.0)
+    # amount≈0.28 → up to ~0.85 mix on fully-lagging body (listing-readable, not milk)
+    strength = float(np.clip(0.55 + 1.1 * float(amount), 0.55, 0.90))
+    mix = np.clip(lag * strength, 0.0, strength)[..., None]
+    target = np.clip(m * 1.04, 0.0, 248.0)
+    out = a * (1.0 - mix) + target * mix
+    # Tiny shared shadow toe so pure-black furniture isn't silhouette-only
+    out_l = out.mean(axis=2)
+    shadow = np.clip((42.0 - out_l) / 42.0, 0.0, 1.0) * body.astype(np.float32)
+    shadow = cv2.GaussianBlur(shadow, (0, 0), sigmaX=1.5)
+    out = np.clip(out + shadow[..., None] * 8.0, 0.0, 255.0)
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
 
 
 def window_pull_from_brackets(
@@ -1496,6 +1684,9 @@ def enhance_bracket(
     used_sky = False
     used_watermark_strip = False
 
+    # Magenta/pink clipped highlights → neutral before merge/pull (CR3 JPEG P0)
+    images = [_neutralize_magenta_highlights(im) for im in images]
+
     mid, under, over = _pick_under_mid_over(images, biases)
     body = mid
 
@@ -1516,7 +1707,14 @@ def enhance_bracket(
             used_window = under is not None or over is not None
 
         # Cove/exterior: bright sky must stay mid-biased (never dirtier than mid)
+        # Cove ACCEPT regression bar stays locked — do not weaken this restore.
         body = _sky_mid_bias_restore(body, mid, under)
+        # v8: glass/sky highlight cap vs mid (preserve exterior detail family)
+        body = _highlight_cap_vs_mid(body, mid, under)
+        # Kill residual pink in glass after pull/cap (no invent sky)
+        body = _neutralize_magenta_highlights(body)
+        # Interior body beat-mid (Heroes-class readable; no milk on glass)
+        body = _body_beat_mid(body, mid)
 
         body = restore_black_point(body)
         # Slight midtone punch for exteriors (Frame v2 P1); interiors stay gentler
