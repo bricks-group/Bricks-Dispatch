@@ -21,6 +21,7 @@ const STILLS_TYPES = [
   { id: 'drone', label: 'Drone' },
   { id: 'reel', label: 'Reel' },
   { id: 'twilight', label: 'Twilight' },
+  { id: 'staging', label: 'Staging' },
 ] as const;
 type StillsType = (typeof STILLS_TYPES)[number]['id'];
 
@@ -202,10 +203,14 @@ export default function UploadsScreen() {
           contentContainerStyle={s.scroll}
         >
           <Text style={s.title}>Upload</Text>
-          <Text style={s.subtitle}>Camera JPEG, drone, reel, twilight — signed upload, no 4MB cap.</Text>
+          <Text style={s.subtitle}>Camera JPEG, drone, reel, twilight, staging — signed upload, no 4MB cap.</Text>
           {requiresBracketSet(stillsType) ? (
             <Text style={{ fontSize: 12, color: TOKENS.brickSoft, marginBottom: 14 }}>
               {BRACKET_HINT} Minimum 3 exposures per angle. Single frames are rejected.
+            </Text>
+          ) : stillsType === 'staging' ? (
+            <Text style={{ fontSize: 12, color: TOKENS.moonFaint, marginBottom: 14 }}>
+              Staging delivers the original to the listing (no enhance, no virtual staging).
             </Text>
           ) : null}
 

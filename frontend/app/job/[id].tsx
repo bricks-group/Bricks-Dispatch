@@ -784,7 +784,7 @@ export default function JobDetailScreen() {
             style={s.captureStartChip}
             onPress={() => router.push('/(tabs)/uploads' as any)}
           >
-            <Text style={s.captureStartChipText}>Upload stills · drone · reel</Text>
+            <Text style={s.captureStartChipText}>Upload stills · drone · reel · staging</Text>
           </PressScale>
         ) : null}
 

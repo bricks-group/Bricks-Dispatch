@@ -172,9 +172,9 @@ export function jobCaptureModes(job: CaptureJobLike | null | undefined): Capture
 
 export function captureNeitherCopy(flags: CaptureFlags): string {
   if (flags.visit && !flags.tour && !flags.floorplan) {
-    return 'This job has Virtual Visit only — open Deliver Visit to paste a Polycam URL or upload a .ply / .splat. Upload HDR stills, drone, reel, or twilight from Upload after the shoot.';
+    return 'This job has Virtual Visit only — open Deliver Visit to paste a Polycam URL or upload a .ply / .splat. Upload HDR stills, drone, reel, twilight, or staging from Upload after the shoot.';
   }
-  return 'This job has no in-app 3D tour, floor plan, or Virtual Visit. Upload HDR stills, drone, reel, or twilight from Upload after the shoot.';
+  return 'This job has no in-app 3D tour, floor plan, or Virtual Visit. Upload HDR stills, drone, reel, twilight, or staging from Upload after the shoot.';
 }
 
 export function hasAnyCaptureMode(flags: CaptureFlags): boolean {
