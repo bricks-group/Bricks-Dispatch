@@ -165,7 +165,10 @@ def pg_insert_job_assigned_to_owner(job: dict) -> Optional[str]:
         logger.warning("pg job fallback: no POSTGRES_URL — trying OS proxy")
         return os_insert_job_assigned_to_owner(job)
     job = dict(job)
-    job["assignee_id"] = KAM_MEMBER_ID
+    # Assign-first: keep checkout/intake assignee when present; else Owner (Kam).
+    aid = (job.get("assignee_id") or "").strip()
+    if not aid or aid == "default_user":
+        job["assignee_id"] = KAM_MEMBER_ID
     job["status"] = "assigned"
     if not job.get("vendor_id"):
         job["vendor_id"] = ORG_VENDOR_ID
