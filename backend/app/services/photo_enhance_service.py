@@ -12,8 +12,11 @@ virtual staging / object removal / day-to-dusk are NOT in this pipeline
 Default stack (order), with honest flags via capabilities():
 
   1. EXIF auto-orient
-  2. HDR merge when bracket siblings are provided (OpenCV MergeMertens);
-     otherwise single-frame continue (honest — no invented exposures)
+  2. HDR merge when bracket siblings are provided: prefer Enfuse CLI
+     (battle-tested exposure fusion / Photomatix-Interior class) when
+     installed; else OpenCV MergeMertens on uint8 with mid+over bias
+     (OpenCV float[0,1] path is broken on cv2 5.x — near-black). Never
+     invent exposures; single-frame continues honestly without siblings
   3. Magenta/pink clipped-highlight neutralize (neutral grey/white — no invent
      sky/dusk); window pull from under/over where available (prefer readable
      −EV when conf good; leave-mid only for mottled low-conf); soft single-frame
@@ -95,7 +98,7 @@ def capabilities() -> Dict[str, Any]:
         sky = "unavailable"
     return {
         "exif_orient": True,
-        "hdr_merge": "opencv_mertens" if cv else "unavailable",
+        "hdr_merge": (("enfuse_or_mertens_u8" if __import__("shutil").which("enfuse") else "opencv_mertens_u8") if cv else "unavailable"),
         "window_pull": "glass_only_bracket" if cv else "single_frame_soft",
         "sky_replace": sky,
         "straighten": "hough_verticals_gated" if cv else "unavailable",
@@ -475,25 +478,233 @@ def _to_bgr_float(img: Image.Image) -> np.ndarray:
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR).astype(np.float32) / 255.0
 
 
+def _to_bgr_u8(img: Image.Image) -> np.ndarray:
+    import cv2
+
+    rgb = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def _body_luma_mean(img: Image.Image) -> float:
+    """Listing body crop luma (sofa/rug family) — matches desk demo metrics."""
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+    h, w = arr.shape[:2]
+    y0, y1 = int(h * 0.38), int(h * 0.82)
+    x0, x1 = int(w * 0.12), int(w * 0.72)
+    crop = arr[y0:y1, x0:x1]
+    return float(
+        0.2126 * crop[:, :, 0].mean()
+        + 0.7152 * crop[:, :, 1].mean()
+        + 0.0722 * crop[:, :, 2].mean()
+    )
+
+
+def _enfuse_bin() -> Optional[str]:
+    """Return path to enfuse CLI when present (optional — Vercel has no binary)."""
+    import shutil
+
+    return shutil.which("enfuse")
+
+
+def merge_brackets_enfuse(images: Sequence[Image.Image]) -> Image.Image:
+    """Enfuse CLI exposure fusion — proven RE-interior Photomatix alternative.
+
+    Params follow common real-estate Enfuse practice (exposure-weighted soft
+    mask; bright-biased optimum for interior walls). Windows still get real
+    −EV via window_pull_from_brackets after this merge.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    if len(images) < 2:
+        return images[0]
+    bin_path = _enfuse_bin()
+    if not bin_path:
+        raise RuntimeError("enfuse binary not found")
+
+    h0, w0 = images[0].size
+    with tempfile.TemporaryDirectory(prefix="enfuse_") as td:
+        td_path = Path(td)
+        inputs = []
+        for i, im in enumerate(images):
+            rgb = im.convert("RGB")
+            if rgb.size != (w0, h0):
+                rgb = rgb.resize((w0, h0), Image.Resampling.LANCZOS)
+            p = td_path / f"b{i:02d}.tif"
+            rgb.save(p, format="TIFF")
+            inputs.append(p)
+        out = td_path / "fused.jpg"
+        # Photomatix Interior–class: exposure-driven, soft mask, bright optimum
+        cmd = [
+            bin_path,
+            "--exposure-weight=1.0",
+            "--saturation-weight=0.2",
+            "--contrast-weight=0.0",
+            "--exposure-optimum=0.70",
+            "--exposure-width=0.30",
+            "--soft-mask",
+            "-o",
+            str(out),
+            *[str(p) for p in inputs],
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0 or not out.exists():
+            raise RuntimeError(
+                f"enfuse failed rc={proc.returncode}: {(proc.stderr or proc.stdout)[:400]}"
+            )
+        return Image.open(out).convert("RGB")
+
+
 def merge_brackets_mertens(images: Sequence[Image.Image]) -> Image.Image:
-    """Soft exposure fusion. Biases mid contrast; do not rely on this alone for MLS."""
+    """OpenCV MergeMertens (Mertens/Kautz/Van Reeth exposure fusion).
+
+    CRITICAL: feed uint8 BGR. OpenCV 5.x MergeMertens on float[0,1] returns
+    near-black (mean ~0.002) — that was crushing desk MLS darker than mid.
+
+    Photomatix Interior–class bias: duplicate mid + over so well-exposed
+    interior walls dominate; darkest plate stays available for window_pull.
+    """
     import cv2
 
     if len(images) < 2:
         return images[0]
-    mats = [_to_bgr_float(im) for im in images]
+
+    mats = [_to_bgr_u8(im) for im in images]
     h0, w0 = mats[0].shape[:2]
     aligned = []
     for m in mats:
         if m.shape[0] != h0 or m.shape[1] != w0:
             m = cv2.resize(m, (w0, h0), interpolation=cv2.INTER_AREA)
         aligned.append(m)
-    # Lower contrast weight → less "HDR crunch"; keep exposure/sat moderate.
-    merge = cv2.createMergeMertens(contrast_weight=0.35, saturation_weight=0.2, exposure_weight=1.0)
-    fused = merge.process(aligned)
-    fused_u8 = np.clip(fused * 255.0, 0, 255).astype(np.uint8)
+
+    # Rank by mean luma (dark → bright) for interior bias
+    scored = sorted(range(len(aligned)), key=lambda i: float(aligned[i].mean()))
+    ordered = [aligned[i] for i in scored]
+    n = len(ordered)
+    mid_i = n // 2
+    # Mid + over duplicated (Frame / Photomatix Interior practice). Keep under
+    # in the stack once so highlight recovery still has a dark donor cue.
+    merge_list: List[np.ndarray] = []
+    for i, m in enumerate(ordered):
+        merge_list.append(m)
+        if i == mid_i or i >= mid_i + 1:
+            merge_list.append(m)
+
+    merge = cv2.createMergeMertens(
+        contrast_weight=1.0, saturation_weight=0.75, exposure_weight=1.0
+    )
+    fused = merge.process(merge_list)
+    # Output is float ~[0,1] (may slightly undershoot/overshoot)
+    if float(np.nanmax(fused)) <= 1.5:
+        fused_u8 = np.clip(fused * 255.0, 0, 255).astype(np.uint8)
+    else:
+        fused_u8 = np.clip(fused, 0, 255).astype(np.uint8)
     rgb = cv2.cvtColor(fused_u8, cv2.COLOR_BGR2RGB)
     return Image.fromarray(rgb, "RGB")
+
+
+def merge_exposure_fusion(
+    images: Sequence[Image.Image],
+    *,
+    mid: Optional[Image.Image] = None,
+) -> Tuple[Image.Image, str]:
+    """Prefer Enfuse; fall back to proven uint8 Mertens. Reject near-black fuse.
+
+    Returns (fused_image, backend_tag). backend_tag in {enfuse, mertens_u8, mid}.
+    """
+    if len(images) < 2:
+        return images[0], "mid"
+
+    mid_ref = mid if mid is not None else images[len(images) // 2]
+    mid_body = _body_luma_mean(mid_ref)
+    candidates: List[Tuple[str, Image.Image]] = []
+
+    if _enfuse_bin():
+        try:
+            candidates.append(("enfuse", merge_brackets_enfuse(images)))
+        except Exception as e:
+            logger.warning("photo_enhance: Enfuse merge failed (%s) — Mertens fallback", e)
+
+    try:
+        candidates.append(("mertens_u8", merge_brackets_mertens(images)))
+    except Exception as e:
+        logger.warning("photo_enhance: Mertens merge failed (%s)", e)
+
+    best_tag, best_img, best_body = "mid", mid_ref, mid_body
+    for tag, img in candidates:
+        # Resize to mid for fair body compare
+        if img.size != mid_ref.size:
+            img = img.resize(mid_ref.size, Image.Resampling.LANCZOS)
+        b = _body_luma_mean(img)
+        # Reject near-black / crush (the cv2 float bug landed ~0.1)
+        if b < max(8.0, mid_body * 0.55):
+            logger.warning(
+                "photo_enhance: reject %s fuse body=%.1f (mid=%.1f) — near-black/crush",
+                tag, b, mid_body,
+            )
+            continue
+        if b > best_body:
+            best_tag, best_img, best_body = tag, img, b
+
+    if best_tag == "mid":
+        logger.warning("photo_enhance: no usable fuse — mid plate only")
+    else:
+        logger.info(
+            "photo_enhance: fuse backend=%s body=%.1f mid=%.1f",
+            best_tag, best_body, mid_body,
+        )
+    return best_img, best_tag
+
+
+def _interior_body_lift(
+    working: Image.Image,
+    mid: Image.Image,
+    *,
+    target_body: float = 148.0,
+) -> Image.Image:
+    """Frame-style body lift toward Heroes/AutoHDR-class readable interiors.
+
+    Soft shoulder preserves −EV glass. Does not invent sky. Gain capped.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return working
+
+    a = np.asarray(working.convert("RGB"), dtype=np.float32) / 255.0
+    cur = _body_luma_mean(working)
+    if cur < 1.0:
+        return working
+    mid_body = _body_luma_mean(mid)
+    # Aim for Heroes-class (~152) but never below a clear beat of mid
+    target = float(max(target_body, mid_body * 1.18))
+    gain = float(np.clip(target / cur, 0.98, 1.45))
+    if gain <= 1.01:
+        return working
+
+    lifted = a * gain
+    t = 0.90
+    over = lifted > t
+    compressed = t + (1.0 - t) * (
+        1.0 - np.exp(-(lifted - t) / ((1.0 - t) * 1.2 + 1e-6))
+    )
+    out = np.where(over, compressed, lifted)
+
+    m = np.asarray(
+        mid.convert("RGB").resize(working.size, Image.Resampling.LANCZOS),
+        dtype=np.float32,
+    )
+    luma_m = m.mean(axis=2)
+    chroma_m = m.max(axis=2) - m.min(axis=2)
+    glass = ((luma_m >= 185.0) & (chroma_m < 45.0)) | (luma_m >= 220.0)
+    glass_w = cv2.GaussianBlur(glass.astype(np.float32), (0, 0), sigmaX=2.0)[..., None]
+    out = out * (1.0 - glass_w) + a * glass_w
+    logger.info(
+        "photo_enhance: interior body lift cur=%.1f target=%.1f gain=%.3f",
+        cur, target, gain,
+    )
+    return Image.fromarray(np.clip(out * 255.0, 0, 255).astype(np.uint8), "RGB")
 
 
 def _sky_region_weight(rgb: np.ndarray) -> np.ndarray:
@@ -529,10 +740,11 @@ def _mid_biased_body(
     *,
     fused_mix: float = 0.35,
 ) -> Image.Image:
-    """Room/exterior body stays mostly mid; fusion only where mid is weak.
+    """Compose listing body from bright fuse; protect sky/highlights to mid.
 
-    Frame v2/v3 P0 — bright sky / sun-adjacent: bias harder to mid (never
-    average highlight stress into muddy yellow-grey / green-yellow).
+    When fused body clearly beats mid (Enfuse / fixed Mertens), use fused as
+    the room base — do NOT crush back toward mid. Sky / blown highlights stay
+    mid-biased (Cove ACCEPT; never green-yellow mud).
     """
     if fused is None:
         return mid
@@ -541,20 +753,43 @@ def _mid_biased_body(
         fused.convert("RGB").resize(mid.size, Image.Resampling.LANCZOS),
         dtype=np.float32,
     )
+    mid_body = _body_luma_mean(mid)
+    fused_body = _body_luma_mean(
+        Image.fromarray(np.clip(b, 0, 255).astype(np.uint8), "RGB")
+    )
+    # Bright-even path: fused is the body (Photomatix Interior / AutoHDR bar)
+    if fused_body >= mid_body * 0.98 and fused_body > 8.0:
+        sky_w = _sky_region_weight(a)
+        chroma = a.max(axis=2) - a.min(axis=2)
+        luma = a.mean(axis=2)
+        # Hard lock: bright low-chroma mid sky/cove stays mid (Cove ACCEPT)
+        hard_sky = ((luma >= 200.0) & (chroma < 35.0)).astype(np.float32)
+        highlight = np.clip((luma - 200.0) / 40.0, 0.0, 1.0)
+        bright_flat = highlight * np.clip((28.0 - chroma) / 28.0, 0.0, 1.0)
+        h = luma.shape[0]
+        yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+        upper = np.clip(1.0 - yy * 1.35, 0.0, 1.0)
+        upper_bright = upper * np.clip((luma - 160.0) / 60.0, 0.0, 1.0)
+        protect = np.clip(
+            np.maximum(
+                np.maximum(np.maximum(sky_w, bright_flat), upper_bright),
+                hard_sky,
+            ),
+            0.0,
+            1.0,
+        )[..., None]
+        out = b * (1.0 - protect) + a * protect
+        return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+    # Legacy soft mix when fuse is weak/dark — shadows only
     luma = a.mean(axis=2)
-
-    # Shadows: allow a little fused lift
     w = np.clip((50.0 - luma) / 50.0, 0.0, 1.0) * 0.45
-
-    # Sky / highlight: zero fusion — keep mid plate (Frame cove sky mid-bias)
     sky_w = _sky_region_weight(a)
     w = w * (1.0 - sky_w)
-
     chroma = a.max(axis=2) - a.min(axis=2)
     highlight = np.clip((luma - 200.0) / 40.0, 0.0, 1.0)
     bright_flat = highlight * np.clip((28.0 - chroma) / 28.0, 0.0, 1.0)
     w = w * (1.0 - bright_flat)
-
     w = (w * float(np.clip(fused_mix / 0.35, 0.4, 1.0)))[..., None]
     out = a * (1.0 - w) + b * w
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
@@ -1805,14 +2040,15 @@ def enhance_bracket(
 
     if len(images) >= 2:
         fused = None
+        fuse_backend = "none"
         try:
-            fused = merge_brackets_mertens(images)
-            used_hdr = True
+            fused, fuse_backend = merge_exposure_fusion(images, mid=mid)
+            used_hdr = fuse_backend in ("enfuse", "mertens_u8")
         except Exception as e:
-            logger.warning("photo_enhance: Mertens merge failed (%s) — mid body only", e)
+            logger.warning("photo_enhance: exposure fusion failed (%s) — mid body only", e)
 
-        # Mid-biased body (Frame P0) — do not replace room with equal HDR
-        body = _mid_biased_body(mid, fused, fused_mix=0.35)
+        # Bright fuse as body when it beats mid; sky/highlight protect to mid
+        body = _mid_biased_body(mid, fused, fused_mix=0.85)
 
         pulled = window_pull_from_brackets(body, under, over, reference_mid=mid)
         if pulled is not body:
@@ -1826,12 +2062,15 @@ def enhance_bracket(
         body = _highlight_cap_vs_mid(body, mid, under)
         # Kill residual pink in glass after pull/cap (no invent sky)
         body = _neutralize_magenta_highlights(body)
-        # Interior body beat-mid (Heroes-class readable; no milk on glass)
-        body = _body_beat_mid(body, mid)
+        # Interior body beat-mid, then Frame-style lift toward Heroes/AutoHDR
+        body = _body_beat_mid(body, mid, amount=0.35)
+        body = _interior_body_lift(body, mid, target_body=148.0)
 
-        body = restore_black_point(body)
+        # Soft black seat only — avoid crushing bright Enfuse interiors
+        if _body_luma_mean(body) < _body_luma_mean(mid) * 1.05:
+            body = restore_black_point(body)
         # Slight midtone punch for exteriors (Frame v2 P1); interiors stay gentler
-        curve_amt = 0.14 if (under is not None and sky_region_likely(mid)) else 0.10
+        curve_amt = 0.14 if (under is not None and sky_region_likely(mid)) else 0.08
         body = gentle_s_curve(body, amount=curve_amt)
 
     working = body

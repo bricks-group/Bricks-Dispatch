@@ -25,6 +25,9 @@ from app.services.photo_enhance_service import (
     format_listing_ready,
     group_assets_by_bracket,
     merge_brackets_mertens,
+    merge_exposure_fusion,
+    _interior_body_lift,
+    _body_luma_mean,
     replace_sky_opencv,
     sky_region_likely,
     straighten_verticals,
@@ -914,3 +917,39 @@ def test_enhance_meta_wm_strip_false_by_default():
     assert meta["used_watermark_strip"] is False
     assert REASON_CORNER_OVERLAY == "possible_corner_overlay"
 
+
+
+def test_mertens_uint8_not_near_black():
+    """OpenCV float[0,1] Mertens was near-black on cv2 5.x — uint8 path must stay lit."""
+    under = Image.new("RGB", (320, 240), (40, 40, 40))
+    mid = Image.new("RGB", (320, 240), (120, 110, 100))
+    over = Image.new("RGB", (320, 240), (200, 190, 180))
+    fused = merge_brackets_mertens([under, mid, over])
+    mean = float(np.asarray(fused, dtype=np.float32).mean())
+    assert mean > 40.0, f"Mertens near-black/crush: mean={mean}"
+
+
+def test_exposure_fusion_beats_or_matches_mid_body():
+    """Enfuse (if present) or uint8 Mertens must not land darker than mid body."""
+    under = Image.new("RGB", (400, 300), (50, 45, 40))
+    mid = Image.new("RGB", (400, 300), (130, 120, 110))
+    over = Image.new("RGB", (400, 300), (210, 200, 190))
+    # paint a sofa-ish body region
+    m = np.asarray(mid).copy(); m[110:250, 50:300] = (140, 125, 110); mid = Image.fromarray(m)
+    o = np.asarray(over).copy(); o[110:250, 50:300] = (200, 185, 165); over = Image.fromarray(o)
+    fused, tag = merge_exposure_fusion([under, mid, over], mid=mid)
+    assert tag in ("enfuse", "mertens_u8", "mid")
+    if tag != "mid":
+        assert _body_luma_mean(fused) >= _body_luma_mean(mid) * 0.95
+
+
+def test_interior_body_lift_beats_mid_protects_glass():
+    mid = np.full((160, 220, 3), 120, dtype=np.uint8)
+    mid[20:70, 30:190] = 230  # glass
+    mid[90:150, 20:200] = (150, 140, 130)
+    desk = mid.copy()
+    desk[90:150, 20:200] = 70
+    out = _interior_body_lift(Image.fromarray(desk), Image.fromarray(mid), target_body=148.0)
+    o = np.asarray(out, dtype=np.float32)
+    assert float(o[100:140, 40:180].mean()) > 90.0
+    assert float(o[25:65, 40:180].mean()) <= 232.0
