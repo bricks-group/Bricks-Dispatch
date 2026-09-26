@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Form, Header, HTTPException
 
-from ..services.media_intake import infer_media_type, stills_storage_path, wants_staging
+from ..services.media_intake import durable_media_filename, infer_media_type, stills_storage_path, wants_staging
 from ..services.storage import create_signed_upload_url, upload_file
 from ..services.post_production import process_job_assets
 from fastapi import BackgroundTasks
@@ -163,10 +163,12 @@ async def sign_stills_upload(
     filename = str((payload or {}).get("filename") or "still.jpg")
     mime_type = str((payload or {}).get("mime_type") or "")
     media_type = infer_media_type(filename, mime_type, (payload or {}).get("media_type"))
+    durable_name = durable_media_filename(filename, media_type)
     if not job_id:
         api_error(400, "job_id is required", "missing_job_id")
     await _actor_job(authorization, x_user_id, job_id)
     upload_id = str(uuid.uuid4())
+    # Keep signed storage_path on the client-provided basename so PUT contract stays stable.
     path = stills_storage_path(job_id, upload_id, filename)
     signed = await create_signed_upload_url(path)
     if not signed or not signed.get("signed_url"):
@@ -180,6 +182,7 @@ async def sign_stills_upload(
         "signed_url": signed.get("signed_url"),
         "token": signed.get("token"),
         "content_type": mime_type or "application/octet-stream",
+        "filename": durable_name,
         "media_type": media_type,
         "requires_staging": media_type == "staging",
     }
@@ -200,6 +203,8 @@ async def complete_stills_upload(
     mime_type = str((payload or {}).get("mime_type") or "")
     file_size = int((payload or {}).get("file_size") or 0)
     media_type = infer_media_type(filename, mime_type, (payload or {}).get("media_type"))
+    # Persist kind in filename column (uploads has no media_type col) for leftover routing.
+    filename = durable_media_filename(filename, media_type)
     if not job_id or not upload_id or not storage_path:
         api_error(400, "job_id, upload_id, and storage_path are required", "missing_complete_fields")
     prefix = f"bricks-go/jobs/{job_id}/{upload_id}/"
@@ -394,12 +399,13 @@ async def create_upload(
     if file_url is None:
         raise HTTPException(status_code=500, detail="File upload to storage failed")
 
-    # Persist record
+    # Persist record — durable filename carries media kind (no media_type DB column).
     kind = infer_media_type(filename, mime_type, media_type)
+    durable_name = durable_media_filename(filename, kind)
     record = UploadRecord(
         id=upload_id,
         job_id=job_id,
-        filename=filename,
+        filename=durable_name,
         file_size=file_size,
         mime_type=mime_type,
         thumbnail=thumbnail_b64,
@@ -408,7 +414,7 @@ async def create_upload(
         qc_variant_url=qc_variant_url,
         media_type=kind,
         processing_status="pending",
-        requires_staging=kind == "staging" or wants_staging({"filename": filename, "media_type": kind}),
+        requires_staging=kind == "staging" or wants_staging({"filename": durable_name, "media_type": kind}),
     )
 
     await _insert_upload_row(db, record.dict())

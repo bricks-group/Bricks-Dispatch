@@ -1,5 +1,6 @@
 from app.services.media_intake import (
     delivery_route,
+    durable_media_filename,
     infer_media_type,
     is_listing_still_delivery_row,
     is_photo_delivery_candidate,
@@ -167,3 +168,51 @@ def test_pick_visit_upload_includes_provider_visit():
     row = {"id": "v1", "filename": "mesh.bin", "provider": "visit", "file_url": "visits/j/mesh.bin"}
     assert pick_visit_upload([{"filename": "a.jpg"}, row])["id"] == "v1"
     assert pick_visit_upload([{"filename": "a.jpg", "provider": "bricks_inhouse"}]) is None
+
+
+def test_durable_media_filename_prefixes_and_no_double():
+    assert durable_media_filename("IMG_0001.JPG", "twilight") == "twilight_IMG_0001.JPG"
+    assert durable_media_filename("IMG_0001.JPG", "drone") == "aerial_IMG_0001.JPG"
+    assert durable_media_filename("living.jpg", "staging") == "staging_living.jpg"
+    assert durable_media_filename("IMG_1.JPG", "reel") == "reel_IMG_1.JPG"
+    # hdr / photo listing stills unchanged
+    assert durable_media_filename("IMG_0001.JPG", "hdr") == "IMG_0001.JPG"
+    assert durable_media_filename("IMG_0001.JPG", "photo") == "IMG_0001.JPG"
+    # already cued → unchanged (no double prefix)
+    assert durable_media_filename("DJI_0042.JPG", "drone") == "DJI_0042.JPG"
+    assert durable_media_filename("aerial_front.jpg", "drone") == "aerial_front.jpg"
+    assert durable_media_filename("twilight_IMG_0001.JPG", "twilight") == "twilight_IMG_0001.JPG"
+    assert durable_media_filename("staging_living.jpg", "staging") == "staging_living.jpg"
+    assert durable_media_filename("reel_cut.mp4", "reel") == "reel_cut.mp4"
+    # path-safe basename only
+    assert durable_media_filename("../../other/IMG_9.JPG", "twilight") == "twilight_IMG_9.JPG"
+
+
+def test_durable_filename_delivery_route_without_media_type_col():
+    """DB row has no media_type — durable filename alone must route honestly."""
+    assert delivery_route({
+        "file_url": "bricks-go/jobs/j/u/IMG_0001.JPG",
+        "filename": durable_media_filename("IMG_0001.JPG", "twilight"),
+    }) == "twilight"
+    assert delivery_route({
+        "file_url": "bricks-go/jobs/j/u/IMG_0001.JPG",
+        "filename": durable_media_filename("IMG_0001.JPG", "drone"),
+    }) == "as_is"
+    assert delivery_route({
+        "file_url": "bricks-go/jobs/j/u/living.jpg",
+        "filename": durable_media_filename("living.jpg", "staging"),
+    }) == "staging"
+    assert delivery_route({
+        "file_url": "bricks-go/jobs/j/u/IMG_0001.JPG",
+        "filename": durable_media_filename("IMG_0001.JPG", "hdr"),
+    }) == "vendor_photo"
+    # bare IMG with no durable cue still falls to vendor_photo (the bug we fix at register)
+    assert delivery_route({
+        "file_url": "p/IMG_0001.JPG",
+        "filename": "IMG_0001.JPG",
+    }) == "vendor_photo"
+
+
+def test_infer_reel_cue_and_file_url_basename():
+    assert infer_media_type("reel_IMG_1.JPG") == "reel"
+    assert infer_media_type(None, None, None, file_url="bricks-go/jobs/j/u/twilight_x.jpg") == "twilight"

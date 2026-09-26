@@ -25,8 +25,13 @@ def infer_media_type(
     filename: Any = None,
     mime_type: Any = None,
     explicit: Any = None,
+    file_url: Any = None,
 ) -> str:
-    """Return a catalog media_type. Unknown → hdr (still photo)."""
+    """Return a catalog media_type. Unknown → hdr (still photo).
+
+    Optional file_url: when filename is empty/generic, glance at the storage
+    path basename (durable prefixes land on the filename column; path may differ).
+    """
     raw = _lower(explicit).replace(" ", "_").replace("-", "_")
     aliases = {
         "photos": "hdr",
@@ -49,6 +54,10 @@ def infer_media_type(
         return aliases[raw]
 
     name = _lower(filename)
+    if not name or name in ("still.jpg", "still.jpeg", "photo.jpg"):
+        url_base = _lower(str(file_url or "").replace("\\", "/").split("/")[-1])
+        if url_base:
+            name = url_base
     mime = _lower(mime_type)
     if "stag" in name:
         return "staging"
@@ -56,6 +65,8 @@ def infer_media_type(
         return "twilight"
     if "drone" in name or "aerial" in name or name.startswith("dji"):
         return "drone"
+    if "reel" in name or "cinematic" in name:
+        return "reel"
     if mime.startswith("video/") or name.endswith(VIDEO_EXTS):
         return "reel"
     return "hdr"
@@ -132,6 +143,39 @@ def delivery_route(asset: Optional[dict] = None) -> str:
     if is_photo_file(row.get("filename"), row.get("mime_type"), row.get("media_type")):
         return "vendor_photo"
     return "as_is"
+
+
+_DURABLE_PREFIXES = {
+    "drone": "aerial_",
+    "reel": "reel_",
+    "twilight": "twilight_",
+    "staging": "staging_",
+}
+
+
+def durable_media_filename(filename: Any = None, media_type: Any = None) -> str:
+    """Path-safe basename that survives DB insert without a media_type column.
+
+    public.uploads strips media_type / requires_staging on insert. process_job_assets
+    reloads rows and delivery_route only sees filename/mime — so a GO Twilight pick
+    with IMG_1234.JPG would fall through to vendor_photo + sky invent. Prefix
+    client-chosen kinds with cues infer_media_type already understands.
+    Listing stills (hdr/photo) and filenames that already cue the same kind stay
+    unchanged. Does not double-prefix.
+    """
+    base = (filename or "still.jpg").replace("\\", "/").split("/")[-1].lstrip(".") or "still.jpg"
+    intended = infer_media_type(base, None, media_type)
+    if intended == "hdr":
+        return base
+    from_name = infer_media_type(base, None, None)
+    if from_name == intended:
+        return base
+    prefix = _DURABLE_PREFIXES.get(intended)
+    if not prefix:
+        return base
+    if base.lower().startswith(prefix.lower()):
+        return base
+    return f"{prefix}{base}"
 
 
 def stills_storage_path(job_id: str, upload_id: str, filename: str) -> str:
