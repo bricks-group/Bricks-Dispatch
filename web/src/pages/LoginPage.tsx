@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { login, loginWithGoogle, loginWithPassword, verifyOtp } from '../lib/api';
+import { isAuthRestricted, login, loginWithGoogle, loginWithPassword, verifyOtp } from '../lib/api';
 
 function BrickMark() {
   return (
@@ -47,6 +47,7 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [otpLoading, setOtpLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [authRestricted, setAuthRestricted] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -58,6 +59,20 @@ export function LoginPage() {
       const qs = params.toString();
       window.history.replaceState({}, '', qs ? `/login?${qs}` : '/login');
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    isAuthRestricted()
+      .then((restricted) => {
+        if (!cancelled) setAuthRestricted(restricted);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthRestricted(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onPasswordLogin = async (event: FormEvent) => {
@@ -106,7 +121,7 @@ export function LoginPage() {
     setGoogleLoading(true);
     try {
       await loginWithGoogle();
-      // Browser navigates to Google; if we return, OAuth failed to start.
+      // Browser navigates to Google; if we return without redirect, clear loading below.
     } catch (e) {
       const msg = (e as Error).message || 'Google sign-in is not available.';
       const low = msg.toLowerCase();
@@ -118,6 +133,7 @@ export function LoginPage() {
         || low.includes('restricted')
       ) {
         setError('Google sign-in is unavailable while Auth is restricted. Use email and password.');
+        setAuthRestricted(true);
       } else if (
         low.includes('provider is not enabled')
         || low.includes('unsupported provider')
@@ -127,6 +143,7 @@ export function LoginPage() {
       } else {
         setError(msg);
       }
+    } finally {
       setGoogleLoading(false);
     }
   };
@@ -156,6 +173,11 @@ export function LoginPage() {
         <BrickMark />
         <h2>bricks</h2>
         <p className="muted" style={{ margin: 0 }}>Sign in to GO.</p>
+        {authRestricted && (
+          <p className="muted" style={{ margin: '8px 0 0' }} data-testid="auth-fair-use-banner">
+            Google and magic link are unavailable under Fair Use — use email and password.
+          </p>
+        )}
         <label className="login-field">
           Email
           <input
@@ -187,7 +209,7 @@ export function LoginPage() {
           type="button"
           className="btn-link"
           onClick={onEmailCode}
-          disabled={submitting || googleLoading || otpLoading || !email.trim()}
+          disabled={submitting || googleLoading || otpLoading || !email.trim() || authRestricted}
           style={{ marginTop: 8 }}
         >
           {otpLoading ? 'Sending code…' : 'Email me a code'}
@@ -202,10 +224,10 @@ export function LoginPage() {
           className="login-oauth"
           data-testid="login-google-btn"
           onClick={onGoogle}
-          disabled={submitting || googleLoading || otpLoading}
+          disabled={submitting || googleLoading || otpLoading || authRestricted}
         >
           <GoogleMark />
-          {googleLoading ? 'Redirecting…' : 'Continue with Google'}
+          {googleLoading ? 'Redirecting…' : authRestricted ? 'Google unavailable' : 'Continue with Google'}
         </button>
         {/* Apple stays OFF until Apple Developer / Supabase Apple is connected — same honesty as OS. */}
       </form>

@@ -225,7 +225,6 @@ export async function verifyOtp(email: string, token: string): Promise<AuthMembe
   return me();
 }
 
-/** Google sign-in for GO web. Basic login scopes only — not calendar. */
 export function authCallbackUrl(): string {
   if (typeof window !== 'undefined' && window.location?.origin) {
     return `${window.location.origin}/auth/callback`;
@@ -233,16 +232,47 @@ export function authCallbackUrl(): string {
   return 'https://go.brxs.ca/auth/callback';
 }
 
+/** True when Canada Auth REST returns Fair Use 402 (settings / authorize blocked). */
+export async function isAuthRestricted(): Promise<boolean> {
+  const url = import.meta.env.VITE_SUPABASE_URL || '';
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+  if (!url || !key) return false;
+  try {
+    const res = await fetch(`${url}/auth/v1/settings`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    if (res.status === 402) return true;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return isFairUseAuthError({ message: body, status: res.status });
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Google sign-in for GO web. Basic login scopes only — not calendar. */
 export async function loginWithGoogle(): Promise<void> {
-  const { error } = await supabase.auth.signInWithOAuth({
+  if (await isAuthRestricted()) {
+    throw new Error(
+      'Auth is restricted (Fair Use / 402). Google sign-in is unavailable until Auth unlocks.',
+    );
+  }
+  const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
       redirectTo: authCallbackUrl(),
+      skipBrowserRedirect: true,
       // Default Google scopes: openid email profile. Do NOT request calendar here.
       queryParams: { access_type: 'offline', prompt: 'select_account' },
     },
   });
   if (error) throw error;
+  if (!data?.url) {
+    throw new Error('Google sign-in did not return a redirect URL.');
+  }
+  window.location.assign(data.url);
 }
 
 export async function me(): Promise<AuthMember> {
