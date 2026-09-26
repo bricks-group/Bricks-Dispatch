@@ -224,18 +224,22 @@ async def process_job_assets(job_id: str):
 
 
 async def _deliver_leftovers_with_brackets(db, job_id: str, leftover: list) -> None:
-    """Deliver leftovers; fuse photo brackets into one listing still per stem."""
+    """Deliver leftovers; fuse photo/twilight brackets into one listing still per stem."""
     from .media_intake import delivery_route
     from .photo_enhance_service import group_assets_by_bracket
 
     photos = []
+    twilight = []
     others = []
     for asset in leftover:
         route = delivery_route(asset)
-        # Staging / twilight / drone-aerial / reel must never enter HDR photos group
-        # (no blue-sky invent on dusk or aerial JPEGs). Only vendor_photo leftovers bracket-merge.
+        # Twilight must NEVER enter vendor_photo group (apply_sky=True) — that path
+        # may invent blue sky / day-to-dusk. Twilight gets its own bracket merge with
+        # apply_sky=False. Staging / drone-aerial / reel stay out of both bracket paths.
         if route == "vendor_photo":
             photos.append(asset)
+        elif route == "twilight":
+            twilight.append(asset)
         else:
             others.append(asset)
 
@@ -247,11 +251,26 @@ async def _deliver_leftovers_with_brackets(db, job_id: str, leftover: list) -> N
             await deliver_asset_without_vendor(db, job_id, group[0])
             continue
         # Primary = closest to 0 EV (or middle); siblings share processed_url.
-        await deliver_bracket_group_without_vendor(db, job_id, group)
+        await deliver_bracket_group_without_vendor(db, job_id, group, apply_sky=True)
+
+    # Real dusk brackets: HDR-merge with apply_sky=False (len<=1 → single-frame polish).
+    if twilight:
+        for group in group_assets_by_bracket(twilight):
+            if len(group) <= 1:
+                await deliver_asset_without_vendor(db, job_id, group[0])
+                continue
+            await deliver_bracket_group_without_vendor(
+                db, job_id, group, apply_sky=False
+            )
 
 
-async def deliver_bracket_group_without_vendor(db, job_id: str, group: list) -> None:
-    """HDR-merge + window-pull a +/-EV set; mark all siblings done."""
+async def deliver_bracket_group_without_vendor(
+    db, job_id: str, group: list, *, apply_sky: bool = True
+) -> None:
+    """HDR-merge + window-pull a +/-EV set; mark all siblings done.
+
+    apply_sky=True for vendor_photo brackets; False for twilight (preserve real dusk).
+    """
     from .photo_enhance_service import (
         enhance_bracket,
         exposure_bias_from_name,
@@ -291,7 +310,7 @@ async def deliver_bracket_group_without_vendor(db, job_id: str, group: list) -> 
 
     try:
         enhanced, enhance_meta = enhance_bracket(
-            frames, filenames, apply_sky=True, return_meta=True
+            frames, filenames, apply_sky=apply_sky, return_meta=True
         )
         processed = await upload_enhanced(db.storage, job_id, primary_id, enhanced)
         qc_path = await upload_qc_variant(db.storage, job_id, primary_id, enhanced)

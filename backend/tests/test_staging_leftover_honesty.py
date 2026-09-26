@@ -61,7 +61,7 @@ def test_leftovers_route_staging_to_others_not_hdr_photos(monkeypatch):
     async def fake_deliver(_db, job_id, asset):
         delivered.append(asset["id"])
 
-    async def fake_bracket(_db, job_id, group):
+    async def fake_bracket(_db, job_id, group, *, apply_sky=True):
         bracket_calls.append([a["id"] for a in group])
 
     def fake_group(photos):
@@ -121,7 +121,7 @@ def test_leftovers_staging_alone_never_calls_bracket(monkeypatch):
     async def fake_deliver(_db, job_id, asset):
         delivered.append(asset["id"])
 
-    async def fake_bracket(_db, job_id, group):
+    async def fake_bracket(_db, job_id, group, *, apply_sky=True):
         bracket_calls.append([a["id"] for a in group])
 
     def fake_group(photos):
