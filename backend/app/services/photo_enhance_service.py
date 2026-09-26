@@ -685,11 +685,16 @@ def _interior_body_lift(
     working: Image.Image,
     mid: Image.Image,
     *,
-    target_body: float = 148.0,
+    target_body: float = 155.0,
+    gain_cap: float = 1.55,
+    shoulder_t: float = 0.945,
 ) -> Image.Image:
     """Frame-style body lift toward Heroes/AutoHDR-class readable interiors.
 
-    Soft shoulder preserves −EV glass. Does not invent sky. Gain capped.
+    Gain sized on full body_mean (sofa crop incl. bay glass region) toward
+    ~155 Heroes bar. Applied only off true glass (mid-plate blown flat /
+    near-clip) so −EV window pull stays. Luma soft-shoulder avoids milk.
+    Does not invent sky. Cove mid-bias stays locked upstream.
     """
     try:
         import cv2
@@ -701,19 +706,11 @@ def _interior_body_lift(
     if cur < 1.0:
         return working
     mid_body = _body_luma_mean(mid)
-    # Aim for Heroes-class (~152) but never below a clear beat of mid
-    target = float(max(target_body, mid_body * 1.18))
-    gain = float(np.clip(target / cur, 0.98, 1.45))
+    # Heroes-class (~152–155) but never below a clear beat of mid
+    target = float(max(target_body, mid_body * 1.20))
+    gain = float(np.clip(target / cur, 0.98, float(gain_cap)))
     if gain <= 1.01:
         return working
-
-    lifted = a * gain
-    t = 0.90
-    over = lifted > t
-    compressed = t + (1.0 - t) * (
-        1.0 - np.exp(-(lifted - t) / ((1.0 - t) * 1.2 + 1e-6))
-    )
-    out = np.where(over, compressed, lifted)
 
     m = np.asarray(
         mid.convert("RGB").resize(working.size, Image.Resampling.LANCZOS),
@@ -721,12 +718,32 @@ def _interior_body_lift(
     )
     luma_m = m.mean(axis=2)
     chroma_m = m.max(axis=2) - m.min(axis=2)
-    glass = ((luma_m >= 185.0) & (chroma_m < 45.0)) | (luma_m >= 220.0)
-    glass_w = cv2.GaussianBlur(glass.astype(np.float32), (0, 0), sigmaX=2.0)[..., None]
-    out = out * (1.0 - glass_w) + a * glass_w
+    # True glass only — bright walls/furniture stay liftable (v3 mask was too wide)
+    glass = ((luma_m >= 200.0) & (chroma_m < 38.0)) | (luma_m >= 235.0)
+    glass_w = cv2.GaussianBlur(glass.astype(np.float32), (0, 0), sigmaX=1.6)
+
+    lifted = a * gain
+    # Luma-based soft shoulder (preserve chromaticity; less midtone crush)
+    luma = (
+        0.2126 * lifted[:, :, 0]
+        + 0.7152 * lifted[:, :, 1]
+        + 0.0722 * lifted[:, :, 2]
+    )
+    over = luma > float(shoulder_t)
+    if over.any():
+        t = float(shoulder_t)
+        compressed_L = t + (1.0 - t) * (
+            1.0 - np.exp(-(luma - t) / ((1.0 - t) * 1.4 + 1e-6))
+        )
+        scale = np.ones_like(luma)
+        scale[over] = compressed_L[over] / (luma[over] + 1e-6)
+        lifted = lifted * scale[:, :, None]
+
+    gw = np.clip(glass_w, 0.0, 1.0)[:, :, None]
+    out = lifted * (1.0 - gw) + a * gw
     logger.info(
-        "photo_enhance: interior body lift cur=%.1f target=%.1f gain=%.3f",
-        cur, target, gain,
+        "photo_enhance: interior body lift cur=%.1f target=%.1f gain=%.3f glass=%.3f",
+        cur, target, gain, float(glass_w.mean()),
     )
     return Image.fromarray(np.clip(out * 255.0, 0, 255).astype(np.uint8), "RGB")
 
@@ -2086,14 +2103,12 @@ def enhance_bracket(
         body = _highlight_cap_vs_mid(body, mid, under)
         # Kill residual pink in glass after pull/cap (no invent sky)
         body = _neutralize_magenta_highlights(body)
-        # Brightness comes from proven Enfuse/Mertens mid+overs body stack —
-        # not hand-tuned CLAHE/body-lift chasing. Mild safety only if fuse
-        # still lags mid (crushed sofa); do not invent sky or milk highlights.
-        fuse_body = _body_luma_mean(body)
+        # Mid+overs fuse is the RE body base; always finish toward Heroes-class
+        # readable interiors (~152–155). Glass stays −EV (lift skips true glass).
+        # Do not invent sky. Cove mid-bias restore above stays locked.
         mid_body = _body_luma_mean(mid)
-        if fuse_body < mid_body * 1.05:
-            body = _body_beat_mid(body, mid, amount=0.22)
-            body = _interior_body_lift(body, mid, target_body=max(148.0, mid_body * 1.15))
+        body = _body_beat_mid(body, mid, amount=0.35)
+        body = _interior_body_lift(body, mid, target_body=155.0)
 
         # Soft black seat only — avoid crushing bright Enfuse interiors
         if _body_luma_mean(body) < mid_body * 1.05:
@@ -2114,6 +2129,12 @@ def enhance_bracket(
 
     working = straighten_verticals(working)
     working = _apply_tone_enhance(working)
+    # Tone/CLAHE can nudge body down — second Heroes lift if still short.
+    # Glass protect + gain_cap keep milk/ceiling sparkle in check.
+    if len(images) >= 2 and _body_luma_mean(working) < 148.0:
+        working = _interior_body_lift(
+            working, mid, target_body=155.0, gain_cap=1.35, shoulder_t=0.95
+        )
     working = format_listing_ready(working)
     # Corner overlay: default detect → soft-fail; inpaint only if WATERMARK_STRIP=1
     working, used_watermark_strip, wm_reasons = _strip_corner_watermarks(working)

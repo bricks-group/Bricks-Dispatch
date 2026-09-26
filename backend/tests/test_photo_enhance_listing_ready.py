@@ -950,10 +950,36 @@ def test_interior_body_lift_beats_mid_protects_glass():
     mid[90:150, 20:200] = (150, 140, 130)
     desk = mid.copy()
     desk[90:150, 20:200] = 70
-    out = _interior_body_lift(Image.fromarray(desk), Image.fromarray(mid), target_body=148.0)
+    out = _interior_body_lift(Image.fromarray(desk), Image.fromarray(mid), target_body=155.0)
     o = np.asarray(out, dtype=np.float32)
     assert float(o[100:140, 40:180].mean()) > 90.0
     assert float(o[25:65, 40:180].mean()) <= 232.0
+
+
+def test_interior_body_lift_toward_heroes_no_glass_milk():
+    """v4: Fuze-class lag (~115) lifts toward Heroes ~155; blown glass not milked."""
+    h, w = 200, 280
+    mid = np.full((h, w, 3), 112, dtype=np.uint8)
+    mid[76:164, 34:200] = (130, 120, 110)  # mid sofa family in body crop
+    mid[10:55, 40:240] = (235, 236, 238)  # blown flat glass
+    desk = mid.copy()
+    # Prod-like lag: body ~115 (not silhouette-crushed 60 — gain_cap 1.55)
+    desk[76:164, 34:200] = (118, 110, 102)
+    desk[10:55, 40:240] = 250
+    before = _body_luma_mean(Image.fromarray(desk, "RGB"))
+    out = _interior_body_lift(
+        Image.fromarray(desk, "RGB"),
+        Image.fromarray(mid, "RGB"),
+        target_body=155.0,
+    )
+    after = _body_luma_mean(out)
+    o = np.asarray(out, dtype=np.float32)
+    glass = float(o[15:50, 50:220].mean())
+    glass_in = float(desk[15:50, 50:220].astype(np.float32).mean())
+    assert 100.0 < before < 135.0, f"fixture not Fuze-class: {before}"
+    assert after > before + 15.0, f"lift too weak: {before} → {after}"
+    assert after >= 140.0, f"short of Heroes-ward bar: {after}"
+    assert glass <= glass_in + 2.0, f"glass milked by lift: {glass} from {glass_in}"
 
 
 def test_body_plates_for_fuse_drops_darkest():
