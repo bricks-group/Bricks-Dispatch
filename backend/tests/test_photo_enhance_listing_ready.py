@@ -26,6 +26,7 @@ from app.services.photo_enhance_service import (
     group_assets_by_bracket,
     merge_brackets_mertens,
     merge_exposure_fusion,
+    _body_plates_for_fuse,
     _interior_body_lift,
     _body_luma_mean,
     replace_sky_opencv,
@@ -953,3 +954,14 @@ def test_interior_body_lift_beats_mid_protects_glass():
     o = np.asarray(out, dtype=np.float32)
     assert float(o[100:140, 40:180].mean()) > 90.0
     assert float(o[25:65, 40:180].mean()) <= 232.0
+
+
+def test_body_plates_for_fuse_drops_darkest():
+    """RE interior: under reserved for −EV; body fuse is mid+overs."""
+    under = Image.new("RGB", (64, 48), (40, 35, 30))
+    mid = Image.new("RGB", (64, 48), (120, 110, 100))
+    over = Image.new("RGB", (64, 48), (200, 190, 180))
+    plates = _body_plates_for_fuse([under, mid, over])
+    assert len(plates) == 2
+    means = [float(np.asarray(im.convert("L")).mean()) for im in plates]
+    assert min(means) >= float(np.asarray(mid.convert("L")).mean()) - 1.0

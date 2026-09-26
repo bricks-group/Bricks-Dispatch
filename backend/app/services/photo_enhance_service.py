@@ -13,14 +13,14 @@ Default stack (order), with honest flags via capabilities():
 
   1. EXIF auto-orient
   2. HDR merge when bracket siblings are provided: prefer Enfuse CLI
-     (battle-tested exposure fusion / Photomatix-Interior class) when
-     installed; else OpenCV MergeMertens on uint8 with mid+over bias
+     (ppsp/RE-interior: mid+overs body stack, under reserved for −EV glass) when
+     installed; else OpenCV MergeMertens uint8 mid+overs
      (OpenCV float[0,1] path is broken on cv2 5.x — near-black). Never
      invent exposures; single-frame continues honestly without siblings
   3. Magenta/pink clipped-highlight neutralize (neutral grey/white — no invent
      sky/dusk); window pull from under/over where available (prefer readable
      −EV when conf good; leave-mid only for mottled low-conf); soft single-frame
-     highlight recovery otherwise. Highlight-cap vs mid; body beat-mid.
+     highlight recovery otherwise. Highlight-cap vs mid; body brightness from mid+overs Enfuse/Mertens (not lift-chase).
   4. Exterior sky replacement when sky is detected: SKY_SERVICE_URL HTTP
      first; in-process OpenCV heuristic fallback when URL unset/down
      (natural blue gradient — desk-standard, no separate host required)
@@ -98,7 +98,7 @@ def capabilities() -> Dict[str, Any]:
         sky = "unavailable"
     return {
         "exif_orient": True,
-        "hdr_merge": (("enfuse_or_mertens_u8" if __import__("shutil").which("enfuse") else "opencv_mertens_u8") if cv else "unavailable"),
+        "hdr_merge": (("enfuse_re_interior_mid_overs" if __import__("shutil").which("enfuse") else "opencv_mertens_u8_mid_overs") if cv else "unavailable"),
         "window_pull": "glass_only_bracket" if cv else "single_frame_soft",
         "sky_replace": sky,
         "straighten": "hough_verticals_gated" if cv else "unavailable",
@@ -506,12 +506,29 @@ def _enfuse_bin() -> Optional[str]:
     return shutil.which("enfuse")
 
 
-def merge_brackets_enfuse(images: Sequence[Image.Image]) -> Image.Image:
-    """Enfuse CLI exposure fusion — proven RE-interior Photomatix alternative.
+def _body_plates_for_fuse(images: Sequence[Image.Image]) -> List[Image.Image]:
+    """Photomatix-Interior / ppsp practice: fuse mid+overs only.
 
-    Params follow common real-estate Enfuse practice (exposure-weighted soft
-    mask; bright-biased optimum for interior walls). Windows still get real
-    −EV via window_pull_from_brackets after this merge.
+    Darkest under plate(s) crush interior walls when included in the body
+    stack. Keep them out of fusion; window_pull uses real −EV after merge.
+    With 2 frames keep both. With ≥3 drop the darkest by mean luma.
+    """
+    if len(images) < 3:
+        return list(images)
+    scored = sorted(
+        images,
+        key=lambda im: float(np.asarray(im.convert("L"), dtype=np.float32).mean()),
+    )
+    # Drop darkest; keep mid→bright (and any extras brighter than mid)
+    return list(scored[1:])
+
+
+def merge_brackets_enfuse(images: Sequence[Image.Image]) -> Image.Image:
+    """Enfuse CLI — proven RE-interior path (ppsp / Photomatix-Interior class).
+
+    Body stack should be mid+overs only (callers exclude under). Soft-mask
+    exposure fusion with bright optimum; windows get real −EV via
+    window_pull_from_brackets after this merge. No generative sky invent.
     """
     import subprocess
     import tempfile
@@ -541,8 +558,9 @@ def merge_brackets_enfuse(images: Sequence[Image.Image]) -> Image.Image:
             "--exposure-weight=1.0",
             "--saturation-weight=0.2",
             "--contrast-weight=0.0",
-            "--exposure-optimum=0.70",
-            "--exposure-width=0.30",
+            # RE interior bright body (ppsp / tipsforRE Enfuse practice)
+            "--exposure-optimum=0.80",
+            "--exposure-width=0.25",
             "--soft-mask",
             "-o",
             str(out),
@@ -578,17 +596,17 @@ def merge_brackets_mertens(images: Sequence[Image.Image]) -> Image.Image:
             m = cv2.resize(m, (w0, h0), interpolation=cv2.INTER_AREA)
         aligned.append(m)
 
-    # Rank by mean luma (dark → bright) for interior bias
+    # Rank by mean luma (dark → bright). Body fuse = mid+overs only
+    # (Photomatix Interior / ppsp). Under stays out — window_pull uses it.
     scored = sorted(range(len(aligned)), key=lambda i: float(aligned[i].mean()))
     ordered = [aligned[i] for i in scored]
-    n = len(ordered)
-    mid_i = n // 2
-    # Mid + over duplicated (Frame / Photomatix Interior practice). Keep under
-    # in the stack once so highlight recovery still has a dark donor cue.
+    # Caller already passed mid+overs; still drop darkest if ≥3 slipped in.
+    body = ordered[1:] if len(ordered) >= 3 else ordered
+    mid_i = len(body) // 2
     merge_list: List[np.ndarray] = []
-    for i, m in enumerate(ordered):
+    for i, m in enumerate(body):
         merge_list.append(m)
-        if i == mid_i or i >= mid_i + 1:
+        if i >= mid_i:
             merge_list.append(m)
 
     merge = cv2.createMergeMertens(
@@ -620,14 +638,20 @@ def merge_exposure_fusion(
     mid_body = _body_luma_mean(mid_ref)
     candidates: List[Tuple[str, Image.Image]] = []
 
+    body_plates = _body_plates_for_fuse(images)
+    logger.info(
+        "photo_enhance: body fuse plates=%d/%d (mid+overs; under reserved for −EV glass)",
+        len(body_plates), len(images),
+    )
+
     if _enfuse_bin():
         try:
-            candidates.append(("enfuse", merge_brackets_enfuse(images)))
+            candidates.append(("enfuse", merge_brackets_enfuse(body_plates)))
         except Exception as e:
             logger.warning("photo_enhance: Enfuse merge failed (%s) — Mertens fallback", e)
 
     try:
-        candidates.append(("mertens_u8", merge_brackets_mertens(images)))
+        candidates.append(("mertens_u8", merge_brackets_mertens(body_plates)))
     except Exception as e:
         logger.warning("photo_enhance: Mertens merge failed (%s)", e)
 
@@ -2062,12 +2086,17 @@ def enhance_bracket(
         body = _highlight_cap_vs_mid(body, mid, under)
         # Kill residual pink in glass after pull/cap (no invent sky)
         body = _neutralize_magenta_highlights(body)
-        # Interior body beat-mid, then Frame-style lift toward Heroes/AutoHDR
-        body = _body_beat_mid(body, mid, amount=0.35)
-        body = _interior_body_lift(body, mid, target_body=148.0)
+        # Brightness comes from proven Enfuse/Mertens mid+overs body stack —
+        # not hand-tuned CLAHE/body-lift chasing. Mild safety only if fuse
+        # still lags mid (crushed sofa); do not invent sky or milk highlights.
+        fuse_body = _body_luma_mean(body)
+        mid_body = _body_luma_mean(mid)
+        if fuse_body < mid_body * 1.05:
+            body = _body_beat_mid(body, mid, amount=0.22)
+            body = _interior_body_lift(body, mid, target_body=max(148.0, mid_body * 1.15))
 
         # Soft black seat only — avoid crushing bright Enfuse interiors
-        if _body_luma_mean(body) < _body_luma_mean(mid) * 1.05:
+        if _body_luma_mean(body) < mid_body * 1.05:
             body = restore_black_point(body)
         # Slight midtone punch for exteriors (Frame v2 P1); interiors stay gentler
         curve_amt = 0.14 if (under is not None and sky_region_likely(mid)) else 0.08
