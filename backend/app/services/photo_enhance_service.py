@@ -21,10 +21,11 @@ Default stack (order), with honest flags via capabilities():
   4. Exterior sky replacement when sky is detected: SKY_SERVICE_URL HTTP
      first; in-process OpenCV heuristic fallback when URL unset/down
      (natural blue gradient — desk-standard, no separate host required)
-  5. Straighten verticals / level horizon (mild Hough-based rotate; no mushy
-     full-room warp)
+  5. Straighten verticals / level horizon (mild Hough-based rotate; skips when
+     correction would bow strong horizontals / ceiling lines; no mushy warp)
   6. WB / exposure polish (gentle CLAHE + grey-world — inviting interiors,
-     not HDR-halo / oversat)
+     not HDR-halo / oversat; CLAHE gated off bright ceiling / near-white
+     lit panels to prevent sparkle/fuzz)
   7. MLS export profile: 4:3 landscape, long-edge clamp 2048–2400 (no
      upscale), sRGB JPEG ~LISTING_JPEG_QUALITY with soft ~1–3 MB band;
      corner overlay detect → qc_soft_fail by default (aggressive inpaint
@@ -97,8 +98,8 @@ def capabilities() -> Dict[str, Any]:
         "hdr_merge": "opencv_mertens" if cv else "unavailable",
         "window_pull": "glass_only_bracket" if cv else "single_frame_soft",
         "sky_replace": sky,
-        "straighten": "hough_verticals" if cv else "unavailable",
-        "wb_exposure": "clahe_greyworld",
+        "straighten": "hough_verticals_gated" if cv else "unavailable",
+        "wb_exposure": "clahe_greyworld_ceiling_gated",
         "listing_crop": "4:3_landscape_content",
         "long_edge_px": LISTING_MAX_LONG_EDGE,
         "long_edge_band_px": [LISTING_TARGET_MIN_LONG_EDGE, LISTING_MAX_LONG_EDGE],
@@ -1367,8 +1368,13 @@ def _crop_black_wedges(img: Image.Image, *, thresh: int = 12) -> Image.Image:
     return img.crop((left, top, right, bottom))
 
 
-def straighten_verticals(img: Image.Image, max_degrees: float = 4.0) -> Image.Image:
-    """Mild rotate to level dominant near-verticals. Skips if signal is weak."""
+def straighten_verticals(img: Image.Image, max_degrees: float = 1.5) -> Image.Image:
+    """Mild rotate to level dominant near-verticals.
+
+    Vertical-only mild correction. Skips when signal is weak OR when the
+    proposed rotate would bend strong horizontals (ceiling / cove lines /
+    mullion tops) — that bow is worse than a slight lean.
+    """
     try:
         import cv2
     except ImportError:
@@ -1377,15 +1383,16 @@ def straighten_verticals(img: Image.Image, max_degrees: float = 4.0) -> Image.Im
     arr = np.asarray(img.convert("RGB"))
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
     edges = cv2.Canny(gray, 60, 160, apertureSize=3)
-    min_len = max(20, min(arr.shape[:2]) // 6)
+    min_len = max(24, min(arr.shape[:2]) // 5)
     lines = cv2.HoughLinesP(
-        edges, 1, np.pi / 180, threshold=80,
-        minLineLength=min_len, maxLineGap=20,
+        edges, 1, np.pi / 180, threshold=90,
+        minLineLength=min_len, maxLineGap=16,
     )
     if lines is None:
         return img
 
-    angles = []
+    vert_devs = []
+    horiz_devs = []
     for line in lines:
         # OpenCV may return shape (N,1,4) or (N,4) depending on version.
         pts = line[0] if getattr(line, 'shape', ()) == (1, 4) or (hasattr(line, '__len__') and len(line) == 1) else line
@@ -1393,17 +1400,88 @@ def straighten_verticals(img: Image.Image, max_degrees: float = 4.0) -> Image.Im
         dx, dy = (x2 - x1), (y2 - y1)
         if dx == 0 and dy == 0:
             continue
-        ang = np.degrees(np.arctan2(dy, dx))
-        dev = ang - 90.0 if ang > 0 else ang + 90.0
-        if abs(dev) <= max_degrees * 1.5:
-            angles.append(dev)
-    if len(angles) < 4:
+        length = float(np.hypot(dx, dy))
+        ang = np.degrees(np.arctan2(dy, dx))  # [-180, 180], 0 = horizontal
+        # Near-vertical: angle near ±90
+        v_dev = ang - 90.0 if ang > 0 else ang + 90.0
+        if abs(v_dev) <= max_degrees * 1.5:
+            vert_devs.append((v_dev, length))
+        # Near-horizontal: |ang| small or near ±180
+        h_ang = ang
+        if h_ang > 90:
+            h_ang -= 180
+        elif h_ang < -90:
+            h_ang += 180
+        if abs(h_ang) <= max_degrees * 1.5:
+            horiz_devs.append((h_ang, length))
+
+    if len(vert_devs) < 6:
         return img
-    median = float(np.median(angles))
-    if abs(median) < 0.15 or abs(median) > max_degrees:
+    # Length-weighted median of vertical deviations
+    vert_devs.sort(key=lambda t: t[0])
+    total_w = sum(w for _, w in vert_devs)
+    acc = 0.0
+    median = vert_devs[len(vert_devs) // 2][0]
+    for ang, w in vert_devs:
+        acc += w
+        if acc >= total_w / 2.0:
+            median = float(ang)
+            break
+    if abs(median) < 0.35 or abs(median) > max_degrees:
         return img
+
+    # Risk gate: strong horizontals already near-level — rotating would bow them
+    if horiz_devs:
+        h_w = sum(w for _, w in horiz_devs)
+        v_w = sum(w for _, w in vert_devs)
+        h_med = float(np.median([a for a, _ in horiz_devs]))
+        # If horizontals are flatter than the proposed vertical fix, skip —
+        # prefer leaving mild mullion lean over bowed ceiling/cove.
+        if h_w >= 0.6 * v_w and abs(h_med) < abs(median) * 0.75:
+            logger.info(
+                "photo_enhance: straighten skipped (horiz risk) vert=%.2f horiz=%.2f hw/vw=%.2f",
+                median, h_med, h_w / max(v_w, 1e-6),
+            )
+            return img
+        # Also skip if horizontals themselves are already well-leveled but
+        # rotating by |median| would push them past ~0.6°
+        if abs(h_med - median) > 0.6 and abs(h_med) < 0.35:
+            logger.info(
+                "photo_enhance: straighten skipped (would bow horizontals) vert=%.2f horiz=%.2f",
+                median, h_med,
+            )
+            return img
+
     rotated = img.rotate(-median, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=(0, 0, 0))
     return _crop_black_wedges(rotated)
+
+
+def _bright_ceiling_panel_mask(l_ch: np.ndarray) -> np.ndarray:
+    """Mask bright / near-white lit ceiling + cove / LED panels.
+
+    CLAHE on these regions fizzes sparkle/fuzz (Kam Fuze reject). Prefer
+    leaving them alone over local-contrast crunch.
+    """
+    h, w = l_ch.shape[:2]
+    # Upper 45% favors ceiling / cove; allow full-frame for blown LED panels
+    upper = np.zeros((h, w), dtype=bool)
+    upper[: max(1, int(h * 0.45)), :] = True
+    bright = l_ch.astype(np.float32)
+    # Near-white lit panels (LAB L channel, 0–255) — gate early; CLAHE
+    # sparkle starts well below clip white on warm cove LEDs.
+    near_white = bright >= 188
+    very_bright = bright >= 172
+    # Soft upper-band gate: very bright in upper region, or near-white anywhere
+    mask = (very_bright & upper) | near_white
+    # Dilate slightly so CLAHE tile seams don't ring the panel edge
+    try:
+        import cv2
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        mask_u8 = (mask.astype(np.uint8) * 255)
+        mask_u8 = cv2.dilate(mask_u8, kernel, iterations=1)
+        return mask_u8 > 0
+    except Exception:
+        return mask
 
 
 def _enhance_with_opencv(arr_bgr) -> np.ndarray:
@@ -1411,9 +1489,21 @@ def _enhance_with_opencv(arr_bgr) -> np.ndarray:
 
     lab = cv2.cvtColor(arr_bgr, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
+    l_orig = l_ch.copy()
     # Frame P0: cap local contrast — old 1.6 + detailEnhance → muddy HDR crunch
-    clahe = cv2.createCLAHE(clipLimit=1.15, tileGridSize=(8, 8))
-    l_ch = clahe.apply(l_ch)
+    # Kam Fuze reject: even mild CLAHE sparkles lit cove/LED ceiling — gate it.
+    bright_mask = _bright_ceiling_panel_mask(l_ch)
+    bright_frac = float(bright_mask.mean()) if bright_mask.size else 0.0
+    if bright_frac >= 0.28:
+        # Substantial lit ceiling/panel coverage — skip CLAHE entirely
+        logger.info("photo_enhance: CLAHE skipped (bright_frac=%.2f)", bright_frac)
+    else:
+        clip = 1.0 if bright_frac >= 0.08 else 1.10
+        clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8))
+        l_ch = clahe.apply(l_ch)
+        if bright_mask.any():
+            # Restore original L on bright ceiling / near-white panels
+            l_ch = np.where(bright_mask, l_orig, l_ch)
     lab = cv2.merge((l_ch, a_ch, b_ch))
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
@@ -1471,13 +1561,36 @@ def _apply_tone_enhance(img: Image.Image) -> Image.Image:
         import cv2
 
         arr_rgb = np.array(img)
+        arr_pre = arr_rgb.copy()
         arr_bgr = cv2.cvtColor(arr_rgb, cv2.COLOR_RGB2BGR)
         arr_bgr = _enhance_with_opencv(arr_bgr)
         arr_rgb = cv2.cvtColor(arr_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
         arr_rgb = _wall_anchored_white_balance(arr_rgb)
-        out = Image.fromarray(arr_rgb.astype(np.uint8), "RGB")
-        # Sharpen last and lightly (Frame P0)
-        return out.filter(ImageFilter.UnsharpMask(radius=0.8, percent=55, threshold=4))
+        # Restore pre-tone RGB on bright ceiling / lit panels (kills CLAHE +
+        # WB fizz; mid/HDR body already set those highlights).
+        lab_pre = cv2.cvtColor(arr_pre, cv2.COLOR_RGB2LAB)
+        bright_mask = _bright_ceiling_panel_mask(lab_pre[:, :, 0])
+        if bright_mask.any():
+            pre_f = arr_pre.astype(np.float32)
+            m = bright_mask.astype(np.float32)[..., None]
+            # Soft edge so restore doesn't seam
+            m = cv2.GaussianBlur(m, (0, 0), sigmaX=2.0)
+            if m.ndim == 2:
+                m = m[..., None]
+            arr_rgb = arr_rgb * (1.0 - m) + pre_f * m
+        out = Image.fromarray(np.clip(arr_rgb, 0, 255).astype(np.uint8), "RGB")
+        # Sharpen lightly, then put bright panels back (unsharp fizzes cove too)
+        sharp = out.filter(ImageFilter.UnsharpMask(radius=0.7, percent=40, threshold=5))
+        if bright_mask.any():
+            sharp_a = np.array(sharp, dtype=np.float32)
+            pre_f = arr_pre.astype(np.float32)
+            m = bright_mask.astype(np.float32)[..., None]
+            m = cv2.GaussianBlur(m, (0, 0), sigmaX=2.0)
+            if m.ndim == 2:
+                m = m[..., None]
+            sharp_a = sharp_a * (1.0 - m) + pre_f * m
+            return Image.fromarray(np.clip(sharp_a, 0, 255).astype(np.uint8), "RGB")
+        return sharp
     except ImportError:
         logger.warning("photo_enhance: cv2 unavailable — PIL-only tone path")
         return _enhance_with_pil_only(img)
