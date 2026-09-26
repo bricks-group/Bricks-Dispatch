@@ -102,11 +102,14 @@ def wants_staging(asset: Optional[dict] = None) -> bool:
 def delivery_route(asset: Optional[dict] = None) -> str:
     """How this upload should leave post-production.
 
-    vendor_photo  — Fotello / Autoenhance / in-house enhance
-    staging       — BoxBrownie virtual staging (or original if no keys)
-    as_is         — drone / reel / video, no photo edit
-    visit         — .ply/.splat/.spz, not a listing still
+    Order: skip → visit → staging → twilight → as_is (video) → vendor_photo → as_is.
+
     skip          — no file
+    visit         — .ply/.splat/.spz, not a listing still
+    staging       — honest original (no virtual staging / no enhance)
+    twilight      — real dusk shot; in-house enhance with apply_sky=False (no blue-sky / day-to-dusk)
+    as_is         — drone / reel / video, no photo edit
+    vendor_photo  — Fotello / Autoenhance / in-house enhance (may apply sky)
     """
     row = asset or {}
     if not (row.get("file_url") or row.get("storage_path")):
@@ -115,6 +118,9 @@ def delivery_route(asset: Optional[dict] = None) -> str:
         return "visit"
     if wants_staging(row):
         return "staging"
+    mt = infer_media_type(row.get("filename"), row.get("mime_type"), row.get("media_type"))
+    if mt == "twilight":
+        return "twilight"
     if is_video_file(row.get("filename"), row.get("mime_type"), row.get("media_type")):
         return "as_is"
     if is_photo_file(row.get("filename"), row.get("mime_type"), row.get("media_type")):

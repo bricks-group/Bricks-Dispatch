@@ -40,6 +40,9 @@ def test_photo_vs_video():
 def test_delivery_routes():
     assert delivery_route({"file_url": "p/a.jpg", "filename": "a.jpg", "media_type": "hdr"}) == "vendor_photo"
     assert delivery_route({"file_url": "p/a.jpg", "filename": "stage.jpg", "media_type": "staging"}) == "staging"
+    assert delivery_route({"file_url": "p/a.jpg", "filename": "twilight-front.jpg", "media_type": "twilight"}) == "twilight"
+    assert delivery_route({"file_url": "p/a.jpg", "filename": "dusk-rear.jpg", "media_type": "dusk"}) == "twilight"
+    assert delivery_route({"file_url": "p/a.jpg", "filename": "golden-hour.jpg"}) == "twilight"
     assert delivery_route({"file_url": "p/a.mp4", "filename": "drone.mp4", "media_type": "drone"}) == "as_is"
     assert delivery_route({"file_url": "p/a.splat", "filename": "visit.splat"}) == "visit"
     assert delivery_route({"filename": "a.jpg"}) == "skip"

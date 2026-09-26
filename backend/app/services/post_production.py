@@ -181,6 +181,11 @@ async def process_job_assets(job_id: str):
             leftover.append(asset)
             continue
 
+        if route == "twilight":
+            # Real dusk shots — never Fotello/Autoenhance/BoxBrownie (those invent day-to-dusk / blue sky).
+            leftover.append(asset)
+            continue
+
         if FOTELLO_API_KEY:
             ft_id = await trigger_fotello_edit(provider_url)
             if ft_id:
@@ -227,7 +232,8 @@ async def _deliver_leftovers_with_brackets(db, job_id: str, leftover: list) -> N
     others = []
     for asset in leftover:
         route = delivery_route(asset)
-        # Staging must never enter HDR bracket merge — deliver as original via others.
+        # Staging + twilight must never enter HDR photos group (no blue-sky / day-to-dusk).
+        # Only vendor_photo leftovers go through bracket merge.
         if route == "vendor_photo":
             photos.append(asset)
         else:
@@ -322,6 +328,7 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
 
     Photos get in-house enhance when possible; drone/reel/video stay as-is.
     Staging always delivers the original (honest — not virtually staged; no third-party).
+    Twilight gets in-house enhance with apply_sky=False (preserve real dusk; no blue-sky invention).
     """
     from .media_intake import delivery_route
     from .storage import download_bytes
@@ -363,6 +370,47 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     provider = "as_is"
     qc_path = asset.get("qc_variant_url")
     enhance_meta = {}
+
+    # Twilight: polish only — never blue-sky replacement or day-to-dusk invention.
+    if route == "twilight":
+        try:
+            from .photo_enhance_service import enhance_bracket, upload_enhanced, upload_qc_variant
+            original = await download_bytes(file_path)
+            if original:
+                enhanced, enhance_meta = enhance_bracket(
+                    [original], apply_sky=False, return_meta=True
+                )
+                processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
+                qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
+                provider = "bricks_inhouse"
+        except Exception as e:
+            logger.error(
+                f"Twilight enhance failed for {upload_id}: {e} — delivering original"
+            )
+            processed = file_path
+            provider = "original"
+            enhance_meta = {}
+
+        update = {
+            "processing_status": "done",
+            "processed_url": processed,
+            "provider": provider,
+            "processed_at": now,
+        }
+        if qc_path:
+            update["qc_variant_url"] = qc_path
+        if enhance_meta.get("mls_quarantine"):
+            update["qc_status"] = "flagged"
+            update["qc_notes"] = (
+                "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
+                f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
+            )[:500]
+        await _safe_update_upload(db, upload_id, update)
+        logger.info(
+            f"Job {job_id}: twilight upload {upload_id} delivered "
+            f"provider={provider} (apply_sky=False)"
+        )
+        return
 
     if route == "vendor_photo":
         try:
