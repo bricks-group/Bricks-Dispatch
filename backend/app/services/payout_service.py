@@ -55,21 +55,32 @@ def calculate_payout_amount(rack_price: int | None, vendor_tier: int | None) -> 
     return int(rack_price * 100 * pct)
 
 
-_SQFT_TIER_BOUNDARIES = (1999, "small"), (3499, "mid"), (4999, "large")
+# www client footprint bands (match brxs.ca): Small ≤1,200 / Mid 1,201–2,500 /
+# Large 2,501–4,000 / XL 4,001+. Ceilings are inclusive upper bounds of each band.
+_SQFT_TIER_BOUNDARIES = (1200, "small"), (2500, "mid"), (4000, "large")
 
-# www à-la-carte catalog ids → existing vendor_payout_rates package_id cells.
-# Does not invent new dollar amounts; only remaps product naming/structure.
+# Canonical www package_ids for vendor_payout_rates (5 packages × 4 bands × 3 tiers).
+_WWW_PACKAGE_IDS = frozenset({"photos_only", "essentials", "story", "showcase", "full"})
+
+# Normalize alternate spellings onto the five www cells. Each resolves to its OWN
+# package_id — not shared standard/premium/luxury. Legacy package_ids
+# (standard/premium/luxury/estate) are intentionally absent here so they pass
+# through unchanged for historical job reads only; nothing new aliases TO estate.
 _PACKAGE_RATE_ALIASES = {
-    "photos_only": "standard",
-    "photosonly": "standard",
-    "photos": "standard",
-    "essentials": "standard",
-    "story": "premium",
-    "showcase": "premium",
-    "suite": "luxury",
-    "full": "luxury",
-    "full_suite": "luxury",
+    "photos_only": "photos_only",
+    "photosonly": "photos_only",
+    "photos": "photos_only",
+    "essentials": "essentials",
+    "story": "story",
+    "showcase": "showcase",
+    "suite": "full",
+    "full": "full",
+    "full_suite": "full",
 }
+
+# Explicit legacy map: old shared cells remain readable for jobs booked before
+# the www reprice. Not used as alias *targets* for new www catalog ids.
+_LEGACY_PACKAGE_IDS = frozenset({"standard", "premium", "luxury", "estate"})
 
 
 def _rate_card_package_id(package_id: str | None) -> str | None:
@@ -80,7 +91,7 @@ def _rate_card_package_id(package_id: str | None) -> str | None:
 
 
 def _sqft_tier(sqft: int | None) -> str:
-    """Mirrors Bricks-Companion's app/config.py sqft_tier() exactly -- same bands."""
+    """Client footprint band for vendor_payout_rates: Small≤1200 / Mid≤2500 / Large≤4000 / XL."""
     if sqft:
         for ceiling, tier in _SQFT_TIER_BOUNDARIES:
             if sqft <= ceiling:
