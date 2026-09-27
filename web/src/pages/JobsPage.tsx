@@ -8,6 +8,8 @@ import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
 import { STILLS_TYPES, uploadStillFile, type StillsType } from '../lib/stills-upload';
 import {
   BRACKET_HINT,
+  cameraRawRejectionMessage,
+  isCameraRawName,
   requiresBracketSet,
   validateHdrBracketSelection,
   validateHdrUploadsForComplete,
@@ -275,6 +277,10 @@ function JobListingPanel({
     setUploading(true);
     setErr('');
     try {
+      if (files.some((f) => isCameraRawName(f.name))) {
+        setErr(cameraRawRejectionMessage);
+        return;
+      }
       if (requiresBracketSet(stillsType)) {
         const issue = validateHdrBracketSelection(
           files.map((f) => f.name),
@@ -522,12 +528,12 @@ function JobListingPanel({
         <div>
           <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS · CAMERA / DRONE / REEL / TWILIGHT / STAGING</p>
           <p className="muted" style={{ padding: 0, margin: '4px 0 8px', fontSize: 12 }}>
-            HDR stills stay on the camera. After the shoot, upload JPEG / RAW / MP4 here — files go straight to storage (not the 4MB API cap). Tag Twilight for real dusk so listing enhance keeps dusk sky (no blue-sky / day-to-dusk). Tag Staging for vacant/staged rooms so listing delivery keeps the original (no enhance).
+            HDR stills stay on the camera. After the shoot, upload JPEG/HEIC ±EV brackets (no camera RAW) / MP4 here — files go straight to storage (not the 4MB API cap). Tag Twilight for real dusk so listing enhance keeps dusk sky (no blue-sky / day-to-dusk). Tag Staging for vacant/staged rooms so listing delivery keeps the original (no enhance).
           </p>
           {requiresBracketSet(stillsType) ? (
             <>
               <p style={{ padding: 0, margin: '0 0 8px', fontSize: 13, color: 'var(--c-brick, #D2542B)' }}>
-                {BRACKET_HINT} Minimum 3 exposures per room/angle. Single frames are rejected.
+                {BRACKET_HINT} Minimum 3 exposures per room/angle. JPEG/HEIC only (no camera RAW). Single frames are rejected.
               </p>
               {stillsType === 'twilight' ? (
                 <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
@@ -556,7 +562,7 @@ function JobListingPanel({
             <input
               type="file"
               multiple
-              accept="image/*,video/*,.jpg,.jpeg,.png,.tif,.tiff,.webp,.heic,.mp4,.mov"
+              accept="image/jpeg,image/png,image/tiff,image/webp,image/heic,image/heif,video/*,.jpg,.jpeg,.png,.tif,.tiff,.webp,.heic,.heif,.mp4,.mov"
               onChange={onUpload}
               disabled={uploading || job.status === 'assigned'}
             />

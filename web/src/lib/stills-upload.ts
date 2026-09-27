@@ -41,9 +41,18 @@ export async function uploadStillFile(jobId: string, file: File, mediaType: Stil
       media_type: mediaType,
     }),
   });
-  const sign = (await signRes.json().catch(() => ({}))) as SignResp & { detail?: string; message?: string };
+  const sign = (await signRes.json().catch(() => ({}))) as SignResp & {
+    detail?: string | { message?: string; code?: string };
+    message?: string;
+  };
   if (!signRes.ok || !sign.signed_url) {
-    throw new Error(sign.detail || sign.message || 'Could not start stills upload');
+    const d = sign.detail;
+    const msg =
+      (typeof d === 'string' && d) ||
+      (d && typeof d === 'object' && typeof d.message === 'string' && d.message) ||
+      sign.message ||
+      'Could not start stills upload';
+    throw new Error(msg);
   }
   const put = await fetch(sign.signed_url, {
     method: 'PUT',

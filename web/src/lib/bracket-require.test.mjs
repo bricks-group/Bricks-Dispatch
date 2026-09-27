@@ -20,6 +20,9 @@ const {
   exposureBiasFromName,
   bracketHasUnderMidOver,
   inferMediaType,
+  isCameraRawName,
+  isImageName,
+  cameraRawRejectionMessage,
   validateHdrBracketSelection,
   validateHdrUploadsForComplete,
   requiresBracketSet,
@@ -148,6 +151,25 @@ assert.equal(
 );
 assert.equal(
   validateHdrUploadsForComplete([{ filename: 'DJI_0456.jpg', mime_type: 'image/jpeg' }]),
+  null,
+);
+
+
+// Camera RAW reject parity with API CAMERA_RAW_EXTS / frontend helpers
+assert.equal(isCameraRawName('living_-2.CR3'), true);
+assert.equal(isCameraRawName('shot.dng'), true);
+assert.equal(isCameraRawName('a.NEF'), true);
+assert.equal(isCameraRawName('living_0.jpg'), false);
+assert.equal(isCameraRawName('shot.HEIC'), false);
+assert.equal(isImageName('living_0.jpg'), true);
+assert.equal(isImageName('shot.heic'), true);
+assert.equal(isImageName('living_-2.CR3'), false);
+assert.equal(isImageName('shot.dng'), false);
+assert.match(cameraRawRejectionMessage, /JPEG \(or HEIC\)/i);
+assert.match(cameraRawRejectionMessage, /not supported/i);
+// RAW must not count as bracket stills (would hollow enhance→listing)
+assert.equal(
+  validateHdrBracketSelection(['living_-2.CR3', 'living_0.CR3', 'living_+2.CR3'], []),
   null,
 );
 
