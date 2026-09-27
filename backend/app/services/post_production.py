@@ -186,20 +186,12 @@ async def process_job_assets(job_id: str):
             leftover.append(asset)
             continue
 
-        if FOTELLO_API_KEY:
-            ft_id = await trigger_fotello_edit(provider_url)
-            if ft_id:
-                results.append({"asset_id": asset["id"], "provider": "fotello", "provider_job_id": ft_id})
-            else:
-                leftover.append(asset)
-        elif AUTOENHANCE_API_KEY:
-            ae_id = await trigger_autoenhance_edit(provider_url)
-            if ae_id:
-                results.append({"asset_id": asset["id"], "provider": "autoenhance", "provider_job_id": ae_id})
-            else:
-                leftover.append(asset)
-        else:
-            leftover.append(asset)
+        # Launch path: sync leftover enhance (Autoenhance v3 HDR brackets when
+        # AUTOENHANCE_API_KEY is set + plan active, else bricks_inhouse).
+        # Do NOT submit vendor_photo to async Fotello/AE v2 — that leaves rows
+        # in processing waiting for callbacks and skips bracket HDR merge.
+        leftover.append(asset)
+        _ = provider_url  # signed URL kept for future async providers
 
     for res in results:
         await _safe_update_upload(db, res["asset_id"], {
@@ -308,13 +300,37 @@ async def deliver_bracket_group_without_vendor(
     primary = sorted(loaded, key=_bias_key)[0]
     primary_id = primary.get("id")
 
+    enhanced = None
+    enhance_meta = {}
+    provider = "bricks_inhouse"
+    # Prefer Autoenhance v3 HDR for day vendor brackets (mls_safe: no invent sky).
+    # Twilight (apply_sky=False) stays in-house. Fail-fast to bricks_inhouse on
+    # No Plan / errors so listing delivery never hangs on a vendor API.
+    if apply_sky:
+        try:
+            from . import autoenhance_service as ae
+            if ae.is_available():
+                enhanced, enhance_meta = ae.enhance_brackets_sync(
+                    frames, filenames, apply_sky=False
+                )
+                provider = "autoenhance"
+                logger.info(
+                    f"Job {job_id}: Autoenhance HDR ok order={enhance_meta.get('order_id')}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Job {job_id}: Autoenhance skipped ({e}) — bricks_inhouse fallback"
+            )
+            enhanced = None
+
     try:
-        enhanced, enhance_meta = enhance_bracket(
-            frames, filenames, apply_sky=apply_sky, return_meta=True
-        )
+        if enhanced is None:
+            enhanced, enhance_meta = enhance_bracket(
+                frames, filenames, apply_sky=apply_sky, return_meta=True
+            )
+            provider = "bricks_inhouse"
         processed = await upload_enhanced(db.storage, job_id, primary_id, enhanced)
         qc_path = await upload_qc_variant(db.storage, job_id, primary_id, enhanced)
-        provider = "bricks_inhouse"
     except Exception as e:
         logger.error(f"Bracket enhance failed for job {job_id}: {e} — delivering originals")
         for asset in loaded:
