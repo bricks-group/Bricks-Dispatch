@@ -43,13 +43,28 @@ def test_bracket_group_prefers_autoenhance_then_uploads(monkeypatch):
     async def fake_qc(*_a, **_k):
         return "qc/path.jpg"
 
+    uploaded = []
+
+    async def fake_up_track(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/path.jpg"
+
     fake_pes = ModuleType("app.services.photo_enhance_service")
     fake_pes.enhance_bracket = lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("inhouse must not run when AE succeeds")
     )
     fake_pes.exposure_bias_from_name = lambda n: 0.0 if "_0" in n else -2.0
-    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_enhanced = fake_up_track
     fake_pes.upload_qc_variant = fake_qc
+    # AE full-res must pass PropTx listing export before upload
+    fake_pes.apply_listing_export = lambda b: (
+        b"\xff\xd8mls",
+        {
+            "listing_export_applied": True,
+            "export": {"width": 2400, "height": 1800, "aspect_ok": True, "long_edge_ok": True},
+            "mls_export_profile": "frame_proptx_mls_stills_v1",
+        },
+    )
     monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
 
     fake_storage = ModuleType("app.services.storage")
@@ -61,7 +76,7 @@ def test_bracket_group_prefers_autoenhance_then_uploads(monkeypatch):
     monkeypatch.setattr(
         ae,
         "enhance_brackets_sync",
-        lambda *a, **k: (b"\xff\xd8ae", {"order_id": "ord-1", "provider": "autoenhance"}),
+        lambda *a, **k: (b"\xff\xd8ae_raw_oversized", {"order_id": "ord-1", "provider": "autoenhance"}),
     )
 
     group = [
@@ -74,6 +89,7 @@ def test_bracket_group_prefers_autoenhance_then_uploads(monkeypatch):
     assert providers["u2"] == "autoenhance"  # primary ~0 EV
     assert providers["u1"] == "bracket_sibling"
     assert providers["u3"] == "bracket_sibling"
+    assert uploaded and uploaded[0] == b"\xff\xd8mls"  # listing-export bytes, not raw AE
 
 
 def test_bracket_group_falls_back_inhouse_on_no_plan(monkeypatch):
@@ -99,6 +115,9 @@ def test_bracket_group_falls_back_inhouse_on_no_plan(monkeypatch):
     fake_pes.exposure_bias_from_name = lambda n: 0.0
     fake_pes.upload_enhanced = fake_up
     fake_pes.upload_qc_variant = fake_qc
+    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(
+        AssertionError("listing export must not run when AE fails over to inhouse")
+    )
     monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
 
     fake_storage = ModuleType("app.services.storage")
@@ -143,3 +162,39 @@ def test_autoenhance_no_plan_marks_worker_blocked(monkeypatch):
     assert ae._plan_blocked is True
     # reset for other tests
     ae._plan_blocked = False
+
+
+def test_apply_listing_export_fixes_ae_3x2_oversized():
+    """Live Fuze AE leftover was 2800×1870 — must become 4:3 ≤2400 long edge."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.photo_enhance_service import (
+        LISTING_MAX_LONG_EDGE,
+        apply_listing_export,
+        listing_export_invariants,
+    )
+
+    img = Image.new("RGB", (2800, 1870), (120, 130, 140))
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    raw = buf.getvalue()
+    out, meta = apply_listing_export(raw)
+    inv = listing_export_invariants(out)
+    assert meta.get("listing_export_applied") is True
+    assert inv["aspect_ok"] is True
+    assert inv["long_edge_ok"] is True
+    assert inv["long_edge"] <= LISTING_MAX_LONG_EDGE
+    assert inv["landscape"] is True
+    # 2800×1870 center-cropped to 4:3 → 2493×1870 then scaled to 2400×1800
+    assert inv["width"] == 2400
+    assert inv["height"] == 1800
+
+
+def test_deliver_bracket_source_calls_listing_export_after_ae():
+    src = Path(pp.__file__).read_text(encoding="utf-8")
+    assert "apply_listing_export(enhanced)" in src
+    assert "listing_export_applied" in Path(
+        __file__
+    ).read_text(encoding="utf-8") or "apply_listing_export" in src

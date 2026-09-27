@@ -301,6 +301,43 @@ def format_listing_ready(
     return _resize_long_edge(cropped, max_long_edge)
 
 
+def apply_listing_export(image_bytes: bytes) -> Tuple[bytes, Dict[str, Any]]:
+    """PropTx MLS geometry/JPEG on already-enhanced bytes (Autoenhance path).
+
+    Autoenhance full-res is often 3:2 / long-edge >2400. In-house enhance_bracket
+    already ends with format_listing_ready; AE leftovers must get the same export
+    before upload so listing/share/MLS zip stay board-safe.
+    Does not re-run HDR/sky/tone — crop 4:3, long-edge cap, sRGB JPEG only.
+    """
+    img = _load_rgb(image_bytes)
+    img = format_listing_ready(img)
+    out = _encode_jpeg(img)
+    inv = listing_export_invariants(out)
+    meta: Dict[str, Any] = {
+        "mls_export_profile": MLS_EXPORT_PROFILE,
+        "mls_brief": MLS_BRIEF_REF,
+        "listing_export_applied": True,
+        "export": inv,
+        "accept_claim": False,
+    }
+    try:
+        from .mls_people_detect import people_soft_fail_metadata
+
+        meta.update(people_soft_fail_metadata(out))
+    except Exception as e:
+        logger.warning("photo_enhance: people soft-fail meta skipped on listing export (%s)", e)
+        meta.update(
+            {
+                "qc_people_detected": False,
+                "qc_face_count": 0,
+                "mls_quarantine": False,
+                "qc_soft_fail": False,
+                "qc_soft_fail_reasons": [],
+            }
+        )
+    return out, meta
+
+
 def _to_srgb_rgb(img: Image.Image) -> Image.Image:
     """Flatten to 8-bit sRGB RGB — drop exotic ICC / CMYK casts for MLS JPEG."""
     if img.mode == "CMYK":

@@ -264,6 +264,7 @@ async def deliver_bracket_group_without_vendor(
     apply_sky=True for vendor_photo brackets; False for twilight (preserve real dusk).
     """
     from .photo_enhance_service import (
+        apply_listing_export,
         enhance_bracket,
         exposure_bias_from_name,
         upload_enhanced,
@@ -313,9 +314,16 @@ async def deliver_bracket_group_without_vendor(
                 enhanced, enhance_meta = ae.enhance_brackets_sync(
                     frames, filenames, apply_sky=False
                 )
+                # AE full-res skips inhouse format_listing_ready — apply PropTx
+                # 4:3 + long-edge ≤2400 before upload (live Fuze was 2800×1870 3:2).
+                enhanced, export_meta = apply_listing_export(enhanced)
+                enhance_meta = {**enhance_meta, **export_meta}
                 provider = "autoenhance"
+                exp = (enhance_meta.get("export") or {})
                 logger.info(
-                    f"Job {job_id}: Autoenhance HDR ok order={enhance_meta.get('order_id')}"
+                    f"Job {job_id}: Autoenhance HDR ok order={enhance_meta.get('order_id')} "
+                    f"listing_export={exp.get('width')}x{exp.get('height')} "
+                    f"aspect_ok={exp.get('aspect_ok')} long_ok={exp.get('long_edge_ok')}"
                 )
         except Exception as e:
             logger.warning(
