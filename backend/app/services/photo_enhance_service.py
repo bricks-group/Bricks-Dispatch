@@ -52,6 +52,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
+from . import image_io  # registers HEIF opener for iPhone stills
+
 logger = logging.getLogger(__name__)
 
 STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "brxs-deliverables")
@@ -2041,8 +2043,7 @@ def replace_sky(image_bytes: bytes, img: Optional[Image.Image] = None) -> Option
 # ---------------------------------------------------------------------------
 
 def _load_rgb(image_bytes: bytes) -> Image.Image:
-    img = Image.open(io.BytesIO(image_bytes))
-    return _exif_auto_orient(img).convert("RGB")
+    return image_io.open_rgb(image_bytes)
 
 
 def enhance_bracket(

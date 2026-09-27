@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 from PIL import Image
 
+from . import image_io  # registers HEIF opener for iPhone stills
 from ..shared.database import get_db
 
 STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "brxs-deliverables")
@@ -37,19 +38,19 @@ MAX_GET_EXPIRY = 7 * 24 * 3600
 
 def _make_thumbnail_bytes(image_bytes: bytes, size: Tuple[int, int] = (400, 300)) -> bytes:
     """Resize image to thumbnail and return JPEG bytes."""
-    img = Image.open(io.BytesIO(image_bytes))
+    img = image_io.open_rgb(image_bytes)
     img.thumbnail(size, Image.LANCZOS)
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=75)
+    img.save(buf, format="JPEG", quality=75)
     return buf.getvalue()
 
 
 def make_qc_variant_bytes(image_bytes: bytes, size: Tuple[int, int] = QC_VARIANT_SIZE) -> bytes:
     """Resize image to QC review size and return JPEG bytes."""
-    img = Image.open(io.BytesIO(image_bytes))
+    img = image_io.open_rgb(image_bytes)
     img.thumbnail(size, Image.LANCZOS)
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=82)
+    img.save(buf, format="JPEG", quality=82)
     return buf.getvalue()
 
 
@@ -445,8 +446,7 @@ async def create_signed_upload_url(storage_path: str) -> Optional[dict]:
 
 def resize_image_bytes(image_bytes: bytes, max_side: int = 1280, quality: int = 75) -> bytes:
     """Downscale an image to JPEG for Gemini / tour scenes."""
-    img = Image.open(io.BytesIO(image_bytes))
-    img = img.convert("RGB")
+    img = image_io.open_rgb(image_bytes)
     img.thumbnail((max_side, max_side), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality, optimize=True)
