@@ -51,6 +51,13 @@ assert.equal(requiresBracketSet('floorplan'), false);
 assert.equal(inferMediaType('floorplan_main.png'), 'floorplan');
 assert.equal(inferMediaType('cubicasa_export.png'), 'floorplan');
 assert.equal(inferMediaType('plan.pdf', 'application/pdf', 'floor_plan'), 'floorplan');
+assert.equal(inferMediaType('plan.png'), 'floorplan');
+assert.equal(inferMediaType('plans.jpg'), 'floorplan');
+assert.equal(inferMediaType('plan', undefined, 'plan'), 'floorplan');
+assert.equal(inferMediaType('plans', undefined, 'plans'), 'floorplan');
+// Substring must NOT force floorplan (ordinary stills stay hdr)
+assert.equal(inferMediaType('airplane.jpg'), 'hdr');
+assert.equal(inferMediaType('explainer.png'), 'hdr');
 assert.equal(HDR_BRACKET_MIN, 3);
 assert.ok(BRACKET_HINT.includes('bracketed'));
 
