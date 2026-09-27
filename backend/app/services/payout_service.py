@@ -82,11 +82,26 @@ _PACKAGE_RATE_ALIASES = {
 # the www reprice. Not used as alias *targets* for new www catalog ids.
 _LEGACY_PACKAGE_IDS = frozenset({"standard", "premium", "luxury", "estate"})
 
+# Soft-retired for NEW job intake only. Historical jobs keep these package_ids
+# so vendor_payout_rates legacy rows still resolve. Nothing maps www IDs onto these.
+_RETIRED_FOR_NEW_JOBS = _LEGACY_PACKAGE_IDS
 
-def _rate_card_package_id(package_id: str | None) -> str | None:
+
+def normalize_package_id_key(package_id: str | None) -> str | None:
     if not package_id:
         return None
-    key = package_id.strip().lower().replace("-", "_").replace(" ", "_")
+    return package_id.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def is_retired_for_new_jobs(package_id: str | None) -> bool:
+    key = normalize_package_id_key(package_id)
+    return bool(key and key in _RETIRED_FOR_NEW_JOBS)
+
+
+def _rate_card_package_id(package_id: str | None) -> str | None:
+    key = normalize_package_id_key(package_id)
+    if not key:
+        return None
     return _PACKAGE_RATE_ALIASES.get(key, key)
 
 

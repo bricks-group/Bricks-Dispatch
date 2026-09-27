@@ -5,6 +5,7 @@ from app.services.payout_service import (
     _WWW_PACKAGE_IDS,
     _rate_card_package_id,
     _sqft_tier,
+    is_retired_for_new_jobs,
 )
 from app.services.vendor_payout_rate_card import (
     VENDOR_PAYOUT_CELLS_CENTS,
@@ -72,3 +73,16 @@ def test_draft_corner_cells():
     # Tier C Photos only / Small → $55.15; Tier A Full suite / XL → $578.90
     assert VENDOR_PAYOUT_CELLS_CENTS[("photos_only", "small")][0] == 5515
     assert VENDOR_PAYOUT_CELLS_CENTS[("full", "xl")][2] == 57890
+
+
+def test_legacy_packages_retired_for_new_jobs_only():
+    assert is_retired_for_new_jobs("estate") is True
+    assert is_retired_for_new_jobs("Estate") is True
+    assert is_retired_for_new_jobs("standard") is True
+    assert is_retired_for_new_jobs("premium") is True
+    assert is_retired_for_new_jobs("luxury") is True
+    assert is_retired_for_new_jobs("photos_only") is False
+    assert is_retired_for_new_jobs("essentials") is False
+    assert is_retired_for_new_jobs("showcase") is False
+    assert is_retired_for_new_jobs("full") is False
+    assert is_retired_for_new_jobs(None) is False

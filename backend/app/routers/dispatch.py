@@ -35,6 +35,20 @@ async def create_dispatch_job(
     if not internal_keys or x_internal_api_key not in internal_keys:
         raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
 
+    # Soft-retire legacy Companion SKUs for NEW jobs only (estate/standard/premium/luxury).
+    # Historical rows keep those package_ids for vendor_payout_rates reads.
+    from ..services.payout_service import is_retired_for_new_jobs
+    _pkg = getattr(payload, "package_id", None)
+    if is_retired_for_new_jobs(_pkg):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Package '{_pkg}' is retired for new jobs. "
+                "Use photos_only / essentials / story / showcase / full (or suite). "
+                "Legacy package_ids remain readable for historical payouts only."
+            ),
+        )
+
     db = await get_db()
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()

@@ -684,6 +684,17 @@ async def create_job(
     if not verify_internal_api_key(x_internal_api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
 
+    from ..services.payout_service import is_retired_for_new_jobs
+    if is_retired_for_new_jobs(payload.package_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Package '{payload.package_id}' is retired for new jobs. "
+                "Use photos_only / essentials / story / showcase / full (or suite). "
+                "Legacy package_ids remain readable for historical payouts only."
+            ),
+        )
+
     job_id = payload.id or str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
 
