@@ -30,11 +30,32 @@ def test_infer_and_route_floorplan_filename_cues():
     assert infer_media_type("room_plan_1.png") == "floorplan"
     assert infer_media_type(explicit="floorplan") == "floorplan"
     assert infer_media_type(explicit="floor_plan") == "floorplan"
+    assert infer_media_type(explicit="plan") == "floorplan"
+    assert infer_media_type(explicit="plans") == "floorplan"
+    # CubiCasa / broker basename plan.png — must NOT HDR + 4:3 crop
+    assert infer_media_type("plan.png") == "floorplan"
+    assert infer_media_type("plans.PNG") == "floorplan"
+    # Substring must not false-positive ordinary stills
+    assert infer_media_type("airplane.jpg") == "hdr"
+    assert infer_media_type("explainer.png") == "hdr"
 
     assert delivery_route({
         "file_url": "p/floorplan_main.png",
         "filename": "floorplan_main.png",
     }) == "as_is"
+    assert delivery_route({
+        "file_url": "p/plan.png",
+        "filename": "plan.png",
+    }) == "as_is"
+    assert delivery_route({
+        "file_url": "p/export.png",
+        "filename": "export.png",
+        "media_type": "plan",
+    }) == "as_is"
+    assert delivery_route({
+        "file_url": "p/living.jpg",
+        "filename": "living.jpg",
+    }) == "vendor_photo"
     assert delivery_route({
         "file_url": "p/floor_plan_main.pdf",
         "filename": "floor_plan_main.pdf",
@@ -69,7 +90,9 @@ def test_plain_pdf_as_is_even_without_floorplan_cue():
 
 def test_durable_media_filename_prefixes_floorplan():
     assert durable_media_filename("IMG_0001.PNG", "floorplan") == "floorplan_IMG_0001.PNG"
-    assert durable_media_filename("plan.pdf", "floor_plan") == "floorplan_plan.pdf"
+    assert durable_media_filename("plan.pdf", "floor_plan") == "plan.pdf"  # stem plan already cues
+    assert durable_media_filename("export.png", "plan") == "floorplan_export.png"
+    assert durable_media_filename("plan.png", "plan") == "plan.png"  # stem already cues
     assert durable_media_filename("floorplan_main.png", "floorplan") == "floorplan_main.png"
     assert durable_media_filename("cubicasa_export.png", "floorplan") == "cubicasa_export.png"
     # durable alone routes without media_type col

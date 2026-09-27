@@ -141,6 +141,8 @@ export function inferMediaType(
     roomplan: 'floorplan',
     room_plan: 'floorplan',
     cubicasa: 'floorplan',
+    plan: 'floorplan',
+    plans: 'floorplan',
   };
   const known = new Set(['hdr', 'photo', 'drone', 'reel', 'twilight', 'staging', 'floorplan']);
   if (known.has(raw)) return raw === 'photo' ? 'hdr' : raw;
@@ -151,6 +153,11 @@ export function inferMediaType(
   if (name.includes('stag')) return 'staging';
   if (name.includes('twilight') || name.includes('dusk') || name.includes('golden')) {
     return 'twilight';
+  }
+  // Exact basename plan/plans (CubiCasa) — not substring (airplane/explainer).
+  const stem = name.includes('.') ? name.slice(0, name.lastIndexOf('.')) : name;
+  if (stem === 'plan' || stem === 'plans') {
+    return 'floorplan';
   }
   if (
     name.includes('floorplan') ||

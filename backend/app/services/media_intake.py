@@ -78,6 +78,9 @@ def infer_media_type(
         "roomplan": "floorplan",
         "room_plan": "floorplan",
         "cubicasa": "floorplan",
+        # OS media_kind parity — GO/API may send media_type=plan
+        "plan": "floorplan",
+        "plans": "floorplan",
     }
     if raw in VALID_MEDIA_TYPES:
         return "hdr" if raw == "photo" else raw
@@ -94,6 +97,11 @@ def infer_media_type(
         return "staging"
     if "twilight" in name or "dusk" in name or "golden" in name:
         return "twilight"
+    # Exact basename plan/plans (CubiCasa / broker exports) — not substring
+    # ("airplane", "explainer") so ordinary stills stay vendor_photo.
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    if stem in ("plan", "plans"):
+        return "floorplan"
     if (
         "floorplan" in name
         or "floor_plan" in name
