@@ -1636,6 +1636,180 @@ def pg_upsert_vendor_member(
             pass
 
 
+def pg_insert_vendor_application(row: dict) -> Optional[dict]:
+    """INSERT public.vendor_members for /api/onboarding/apply when PostgREST is 402.
+
+    Whitelists applicant columns used by _apply_to_bricks_inner. JSON list/dict
+    fields are cast to jsonb. Soft-drops unknown columns on older schemas by
+    retrying without optional keys (portfolio_samples, vendor_type, …).
+    """
+    if not isinstance(row, dict) or not row:
+        return None
+
+    import uuid
+    from datetime import datetime, timezone
+
+    json_cols = {
+        "portfolio_links",
+        "portfolio_samples",
+        "equipment_list",
+        "service_areas",
+        "operation_polygon",
+        "skills",
+    }
+    allowed = {
+        "id",
+        "vendor_id",
+        "name",
+        "email",
+        "phone",
+        "role",
+        "title",
+        "vendor_type",
+        "specialty",
+        "skills",
+        "is_active",
+        "onboarding_status",
+        "portfolio_links",
+        "portfolio_samples",
+        "equipment_list",
+        "service_areas",
+        "operation_polygon",
+        "home_city",
+        "max_travel_km",
+        "drone_certified",
+        "rpas_certificate_number",
+        "rpas_certificate_level",
+        "hst_number",
+        "internal_notes",
+        "home_lat",
+        "home_lng",
+        "ic_agreement_version",
+        "terms_accepted_at",
+        "application_token",
+        "created_at",
+        "updated_at",
+    }
+
+    data = {k: row[k] for k in allowed if k in row}
+    if not data.get("email") or not data.get("name"):
+        return None
+    if not data.get("id"):
+        data["id"] = str(uuid.uuid4())
+    data["email"] = str(data["email"]).lower().strip()
+    if not data.get("vendor_id"):
+        data["vendor_id"] = ORG_VENDOR_ID
+    now = datetime.now(timezone.utc).isoformat()
+    data.setdefault("created_at", now)
+    data.setdefault("updated_at", now)
+    data.setdefault("role", "Applicant")
+    data.setdefault("onboarding_status", "pending")
+    data.setdefault("is_active", False)
+
+    # Soft-drop order when older DBs lack columns.
+    optional_drop_order = (
+        "portfolio_samples",
+        "vendor_type",
+        "application_token",
+        "operation_polygon",
+        "rpas_certificate_level",
+        "rpas_certificate_number",
+        "ic_agreement_version",
+        "terms_accepted_at",
+        "internal_notes",
+        "home_lat",
+        "home_lng",
+    )
+
+    def _build(payload: dict):
+        cols: list[str] = []
+        vals: list[Any] = []
+        placeholders: list[str] = []
+        for c, v in payload.items():
+            if c in json_cols:
+                if hasattr(v, "dict"):
+                    v = v.dict()
+                elif isinstance(v, list):
+                    v = [(x.dict() if hasattr(x, "dict") else x) for x in v]
+                if not isinstance(v, str):
+                    try:
+                        v = json.dumps(v if v is not None else [])
+                    except Exception:
+                        v = "[]"
+                cols.append(c)
+                vals.append(v)
+                placeholders.append("%s::jsonb")
+                continue
+            if c == "is_active" or c == "drone_certified":
+                v = bool(v)
+            elif c == "max_travel_km":
+                try:
+                    v = int(v)
+                except Exception:
+                    v = 50
+            cols.append(c)
+            vals.append(v)
+            placeholders.append("%s")
+        sql = (
+            f"INSERT INTO public.vendor_members ({', '.join(cols)}) "
+            f"VALUES ({', '.join(placeholders)}) RETURNING *"
+        )
+        return sql, vals
+
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_insert_vendor_application: no Postgres connection")
+        return None
+    try:
+        working = dict(data)
+        last_err = None
+        with conn.cursor() as cur:
+            for _ in range(len(optional_drop_order) + 1):
+                try:
+                    sql, vals = _build(working)
+                    cur.execute(sql, vals)
+                    out = _row_from_cursor(cur)
+                    if out:
+                        for jk in json_cols:
+                            _parse_json_field(out, jk, default=[])
+                        logger.warning(
+                            "pg_insert_vendor_application ok id=%s email=%s",
+                            out.get("id"),
+                            (out.get("email") or "")[:40],
+                        )
+                        return out
+                except Exception as e:
+                    last_err = e
+                    dropped = False
+                    for key in optional_drop_order:
+                        if key in working:
+                            working.pop(key, None)
+                            dropped = True
+                            logger.warning(
+                                "pg_insert_vendor_application soft-drop %s: %s",
+                                key,
+                                str(e)[:180],
+                            )
+                            break
+                    if not dropped:
+                        break
+            if last_err:
+                logger.error(
+                    "pg_insert_vendor_application failed: %s", str(last_err)[:400]
+                )
+            return None
+    except Exception as e:
+        logger.error("pg_insert_vendor_application failed: %s", str(e)[:400])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+
+
 # --- Fair-Use: availability gate + calendar FreeBusy + vendor notify ----------
 
 _VENDOR_AVAILABILITY_JSON_COLS = ("blocked_windows",)

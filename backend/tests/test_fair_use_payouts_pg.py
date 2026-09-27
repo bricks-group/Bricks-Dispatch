@@ -533,7 +533,7 @@ def test_stripe_connect_status_pg_on_402(monkeypatch):
         "get_vendor_member",
         AsyncMock(return_value={"id": "owner-1", "vendor_id": "default_vendor", "role": "Owner"}),
     )
-    monkeypatch.setattr(sc_status, "is_vendor_admin", lambda m: True)
+    monkeypatch.setattr(sc_status, "can_access_stripe_connect", lambda m: True)
     monkeypatch.setattr(sc_status, "get_db", AsyncMock(return_value=Db()))
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_select_contractor_by_vendor_id",

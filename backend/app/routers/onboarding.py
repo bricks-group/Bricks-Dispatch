@@ -235,7 +235,7 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     """
     Wave A vendor application (photographer | stager | cleaner).
     Requires acceptance of the current IC agreement.
-    Records ic_agreement_version as the live server version (currently 1.6).
+    Records ic_agreement_version as the live server version (currently 1.7).
     photographers.html posts vendor_type=photographer; drone remains an RPAS capability.
     """
     if not application.accepted_terms:
@@ -275,8 +275,26 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
 
 
 async def _apply_to_bricks_inner(application: VendorApplicationCreate):
-    res_existing = await (await get_db()).table("vendor_members").select("*").eq("email", application.email.lower().strip()).maybe_single().execute()
-    if res_existing and res_existing.data:
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_insert_vendor_application,
+        pg_select_vendor_member,
+        pg_upsert_vendor_availability,
+    )
+
+    email_l = application.email.lower().strip()
+    existing = None
+    try:
+        res_existing = await (await get_db()).table("vendor_members").select("*").eq(
+            "email", email_l
+        ).maybe_single().execute()
+        existing = res_existing.data if res_existing else None
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            existing = pg_select_vendor_member(email=email_l)
+        else:
+            raise
+    if existing:
         raise HTTPException(status_code=400, detail="An application with this email already exists.")
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -301,7 +319,7 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         id=str(uuid.uuid4()),
         application_token=application_token,
         name=application.name,
-        email=application.email.lower().strip(),
+        email=email_l,
         phone=application.phone,
         role="Applicant",
         vendor_type=vtype,
@@ -332,24 +350,79 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         member_dict["portfolio_samples"] = [
             s.dict() if hasattr(s, "dict") else s for s in member_dict["portfolio_samples"]
         ]
+    if "operation_polygon" in member_dict and member_dict["operation_polygon"] is not None:
+        member_dict["operation_polygon"] = [
+            c.dict() if hasattr(c, "dict") else c for c in member_dict["operation_polygon"]
+        ]
+
     db = await get_db()
+    inserted_via_pg = False
     try:
         await db.table("vendor_members").insert(member_dict).execute()
-    except Exception:
-        # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
-        member_dict.pop("portfolio_samples", None)
-        try:
-            await db.table("vendor_members").insert(member_dict).execute()
-        except Exception:
-            member_dict.pop("vendor_type", None)
-            await db.table("vendor_members").insert(member_dict).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            # Canada Fair Use REST often 402 — same PG fallback as payouts/Connect.
+            pg_row = pg_insert_vendor_application(member_dict)
+            if not pg_row:
+                logger.error("apply_to_bricks Fair-Use PG insert failed for %s", email_l)
+                raise HTTPException(
+                    status_code=503,
+                    detail="Could not process application right now. Please try again shortly.",
+                )
+            inserted_via_pg = True
+        else:
+            # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
+            member_dict.pop("portfolio_samples", None)
+            try:
+                await db.table("vendor_members").insert(member_dict).execute()
+            except Exception as e2:
+                if _is_rest_quota_error(e2):
+                    pg_row = pg_insert_vendor_application(member_dict)
+                    if not pg_row:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Could not process application right now. Please try again shortly.",
+                        )
+                    inserted_via_pg = True
+                else:
+                    member_dict.pop("vendor_type", None)
+                    try:
+                        await db.table("vendor_members").insert(member_dict).execute()
+                    except Exception as e3:
+                        if _is_rest_quota_error(e3):
+                            pg_row = pg_insert_vendor_application(member_dict)
+                            if not pg_row:
+                                raise HTTPException(
+                                    status_code=503,
+                                    detail="Could not process application right now. Please try again shortly.",
+                                )
+                            inserted_via_pg = True
+                        else:
+                            raise
 
     availability = AvailabilitySettings(
         member_id=member.id,
         vendor_id=member.vendor_id,
         available=True
     )
-    await (await get_db()).table("vendor_availability").insert(availability.dict()).execute()
+    avail_dict = availability.dict()
+    try:
+        await (await get_db()).table("vendor_availability").insert(avail_dict).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e) or inserted_via_pg:
+            if not pg_upsert_vendor_availability(avail_dict):
+                logger.warning(
+                    "apply_to_bricks: availability PG upsert failed member=%s (non-fatal)",
+                    member.id,
+                )
+        else:
+            # Non-quota insert failure: try PG anyway if REST flaked; else log.
+            if not pg_upsert_vendor_availability(avail_dict):
+                logger.warning(
+                    "apply_to_bricks: availability insert failed member=%s: %s",
+                    member.id,
+                    type(e).__name__,
+                )
 
     return {
         "success": True,
@@ -481,15 +554,17 @@ async def upload_compliance_document(
     file_data: str = Form(...),
     expiry_date: Optional[str] = Form(None),
     token: Optional[str] = Form(None),
+    application_token: Optional[str] = Form(None),
 ):
     """
     Upload Ontario compliance documents (COI, WSIB, etc) or a resume.
+    Client must send member_id + application_token (or token) from /apply.
     """
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
     member = res_member.data
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
-    _check_application_token(member, token)
+    _check_application_token(member, token or application_token)
 
     portfolio_docs = [portfolio_doc_type(t) for t in PORTFOLIO_MEDIA_TYPES]
     valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume", *portfolio_docs]

@@ -147,6 +147,23 @@ def is_vendor_admin(member: dict) -> bool:
     title = (member.get("title") or "").lower()
     return any(k in role or k in title for k in ["owner", "admin", "manager"])
 
+def can_access_stripe_connect(member: dict) -> bool:
+    """Who may start/view Stripe Connect onboard+status for their vendor org.
+
+    Owner/Admin/Manager always (admin override). Any *active* vendor_member
+    (including Photographer after approval) may open Connect for the org's
+    contractor row. Applicants (is_active=False) stay gated out.
+
+    TODO: multi-member Connect — today contractors are keyed by vendor_id
+    (one Stripe Express account per org). Solo IC applicants are the Monday path;
+    do not assume per-member stripe_account_id until redesigned.
+    """
+    if not member:
+        return False
+    if is_vendor_admin(member):
+        return True
+    return bool(member.get("is_active")) and bool(member.get("vendor_id"))
+
 def verify_internal_api_key(key: Optional[str]) -> bool:
     """Validate a service-to-service X-Internal-Api-Key value.
 

@@ -15,7 +15,7 @@ from ..services.capture_entitlements import stamp_capture
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
-from ..shared.auth import ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
+from ..shared.auth import can_access_stripe_connect, ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.vendor_identity import is_owner_member, photographer_payout_cents, public_profile
 from ..shared.job_scope import (
     ORG_VENDOR_ID,
@@ -1578,7 +1578,9 @@ async def start_stripe_connect_onboarding(
     since it's the only side that reliably knows its own deployed origin."""
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    if not is_vendor_admin(actor_member):
+    # Active Photographer (post-approval) + Manager/Owner/Admin may start Connect.
+    # Org still shares one contractors row per vendor_id (no multi-member redesign).
+    if not can_access_stripe_connect(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
