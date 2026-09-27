@@ -24,6 +24,7 @@ const STILLS_TYPES = [
   { id: 'reel', label: 'Reel' },
   { id: 'twilight', label: 'Twilight' },
   { id: 'staging', label: 'Staging' },
+  { id: 'floorplan', label: 'Floor plan' },
 ] as const;
 type StillsType = (typeof STILLS_TYPES)[number]['id'];
 
@@ -215,7 +216,7 @@ export default function UploadsScreen() {
           contentContainerStyle={s.scroll}
         >
           <Text style={s.title}>Upload</Text>
-          <Text style={s.subtitle}>JPEG/HEIC ±EV brackets (no camera RAW), drone, reel, twilight, staging — signed upload, no 4MB cap. Tag Twilight for real dusk (no blue-sky / day-to-dusk).</Text>
+          <Text style={s.subtitle}>JPEG/HEIC ±EV brackets (no camera RAW), drone, reel, twilight, staging, floor plan — signed upload, no 4MB cap. Tag Twilight for real dusk (no blue-sky / day-to-dusk). Tag Floor plan for CubiCasa/PDF/PNG exports (original to listing, no HDR enhance).</Text>
           {requiresBracketSet(stillsType) ? (
             <>
               <Text style={{ fontSize: 12, color: TOKENS.brickSoft, marginBottom: stillsType === 'twilight' ? 6 : 14 }}>
@@ -230,6 +231,10 @@ export default function UploadsScreen() {
           ) : stillsType === 'staging' ? (
             <Text style={{ fontSize: 12, color: TOKENS.moonFaint, marginBottom: 14 }}>
               Staging delivers the original to the listing (no enhance, no virtual staging).
+            </Text>
+          ) : stillsType === 'floorplan' ? (
+            <Text style={{ fontSize: 12, color: TOKENS.moonFaint, marginBottom: 14 }}>
+              Floor plan delivers the original to the listing (PNG/PDF — no HDR enhance).
             </Text>
           ) : null}
 

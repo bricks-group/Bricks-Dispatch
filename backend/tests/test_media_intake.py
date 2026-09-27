@@ -32,6 +32,8 @@ def test_infer_from_filename_and_mime():
     assert infer_media_type("aerial-front.jpg") == "drone"
     assert infer_media_type("twilight-rear.jpg") == "twilight"
     assert infer_media_type("living-stage.jpg") == "staging"
+    assert infer_media_type("floorplan_main.png") == "floorplan"
+    assert infer_media_type("cubicasa_export.png") == "floorplan"
     assert infer_media_type("reel-cut.mov", "video/quicktime") == "reel"
     assert infer_media_type("living-01.JPG", "image/jpeg") == "hdr"
 
@@ -190,6 +192,8 @@ def test_durable_media_filename_prefixes_and_no_double():
     assert durable_media_filename("twilight_IMG_0001.JPG", "twilight") == "twilight_IMG_0001.JPG"
     assert durable_media_filename("staging_living.jpg", "staging") == "staging_living.jpg"
     assert durable_media_filename("reel_cut.mp4", "reel") == "reel_cut.mp4"
+    assert durable_media_filename("IMG_1.PNG", "floorplan") == "floorplan_IMG_1.PNG"
+    assert durable_media_filename("floorplan_main.png", "floorplan") == "floorplan_main.png"
     # path-safe basename only
     assert durable_media_filename("../../other/IMG_9.JPG", "twilight") == "twilight_IMG_9.JPG"
 
@@ -208,6 +212,10 @@ def test_durable_filename_delivery_route_without_media_type_col():
         "file_url": "bricks-go/jobs/j/u/living.jpg",
         "filename": durable_media_filename("living.jpg", "staging"),
     }) == "staging"
+    assert delivery_route({
+        "file_url": "bricks-go/jobs/j/u/IMG_1.PNG",
+        "filename": durable_media_filename("IMG_1.PNG", "floorplan"),
+    }) == "as_is"
     assert delivery_route({
         "file_url": "bricks-go/jobs/j/u/IMG_0001.JPG",
         "filename": durable_media_filename("IMG_0001.JPG", "hdr"),

@@ -1,19 +1,21 @@
 """Classify sold listing media so intake + post-process are not hollow.
 
-HDR stills, twilight, drone, reel, and staging all land on the listing file
-through /api/uploads (signed PUT for camera JPEGs / video — not the 4MB
-Vercel POST body). Phone capture is only tour / floor plan / Visit bridge.
+HDR stills, twilight, drone, reel, staging, and floorplan all land on the listing
+file through /api/uploads (signed PUT for camera JPEGs / video / PDF — not the
+4MB Vercel POST body). Phone capture is only tour / floor plan / Visit bridge.
+Floorplan PNG/PDF/CubiCasa exports deliver as_is (honest — no HDR enhance).
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
-VALID_MEDIA_TYPES = ("hdr", "photo", "drone", "reel", "twilight", "staging")
+VALID_MEDIA_TYPES = ("hdr", "photo", "drone", "reel", "twilight", "staging", "floorplan")
 PHOTO_TYPES = frozenset({"hdr", "photo", "twilight", "staging", "still", "image", ""})
-AS_IS_TYPES = frozenset({"drone", "reel", "video"})
+AS_IS_TYPES = frozenset({"drone", "reel", "video", "floorplan"})
 STAGING_TYPES = frozenset({"staging", "virtual_staging"})
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm", ".avi")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".heif")
+PDF_EXTS = (".pdf",)
 # Camera RAW — enhance only decodes JPEG/PNG/WebP/HEIC via image_io.open_rgb.
 # Reject at upload so vendors never land a hollow enhance→listing path.
 CAMERA_RAW_EXTS = (
@@ -72,6 +74,10 @@ def infer_media_type(
         "day_to_dusk": "twilight",
         "virtual_staging": "staging",
         "stage": "staging",
+        "floor_plan": "floorplan",
+        "roomplan": "floorplan",
+        "room_plan": "floorplan",
+        "cubicasa": "floorplan",
     }
     if raw in VALID_MEDIA_TYPES:
         return "hdr" if raw == "photo" else raw
@@ -88,6 +94,16 @@ def infer_media_type(
         return "staging"
     if "twilight" in name or "dusk" in name or "golden" in name:
         return "twilight"
+    if (
+        "floorplan" in name
+        or "floor_plan" in name
+        or "floor-plan" in name
+        or "cubicasa" in name
+        or "roomplan" in name
+        or "room_plan" in name
+        or "room-plan" in name
+    ):
+        return "floorplan"
     if "drone" in name or "aerial" in name or name.startswith("dji"):
         return "drone"
     if "reel" in name or "cinematic" in name:
@@ -104,13 +120,22 @@ def is_visit_file(filename: Any = None) -> bool:
 
 def is_video_file(filename: Any = None, mime_type: Any = None, media_type: Any = None) -> bool:
     mt = _lower(media_type)
-    if mt in AS_IS_TYPES:
+    if mt in ("drone", "reel", "video"):
         return True
     mime = _lower(mime_type)
     if mime.startswith("video/"):
         return True
     name = _lower(filename)
     return name.endswith(VIDEO_EXTS)
+
+
+def is_pdf_file(filename: Any = None, mime_type: Any = None) -> bool:
+    """True for PDF floor-plan / document uploads — never HDR enhance."""
+    name = _lower(filename)
+    if name.endswith(PDF_EXTS):
+        return True
+    mime = _lower(mime_type)
+    return mime == "application/pdf" or mime.endswith("/pdf")
 
 
 def is_camera_raw_file(filename: Any = None, mime_type: Any = None) -> bool:
@@ -145,6 +170,10 @@ def assert_listing_still_decodable(
         return
     if is_video_file(filename, mime_type, media_type):
         return
+    if is_pdf_file(filename, mime_type):
+        return
+    if _lower(media_type) == "floorplan":
+        return
     if is_camera_raw_file(filename, mime_type):
         from ..shared.errors import api_error
 
@@ -155,6 +184,15 @@ def is_photo_file(filename: Any = None, mime_type: Any = None, media_type: Any =
     if is_visit_file(filename):
         return False
     if is_video_file(filename, mime_type, media_type):
+        return False
+    # PDF honesty: never treat as listing photo (PHOTO_TYPES includes "" so
+    # missing media_type used to make plan.pdf look like a photo).
+    if is_pdf_file(filename, mime_type):
+        return False
+    # Infer from filename when media_type absent — floorplan_/cubicasa_/aerial_
+    # must not count as enhance-eligible photos.
+    inferred = infer_media_type(filename, mime_type, media_type)
+    if inferred in AS_IS_TYPES:
         return False
     mt = _lower(media_type)
     if mt in STAGING_TYPES or mt in PHOTO_TYPES:
@@ -176,17 +214,19 @@ def wants_staging(asset: Optional[dict] = None) -> bool:
 def delivery_route(asset: Optional[dict] = None) -> str:
     """How this upload should leave post-production.
 
-    Order: skip → visit → staging → twilight → as_is (drone/reel/video) → vendor_photo → as_is.
+    Order: skip → visit → staging → twilight → as_is (drone/reel/video/floorplan/PDF)
+    → vendor_photo → as_is.
 
     skip          — no file
     visit         — .ply/.splat/.spz, not a listing still
     staging       — honest original (no virtual staging / no enhance)
     twilight      — real dusk shot; in-house enhance with apply_sky=False (no blue-sky / day-to-dusk)
-    as_is         — drone / reel / video, no photo edit (incl. aerial JPEGs)
+    as_is         — drone / reel / video / floorplan / PDF, no photo edit (incl. aerial JPEGs)
     vendor_photo  — Fotello / Autoenhance / in-house enhance (may apply sky)
 
     media_type is not a DB column — always use infer_media_type (filename/mime/explicit)
-    so DJI_/aerial_/*.mp4 stills never fall through to vendor_photo + sky replace.
+    so DJI_/aerial_/*.mp4 / floorplan_* / CubiCasa / PDF never fall through to
+    vendor_photo + sky replace.
     """
     row = asset or {}
     if not (row.get("file_url") or row.get("storage_path")):
@@ -195,13 +235,21 @@ def delivery_route(asset: Optional[dict] = None) -> str:
         return "visit"
     if wants_staging(row):
         return "staging"
-    mt = infer_media_type(row.get("filename"), row.get("mime_type"), row.get("media_type"))
+    mt = infer_media_type(
+        row.get("filename"),
+        row.get("mime_type"),
+        row.get("media_type"),
+        file_url=row.get("file_url") or row.get("storage_path"),
+    )
     if mt == "twilight":
         return "twilight"
     # Use inferred mt (not raw row media_type) — uploads table has no media_type col.
     if mt in AS_IS_TYPES:
         return "as_is"
     if is_video_file(row.get("filename"), row.get("mime_type"), row.get("media_type")):
+        return "as_is"
+    # PDF honesty — CubiCasa / broker PDF exports never enter HDR enhance.
+    if is_pdf_file(row.get("filename"), row.get("mime_type")):
         return "as_is"
     if is_photo_file(row.get("filename"), row.get("mime_type"), row.get("media_type")):
         return "vendor_photo"
@@ -213,6 +261,7 @@ _DURABLE_PREFIXES = {
     "reel": "reel_",
     "twilight": "twilight_",
     "staging": "staging_",
+    "floorplan": "floorplan_",
 }
 
 

@@ -28,7 +28,8 @@ execSync(
 );
 const { requiresBracketSet } = await import(`${out}?t=${Date.now()}`);
 assert.equal(requiresBracketSet('staging'), false);
+assert.equal(requiresBracketSet('floorplan'), false);
 assert.equal(requiresBracketSet('hdr'), true);
 assert.equal(requiresBracketSet('twilight'), true);
 
-console.log('stills-upload staging picker tests passed');
+console.log('stills-upload staging/floorplan picker tests passed');

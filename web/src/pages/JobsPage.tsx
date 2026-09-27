@@ -526,9 +526,9 @@ function JobListingPanel({
         <JobShootChecklist job={job} />
         <CaptureStatusBlock job={job} />
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS · CAMERA / DRONE / REEL / TWILIGHT / STAGING</p>
+          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS · CAMERA / DRONE / REEL / TWILIGHT / STAGING / FLOOR PLAN</p>
           <p className="muted" style={{ padding: 0, margin: '4px 0 8px', fontSize: 12 }}>
-            HDR stills stay on the camera. After the shoot, upload JPEG/HEIC ±EV brackets (no camera RAW) / MP4 here — files go straight to storage (not the 4MB API cap). Tag Twilight for real dusk so listing enhance keeps dusk sky (no blue-sky / day-to-dusk). Tag Staging for vacant/staged rooms so listing delivery keeps the original (no enhance).
+            HDR stills stay on the camera. After the shoot, upload JPEG/HEIC ±EV brackets (no camera RAW) / MP4 / floor-plan PNG or PDF here — files go straight to storage (not the 4MB API cap). Tag Twilight for real dusk so listing enhance keeps dusk sky (no blue-sky / day-to-dusk). Tag Staging for vacant/staged rooms so listing delivery keeps the original (no enhance). Tag Floor plan for CubiCasa/PDF/PNG exports (original to listing, no HDR enhance).
           </p>
           {requiresBracketSet(stillsType) ? (
             <>
@@ -544,6 +544,10 @@ function JobListingPanel({
           ) : stillsType === 'staging' ? (
             <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
               Staging delivers the original to the listing (no enhance, no virtual staging).
+            </p>
+          ) : stillsType === 'floorplan' ? (
+            <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
+              Floor plan delivers the original to the listing (PNG/PDF — no HDR enhance).
             </p>
           ) : null}
           <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
@@ -562,7 +566,7 @@ function JobListingPanel({
             <input
               type="file"
               multiple
-              accept="image/jpeg,image/png,image/tiff,image/webp,image/heic,image/heif,video/*,.jpg,.jpeg,.png,.tif,.tiff,.webp,.heic,.heif,.mp4,.mov"
+              accept="image/jpeg,image/png,image/tiff,image/webp,image/heic,image/heif,application/pdf,video/*,.jpg,.jpeg,.png,.tif,.tiff,.webp,.heic,.heif,.pdf,.mp4,.mov"
               onChange={onUpload}
               disabled={uploading || job.status === 'assigned'}
             />

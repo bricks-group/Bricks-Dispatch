@@ -7,6 +7,7 @@ export const STILLS_TYPES = [
   { id: 'reel', label: 'Reel' },
   { id: 'twilight', label: 'Twilight' },
   { id: 'staging', label: 'Staging' },
+  { id: 'floorplan', label: 'Floor plan' },
 ] as const;
 
 export type StillsType = (typeof STILLS_TYPES)[number]['id'];
@@ -26,9 +27,9 @@ async function authHeaders(): Promise<HeadersInit> {
   return headers;
 }
 
-/** Camera JPEG / drone / reel / twilight / staging → Storage via signed PUT (not the 4MB Vercel POST).
+/** Camera JPEG / drone / reel / twilight / staging / floorplan → Storage via signed PUT (not the 4MB Vercel POST).
  * Always pass the camera filename (stem + ±EV) so backend group_brackets can cluster.
- * Staging tags durable staging_ filename → leftover route as_is (no enhance / no virtual staging). */
+ * Staging / Floor plan tag durable prefixes → leftover route as_is (no enhance). */
 export async function uploadStillFile(jobId: string, file: File, mediaType: StillsType) {
   const signRes = await fetch(`${API_BASE}/api/uploads/sign`, {
     method: 'POST',

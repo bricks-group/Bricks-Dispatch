@@ -401,6 +401,34 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         )
         return
 
+    # Floorplan / drone / reel / PDF: original only — never HDR enhance / sky invent.
+    if route == "as_is":
+        from .media_intake import infer_media_type, is_pdf_file
+
+        mt = infer_media_type(
+            asset.get("filename"),
+            asset.get("mime_type"),
+            asset.get("media_type"),
+            file_url=file_path,
+        )
+        label = (
+            "floorplan"
+            if mt == "floorplan"
+            or is_pdf_file(asset.get("filename"), asset.get("mime_type"))
+            else "as_is"
+        )
+        await _safe_update_upload(db, upload_id, {
+            "processing_status": "done",
+            "processed_url": file_path,
+            "provider": "as_is",
+            "processed_at": now,
+        })
+        logger.info(
+            f"Job {job_id}: {label} upload {upload_id} delivered as_is "
+            "(original file — no HDR enhance)"
+        )
+        return
+
     processed = file_path
     provider = "as_is"
     qc_path = asset.get("qc_variant_url")

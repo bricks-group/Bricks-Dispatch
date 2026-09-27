@@ -47,6 +47,10 @@ assert.equal(requiresBracketSet('hdr'), true);
 assert.equal(requiresBracketSet('twilight'), true);
 assert.equal(requiresBracketSet('drone'), false);
 assert.equal(requiresBracketSet('staging'), false);
+assert.equal(requiresBracketSet('floorplan'), false);
+assert.equal(inferMediaType('floorplan_main.png'), 'floorplan');
+assert.equal(inferMediaType('cubicasa_export.png'), 'floorplan');
+assert.equal(inferMediaType('plan.pdf', 'application/pdf', 'floor_plan'), 'floorplan');
 assert.equal(HDR_BRACKET_MIN, 3);
 assert.ok(BRACKET_HINT.includes('bracketed'));
 

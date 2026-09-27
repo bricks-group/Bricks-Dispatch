@@ -137,8 +137,12 @@ export function inferMediaType(
     virtual_staging: 'staging',
     stage: 'staging',
     photo: 'hdr',
+    floor_plan: 'floorplan',
+    roomplan: 'floorplan',
+    room_plan: 'floorplan',
+    cubicasa: 'floorplan',
   };
-  const known = new Set(['hdr', 'photo', 'drone', 'reel', 'twilight', 'staging']);
+  const known = new Set(['hdr', 'photo', 'drone', 'reel', 'twilight', 'staging', 'floorplan']);
   if (known.has(raw)) return raw === 'photo' ? 'hdr' : raw;
   if (aliases[raw]) return aliases[raw];
 
@@ -147,6 +151,17 @@ export function inferMediaType(
   if (name.includes('stag')) return 'staging';
   if (name.includes('twilight') || name.includes('dusk') || name.includes('golden')) {
     return 'twilight';
+  }
+  if (
+    name.includes('floorplan') ||
+    name.includes('floor_plan') ||
+    name.includes('floor-plan') ||
+    name.includes('cubicasa') ||
+    name.includes('roomplan') ||
+    name.includes('room_plan') ||
+    name.includes('room-plan')
+  ) {
+    return 'floorplan';
   }
   if (name.includes('drone') || name.includes('aerial') || name.startsWith('dji')) {
     return 'drone';
@@ -293,4 +308,29 @@ export function validateHdrUploadsForComplete(
 export function requiresBracketSet(mediaType: string | null | undefined): boolean {
   const mt = String(mediaType || '').toLowerCase();
   return mt === 'hdr' || mt === 'photo' || mt === 'stills' || mt === 'twilight';
+}
+
+/** Mirror backend media_intake.durable_media_filename durable prefixes. */
+const DURABLE_PREFIXES: Record<string, string> = {
+  drone: 'aerial_',
+  reel: 'reel_',
+  twilight: 'twilight_',
+  staging: 'staging_',
+  floorplan: 'floorplan_',
+};
+
+export function durableMediaFilename(
+  filename?: string | null,
+  mediaType?: string | null,
+): string {
+  const raw = String(filename || 'still.jpg').replace(/\\/g, '/');
+  const base = (raw.split('/').pop() || 'still.jpg').replace(/^\.+/, '') || 'still.jpg';
+  const intended = inferMediaType(base, null, mediaType);
+  if (intended === 'hdr') return base;
+  const fromName = inferMediaType(base, null, null);
+  if (fromName === intended) return base;
+  const prefix = DURABLE_PREFIXES[intended];
+  if (!prefix) return base;
+  if (base.toLowerCase().startsWith(prefix.toLowerCase())) return base;
+  return `${prefix}${base}`;
 }
