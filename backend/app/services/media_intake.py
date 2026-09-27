@@ -13,7 +13,32 @@ PHOTO_TYPES = frozenset({"hdr", "photo", "twilight", "staging", "still", "image"
 AS_IS_TYPES = frozenset({"drone", "reel", "video"})
 STAGING_TYPES = frozenset({"staging", "virtual_staging"})
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm", ".avi")
-IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".heif")
+# Camera RAW — enhance only decodes JPEG/PNG/WebP/HEIC via image_io.open_rgb.
+# Reject at upload so vendors never land a hollow enhance→listing path.
+CAMERA_RAW_EXTS = (
+    ".cr2", ".cr3", ".dng", ".nef", ".nrw", ".arw", ".srf", ".sr2",
+    ".raf", ".orf", ".rw2", ".pef", ".ptx", ".srw", ".x3f", ".raw", ".rwl",
+)
+_CAMERA_RAW_MIME_MARKERS = (
+    "image/x-adobe-dng",
+    "image/x-canon-cr2",
+    "image/x-canon-cr3",
+    "image/x-nikon-nef",
+    "image/x-sony-arw",
+    "image/x-fuji-raf",
+    "image/x-olympus-orf",
+    "image/x-panasonic-rw2",
+    "image/x-pentax-pef",
+    "image/x-samsung-srw",
+    "image/x-sigma-x3f",
+    "image/x-raw",
+    "image/x-dcraw",
+)
+CAMERA_RAW_REJECT_MESSAGE = (
+    "Camera RAW files (CR2/CR3/DNG/NEF/ARW/…) are not supported for listing stills. "
+    "Export JPEG (or HEIC) ±EV brackets from your camera or Lightroom, then upload those."
+)
 VISIT_EXTS = (".splat", ".ply", ".spz")
 
 
@@ -86,6 +111,44 @@ def is_video_file(filename: Any = None, mime_type: Any = None, media_type: Any =
         return True
     name = _lower(filename)
     return name.endswith(VIDEO_EXTS)
+
+
+def is_camera_raw_file(filename: Any = None, mime_type: Any = None) -> bool:
+    """True when filename ext or mime marks a camera RAW the enhance desk cannot decode."""
+    name = _lower(filename)
+    if name.endswith(CAMERA_RAW_EXTS):
+        return True
+    mime = _lower(mime_type)
+    if not mime:
+        return False
+    if any(marker in mime for marker in _CAMERA_RAW_MIME_MARKERS):
+        return True
+    # Broad fallback: image/x-*raw* / vendor raw tokens without matching IMAGE_EXTS
+    if "raw" in mime and mime.startswith("image/") and not name.endswith(IMAGE_EXTS):
+        # Avoid false-positive on generic image/* ; require x- vendor or /raw
+        if "/x-" in mime or mime.endswith("/raw") or "raw-" in mime:
+            return True
+    return False
+
+
+def assert_listing_still_decodable(
+    filename: Any = None,
+    mime_type: Any = None,
+    media_type: Any = None,
+) -> None:
+    """Reject camera RAW before sign/complete/create so enhance→listing is never hollow.
+
+    Skips Visit (.splat/.ply/.spz) and video (drone reel / cinematic) — those are
+    not listing stills decoded by image_io.open_rgb.
+    """
+    if is_visit_file(filename):
+        return
+    if is_video_file(filename, mime_type, media_type):
+        return
+    if is_camera_raw_file(filename, mime_type):
+        from ..shared.errors import api_error
+
+        api_error(400, CAMERA_RAW_REJECT_MESSAGE, "camera_raw_unsupported")
 
 
 def is_photo_file(filename: Any = None, mime_type: Any = None, media_type: Any = None) -> bool:

@@ -265,3 +265,77 @@ def test_deliver_twilight_durable_name_apply_sky_false(monkeypatch):
     assert len(bracket_calls) == 1
     assert bracket_calls[0]["apply_sky"] is False
     assert updates[0][1]["provider"] == "bricks_inhouse"
+
+
+def test_complete_rejects_camera_raw(monkeypatch):
+    """Hollow enhance hole closes at register — CR3 never inserts."""
+    from fastapi import HTTPException
+
+    job = {
+        "id": "job-d",
+        "uploaded_count": 0,
+        "deliverables_count": 20,
+        "status": "in_progress",
+        "vendor_id": "default_vendor",
+        "assignee_id": "photog-1",
+    }
+    upload_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    filename = "IMG_0001.CR3"
+    storage_path = f"bricks-go/jobs/job-d/{upload_id}/{filename}"
+
+    class Db:
+        def table(self, name):
+            raise AssertionError("DB must not be touched for RAW")
+
+    monkeypatch.setattr(
+        up,
+        "_actor_job",
+        AsyncMock(return_value=(Db(), "photog-1", "default_vendor", job)),
+    )
+    monkeypatch.setattr(up, "_maybe_start_post", AsyncMock())
+
+    try:
+        _run(
+            up.complete_stills_upload(
+                BackgroundTasks(),
+                {
+                    "job_id": "job-d",
+                    "upload_id": upload_id,
+                    "storage_path": storage_path,
+                    "filename": filename,
+                    "mime_type": "image/x-canon-cr3",
+                    "media_type": "hdr",
+                    "file_size": 12,
+                },
+            )
+        )
+        raise AssertionError("expected camera_raw_unsupported")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail["code"] == "camera_raw_unsupported"
+
+
+def test_sign_rejects_camera_raw(monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(
+        up,
+        "_actor_job",
+        AsyncMock(side_effect=AssertionError("_actor_job must not run for RAW")),
+    )
+
+    try:
+        _run(
+            up.sign_stills_upload(
+                {
+                    "job_id": "job-d",
+                    "filename": "bracket.DNG",
+                    "mime_type": "image/x-adobe-dng",
+                    "media_type": "hdr",
+                }
+            )
+        )
+        raise AssertionError("expected camera_raw_unsupported")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail["code"] == "camera_raw_unsupported"

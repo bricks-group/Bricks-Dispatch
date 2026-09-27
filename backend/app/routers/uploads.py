@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Form, Header, HTTPException
 
-from ..services.media_intake import durable_media_filename, infer_media_type, stills_storage_path, wants_staging
+from ..services.media_intake import assert_listing_still_decodable, durable_media_filename, infer_media_type, stills_storage_path, wants_staging
 from ..services.storage import create_signed_upload_url, upload_file
 from ..services.post_production import process_job_assets
 from fastapi import BackgroundTasks
@@ -164,6 +164,7 @@ async def sign_stills_upload(
     mime_type = str((payload or {}).get("mime_type") or "")
     media_type = infer_media_type(filename, mime_type, (payload or {}).get("media_type"))
     durable_name = durable_media_filename(filename, media_type)
+    assert_listing_still_decodable(filename, mime_type, media_type)
     if not job_id:
         api_error(400, "job_id is required", "missing_job_id")
     await _actor_job(authorization, x_user_id, job_id)
@@ -203,6 +204,7 @@ async def complete_stills_upload(
     mime_type = str((payload or {}).get("mime_type") or "")
     file_size = int((payload or {}).get("file_size") or 0)
     media_type = infer_media_type(filename, mime_type, (payload or {}).get("media_type"))
+    assert_listing_still_decodable(filename, mime_type, media_type)
     # Persist kind in filename column (uploads has no media_type col) for leftover routing.
     filename = durable_media_filename(filename, media_type)
     if not job_id or not upload_id or not storage_path:
@@ -378,6 +380,9 @@ async def create_upload(
         and job_row.get("assignee_id") != actor_id
     ):
         api_error(404, "Job not found", "job_not_found")
+
+    kind_preview = infer_media_type(filename, mime_type, media_type)
+    assert_listing_still_decodable(filename, mime_type, kind_preview)
 
     # Decode base64 payload
     try:

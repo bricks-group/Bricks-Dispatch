@@ -10,6 +10,8 @@ import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 import {
   BRACKET_HINT,
+  cameraRawRejectionMessage,
+  isCameraRawName,
   requiresBracketSet,
   validateHdrBracketSelection,
 } from '../../lib/bracket-require';
@@ -156,13 +158,23 @@ export default function UploadsScreen() {
     });
     if (result.canceled || !result.assets?.length) return;
 
+    const assetNames = result.assets.map((a, i) => {
+      const fromName = a.fileName || '';
+      const fromUri = (a.uri || '').split(/[/\\]/).pop() || '';
+      return fromName || fromUri || `upload_${Date.now()}_${i}.jpg`;
+    });
+    if (assetNames.some((n) => isCameraRawName(n))) {
+      Alert.alert('Camera RAW not supported', cameraRawRejectionMessage);
+      return;
+    }
+
     setUploading(true);
     try {
       if (requiresBracketSet(stillsType)) {
         const existing = uploads
           .filter((u) => u.job_id === targetJob.id)
           .map((u) => u.filename);
-        const names = result.assets.map((a, i) => a.fileName || `upload_${Date.now()}_${i}.jpg`);
+        const names = assetNames;
         const issue = validateHdrBracketSelection(names, existing);
         if (issue) {
           Alert.alert('Brackets required', issue.message);
@@ -203,7 +215,7 @@ export default function UploadsScreen() {
           contentContainerStyle={s.scroll}
         >
           <Text style={s.title}>Upload</Text>
-          <Text style={s.subtitle}>Camera JPEG, drone, reel, twilight, staging — signed upload, no 4MB cap. Tag Twilight for real dusk (no blue-sky / day-to-dusk).</Text>
+          <Text style={s.subtitle}>JPEG/HEIC ±EV brackets (no camera RAW), drone, reel, twilight, staging — signed upload, no 4MB cap. Tag Twilight for real dusk (no blue-sky / day-to-dusk).</Text>
           {requiresBracketSet(stillsType) ? (
             <>
               <Text style={{ fontSize: 12, color: TOKENS.brickSoft, marginBottom: stillsType === 'twilight' ? 6 : 14 }}>

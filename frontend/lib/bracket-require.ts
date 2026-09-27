@@ -87,9 +87,21 @@ export function bracketHasUnderMidOver(filenames: string[]): boolean {
   return hasUnder && hasMid && hasOver;
 }
 
-function isImageName(name: string): boolean {
-  return /\.(jpe?g|png|tif{1,2}|webp|heic|dng|cr2|nef|arw|raf|orf)$/i.test(name);
+/** Listing-decodable stills only — enhance decodes JPEG/PNG/TIFF/WebP/HEIC/HEIF. */
+export function isImageName(name: string): boolean {
+  return /\.(jpe?g|png|tif{1,2}|webp|heic|heif)$/i.test(name);
 }
+
+/** Camera RAW the enhance desk cannot decode (parity with backend CAMERA_RAW_EXTS). */
+export function isCameraRawName(name: string): boolean {
+  return /\.(cr2|cr3|dng|nef|nrw|arw|srf|sr2|raf|orf|rw2|pef|ptx|srw|x3f|raw|rwl)$/i.test(
+    name || '',
+  );
+}
+
+export const cameraRawRejectionMessage =
+  'Camera RAW files (CR2/CR3/DNG/NEF/ARW/…) are not supported for listing stills. ' +
+  'Export JPEG (or HEIC) ±EV brackets from your camera or Lightroom, then upload those.';
 
 function isVisitName(name: string): boolean {
   return /\.(splat|ply|spz)$/i.test(name);

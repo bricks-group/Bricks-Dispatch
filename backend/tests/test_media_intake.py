@@ -1,7 +1,13 @@
+from fastapi import HTTPException
+
 from app.services.media_intake import (
+    CAMERA_RAW_EXTS,
+    IMAGE_EXTS,
+    assert_listing_still_decodable,
     delivery_route,
     durable_media_filename,
     infer_media_type,
+    is_camera_raw_file,
     is_listing_still_delivery_row,
     is_photo_delivery_candidate,
     is_photo_file,
@@ -216,3 +222,50 @@ def test_durable_filename_delivery_route_without_media_type_col():
 def test_infer_reel_cue_and_file_url_basename():
     assert infer_media_type("reel_IMG_1.JPG") == "reel"
     assert infer_media_type(None, None, None, file_url="bricks-go/jobs/j/u/twilight_x.jpg") == "twilight"
+
+
+def test_image_exts_include_heif():
+    assert ".heif" in IMAGE_EXTS
+    assert ".heic" in IMAGE_EXTS
+    assert is_photo_file("shot.heif", "image/heif", "hdr")
+    assert is_photo_file("shot.HEIC", "image/heic", "hdr")
+
+
+def test_is_camera_raw_file_ext_and_mime():
+    for name in ("a.CR3", "b.DNG", "c.cr2", "d.NEF", "e.arw", "f.raf", "g.orf"):
+        assert is_camera_raw_file(name)
+    assert is_camera_raw_file("x.bin", "image/x-adobe-dng")
+    assert is_camera_raw_file(None, "image/x-canon-cr3")
+    assert is_camera_raw_file("foo.JPG", "image/x-nikon-nef")  # mime wins
+    assert not is_camera_raw_file("living.jpg")
+    assert not is_camera_raw_file("shot.HEIC", "image/heic")
+    assert not is_camera_raw_file("clip.MP4", "video/mp4")
+    assert not is_camera_raw_file("tour.splat")
+    assert not is_camera_raw_file("a.png", "image/png")
+    # required coverage set present
+    for ext in (".cr2", ".cr3", ".dng", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef", ".srw", ".x3f", ".raw"):
+        assert ext in CAMERA_RAW_EXTS
+
+
+def test_assert_listing_still_decodable_rejects_raw():
+    try:
+        assert_listing_still_decodable("IMG_0001.CR3")
+        raise AssertionError("expected api_error")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail["code"] == "camera_raw_unsupported"
+        assert "JPEG" in exc.detail["message"] or "HEIC" in exc.detail["message"]
+
+    try:
+        assert_listing_still_decodable("x.bin", "image/x-adobe-dng")
+        raise AssertionError("expected api_error")
+    except HTTPException as exc:
+        assert exc.detail["code"] == "camera_raw_unsupported"
+
+    # visit / video / JPEG / HEIC pass through
+    assert_listing_still_decodable("tour.splat")
+    assert_listing_still_decodable("reel.mp4", "video/mp4", "reel")
+    assert_listing_still_decodable("DJI_0042.JPG", "image/jpeg", "drone")
+    assert_listing_still_decodable("living_0.jpg", "image/jpeg", "hdr")
+    assert_listing_still_decodable("living_0.HEIC", "image/heic", "hdr")
+    assert_listing_still_decodable("living_0.heif", "image/heif", "hdr")
