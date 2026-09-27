@@ -212,3 +212,70 @@ def test_leftovers_route_floorplan_to_others_not_hdr_photos(monkeypatch):
     assert "up-cubi" in delivered
     assert grouped_inputs == [["up-photo-0"]]
     assert bracket_calls == []
+
+
+def test_listing_still_delivery_urls_tags_floorplan_kind(monkeypatch):
+    """GO CubiCasa/PDF leftovers stay in delivery_urls but with kind=floorplan."""
+    from app.routers import post_production as router_pp
+
+    async def fake_signed(path):
+        return f"https://cdn.example/signed/{path}"
+
+    monkeypatch.setattr(router_pp, "get_signed_download_url", fake_signed)
+
+    uploads = [
+        {
+            "id": "up-photo",
+            "filename": "living-0.jpg",
+            "processed_url": "p/living-0.jpg",
+            "processing_status": "done",
+            "qc_status": "passed",
+            "provider": "bricks_inhouse",
+        },
+        {
+            "id": "up-fp",
+            "filename": "floorplan_main.png",
+            "processed_url": "p/floorplan_main.png",
+            "processing_status": "done",
+            "qc_status": "passed",
+            "provider": "as_is",
+        },
+        {
+            "id": "up-cubi",
+            "filename": "cubicasa_export.png",
+            "file_url": "p/cubicasa_export.png",
+            "processing_status": "done",
+            "provider": "as_is",
+        },
+        {
+            "id": "up-pdf",
+            "filename": "plan.pdf",
+            "file_url": "p/plan.pdf",
+            "mime_type": "application/pdf",
+            "processing_status": "done",
+            "provider": "as_is",
+        },
+    ]
+    urls = _run(router_pp._listing_still_delivery_urls(uploads))
+    by_id = {u["upload_id"]: u for u in urls}
+    assert "up-photo" in by_id
+    assert "kind" not in by_id["up-photo"]
+    assert by_id["up-fp"]["kind"] == "floorplan"
+    assert by_id["up-fp"]["filename"] == "floorplan_main.png"
+    assert by_id["up-fp"]["url"]
+    assert by_id["up-cubi"]["kind"] == "floorplan"
+    assert by_id["up-pdf"]["kind"] == "floorplan"
+    # Keep in listing still delivery (Companion + late-fold need them)
+    assert is_listing_still_delivery_row(uploads[1])
+
+
+def test_delivery_url_kind_for_upload_filename_cues():
+    from app.routers.post_production import _delivery_url_kind_for_upload
+
+    assert _delivery_url_kind_for_upload({"filename": "floorplan_main.png"}) == "floorplan"
+    assert _delivery_url_kind_for_upload({"filename": "floor_plan_a.png"}) == "floorplan"
+    assert _delivery_url_kind_for_upload({"filename": "cubicasa_export.png"}) == "floorplan"
+    assert _delivery_url_kind_for_upload({"filename": "roomplan_1.png"}) == "floorplan"
+    assert _delivery_url_kind_for_upload({"filename": "plan.pdf"}) == "floorplan"
+    assert _delivery_url_kind_for_upload({"filename": "x.bin", "mime_type": "application/pdf"}) == "floorplan"
+    assert _delivery_url_kind_for_upload({"filename": "living-0.jpg"}) is None

@@ -25,7 +25,12 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from ..services.media_intake import is_listing_still_delivery_row, pick_visit_upload
+from ..services.media_intake import (
+    infer_media_type,
+    is_listing_still_delivery_row,
+    is_pdf_file,
+    pick_visit_upload,
+)
 from ..services.qc_agent import run_qc_for_job
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.auth import get_own_internal_api_key
@@ -192,6 +197,41 @@ def _merge_missing_still_urls(existing_urls, still_urls: list[dict]) -> list[dic
     return existing + added
 
 
+
+def _delivery_url_kind_for_upload(upload: dict) -> Optional[str]:
+    """Tag GO floorplan/PDF leftovers in delivery_urls (Canada: no media_type col).
+
+    Companion strips kind=floorplan (and filename cues) from the client photo
+    gallery while still reading floor_plan_url from these rows. Keep the upload
+    in delivery_urls — do not drop it.
+    """
+    if not isinstance(upload, dict):
+        return None
+    filename = upload.get("filename")
+    mime = upload.get("mime_type")
+    file_url = upload.get("file_url") or upload.get("processed_url")
+    if is_pdf_file(filename, mime):
+        return "floorplan"
+    if infer_media_type(filename, mime, upload.get("media_type"), file_url) == "floorplan":
+        return "floorplan"
+    return None
+
+
+def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
+    """listing still delivery_urls row; floorplan/PDF get kind=floorplan."""
+    entry = {
+        "upload_id": upload["id"],
+        "filename": upload.get("filename", ""),
+        "url": url,
+        "expires_at": expires_at,
+        "qc_flagged": upload.get("qc_status") == "flagged",
+    }
+    kind = _delivery_url_kind_for_upload(upload)
+    if kind:
+        entry["kind"] = kind
+    return entry
+
+
 async def _listing_still_delivery_urls(uploads: list) -> list[dict]:
     """Build photo delivery_urls entries from listing still uploads (not Visit/siblings)."""
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=SIGNED_URL_EXPIRY)).isoformat()
@@ -217,13 +257,7 @@ async def _listing_still_delivery_urls(uploads: list) -> list[dict]:
             url = await get_signed_download_url(path)
         if not url:
             continue
-        out.append({
-            "upload_id": u["id"],
-            "filename": u.get("filename", ""),
-            "url": url,
-            "expires_at": expires_at,
-            "qc_flagged": u.get("qc_status") == "flagged",
-        })
+        out.append(_still_delivery_url_entry(u, url, expires_at))
     return out
 
 
@@ -428,13 +462,7 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False) 
         else:
             url = await get_signed_download_url(path)
         if url:
-            delivery_urls.append({
-                "upload_id": u["id"],
-                "filename": u.get("filename", ""),
-                "url": url,
-                "expires_at": expires_at,
-                "qc_flagged": u.get("qc_status") == "flagged",
-            })
+            delivery_urls.append(_still_delivery_url_entry(u, url, expires_at))
 
     # Find Visit (.splat > .ply > .spz) BEFORE the empty-stills gate so Visit-only
     # (or all-stills-rejected) jobs still register property_visits + deliver.
