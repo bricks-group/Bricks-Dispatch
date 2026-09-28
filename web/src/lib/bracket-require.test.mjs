@@ -42,6 +42,11 @@ assert.equal(exposureBiasFromName('plain.jpg'), null);
 assert.equal(inferMediaType('DJI_0123.jpg', 'image/jpeg'), 'drone');
 assert.equal(inferMediaType('clip.mp4', 'video/mp4'), 'reel');
 assert.equal(inferMediaType('living_0.jpg', 'image/jpeg'), 'hdr');
+// Durable reel_/cinematic_ stills (backend durable_media_filename) — not hdr
+assert.equal(inferMediaType('reel_IMG_1.JPG', 'image/jpeg'), 'reel');
+assert.equal(inferMediaType('cinematic_walk.jpg', 'image/jpeg'), 'reel');
+assert.equal(inferMediaType('reel_cut.mp4', 'video/mp4'), 'reel');
+assert.equal(requiresBracketSet('reel'), false);
 
 assert.equal(requiresBracketSet('hdr'), true);
 assert.equal(requiresBracketSet('twilight'), true);
@@ -162,6 +167,25 @@ assert.equal(
 );
 assert.equal(
   validateHdrUploadsForComplete([{ filename: 'DJI_0456.jpg', mime_type: 'image/jpeg' }]),
+  null,
+);
+
+// Durable reel_ JPEG (no media_type) must not false-block Mark complete
+assert.equal(
+  validateHdrUploadsForComplete([
+    { filename: 'living_-2.jpg', mime_type: 'image/jpeg' },
+    { filename: 'living_0.jpg', mime_type: 'image/jpeg' },
+    { filename: 'living_+2.jpg', mime_type: 'image/jpeg' },
+    { filename: 'reel_IMG_1.JPG', mime_type: 'image/jpeg' },
+  ]),
+  null,
+);
+assert.equal(
+  validateHdrUploadsForComplete([{ filename: 'reel_IMG_1.JPG', mime_type: 'image/jpeg' }]),
+  null,
+);
+assert.equal(
+  validateHdrUploadsForComplete([{ filename: 'cinematic_walk.jpg', mime_type: 'image/jpeg' }]),
   null,
 );
 

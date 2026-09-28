@@ -173,6 +173,11 @@ export function inferMediaType(
   if (name.includes('drone') || name.includes('aerial') || name.startsWith('dji')) {
     return 'drone';
   }
+  // Backend media_intake parity — durable reel_/cinematic_ stills (JPEG/HEIC)
+  // must not fall through to hdr + bracket gate after uploads strip media_type.
+  if (name.includes('reel') || name.includes('cinematic')) {
+    return 'reel';
+  }
   if (mime.startsWith('video/') || /\.(mp4|mov|m4v|webm|avi)$/i.test(name)) {
     return 'reel';
   }
