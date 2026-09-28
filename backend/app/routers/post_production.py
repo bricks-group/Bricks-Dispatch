@@ -275,6 +275,29 @@ def _merge_missing_still_urls(existing_urls, still_urls: list[dict]) -> list[dic
 
 
 
+def _listing_delivery_filename(upload: dict) -> str:
+    """Advertise .jpg when listing bytes are JPEG (enhance / HEIC as_is convert).
+
+    Canada uploads keep capture filename/mime; after AE/inhouse or HEIC→JPEG,
+    processed_url is enhanced/{job}/{id}.jpg. Companion delivery_urls + emails
+    must not say .heic/.png/.webp while the bytes are JPEG. Floorplan PNG/PDF
+    as_is keep their real extension (processed path matches source).
+    """
+    if not isinstance(upload, dict):
+        return "still.jpg"
+    fname = str(upload.get("filename") or "").strip() or "still"
+    path = str(upload.get("processed_url") or upload.get("file_url") or "").strip()
+    path_l = path.lower().split("?", 1)[0]
+    if not path_l.endswith((".jpg", ".jpeg")):
+        return fname
+    if "." in fname:
+        root, ext = fname.rsplit(".", 1)
+        if ext and len(ext) <= 8 and ext.lower() not in ("jpg", "jpeg"):
+            return f"{root}.jpg" if root else f"{fname}.jpg"
+        return fname
+    return f"{fname}.jpg"
+
+
 def _delivery_url_kind_for_upload(upload: dict) -> Optional[str]:
     """Tag GO floorplan/PDF leftovers in delivery_urls (Canada: no media_type col).
 
@@ -298,7 +321,7 @@ def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
     """listing still delivery_urls row; floorplan/PDF get kind=floorplan."""
     entry = {
         "upload_id": upload["id"],
-        "filename": upload.get("filename", ""),
+        "filename": _listing_delivery_filename(upload),
         "url": url,
         "expires_at": expires_at,
         "qc_flagged": upload.get("qc_status") == "flagged",

@@ -302,3 +302,57 @@ def test_delivery_url_kind_for_upload_filename_cues():
     assert _delivery_url_kind_for_upload({"filename": "plan.pdf"}) == "floorplan"
     assert _delivery_url_kind_for_upload({"filename": "x.bin", "mime_type": "application/pdf"}) == "floorplan"
     assert _delivery_url_kind_for_upload({"filename": "living-0.jpg"}) is None
+
+
+def test_listing_delivery_filename_jpeg_when_processed_is_jpg():
+    """HEIC/PNG/WebP capture + JPEG processed_url → advertise .jpg (Companion honesty)."""
+    from app.routers.post_production import _listing_delivery_filename, _still_delivery_url_entry
+
+    assert _listing_delivery_filename({
+        "filename": "staging_room.heic",
+        "processed_url": "enhanced/job/u-heic.jpg",
+        "file_url": "raw/staging_room.heic",
+    }) == "staging_room.jpg"
+    assert _listing_delivery_filename({
+        "filename": "living.png",
+        "processed_url": "enhanced/job/u.png.jpg",
+        "mime_type": "image/png",
+    }) == "living.jpg"
+    assert _listing_delivery_filename({
+        "filename": "phone.webp",
+        "processed_url": "enhanced/job/u.webp.jpg",
+    }) == "phone.jpg"
+    # Already JPEG — keep
+    assert _listing_delivery_filename({
+        "filename": "living-0.jpg",
+        "processed_url": "enhanced/job/u.jpg",
+    }) == "living-0.jpg"
+    # Floorplan PNG as_is — processed stays PNG, keep extension
+    assert _listing_delivery_filename({
+        "filename": "floorplan_main.png",
+        "processed_url": "p/floorplan_main.png",
+    }) == "floorplan_main.png"
+    # HEIC convert failed — processed still HEIC
+    assert _listing_delivery_filename({
+        "filename": "aerial_yard.heic",
+        "processed_url": "raw/drone.heic",
+    }) == "aerial_yard.heic"
+    # PDF untouched
+    assert _listing_delivery_filename({
+        "filename": "plan.pdf",
+        "processed_url": "raw/plan.pdf",
+        "mime_type": "application/pdf",
+    }) == "plan.pdf"
+
+    entry = _still_delivery_url_entry(
+        {
+            "id": "u1",
+            "filename": "staging_room.heic",
+            "processed_url": "enhanced/job/u-heic.jpg",
+            "qc_status": "passed",
+        },
+        "https://cdn.example/u.jpg",
+        "2099-01-01T00:00:00+00:00",
+    )
+    assert entry["filename"] == "staging_room.jpg"
+    assert entry["upload_id"] == "u1"
