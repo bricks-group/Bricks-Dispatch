@@ -681,3 +681,105 @@ def test_finalize_visit_bridge_no_uploads_delivers(monkeypatch):
     assert upsert_row["job_id"] == "job-vb"
     assert upsert_row["delivery_urls"] == []
     assert jobs_tbl.update.call_args[0][0]["status"] == "delivered"
+
+
+def test_normalize_and_merge_visit_delivery_urls():
+    """Virtual Visit rows stamp kind=visit and fold once into delivery_urls."""
+    from app.routers.post_production import (
+        _merge_missing_visit_urls,
+        _normalize_visit_delivery_urls,
+    )
+
+    norm = _normalize_visit_delivery_urls(
+        [{"url": "https://poly.cam/capture/x", "filename": "Virtual Visit"}]
+    )
+    assert len(norm) == 1
+    assert norm[0]["kind"] == "visit"
+    assert norm[0]["url"] == "https://poly.cam/capture/x"
+
+    existing = [
+        {"upload_id": "up-1", "filename": "living.jpg", "url": "https://cdn/a.jpg"},
+    ]
+    merged = _merge_missing_visit_urls(existing, norm)
+    assert merged is not None
+    assert len(merged) == 2
+    assert merged[-1]["kind"] == "visit"
+    # Idempotent — already has visit
+    assert _merge_missing_visit_urls(merged, norm) is None
+
+
+def test_finalize_visit_bridge_folds_polycam_into_delivery(monkeypatch):
+    """Visit-bridge finalize must put kind=visit polycam URL into media_delivery."""
+    db = MagicMock()
+    uploads_tbl = _uploads_chain([])
+    md_empty = MagicMock()
+    md_empty.data = None
+    md_tbl = MagicMock()
+    md_tbl.select.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.maybe_single.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=md_empty)
+    md_tbl.upsert.return_value = md_tbl
+
+    jobs_tbl = MagicMock()
+    jobs_tbl.update.return_value = jobs_tbl
+    jobs_tbl.eq.return_value = jobs_tbl
+    jobs_tbl.select.return_value = jobs_tbl
+    jobs_tbl.maybe_single.return_value = jobs_tbl
+    jobs_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    cap_tbl = _capture_sessions_chain([])
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "jobs":
+            return jobs_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db.table.side_effect = table
+
+    async def fake_qc(_job_id):
+        return {"approved": 0, "rejected": 0, "flagged": 0}
+
+    async def fake_payout(_db, job_id):
+        return None
+
+    async def fake_notify(job_id, delivery_urls):
+        pass
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(pp, "_send_delivery_notification", fake_notify)
+
+    visit_urls = [
+        {"url": "https://poly.cam/capture/bridge99", "filename": "Virtual Visit", "kind": "visit"}
+    ]
+    with patch("app.services.client_comms.register_property_visit", AsyncMock(return_value=True)), \
+         patch("app.services.payout_service.trigger_payout_for_job", fake_payout):
+        asyncio.run(
+            pp._finalize_job_if_complete(
+                "job-vb2",
+                visit_bridge=True,
+                visit_delivery_urls=visit_urls,
+            )
+        )
+
+    upsert_row = md_tbl.upsert.call_args[0][0]
+    urls = upsert_row["delivery_urls"]
+    assert len(urls) == 1
+    assert urls[0]["kind"] == "visit"
+    assert urls[0]["url"] == "https://poly.cam/capture/bridge99"
+
+
+def test_visit_deliver_passes_visit_delivery_urls_to_finalize():
+    from app.routers import capture as capture_mod
+
+    src = Path(capture_mod.__file__).read_text()
+    fn = src.split("async def deliver_virtual_visit")[1].split("@router.put")[0]
+    assert "visit_delivery_urls=delivery_urls" in fn
+    assert '"kind": "visit"' in fn or "'kind': 'visit'" in fn

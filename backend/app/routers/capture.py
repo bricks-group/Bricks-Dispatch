@@ -1043,17 +1043,17 @@ async def _notify_capture_session_delivered(db, job: dict, sid: str, kind: str, 
             from ..services.capture_worker import public_tour_embed_url
             url = public_tour_embed_url(job_id, sid)
             if url:
-                delivery_urls.append({"url": url, "filename": "3D tour"})
+                delivery_urls.append({"url": url, "filename": "3D tour", "kind": "splat"})
         elif kind == "floorplan":
             from ..services.capture_worker import public_floorplan_url
             url = public_floorplan_url(job_id, sid)
             if url:
-                delivery_urls.append({"url": url, "filename": "Floor plan"})
+                delivery_urls.append({"url": url, "filename": "Floor plan", "kind": "floorplan"})
             elif output_path:
                 from ..services.storage import get_signed_download_url
                 signed = await get_signed_download_url(output_path, expiry=60 * 60 * 24)
                 if signed:
-                    delivery_urls.append({"url": signed, "filename": "Floor plan"})
+                    delivery_urls.append({"url": signed, "filename": "Floor plan", "kind": "floorplan"})
     except Exception:
         delivery_urls = []
     try:
@@ -1697,7 +1697,7 @@ async def deliver_virtual_visit(
             visit_type="url",
         )
         # type=url is also used for hosted tours; title Virtual Visit keeps VisitViewer honest.
-        delivery_urls = [{"url": polycam_url, "filename": "Virtual Visit"}]
+        delivery_urls = [{"url": polycam_url, "filename": "Virtual Visit", "kind": "visit"}]
         output = polycam_url
     else:
         ok = await register_property_visit(
@@ -1710,7 +1710,7 @@ async def deliver_virtual_visit(
         try:
             signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24)
             if signed:
-                delivery_urls.append({"url": signed, "filename": "Virtual Visit"})
+                delivery_urls.append({"url": signed, "filename": "Virtual Visit", "kind": "visit"})
         except Exception:
             pass
         output = storage_path
@@ -1746,7 +1746,11 @@ async def deliver_virtual_visit(
     # would unstick processing and skip media_delivery / delivered / payout.
     try:
         from .post_production import _finalize_job_if_complete
-        await _finalize_job_if_complete(job_id, visit_bridge=True)
+        await _finalize_job_if_complete(
+            job_id,
+            visit_bridge=True,
+            visit_delivery_urls=delivery_urls,
+        )
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(

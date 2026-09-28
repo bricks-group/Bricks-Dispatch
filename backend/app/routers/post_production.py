@@ -163,6 +163,83 @@ def _merge_missing_capture_urls(existing_urls, capture_urls: list[dict]) -> list
     return existing + added
 
 
+
+def _normalize_visit_delivery_urls(visit_urls: list | None) -> list[dict]:
+    """Ensure Virtual Visit rows carry kind=visit for Companion gallery honesty."""
+    out: list[dict] = []
+    for item in visit_urls or []:
+        if isinstance(item, str):
+            u = item.strip()
+            if not u:
+                continue
+            out.append({"url": u, "filename": "Virtual Visit", "kind": "visit"})
+            continue
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("download_url") or "").strip()
+        if not url:
+            continue
+        entry = dict(item)
+        entry["url"] = url
+        entry["filename"] = str(entry.get("filename") or "Virtual Visit").strip() or "Virtual Visit"
+        entry["kind"] = "visit"
+        out.append(entry)
+    return out
+
+
+def _merge_missing_visit_urls(existing_urls, visit_urls: list | None) -> list[dict] | None:
+    """Append Virtual Visit rows missing from media_delivery.delivery_urls.
+
+    Polycam bridge / Visit file deliver must fold kind=visit into delivery so
+    Companion can strip from photos and fill visit_url when property_visits is
+    empty (Fair-Use parity with floorplan leftovers).
+    """
+    existing = list(existing_urls or []) if isinstance(existing_urls, list) else []
+    if isinstance(existing_urls, str):
+        import json
+        try:
+            parsed = json.loads(existing_urls)
+            existing = list(parsed) if isinstance(parsed, list) else []
+        except Exception:
+            existing = []
+    incoming = _normalize_visit_delivery_urls(visit_urls)
+    if not incoming:
+        return None
+    seen_urls = set()
+    has_visit_kind = False
+    for u in existing:
+        if not isinstance(u, dict):
+            if isinstance(u, str) and u.strip():
+                seen_urls.add(u.strip())
+            continue
+        url = str(u.get("url") or u.get("download_url") or "").strip()
+        if url:
+            seen_urls.add(url)
+        kind = str(u.get("kind") or "").strip().lower()
+        if kind in {"visit", "virtual_visit", "polycam"}:
+            has_visit_kind = True
+        fname = str(u.get("filename") or "").strip().casefold()
+        if fname == "virtual visit":
+            has_visit_kind = True
+    added: list[dict] = []
+    for vu in incoming:
+        url = str(vu.get("url") or "").strip()
+        if url and url in seen_urls:
+            continue
+        if has_visit_kind and not url:
+            continue
+        # One Visit product per delivery — skip if a Visit row already present
+        if has_visit_kind:
+            continue
+        added.append(vu)
+        has_visit_kind = True
+        if url:
+            seen_urls.add(url)
+    if not added:
+        return None
+    return existing + added
+
+
 def _merge_missing_still_urls(existing_urls, still_urls: list[dict]) -> list[dict] | None:
     """Append listing stills missing from an existing media_delivery.delivery_urls.
 
@@ -261,8 +338,13 @@ async def _listing_still_delivery_urls(uploads: list) -> list[dict]:
     return out
 
 
-async def _fold_late_into_existing_delivery(job_id: str, existing: dict) -> bool:
-    """If media_delivery exists, merge newly completed stills + late floor/tour. No payout/email."""
+async def _fold_late_into_existing_delivery(
+    job_id: str,
+    existing: dict,
+    *,
+    visit_urls: list | None = None,
+) -> bool:
+    """If media_delivery exists, merge stills + late floor/tour/Visit. No payout/email."""
     db = await get_db()
     try:
         res_uploads = await db.table("uploads").select(
@@ -283,12 +365,18 @@ async def _fold_late_into_existing_delivery(job_id: str, existing: dict) -> bool
     merged_stills = _merge_missing_still_urls(raw_urls, still_urls)
     cur = merged_stills if merged_stills is not None else raw_urls
     merged_capture = _merge_missing_capture_urls(cur, capture_urls)
-    if merged_stills is None and merged_capture is None:
+    cur2 = merged_capture if merged_capture is not None else cur
+    merged_visit = _merge_missing_visit_urls(cur2, visit_urls)
+    if merged_stills is None and merged_capture is None and merged_visit is None:
         return False
-    merged = merged_capture if merged_capture is not None else merged_stills
+    merged = (
+        merged_visit
+        if merged_visit is not None
+        else (merged_capture if merged_capture is not None else merged_stills)
+    )
     await _patch_media_delivery(job_id, {"delivery_urls": merged})
     logger.info(
-        "Job %s: folded late stills/capture into existing media_delivery (%s URL(s) total)",
+        "Job %s: folded late stills/capture/Visit into existing media_delivery (%s URL(s) total)",
         job_id,
         len(merged),
     )
@@ -323,7 +411,7 @@ async def _unstick_processing_without_delivery(job_id: str) -> None:
             pg_update_job(job_id, fields)
 
 
-async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False) -> None:
+async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, visit_delivery_urls: list | None = None) -> None:
     """
     Called after each upload is marked done.
     If all uploads for the job are in state 'done', generate delivery
@@ -334,6 +422,9 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False) 
     path, so without this flag empty-uploads would unstick without
     media_delivery / delivered / payout. Skip re-register and agent photo
     email (notify_capture_delivered already ran for Virtual Visit).
+    visit_delivery_urls: Virtual Visit rows (kind=visit) to fold into
+    media_delivery so Companion can fill visit_url when property_visits is
+    empty (floorplan leftover parity).
     """
     db = await get_db()
 
@@ -390,10 +481,12 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False) 
         existing = pg_select_media_delivery_by_job_id(job_id)
     if existing:
         try:
-            folded = await _fold_late_into_existing_delivery(job_id, existing)
+            folded = await _fold_late_into_existing_delivery(
+                job_id, existing, visit_urls=visit_delivery_urls
+            )
             if folded:
                 logger.info(
-                    f"Job {job_id}: media_delivery existed — merged late stills/capture; skip full finalize"
+                    f"Job {job_id}: media_delivery existed — merged late stills/capture/Visit; skip full finalize"
                 )
             else:
                 logger.info(
@@ -475,6 +568,14 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False) 
     if capture_urls:
         # Append floor/tour public URLs onto stills delivery (or stand alone).
         delivery_urls = list(delivery_urls) + capture_urls
+
+    # Polycam / Visit file bridge: keep kind=visit in delivery_urls (Companion
+    # strips from photos + fills visit_url when property_visits is empty).
+    visit_rows = _normalize_visit_delivery_urls(visit_delivery_urls)
+    if visit_rows:
+        merged_visit = _merge_missing_visit_urls(delivery_urls, visit_rows)
+        if merged_visit is not None:
+            delivery_urls = merged_visit
 
     if not delivery_urls and not splat_upload and not visit_bridge:
         # Truly nothing to deliver (no listing stills, no Visit, no capture) — don't stay stuck.
