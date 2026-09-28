@@ -292,6 +292,56 @@ def test_listing_still_delivery_urls_tags_floorplan_kind(monkeypatch):
     assert is_listing_still_delivery_row(uploads[1])
 
 
+
+def test_listing_still_delivery_urls_tags_drone_reel_kind(monkeypatch):
+    """Aerial/DJI/reel leftovers stay in delivery_urls with kind for gallery sectioning."""
+    from app.routers import post_production as router_pp
+
+    async def fake_signed(path):
+        return f"https://cdn.example/signed/{path}"
+
+    monkeypatch.setattr(router_pp, "get_signed_download_url", fake_signed)
+
+    uploads = [
+        {
+            "id": "up-photo",
+            "filename": "living-0.jpg",
+            "processed_url": "p/living-0.jpg",
+            "processing_status": "done",
+            "qc_status": "passed",
+            "provider": "bricks_inhouse",
+        },
+        {
+            "id": "up-dji",
+            "filename": "DJI_0042.JPG",
+            "processed_url": "p/DJI_0042.JPG",
+            "processing_status": "done",
+            "provider": "as_is",
+        },
+        {
+            "id": "up-aerial",
+            "filename": "aerial-front.jpg",
+            "file_url": "p/aerial-front.jpg",
+            "processing_status": "done",
+            "provider": "as_is",
+        },
+        {
+            "id": "up-reel",
+            "filename": "reel_clip.mp4",
+            "file_url": "p/reel_clip.mp4",
+            "mime_type": "video/mp4",
+            "processing_status": "done",
+            "provider": "as_is",
+        },
+    ]
+    urls = _run(router_pp._listing_still_delivery_urls(uploads))
+    by_id = {u["upload_id"]: u for u in urls}
+    assert "kind" not in by_id["up-photo"]
+    assert by_id["up-dji"]["kind"] == "drone"
+    assert by_id["up-aerial"]["kind"] == "drone"
+    assert by_id["up-reel"]["kind"] == "reel"
+
+
 def test_delivery_url_kind_for_upload_filename_cues():
     from app.routers.post_production import _delivery_url_kind_for_upload
 
@@ -302,6 +352,14 @@ def test_delivery_url_kind_for_upload_filename_cues():
     assert _delivery_url_kind_for_upload({"filename": "plan.pdf"}) == "floorplan"
     assert _delivery_url_kind_for_upload({"filename": "x.bin", "mime_type": "application/pdf"}) == "floorplan"
     assert _delivery_url_kind_for_upload({"filename": "living-0.jpg"}) is None
+    # Drone / reel leftovers — OS listing sections by kind (Photos must not absorb)
+    assert _delivery_url_kind_for_upload({"filename": "aerial-front.jpg"}) == "drone"
+    assert _delivery_url_kind_for_upload({"filename": "DJI_0042.JPG"}) == "drone"
+    assert _delivery_url_kind_for_upload({"filename": "aerial_IMG_9.JPG"}) == "drone"
+    assert _delivery_url_kind_for_upload({"filename": "reel_clip.mp4", "mime_type": "video/mp4"}) == "reel"
+    assert _delivery_url_kind_for_upload({"filename": "walkthrough.mov", "mime_type": "video/quicktime"}) == "reel"
+    assert _delivery_url_kind_for_upload({"filename": "twilight_rear.jpg"}) is None
+    assert _delivery_url_kind_for_upload({"filename": "staging_kitchen.jpg"}) is None
 
 
 def test_listing_delivery_filename_jpeg_when_processed_is_jpg():

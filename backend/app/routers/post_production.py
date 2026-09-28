@@ -299,11 +299,15 @@ def _listing_delivery_filename(upload: dict) -> str:
 
 
 def _delivery_url_kind_for_upload(upload: dict) -> Optional[str]:
-    """Tag GO floorplan/PDF leftovers in delivery_urls (Canada: no media_type col).
+    """Tag GO leftovers in delivery_urls (Canada: no media_type col).
 
     Companion strips kind=floorplan (and filename cues) from the client photo
     gallery while still reading floor_plan_url from these rows. Keep the upload
     in delivery_urls — do not drop it.
+
+    kind=drone / kind=reel stamp aerial/DJI/reel leftovers so OS listing/share
+    (and any delivery_urls consumer) can section them out of Photos — parity
+    with floorplan kind tags. HDR/photo/twilight/staging stay untagged (Photos).
     """
     if not isinstance(upload, dict):
         return None
@@ -312,13 +316,18 @@ def _delivery_url_kind_for_upload(upload: dict) -> Optional[str]:
     file_url = upload.get("file_url") or upload.get("processed_url")
     if is_pdf_file(filename, mime):
         return "floorplan"
-    if infer_media_type(filename, mime, upload.get("media_type"), file_url) == "floorplan":
+    mt = infer_media_type(filename, mime, upload.get("media_type"), file_url)
+    if mt == "floorplan":
         return "floorplan"
+    if mt == "drone":
+        return "drone"
+    if mt in ("reel", "video"):
+        return "reel"
     return None
 
 
 def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
-    """listing still delivery_urls row; floorplan/PDF get kind=floorplan."""
+    """listing still delivery_urls row; floorplan/drone/reel get kind stamps."""
     entry = {
         "upload_id": upload["id"],
         "filename": _listing_delivery_filename(upload),
