@@ -418,6 +418,56 @@ async def _heic_as_is_jpeg_url(db, job_id: str, upload_id: str, asset: dict, fil
         return None
 
 
+async def _listing_export_as_is_url(db, job_id: str, upload_id: str, asset: dict, file_path: str):
+    """PropTx MLS geometry on as_is drone stills — crop/JPEG only, no HDR.
+
+    Skip PDF / video / floorplan / non-image. download → apply_listing_export →
+    upload_enhanced. On failure return None so caller keeps the current path.
+    Provider stays as_is (format export only).
+    """
+    from .media_intake import IMAGE_EXTS, is_pdf_file, is_video_file, infer_media_type
+
+    filename = asset.get("filename")
+    mime_type = asset.get("mime_type")
+    if is_pdf_file(filename, mime_type):
+        return None
+    # Mime/ext only — do not pass media_type=drone (is_video_file treats drone as video).
+    if is_video_file(filename, mime_type, None):
+        return None
+    mt = infer_media_type(
+        filename, mime_type, asset.get("media_type"), file_url=file_path
+    )
+    if mt in ("floorplan", "reel", "video"):
+        return None
+    name = str(filename or file_path or "").lower().replace("\\", "/").split("/")[-1]
+    mime = str(mime_type or "").lower()
+    is_image = name.endswith(IMAGE_EXTS) or mime.startswith("image/")
+    if not is_image:
+        return None
+    try:
+        from .photo_enhance_service import apply_listing_export, upload_enhanced
+        from .storage import download_bytes
+
+        original = await download_bytes(file_path)
+        if not original:
+            return None
+        exported, export_meta = apply_listing_export(original)
+        if not exported:
+            return None
+        path = await upload_enhanced(db.storage, job_id, upload_id, exported)
+        exp = (export_meta or {}).get("export") or {}
+        logger.info(
+            f"Job {job_id}: listing_export as_is for {upload_id} → {path} "
+            f"{exp.get('width')}x{exp.get('height')} (provider stays as_is; no HDR)"
+        )
+        return path
+    except Exception as e:
+        logger.warning(
+            f"Job {job_id}: listing_export as_is failed for {upload_id}: {e} — keeping current"
+        )
+        return None
+
+
 async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     """Mark an upload done so listing delivery can proceed without vendor APIs.
 
@@ -487,6 +537,24 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
         if jpeg_url:
             processed_url = jpeg_url
+        # Drone stills: PropTx MLS listing_export (4:3 / le2400 / sRGB JPEG).
+        # HDR enhance stays OFF — provider remains as_is.
+        if mt == "drone":
+            from .media_intake import IMAGE_EXTS
+
+            name = str(asset.get("filename") or processed_url or "").lower()
+            mime = str(asset.get("mime_type") or "").lower()
+            still_image = (
+                name.endswith(IMAGE_EXTS)
+                or mime.startswith("image/")
+                or str(processed_url or "").lower().endswith(IMAGE_EXTS)
+            )
+            if still_image and not is_pdf_file(asset.get("filename"), asset.get("mime_type")):
+                listing_url = await _listing_export_as_is_url(
+                    db, job_id, upload_id, asset, processed_url
+                )
+                if listing_url:
+                    processed_url = listing_url
         await _safe_update_upload(db, upload_id, {
             "processing_status": "done",
             "processed_url": processed_url,
@@ -495,7 +563,7 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         })
         logger.info(
             f"Job {job_id}: {label} upload {upload_id} delivered as_is "
-            "(original file — no HDR enhance)"
+            "(no HDR enhance)"
         )
         return
 
