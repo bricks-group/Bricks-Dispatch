@@ -65,7 +65,7 @@ def enhance_brackets_sync(
     apply_sky: bool = False,
     timeout_sec: float = POLL_TIMEOUT_SEC,
 ) -> Tuple[bytes, dict]:
-    """HDR-merge + enhance a bracket set via Autoenhance v3.
+    """HDR-merge + enhance via Autoenhance v3 (1+ frames; single still = 1 bracket).
 
     apply_sky must stay False for launch mls_safe (no invent sky/dusk).
     Twilight callers should not use this path.
@@ -77,8 +77,8 @@ def enhance_brackets_sync(
     key = api_key()
     if not key:
         raise AutoenhanceNotConfigured("AUTOENHANCE_API_KEY not set")
-    if len(frames) < 2:
-        raise AutoenhanceError("need at least 2 bracket frames")
+    if len(frames) < 1:
+        raise AutoenhanceError("need at least 1 frame")
 
     names = list(filenames or [])
     while len(names) < len(frames):

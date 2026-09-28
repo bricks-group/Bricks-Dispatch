@@ -198,3 +198,313 @@ def test_deliver_bracket_source_calls_listing_export_after_ae():
     assert "listing_export_applied" in Path(
         __file__
     ).read_text(encoding="utf-8") or "apply_listing_export" in src
+
+
+def test_enhance_brackets_sync_accepts_single_frame(monkeypatch):
+    """Single still leftovers: AE accepts 1+ frames (number_of_brackets_per_image=1)."""
+    ae._plan_blocked = False
+    monkeypatch.setattr(ae, "api_key", lambda: "k" * 36)
+
+    calls = {}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, **k):
+            if url.endswith("/process"):
+                calls["process_body"] = k.get("json") or {}
+
+            class R:
+                status_code = 201
+                text = "{}"
+
+                def json(self):
+                    if url.rstrip("/").endswith("/orders"):
+                        return {"order_id": "ord-single"}
+                    if "/brackets" in url:
+                        return {"upload_url": "https://upload.example/put"}
+                    return {}
+
+            return R()
+
+        def put(self, *a, **k):
+            class R:
+                status_code = 200
+                text = ""
+
+            return R()
+
+        def get(self, url, **k):
+            class R:
+                status_code = 200
+                headers = {"Content-Type": "image/jpeg"}
+                content = b"\xff\xd8ae_single"
+                text = ""
+
+                def json(self):
+                    if "/orders/" in url and "/enhanced" not in url:
+                        return {
+                            "is_merging": False,
+                            "is_processing": False,
+                            "images": [{"image_id": "img-1", "status": "processed"}],
+                        }
+                    return {}
+
+            # download_enhanced path
+            if "/enhanced" in url:
+                class R2:
+                    status_code = 200
+                    headers = {"Content-Type": "image/jpeg"}
+                    content = b"\xff\xd8ae_single"
+                    text = ""
+
+                    def json(self):
+                        return {}
+
+                return R2()
+            return R()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", lambda **k: FakeClient())
+    monkeypatch.setattr(ae, "POLL_INTERVAL_SEC", 0)
+    jpeg, meta = ae.enhance_brackets_sync([b"\xff\xd8frame"], ["room.jpg"], apply_sky=False)
+    assert jpeg.startswith(b"\xff\xd8")
+    assert meta["n_brackets"] == 1
+    assert meta["sky_replacement"] is False
+    assert calls["process_body"]["number_of_brackets_per_image"] == 1
+    assert calls["process_body"]["sky_replacement"] is False
+    ae._plan_blocked = False
+
+
+def test_enhance_brackets_sync_rejects_empty_and_sky(monkeypatch):
+    ae._plan_blocked = False
+    monkeypatch.setattr(ae, "api_key", lambda: "k" * 36)
+    with pytest.raises(ae.AutoenhanceError, match="sky_replacement forbidden"):
+        ae.enhance_brackets_sync([b"a", b"b"], apply_sky=True)
+    with pytest.raises(ae.AutoenhanceError, match="need at least 1"):
+        ae.enhance_brackets_sync([], apply_sky=False)
+
+
+def test_deliver_single_vendor_photo_prefers_autoenhance(monkeypatch):
+    updates = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return b"\xff\xd8fakejpg"
+
+    uploaded = []
+
+    async def fake_up(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/single.jpg"
+
+    async def fake_qc(*_a, **_k):
+        return None
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.enhance_image = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("inhouse must not run when AE succeeds")
+    )
+    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_qc_variant = fake_qc
+    fake_pes.apply_listing_export = lambda b: (
+        b"\xff\xd8mls_single",
+        {
+            "listing_export_applied": True,
+            "export": {"width": 2400, "height": 1800, "aspect_ok": True, "long_edge_ok": True},
+            "mls_export_profile": "frame_proptx_mls_stills_v1",
+        },
+    )
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    fake_mi = ModuleType("app.services.media_intake")
+    fake_mi.delivery_route = lambda _a: "vendor_photo"
+    monkeypatch.setitem(sys.modules, "app.services.media_intake", fake_mi)
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setattr(ae, "is_available", lambda: True)
+    monkeypatch.setattr(
+        ae,
+        "enhance_brackets_sync",
+        lambda frames, filenames=None, **k: (
+            b"\xff\xd8ae_raw",
+            {"order_id": "ord-1f", "provider": "autoenhance", "n_brackets": len(frames)},
+        ),
+    )
+
+    asset = {"id": "u-single", "file_url": "raw/p.jpg", "filename": "kitchen.jpg"}
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-1f", asset))
+    assert updates and updates[0][1]["provider"] == "autoenhance"
+    assert uploaded and uploaded[0] == b"\xff\xd8mls_single"
+
+
+def test_deliver_single_vendor_photo_falls_back_inhouse(monkeypatch):
+    updates = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return b"\xff\xd8fakejpg"
+
+    async def fake_up(*_a, **_k):
+        return "processed/ih.jpg"
+
+    async def fake_qc(*_a, **_k):
+        return None
+
+    def fake_enhance(original, return_meta=False):
+        meta = {"provider": "bricks_inhouse", "mls_quarantine": False}
+        return (b"\xff\xd8inhouse", meta) if return_meta else b"\xff\xd8inhouse"
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.enhance_image = fake_enhance
+    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_qc_variant = fake_qc
+    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(
+        AssertionError("listing export must not run when AE fails")
+    )
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    fake_mi = ModuleType("app.services.media_intake")
+    fake_mi.delivery_route = lambda _a: "vendor_photo"
+    monkeypatch.setitem(sys.modules, "app.services.media_intake", fake_mi)
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setattr(ae, "is_available", lambda: True)
+
+    def boom(*_a, **_k):
+        raise ae.AutoenhanceNoPlan("No Plan")
+
+    monkeypatch.setattr(ae, "enhance_brackets_sync", boom)
+
+    asset = {"id": "u-fb", "file_url": "raw/p.jpg", "filename": "room.jpg"}
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-fb", asset))
+    assert any(u.get("provider") == "bricks_inhouse" for _, u in updates)
+
+
+def test_as_is_heic_converts_to_jpeg(monkeypatch):
+    """as_is HEIC originals become sRGB JPEG for listing; provider stays as_is."""
+    updates = []
+    fixture = Path(__file__).resolve().parent / "fixtures" / "heic-smoke.heic"
+    if not fixture.is_file():
+        pytest.skip(f"missing HEIC fixture: {fixture}")
+    try:
+        import pillow_heif  # noqa: F401
+    except ImportError:
+        pytest.skip("pillow-heif not installed")
+
+    heic_bytes = fixture.read_bytes()
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return heic_bytes
+
+    uploaded = []
+
+    async def fake_up(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "enhanced/job/u-heic.jpg"
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.upload_enhanced = fake_up
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    # Use real media_intake for as_is routing (drone/aerial or explicit)
+    from app.services import media_intake as mi
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+
+    asset = {
+        "id": "u-heic",
+        "file_url": "raw/staging_room.heic",
+        "filename": "staging_room.heic",
+        "mime_type": "image/heic",
+        "media_type": "staging",
+    }
+    # Force staging route
+    monkeypatch.setattr(mi, "delivery_route", lambda _a: "staging")
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-heic", asset))
+    assert updates
+    assert updates[0][1]["provider"] == "as_is"
+    assert updates[0][1]["processed_url"] == "enhanced/job/u-heic.jpg"
+    assert uploaded and uploaded[0][:2] == b"\xff\xd8"
+
+
+def test_as_is_heic_decode_failure_keeps_original(monkeypatch):
+    updates = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return b"not-a-real-heic"
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    from app.services import media_intake as mi
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setattr(mi, "delivery_route", lambda _a: "as_is")
+    # infer helpers used inside as_is — keep real media_intake functions
+    asset = {
+        "id": "u-bad",
+        "file_url": "raw/drone.heic",
+        "filename": "aerial_yard.heic",
+        "mime_type": "image/heic",
+    }
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-bad", asset))
+    assert updates
+    assert updates[0][1]["provider"] == "as_is"
+    assert updates[0][1]["processed_url"] == "raw/drone.heic"
+
+
+def test_as_is_pdf_untouched_no_heic_convert(monkeypatch):
+    updates = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        raise AssertionError("PDF must not download for HEIC convert")
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    from app.services import media_intake as mi
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setattr(mi, "delivery_route", lambda _a: "as_is")
+    asset = {
+        "id": "u-pdf",
+        "file_url": "raw/plan.pdf",
+        "filename": "floorplan_cubicasa.pdf",
+        "mime_type": "application/pdf",
+    }
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-pdf", asset))
+    assert updates[0][1]["processed_url"] == "raw/plan.pdf"
+    assert updates[0][1]["provider"] == "as_is"

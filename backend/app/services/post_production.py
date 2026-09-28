@@ -366,6 +366,58 @@ async def deliver_bracket_group_without_vendor(
         await _safe_update_upload(db, uid, update)
 
 
+
+async def _heic_as_is_jpeg_url(db, job_id: str, upload_id: str, asset: dict, file_path: str):
+    """If staging/as_is still is HEIC/HEIF, convert to sRGB JPEG for browser listing.
+
+    Format-only — no HDR/sky/staging invent. PDF/video untouched. On decode failure
+    returns None so caller keeps the original path (honest fallback).
+    """
+    import io
+    from .media_intake import is_pdf_file, is_video_file
+
+    filename = asset.get("filename")
+    mime_type = asset.get("mime_type")
+    if is_pdf_file(filename, mime_type):
+        return None
+    if is_video_file(filename, mime_type, asset.get("media_type")):
+        return None
+    name = str(filename or file_path or "").lower()
+    mime = str(mime_type or "").lower()
+    is_heic = (
+        name.endswith(".heic")
+        or name.endswith(".heif")
+        or "heic" in mime
+        or "heif" in mime
+    )
+    if not is_heic:
+        return None
+    try:
+        from .image_io import open_rgb
+        from .photo_enhance_service import upload_enhanced
+        from .storage import download_bytes
+
+        original = await download_bytes(file_path)
+        if not original:
+            return None
+        img = open_rgb(original)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=92)
+        jpeg = buf.getvalue()
+        if not jpeg.startswith(b"\xff\xd8"):
+            return None
+        path = await upload_enhanced(db.storage, job_id, upload_id, jpeg)
+        logger.info(
+            f"Job {job_id}: HEIC→JPEG delivery for {upload_id} → {path} (provider stays as_is)"
+        )
+        return path
+    except Exception as e:
+        logger.warning(
+            f"Job {job_id}: HEIC→JPEG failed for {upload_id}: {e} — keeping original"
+        )
+        return None
+
+
 async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     """Mark an upload done so listing delivery can proceed without vendor APIs.
 
@@ -396,10 +448,15 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         return
 
     # Staging: honest original only — no in-house enhance, no third-party virtual staging.
+    # HEIC/HEIF → sRGB JPEG for browser listing (format only; provider stays as_is).
     if route == "staging":
+        processed_url = file_path
+        jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
+        if jpeg_url:
+            processed_url = jpeg_url
         await _safe_update_upload(db, upload_id, {
             "processing_status": "done",
-            "processed_url": file_path,
+            "processed_url": processed_url,
             "provider": "as_is",
             "processed_at": now,
         })
@@ -410,6 +467,7 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         return
 
     # Floorplan / drone / reel / PDF: original only — never HDR enhance / sky invent.
+    # HEIC/HEIF stills convert to sRGB JPEG for browser listing (format only).
     if route == "as_is":
         from .media_intake import infer_media_type, is_pdf_file
 
@@ -425,9 +483,13 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             or is_pdf_file(asset.get("filename"), asset.get("mime_type"))
             else "as_is"
         )
+        processed_url = file_path
+        jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
+        if jpeg_url:
+            processed_url = jpeg_url
         await _safe_update_upload(db, upload_id, {
             "processing_status": "done",
-            "processed_url": file_path,
+            "processed_url": processed_url,
             "provider": "as_is",
             "processed_at": now,
         })
@@ -485,18 +547,50 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
 
     if route == "vendor_photo":
         try:
-            from .photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
+            from . import autoenhance_service as ae
+            from .photo_enhance_service import (
+                apply_listing_export,
+                enhance_image,
+                upload_enhanced,
+                upload_qc_variant,
+            )
             original = await download_bytes(file_path)
             enhance_meta = {}
             if original:
-                enhanced, enhance_meta = enhance_image(original, return_meta=True)
+                enhanced = None
+                filename = str(asset.get("filename") or "still.jpg")
+                # Prefer Autoenhance for single-frame leftovers (number_of_brackets=1).
+                if ae.is_available():
+                    try:
+                        enhanced, enhance_meta = ae.enhance_brackets_sync(
+                            [original], [filename], apply_sky=False
+                        )
+                        enhanced, export_meta = apply_listing_export(enhanced)
+                        enhance_meta = {**enhance_meta, **export_meta}
+                        provider = "autoenhance"
+                        exp = (enhance_meta.get("export") or {})
+                        logger.info(
+                            f"Job {job_id}: Autoenhance single-frame ok "
+                            f"order={enhance_meta.get('order_id')} "
+                            f"listing_export={exp.get('width')}x{exp.get('height')}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Job {job_id}: Autoenhance single-frame skipped ({e}) "
+                            "— bricks_inhouse fallback"
+                        )
+                        enhanced = None
+                        enhance_meta = {}
+                if enhanced is None:
+                    enhanced, enhance_meta = enhance_image(original, return_meta=True)
+                    provider = "bricks_inhouse"
                 processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
                 qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
-                provider = "bricks_inhouse"
         except Exception as e:
             logger.error(f"In-house enhance failed for {upload_id}: {e} — delivering original")
             processed = file_path
             provider = "original"
+            enhance_meta = {}
 
     update = {
         "processing_status": "done",
