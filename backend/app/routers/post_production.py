@@ -165,7 +165,12 @@ def _merge_missing_capture_urls(existing_urls, capture_urls: list[dict]) -> list
 
 
 def _normalize_visit_delivery_urls(visit_urls: list | None) -> list[dict]:
-    """Ensure Virtual Visit rows carry kind=visit for Companion gallery honesty."""
+    """Ensure Virtual Visit rows carry kind=visit for Companion gallery honesty.
+
+    Polycam URL rows need http(s) url. Visit file bridge may also carry
+    storage_path (GO .ply/.splat/.spz) so OS can re-sign when the signed URL
+    expires — keep those even if url is temporarily empty.
+    """
     out: list[dict] = []
     for item in visit_urls or []:
         if isinstance(item, str):
@@ -177,10 +182,14 @@ def _normalize_visit_delivery_urls(visit_urls: list | None) -> list[dict]:
         if not isinstance(item, dict):
             continue
         url = str(item.get("url") or item.get("download_url") or "").strip()
-        if not url:
+        storage_path = str(item.get("storage_path") or "").strip()
+        if not url and not storage_path:
             continue
         entry = dict(item)
-        entry["url"] = url
+        if url:
+            entry["url"] = url
+        if storage_path:
+            entry["storage_path"] = storage_path
         entry["filename"] = str(entry.get("filename") or "Virtual Visit").strip() or "Virtual Visit"
         entry["kind"] = "visit"
         out.append(entry)

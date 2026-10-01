@@ -1645,12 +1645,14 @@ async def sign_visit_upload(
     signed = await create_signed_upload_url(storage_path)
     if not signed or not signed.get("signed_url"):
         api_error(502, "Could not mint visit upload URL", "visit_sign_failed")
+    from ..services.storage import STORAGE_BUCKET
     return {
         "ok": True,
         "storage_path": storage_path,
         "signed_url": signed.get("signed_url"),
         "token": signed.get("token"),
         "path": signed.get("path") or storage_path,
+        "bucket": STORAGE_BUCKET,
         "content_type": "application/octet-stream",
     }
 
@@ -1706,13 +1708,29 @@ async def deliver_virtual_visit(
             title=title,
             visit_type="file",
         )
+        # Parity with Polycam URL: always fold kind=visit into media_delivery.
+        # Prefer long-lived GET (7d) so share/desk late-fold outlives a 24h signed URL.
+        # Keep storage_path on the row so OS can re-sign when property_visits is empty.
+        from ..services.storage import MAX_GET_EXPIRY, blob_fallback_enabled, build_hmac_proxy_url
         delivery_urls = []
+        entry = {
+            "filename": "Virtual Visit",
+            "kind": "visit",
+            "storage_path": storage_path,
+        }
+        signed = None
         try:
-            signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24)
-            if signed:
-                delivery_urls.append({"url": signed, "filename": "Virtual Visit", "kind": "visit"})
+            signed = await get_signed_download_url(storage_path, expiry=MAX_GET_EXPIRY)
         except Exception:
-            pass
+            signed = None
+        if signed:
+            entry["url"] = signed
+        elif blob_fallback_enabled():
+            try:
+                entry["url"] = build_hmac_proxy_url("GET", storage_path, MAX_GET_EXPIRY)
+            except Exception:
+                pass
+        delivery_urls.append(entry)
         output = storage_path
 
     if not ok:

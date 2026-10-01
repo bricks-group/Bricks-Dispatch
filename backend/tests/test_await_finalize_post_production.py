@@ -783,3 +783,39 @@ def test_visit_deliver_passes_visit_delivery_urls_to_finalize():
     fn = src.split("async def deliver_virtual_visit")[1].split("@router.put")[0]
     assert "visit_delivery_urls=delivery_urls" in fn
     assert '"kind": "visit"' in fn or "'kind': 'visit'" in fn
+
+def test_visit_file_deliver_always_folds_kind_visit():
+    """GO .ply/.splat/.spz path must fold kind=visit (+ storage_path) like Polycam URL."""
+    from app.routers import capture as capture_mod
+
+    src = Path(capture_mod.__file__).read_text()
+    fn = src.split("async def deliver_virtual_visit")[1].split("@router.put")[0]
+    assert '"kind": "visit"' in fn or "'kind': 'visit'" in fn
+    assert "storage_path" in fn
+    assert "MAX_GET_EXPIRY" in fn
+    assert "delivery_urls.append(entry)" in fn
+    # Never leave file path with empty delivery_urls when register ok
+    assert "delivery_urls = []" in fn  # init still there
+    assert 'entry = {' in fn
+
+
+def test_normalize_visit_keeps_storage_path_without_url():
+    """File-bridge rows with only storage_path must still fold into media_delivery."""
+    from app.routers.post_production import _normalize_visit_delivery_urls
+
+    norm = _normalize_visit_delivery_urls(
+        [{"storage_path": "visits/job-1/a.splat", "filename": "Virtual Visit", "kind": "visit"}]
+    )
+    assert len(norm) == 1
+    assert norm[0]["kind"] == "visit"
+    assert norm[0]["storage_path"] == "visits/job-1/a.splat"
+    assert "url" not in norm[0] or not norm[0].get("url")
+
+
+def test_visit_sign_returns_bucket():
+    from app.routers import capture as capture_mod
+
+    src = Path(capture_mod.__file__).read_text()
+    fn = src.split("async def sign_visit_upload")[1].split("async def deliver_virtual_visit")[0]
+    assert '"bucket": STORAGE_BUCKET' in fn or "'bucket': STORAGE_BUCKET" in fn
+
