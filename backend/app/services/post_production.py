@@ -419,12 +419,13 @@ async def _heic_as_is_jpeg_url(db, job_id: str, upload_id: str, asset: dict, fil
 
 
 async def _listing_export_as_is_url(db, job_id: str, upload_id: str, asset: dict, file_path: str):
-    """PropTx MLS geometry on as_is drone/reel stills — crop/JPEG only, no HDR.
+    """PropTx MLS geometry on as_is drone/reel/staging stills — crop/JPEG only, no HDR.
 
     Skip PDF / video / floorplan / non-image. download → apply_listing_export →
     upload_enhanced. On failure return None so caller keeps the current path.
     Provider stays as_is (format export only). Reel video (mp4/mov) stays untouched
-    via is_video_file; reel_/cinematic_ JPEG stills get the same PropTx export as drone.
+    via is_video_file; reel_/cinematic_/staging_ JPEG stills get the same PropTx
+    export as drone (no virtual staging, no HDR enhance).
     """
     from .media_intake import IMAGE_EXTS, is_pdf_file, is_video_file, infer_media_type
 
@@ -500,11 +501,17 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
 
     # Staging: honest original only — no in-house enhance, no third-party virtual staging.
     # HEIC/HEIF → sRGB JPEG for browser listing (format only; provider stays as_is).
+    # PropTx MLS listing_export (4:3 / le2400) — same as drone/reel stills; HDR OFF.
     if route == "staging":
         processed_url = file_path
         jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
         if jpeg_url:
             processed_url = jpeg_url
+        listing_url = await _listing_export_as_is_url(
+            db, job_id, upload_id, asset, processed_url
+        )
+        if listing_url:
+            processed_url = listing_url
         await _safe_update_upload(db, upload_id, {
             "processing_status": "done",
             "processed_url": processed_url,
@@ -513,7 +520,8 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         })
         logger.info(
             f"Job {job_id}: staging upload {upload_id} delivered as_is "
-            "(original file — no enhance, no virtual staging; owned pipeline later)"
+            "(PropTx listing_export when image; no enhance, no virtual staging; "
+            "owned pipeline later)"
         )
         return
 
