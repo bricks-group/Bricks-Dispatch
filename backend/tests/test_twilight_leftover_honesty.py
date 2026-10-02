@@ -23,6 +23,7 @@ def test_deliver_twilight_calls_enhance_bracket_apply_sky_false(monkeypatch):
     """route=twilight: enhance_bracket([bytes], apply_sky=False); provider bricks_inhouse."""
     updates = []
     bracket_calls = []
+    export_calls = []
 
     async def fake_safe_update(_db, upload_id, update):
         updates.append((upload_id, update))
@@ -31,7 +32,7 @@ def test_deliver_twilight_calls_enhance_bracket_apply_sky_false(monkeypatch):
         return b"JPEG-BYTES"
 
     async def fake_upload_enhanced(_storage, job_id, upload_id, enhanced):
-        assert enhanced == b"ENHANCED"
+        assert enhanced == b"EXPORTED"  # listing_export after enhance
         return f"jobs/{job_id}/{upload_id}/enhanced.jpg"
 
     async def fake_upload_qc(_storage, job_id, upload_id, enhanced):
@@ -46,8 +47,17 @@ def test_deliver_twilight_calls_enhance_bracket_apply_sky_false(monkeypatch):
             return b"ENHANCED", {}
         return b"ENHANCED"
 
+    def fake_listing_export(data):
+        export_calls.append(data)
+        assert data == b"ENHANCED"
+        return b"EXPORTED", {
+            "listing_export_applied": True,
+            "export": {"width": 2400, "height": 1800, "aspect_ok": True, "long_edge_ok": True},
+        }
+
     fake_pes = ModuleType("app.services.photo_enhance_service")
     fake_pes.enhance_bracket = fake_enhance_bracket
+    fake_pes.apply_listing_export = fake_listing_export
     fake_pes.enhance_image = lambda *_a, **_k: (_ for _ in ()).throw(
         AssertionError("enhance_image must not be used for twilight")
     )
@@ -70,6 +80,7 @@ def test_deliver_twilight_calls_enhance_bracket_apply_sky_false(monkeypatch):
 
     assert len(bracket_calls) == 1
     assert bracket_calls[0]["apply_sky"] is False
+    assert export_calls == [b"ENHANCED"]
     assert len(updates) == 1
     uid, update = updates[0]
     assert uid == "up-dusk"
@@ -93,6 +104,9 @@ def test_deliver_twilight_failure_falls_back_to_original(monkeypatch):
 
     fake_pes = ModuleType("app.services.photo_enhance_service")
     fake_pes.enhance_bracket = boom
+    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(
+        AssertionError("listing_export must not run when enhance fails")
+    )
     fake_pes.upload_enhanced = AsyncMock()
     fake_pes.upload_qc_variant = AsyncMock()
     monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
@@ -271,9 +285,20 @@ def test_multi_frame_twilight_leftovers_merge_apply_sky_false(monkeypatch):
     def boom_enhance_image(*_a, **_k):
         raise AssertionError("enhance_image must not be used for twilight brackets")
 
+    export_calls = []
+
+    def fake_listing_export(data):
+        export_calls.append(data)
+        assert data == b"MERGED-DUSK"
+        return b"MERGED-DUSK-MLS", {
+            "listing_export_applied": True,
+            "export": {"width": 2400, "height": 1800, "aspect_ok": True, "long_edge_ok": True},
+        }
+
     fake_pes = ModuleType("app.services.photo_enhance_service")
     fake_pes.enhance_bracket = fake_enhance_bracket
     fake_pes.enhance_image = boom_enhance_image
+    fake_pes.apply_listing_export = fake_listing_export
     # Use real stem/bias helpers so -1/0/+1 group correctly
     from app.services.photo_enhance_service import (
         exposure_bias_from_name,
@@ -282,7 +307,12 @@ def test_multi_frame_twilight_leftovers_merge_apply_sky_false(monkeypatch):
 
     fake_pes.exposure_bias_from_name = exposure_bias_from_name
     fake_pes.group_assets_by_bracket = group_assets_by_bracket
-    fake_pes.upload_enhanced = fake_upload_enhanced
+
+    async def fake_upload_enhanced_exported(_storage, job_id, upload_id, enhanced):
+        assert enhanced == b"MERGED-DUSK-MLS"
+        return f"jobs/{job_id}/{upload_id}/enhanced.jpg"
+
+    fake_pes.upload_enhanced = fake_upload_enhanced_exported
     fake_pes.upload_qc_variant = fake_upload_qc
     monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
     monkeypatch.setattr(pp, "_safe_update_upload", fake_safe_update)
@@ -317,6 +347,7 @@ def test_multi_frame_twilight_leftovers_merge_apply_sky_false(monkeypatch):
     assert bracket_calls[0]["apply_sky"] is False
     assert bracket_calls[0]["n_frames"] == 3
     assert all(c["apply_sky"] is False for c in bracket_calls)
+    assert export_calls == [b"MERGED-DUSK"]
 
     by_id = {uid: upd for uid, upd in updates}
     assert set(by_id) == {"up-tw-m", "up-tw-0", "up-tw-p"}
@@ -411,3 +442,48 @@ def test_leftovers_staging_and_aerial_never_enter_twilight_or_photo_brackets(mon
         {"ids": ["up-tw-m", "up-tw-0"], "apply_sky": False}
     ]
     assert all(c["apply_sky"] is not True or "up-tw" not in str(c["ids"]) for c in bracket_calls)
+
+
+def test_deliver_twilight_listing_export_soft_fail_keeps_enhanced(monkeypatch):
+    """If apply_listing_export throws after enhance, upload enhanced (not original)."""
+    updates = []
+    uploaded = []
+
+    async def fake_safe_update(_db, upload_id, update):
+        updates.append((upload_id, update))
+
+    async def fake_download(_path):
+        return b"JPEG-BYTES"
+
+    async def fake_upload_enhanced(_storage, job_id, upload_id, enhanced):
+        uploaded.append(enhanced)
+        return f"jobs/{job_id}/{upload_id}/enhanced.jpg"
+
+    async def fake_upload_qc(_storage, job_id, upload_id, enhanced):
+        return None
+
+    def fake_enhance_bracket(frames, filenames=None, apply_sky=True, return_meta=False, **_k):
+        assert apply_sky is False
+        return (b"ENHANCED", {}) if return_meta else b"ENHANCED"
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.enhance_bracket = fake_enhance_bracket
+    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(RuntimeError("export boom"))
+    fake_pes.upload_enhanced = fake_upload_enhanced
+    fake_pes.upload_qc_variant = fake_upload_qc
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe_update)
+    monkeypatch.setattr("app.services.storage.download_bytes", fake_download)
+
+    asset = {
+        "id": "up-dusk",
+        "file_url": "p/dusk.jpg",
+        "filename": "dusk.jpg",
+        "media_type": "twilight",
+    }
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-1", asset))
+
+    assert uploaded == [b"ENHANCED"]
+    assert updates[0][1]["provider"] == "bricks_inhouse"
+    assert updates[0][1]["processed_url"] == "jobs/job-1/up-dusk/enhanced.jpg"
+

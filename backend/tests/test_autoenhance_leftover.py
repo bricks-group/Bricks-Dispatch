@@ -110,14 +110,28 @@ def test_bracket_group_falls_back_inhouse_on_no_plan(monkeypatch):
     def fake_enhance(*_a, **_k):
         return b"\xff\xd8inhouse", {"provider": "bricks_inhouse"}
 
+    uploaded = []
+
+    async def fake_up_track(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/path.jpg"
+
+    export_calls = []
+
+    def fake_listing_export(data):
+        export_calls.append(data)
+        assert data == b"\xff\xd8inhouse"
+        return b"\xff\xd8mls_ih", {
+            "listing_export_applied": True,
+            "export": {"width": 2400, "height": 1800, "aspect_ok": True, "long_edge_ok": True},
+        }
+
     fake_pes = ModuleType("app.services.photo_enhance_service")
     fake_pes.enhance_bracket = fake_enhance
     fake_pes.exposure_bias_from_name = lambda n: 0.0
-    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_enhanced = fake_up_track
     fake_pes.upload_qc_variant = fake_qc
-    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(
-        AssertionError("listing export must not run when AE fails over to inhouse")
-    )
+    fake_pes.apply_listing_export = fake_listing_export
     monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
 
     fake_storage = ModuleType("app.services.storage")
@@ -138,6 +152,8 @@ def test_bracket_group_falls_back_inhouse_on_no_plan(monkeypatch):
     ]
     _run(pp.deliver_bracket_group_without_vendor(MagicMock(storage=MagicMock()), "job-y", group, apply_sky=True))
     assert any(u.get("provider") == "bricks_inhouse" for _, u in updates)
+    assert export_calls == [b"\xff\xd8inhouse"]
+    assert uploaded and uploaded[0] == b"\xff\xd8mls_ih"
 
 
 def test_autoenhance_no_plan_marks_worker_blocked(monkeypatch):
@@ -368,13 +384,27 @@ def test_deliver_single_vendor_photo_falls_back_inhouse(monkeypatch):
         meta = {"provider": "bricks_inhouse", "mls_quarantine": False}
         return (b"\xff\xd8inhouse", meta) if return_meta else b"\xff\xd8inhouse"
 
+    uploaded = []
+
+    async def fake_up_track(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/ih.jpg"
+
+    export_calls = []
+
+    def fake_listing_export(data):
+        export_calls.append(data)
+        assert data == b"\xff\xd8inhouse"
+        return b"\xff\xd8mls_ih", {
+            "listing_export_applied": True,
+            "export": {"width": 2400, "height": 1800, "aspect_ok": True, "long_edge_ok": True},
+        }
+
     fake_pes = ModuleType("app.services.photo_enhance_service")
     fake_pes.enhance_image = fake_enhance
-    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_enhanced = fake_up_track
     fake_pes.upload_qc_variant = fake_qc
-    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(
-        AssertionError("listing export must not run when AE fails")
-    )
+    fake_pes.apply_listing_export = fake_listing_export
     monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
 
     fake_storage = ModuleType("app.services.storage")
@@ -396,6 +426,8 @@ def test_deliver_single_vendor_photo_falls_back_inhouse(monkeypatch):
     asset = {"id": "u-fb", "file_url": "raw/p.jpg", "filename": "room.jpg"}
     _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-fb", asset))
     assert any(u.get("provider") == "bricks_inhouse" for _, u in updates)
+    assert export_calls == [b"\xff\xd8inhouse"]
+    assert uploaded and uploaded[0] == b"\xff\xd8mls_ih"
 
 
 def test_as_is_heic_converts_to_jpeg(monkeypatch):
@@ -508,3 +540,50 @@ def test_as_is_pdf_untouched_no_heic_convert(monkeypatch):
     _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-pdf", asset))
     assert updates[0][1]["processed_url"] == "raw/plan.pdf"
     assert updates[0][1]["provider"] == "as_is"
+
+
+def test_deliver_single_vendor_photo_inhouse_listing_export_soft_fail(monkeypatch):
+    """Inhouse fallback: listing_export throw keeps enhanced bytes (not original)."""
+    updates = []
+    uploaded = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return b"\xff\xd8fakejpg"
+
+    async def fake_up(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/ih.jpg"
+
+    async def fake_qc(*_a, **_k):
+        return None
+
+    def fake_enhance(original, return_meta=False):
+        meta = {"provider": "bricks_inhouse", "mls_quarantine": False}
+        return (b"\xff\xd8inhouse", meta) if return_meta else b"\xff\xd8inhouse"
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.enhance_image = fake_enhance
+    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_qc_variant = fake_qc
+    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(RuntimeError("export boom"))
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    fake_mi = ModuleType("app.services.media_intake")
+    fake_mi.delivery_route = lambda _a: "vendor_photo"
+    monkeypatch.setitem(sys.modules, "app.services.media_intake", fake_mi)
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setattr(ae, "is_available", lambda: False)
+
+    asset = {"id": "u-sf", "file_url": "raw/p.jpg", "filename": "room.jpg"}
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-sf", asset))
+    assert updates and updates[0][1]["provider"] == "bricks_inhouse"
+    assert uploaded == [b"\xff\xd8inhouse"]
+

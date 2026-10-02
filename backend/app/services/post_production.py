@@ -337,6 +337,21 @@ async def deliver_bracket_group_without_vendor(
                 frames, filenames, apply_sky=apply_sky, return_meta=True
             )
             provider = "bricks_inhouse"
+            # PropTx MLS geometry — same export AE path applies (soft-fail keep enhanced)
+            try:
+                enhanced, export_meta = apply_listing_export(enhanced)
+                enhance_meta = {**(enhance_meta or {}), **export_meta}
+                exp = (enhance_meta.get("export") or {})
+                logger.info(
+                    f"Job {job_id}: inhouse bracket listing_export="
+                    f"{exp.get('width')}x{exp.get('height')} "
+                    f"aspect_ok={exp.get('aspect_ok')} long_ok={exp.get('long_edge_ok')}"
+                )
+            except Exception as export_err:
+                logger.warning(
+                    f"Job {job_id}: listing_export after inhouse bracket failed "
+                    f"({export_err}) — keeping enhanced"
+                )
         processed = await upload_enhanced(db.storage, job_id, primary_id, enhanced)
         qc_path = await upload_qc_variant(db.storage, job_id, primary_id, enhanced)
     except Exception as e:
@@ -590,12 +605,32 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     # Twilight: polish only — never blue-sky replacement or day-to-dusk invention.
     if route == "twilight":
         try:
-            from .photo_enhance_service import enhance_bracket, upload_enhanced, upload_qc_variant
+            from .photo_enhance_service import (
+                apply_listing_export,
+                enhance_bracket,
+                upload_enhanced,
+                upload_qc_variant,
+            )
             original = await download_bytes(file_path)
             if original:
                 enhanced, enhance_meta = enhance_bracket(
                     [original], apply_sky=False, return_meta=True
                 )
+                # PropTx MLS 4:3 / le≤2400 — match AE vendor_photo + as_is honesty
+                try:
+                    enhanced, export_meta = apply_listing_export(enhanced)
+                    enhance_meta = {**(enhance_meta or {}), **export_meta}
+                    exp = (enhance_meta.get("export") or {})
+                    logger.info(
+                        f"Job {job_id}: twilight listing_export="
+                        f"{exp.get('width')}x{exp.get('height')} "
+                        f"aspect_ok={exp.get('aspect_ok')} long_ok={exp.get('long_edge_ok')}"
+                    )
+                except Exception as export_err:
+                    logger.warning(
+                        f"Job {job_id}: twilight listing_export failed for {upload_id}: "
+                        f"{export_err} — keeping enhanced"
+                    )
                 processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
                 qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
                 provider = "bricks_inhouse"
@@ -667,6 +702,20 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 if enhanced is None:
                     enhanced, enhance_meta = enhance_image(original, return_meta=True)
                     provider = "bricks_inhouse"
+                    # PropTx MLS export — parity with AE single-frame path (soft-fail keep)
+                    try:
+                        enhanced, export_meta = apply_listing_export(enhanced)
+                        enhance_meta = {**(enhance_meta or {}), **export_meta}
+                        exp = (enhance_meta.get("export") or {})
+                        logger.info(
+                            f"Job {job_id}: inhouse single-frame listing_export="
+                            f"{exp.get('width')}x{exp.get('height')}"
+                        )
+                    except Exception as export_err:
+                        logger.warning(
+                            f"Job {job_id}: listing_export after inhouse single-frame "
+                            f"failed ({export_err}) — keeping enhanced"
+                        )
                 processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
                 qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
         except Exception as e:
