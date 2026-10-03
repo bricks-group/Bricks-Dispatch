@@ -59,6 +59,20 @@ WWW_PACKAGE_IDS = ("photos_only", "essentials", "story", "showcase", "full")
 SQFT_TIERS = ("small", "mid", "large", "xl")
 VENDOR_TIERS = (1, 2, 3)  # C / B / A
 
+# Add-on lines (not folded into package cells). Nearest $0.05 to 37/42/48.
+# Visit is per job by client footprint. Staging is per image, same on every band.
+VISIT_PAYOUT_PACKAGE_ID = "virtual_visit"
+STAGING_PAYOUT_PACKAGE_ID = "virtual_staging"
+VISIT_PAYOUT_CELLS_CENTS: dict[str, tuple[int, int, int]] = {
+    "small": (9215, 10460, 11950),
+    "mid": (11065, 12560, 14350),
+    "large": (12915, 14660, 16750),
+    "xl": (14765, 16760, 19150),
+}
+VISIT_RACK_CAD = {"small": 249.0, "mid": 299.0, "large": 349.0, "xl": 399.0}
+STAGING_PAYOUT_PER_IMAGE_CENTS = (1295, 1470, 1680)  # C / B / A
+STAGING_RACK_CAD = 35.0
+
 
 def iter_rate_card_rows():
     """Yield dicts suitable for vendor_payout_rates upserts."""
@@ -74,8 +88,50 @@ def iter_rate_card_rows():
                 }
 
 
+def addon_payout_cents(add_ons, sqft: int | None, vendor_tier: int | None) -> int:
+    """Fixed visit (per job) + staging (per image) on top of the package cell.
+
+    Only explicit add_ons keys. Notes text does not pay. Tier outside 1/2/3 uses C.
+    """
+    import json
+    raw = add_ons
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return 0
+    if not isinstance(raw, list):
+        return 0
+    tier_i = {1: 0, 2: 1, 3: 2}.get(int(vendor_tier) if vendor_tier in (1, 2, 3) else 1, 0)
+    if sqft:
+        band = "small" if sqft <= 1200 else "mid" if sqft <= 2500 else "large" if sqft <= 4000 else "xl"
+    else:
+        band = "small"
+    total = 0
+    for rec in raw:
+        if not isinstance(rec, dict):
+            continue
+        key = str(rec.get("key") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if key in {"visit", "virtual_visit", "virtualvisit"}:
+            rec_band = str(rec.get("sqft_tier") or "").strip().lower()
+            use = rec_band if rec_band in VISIT_PAYOUT_CELLS_CENTS else band
+            total += VISIT_PAYOUT_CELLS_CENTS[use][tier_i]
+        elif key in {"staging", "virtual_staging", "virtualstaging"}:
+            try:
+                n = int(rec.get("images") or rec.get("count") or 1)
+            except Exception:
+                n = 1
+            if n < 1:
+                n = 1
+            total += n * STAGING_PAYOUT_PER_IMAGE_CENTS[tier_i]
+    return total
+
+
 def all_cells_under_half_rack(epsilon: float = 1e-9) -> list[tuple]:
-    """Return any (package, band, tier, vendor_share) where vendor/rack > 0.50."""
+    """Return any (package, band, tier, vendor_share) where vendor/rack > 0.50.
+
+    Includes the five www packages and the visit / staging add-on cells.
+    """
     bad = []
     for pkg in WWW_PACKAGE_IDS:
         for band in SQFT_TIERS:
@@ -84,4 +140,13 @@ def all_cells_under_half_rack(epsilon: float = 1e-9) -> list[tuple]:
                 share = (cents / 100.0) / rack
                 if share > 0.50 + epsilon:
                     bad.append((pkg, band, tier, share))
+    for band, rack in VISIT_RACK_CAD.items():
+        for tier, cents in zip(VENDOR_TIERS, VISIT_PAYOUT_CELLS_CENTS[band]):
+            share = (cents / 100.0) / rack
+            if share > 0.50 + epsilon:
+                bad.append((VISIT_PAYOUT_PACKAGE_ID, band, tier, share))
+    for tier, cents in zip(VENDOR_TIERS, STAGING_PAYOUT_PER_IMAGE_CENTS):
+        share = (cents / 100.0) / STAGING_RACK_CAD
+        if share > 0.50 + epsilon:
+            bad.append((STAGING_PAYOUT_PACKAGE_ID, "per_image", tier, share))
     return bad

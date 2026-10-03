@@ -343,6 +343,10 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         payout_amount = await get_fixed_payout_amount(db, job.get("package_id"), job.get("sqft"), vendor_tier)
         if payout_amount is None:
             payout_amount = calculate_payout_amount(rack_price, vendor_tier)
+        from .vendor_payout_rate_card import addon_payout_cents
+        payout_amount = int(payout_amount or 0) + addon_payout_cents(
+            job.get("add_ons"), job.get("sqft"), vendor_tier
+        )
     if payout_amount <= 0:
         # Don't bail if there are pending trip fees — a photographer who only earned a
         # no-show trip fee on a zero-price job still needs to be paid out.

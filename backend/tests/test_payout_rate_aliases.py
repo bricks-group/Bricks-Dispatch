@@ -8,8 +8,11 @@ from app.services.payout_service import (
     is_retired_for_new_jobs,
 )
 from app.services.vendor_payout_rate_card import (
+    STAGING_PAYOUT_PER_IMAGE_CENTS,
+    VISIT_PAYOUT_CELLS_CENTS,
     VENDOR_PAYOUT_CELLS_CENTS,
     WWW_PACKAGE_IDS,
+    addon_payout_cents,
     all_cells_under_half_rack,
     iter_rate_card_rows,
 )
@@ -86,3 +89,24 @@ def test_legacy_packages_retired_for_new_jobs_only():
     assert is_retired_for_new_jobs("showcase") is False
     assert is_retired_for_new_jobs("full") is False
     assert is_retired_for_new_jobs(None) is False
+
+
+def test_visit_and_staging_cells_under_half_and_exact():
+    bad = all_cells_under_half_rack()
+    assert bad == [], bad
+    assert VISIT_PAYOUT_CELLS_CENTS["small"] == (9215, 10460, 11950)
+    assert VISIT_PAYOUT_CELLS_CENTS["xl"] == (14765, 16760, 19150)
+    assert STAGING_PAYOUT_PER_IMAGE_CENTS == (1295, 1470, 1680)
+    # 2 staged images, tier B, plus a mid visit
+    cents = addon_payout_cents(
+        [
+            {"key": "visit", "sqft_tier": "mid"},
+            {"key": "staging", "images": 2},
+        ],
+        sqft=2000,
+        vendor_tier=2,
+    )
+    assert cents == 12560 + 2 * 1470
+    assert addon_payout_cents([{"key": "tour"}], 2000, 2) == 0
+    # estate is not a visit alias
+    assert addon_payout_cents([{"key": "estate"}], 2000, 1) == 0
