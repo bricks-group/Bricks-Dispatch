@@ -6,7 +6,6 @@ is the fixed vendor_payout_rates card, NOT a % of rack. The platform owner
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from ..shared.geospatial import haversine_km
@@ -444,30 +443,17 @@ def is_drone_job(job: Any) -> bool:
     return "drone" in _add_on_keys(j.get("add_ons") or [])
 
 
-def has_lapsed_insurance(member: Any) -> bool:
-    """True only when a verified COI or WSIB expiry date has actually passed.
-    Fail-open on missing/unverified dates (NULL) -- most currently-active
-    vendors predate this field and have never had one set; blocking on NULL
-    would suspend the entire existing roster, not just genuinely lapsed
-    coverage. Only a confirmed past date counts, matching the IC agreement's
-    "lapsed coverage is automatic suspension from dispatch" clause.
-    """
-    m = _as_dict(member)
-    today = datetime.now(timezone.utc).date().isoformat()
-    for field in ("coi_expires_on", "wsib_expires_on"):
-        value = m.get(field)
-        if value and str(value) < today:
-            return True
-    return False
-
-
 def member_eligible_for_job(member: Any, job: Any) -> bool:
+    """Approved, active, type/location/skill match. Insurance is not a gate.
+
+    COI and WSIB are optional records. Missing, expired, or unverified proof
+    must not exclude an otherwise approved vendor from assignment or dispatch.
+    coi_expires_on and wsib_expires_on are ignored here.
+    """
     m = _as_dict(member)
     if not m.get("is_active"):
         return False
     if is_aman_pending(m):
-        return False
-    if has_lapsed_insurance(m):
         return False
     needed_type = job_required_vendor_type(job)
     if member_vendor_type(m) != needed_type:

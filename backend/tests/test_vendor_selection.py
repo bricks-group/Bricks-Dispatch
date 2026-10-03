@@ -225,23 +225,32 @@ def test_no_match_unassigned():
     assert pick_vendor_rule_based(job, [gta_ic]) is None
 
 
-def test_lapsed_coi_blocks_assignment():
+def test_missing_expired_insurance_does_not_block_assignment():
+    """No COI and no WSIB, or an expired date, must still be assignable."""
+    from app.services.vendor_profile import member_eligible_for_job
+
     job = Job(address="10 King St Mississauga", city="Mississauga", job_type="photo", time_window_start="09:00")
-    lapsed = _approved(id="lapsed", name="Lapsed COI", email="lapsed@test.com", tier=2,
-                        skills=["photo"], service_areas=["GTA"], coi_expires_on="2020-01-01")
+    no_docs = _approved(id="nodocs", name="No Insurance Docs", email="none@test.com", tier=1,
+                        skills=["photo"], service_areas=["GTA"])
+    lapsed_coi = _approved(id="lapsed-coi", name="Lapsed COI", email="lapsed@test.com", tier=2,
+                           skills=["photo"], service_areas=["GTA"], coi_expires_on="2020-01-01")
+    lapsed_wsib = _approved(id="lapsed-wsib", name="Lapsed WSIB", email="wsib@test.com", tier=1,
+                            skills=["photo"], service_areas=["GTA"], wsib_expires_on="2020-06-01")
+    both_expired = _approved(id="both", name="Both Expired", email="both@test.com", tier=1,
+                             skills=["photo"], service_areas=["GTA"],
+                             coi_expires_on="2019-01-01", wsib_expires_on="2019-06-01")
     current = _approved(id="current", name="Current COI", email="current@test.com", tier=1,
-                         skills=["photo"], service_areas=["GTA"], coi_expires_on="2099-01-01")
-    assert pick_vendor_rule_based(job, [lapsed]) is None
-    assert pick_vendor_rule_based(job, [lapsed, current]) == "current"
+                        skills=["photo"], service_areas=["GTA"], coi_expires_on="2099-01-01")
 
+    for member in (no_docs, lapsed_coi, lapsed_wsib, both_expired, current):
+        assert member_eligible_for_job(member, job) is True
 
-def test_null_insurance_expiry_does_not_block():
-    # Most active vendors predate this field entirely -- NULL must fail open,
-    # or the whole existing roster would stop being dispatchable overnight.
-    job = Job(address="10 King St Mississauga", city="Mississauga", job_type="photo", time_window_start="09:00")
-    no_date_on_file = _approved(id="nodate", name="No Date On File", email="nd@test.com", tier=1,
-                                 skills=["photo"], service_areas=["GTA"])
-    assert pick_vendor_rule_based(job, [no_date_on_file]) == "nodate"
+    assert pick_vendor_rule_based(job, [no_docs]) == "nodocs"
+    assert pick_vendor_rule_based(job, [lapsed_coi]) == "lapsed-coi"
+    assert pick_vendor_rule_based(job, [lapsed_wsib]) == "lapsed-wsib"
+    assert pick_vendor_rule_based(job, [both_expired]) == "both"
+    # Expired coverage must not knock a higher tier out of the pool.
+    assert pick_vendor_rule_based(job, [lapsed_coi, current]) == "lapsed-coi"
 
 
 # ── Auto-assign strengthen: duration, overlap, travel hard-gate, Canada ──────
