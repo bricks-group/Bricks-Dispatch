@@ -342,6 +342,65 @@ def test_listing_still_delivery_urls_tags_drone_reel_kind(monkeypatch):
     assert by_id["up-reel"]["kind"] == "reel"
 
 
+
+def test_listing_still_delivery_urls_tags_staging_twilight_kind(monkeypatch):
+    """Staging/twilight leftovers stay in delivery_urls (Photos) with kind stamps."""
+    from app.routers import post_production as router_pp
+
+    async def fake_signed(path):
+        return f"https://cdn.example/signed/{path}"
+
+    monkeypatch.setattr(router_pp, "get_signed_download_url", fake_signed)
+
+    uploads = [
+        {
+            "id": "up-photo",
+            "filename": "living-0.jpg",
+            "processed_url": "p/living-0.jpg",
+            "processing_status": "done",
+            "qc_status": "passed",
+            "provider": "bricks_inhouse",
+        },
+        {
+            "id": "up-stage",
+            "filename": "staging_kitchen.jpg",
+            "processed_url": "p/staging_kitchen.jpg",
+            "processing_status": "done",
+            "provider": "as_is",
+        },
+        {
+            "id": "up-twilight",
+            "filename": "twilight_rear.jpg",
+            "file_url": "p/twilight_rear.jpg",
+            "processing_status": "done",
+            "provider": "bricks_inhouse",
+        },
+        {
+            "id": "up-dusk-alias",
+            "filename": "rear.jpg",
+            "file_url": "p/rear.jpg",
+            "media_type": "dusk",
+            "processing_status": "done",
+            "provider": "bricks_inhouse",
+        },
+        {
+            "id": "up-vs",
+            "filename": "room.jpg",
+            "file_url": "p/room.jpg",
+            "media_type": "virtual_staging",
+            "processing_status": "done",
+            "provider": "as_is",
+        },
+    ]
+    urls = _run(router_pp._listing_still_delivery_urls(uploads))
+    by_id = {u["upload_id"]: u for u in urls}
+    assert "kind" not in by_id["up-photo"]
+    assert by_id["up-stage"]["kind"] == "staging"
+    assert by_id["up-twilight"]["kind"] == "twilight"
+    assert by_id["up-dusk-alias"]["kind"] == "twilight"
+    assert by_id["up-vs"]["kind"] == "staging"
+
+
 def test_delivery_url_kind_for_upload_filename_cues():
     from app.routers.post_production import _delivery_url_kind_for_upload
 
@@ -358,8 +417,17 @@ def test_delivery_url_kind_for_upload_filename_cues():
     assert _delivery_url_kind_for_upload({"filename": "aerial_IMG_9.JPG"}) == "drone"
     assert _delivery_url_kind_for_upload({"filename": "reel_clip.mp4", "mime_type": "video/mp4"}) == "reel"
     assert _delivery_url_kind_for_upload({"filename": "walkthrough.mov", "mime_type": "video/quicktime"}) == "reel"
-    assert _delivery_url_kind_for_upload({"filename": "twilight_rear.jpg"}) is None
-    assert _delivery_url_kind_for_upload({"filename": "staging_kitchen.jpg"}) is None
+    # staging/twilight stamped for partition honesty; still belong in Photos
+    assert _delivery_url_kind_for_upload({"filename": "twilight_rear.jpg"}) == "twilight"
+    assert _delivery_url_kind_for_upload({"filename": "staging_kitchen.jpg"}) == "staging"
+    assert _delivery_url_kind_for_upload({"filename": "dusk_front.jpg"}) == "twilight"
+    assert _delivery_url_kind_for_upload({"filename": "golden_hour.jpg"}) == "twilight"
+    assert _delivery_url_kind_for_upload({"filename": "x.jpg", "media_type": "virtual_staging"}) == "staging"
+    assert _delivery_url_kind_for_upload({"filename": "x.jpg", "media_type": "dusk"}) == "twilight"
+    assert _delivery_url_kind_for_upload({"filename": "x.jpg", "media_type": "day_to_dusk"}) == "twilight"
+    assert _delivery_url_kind_for_upload({"filename": "x.jpg", "media_type": "stage"}) == "staging"
+    assert _delivery_url_kind_for_upload({"filename": "living-0.jpg", "media_type": "hdr"}) is None
+    assert _delivery_url_kind_for_upload({"filename": "living-0.jpg", "media_type": "photo"}) is None
 
 
 def test_listing_delivery_filename_jpeg_when_processed_is_jpg():

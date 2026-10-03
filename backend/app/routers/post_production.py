@@ -316,7 +316,12 @@ def _delivery_url_kind_for_upload(upload: dict) -> Optional[str]:
 
     kind=drone / kind=reel stamp aerial/DJI/reel leftovers so OS listing/share
     (and any delivery_urls consumer) can section them out of Photos — parity
-    with floorplan kind tags. HDR/photo/twilight/staging stay untagged (Photos).
+    with floorplan kind tags.
+
+    kind=staging / kind=twilight ARE stamped for media_delivery / OS
+    photos_from_delivery_urls partition honesty when filenames are hollow.
+    They still belong in Photos (not stripped like floor/tour/Visit; not
+    sectioned like drone/reel). HDR/photo stay untagged (Photos).
     """
     if not isinstance(upload, dict):
         return None
@@ -332,11 +337,15 @@ def _delivery_url_kind_for_upload(upload: dict) -> Optional[str]:
         return "drone"
     if mt in ("reel", "video"):
         return "reel"
+    if mt == "staging":
+        return "staging"
+    if mt == "twilight":
+        return "twilight"
     return None
 
 
 def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
-    """listing still delivery_urls row; floorplan/drone/reel get kind stamps."""
+    """listing still delivery_urls row; floorplan/drone/reel/staging/twilight get kind stamps."""
     entry = {
         "upload_id": upload["id"],
         "filename": _listing_delivery_filename(upload),
