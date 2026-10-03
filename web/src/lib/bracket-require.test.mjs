@@ -60,9 +60,35 @@ assert.equal(inferMediaType('plan.png'), 'floorplan');
 assert.equal(inferMediaType('plans.jpg'), 'floorplan');
 assert.equal(inferMediaType('plan', undefined, 'plan'), 'floorplan');
 assert.equal(inferMediaType('plans', undefined, 'plans'), 'floorplan');
+// Delimited plan token — backend media_intake / OS mediaKind parity
+assert.equal(inferMediaType('Floor Plan.png'), 'floorplan');
+assert.equal(inferMediaType('level-1-plan.jpg'), 'floorplan');
+assert.equal(inferMediaType('site_plan.jpg'), 'floorplan');
+assert.equal(inferMediaType('plan_view.jpg'), 'floorplan');
+assert.equal(inferMediaType('Upper Level Plan.PNG'), 'floorplan');
 // Substring must NOT force floorplan (ordinary stills stay hdr)
 assert.equal(inferMediaType('airplane.jpg'), 'hdr');
 assert.equal(inferMediaType('explainer.png'), 'hdr');
+assert.equal(inferMediaType('ground_floor_living.jpg'), 'hdr');
+assert.equal(inferMediaType('first_floor_kitchen.jpg'), 'hdr');
+assert.equal(inferMediaType('plant_corner.jpg'), 'hdr');
+// Broker Floor Plan alone must not false-gate Mark complete as HDR brackets
+assert.equal(
+  validateHdrUploadsForComplete([{ filename: 'Floor Plan.png', mime_type: 'image/png' }]),
+  null,
+);
+assert.equal(
+  validateHdrUploadsForComplete([
+    { filename: 'living_-2.jpg', mime_type: 'image/jpeg' },
+    { filename: 'living_0.jpg', mime_type: 'image/jpeg' },
+    { filename: 'living_+2.jpg', mime_type: 'image/jpeg' },
+    { filename: 'level-1-plan.jpg', mime_type: 'image/jpeg' },
+  ]),
+  null,
+);
+assert.ok(
+  validateHdrUploadsForComplete([{ filename: 'ground_floor_living.jpg', mime_type: 'image/jpeg' }]),
+);
 assert.equal(HDR_BRACKET_MIN, 3);
 assert.ok(BRACKET_HINT.includes('bracketed'));
 

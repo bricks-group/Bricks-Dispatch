@@ -159,6 +159,12 @@ export function inferMediaType(
   if (stem === 'plan' || stem === 'plans') {
     return 'floorplan';
   }
+  // Delimited "plan" token — backend media_intake / OS mediaKind parity.
+  // "Floor Plan.png" / "level-1-plan.jpg" must be floorplan (not HDR bracket gate).
+  // Must NOT match airplane/plant/replant or ground_floor_* listing stills.
+  if (/(?:^|[_\s-])plan(?:[_\s.-]|$)/.test(name)) {
+    return 'floorplan';
+  }
   if (
     name.includes('floorplan') ||
     name.includes('floor_plan') ||
