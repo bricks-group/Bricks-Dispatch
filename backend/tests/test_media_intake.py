@@ -277,3 +277,25 @@ def test_assert_listing_still_decodable_rejects_raw():
     assert_listing_still_decodable("living_0.jpg", "image/jpeg", "hdr")
     assert_listing_still_decodable("living_0.HEIC", "image/heic", "hdr")
     assert_listing_still_decodable("living_0.heif", "image/heif", "hdr")
+
+
+def test_infer_delimited_plan_token_os_frontend_parity():
+    """Floor Plan / level-1-plan → floorplan as_is; ground_floor / airplane stay hdr."""
+    assert infer_media_type("Floor Plan.png") == "floorplan"
+    assert infer_media_type("level-1-plan.jpg") == "floorplan"
+    assert infer_media_type("site_plan.jpg") == "floorplan"
+    assert infer_media_type("plan_view.jpg") == "floorplan"
+    assert infer_media_type("ground_floor_living.jpg") == "hdr"
+    assert infer_media_type("first_floor_kitchen.jpg") == "hdr"
+    assert infer_media_type("airplane.jpg") == "hdr"
+    assert infer_media_type("plant_corner.jpg") == "hdr"
+    assert delivery_route({
+        "filename": "Floor Plan.png",
+        "mime_type": "image/png",
+        "file_url": "p/Floor Plan.png",
+    }) == "as_is"
+    assert delivery_route({
+        "filename": "ground_floor_living.jpg",
+        "mime_type": "image/jpeg",
+        "file_url": "p/gf.jpg",
+    }) == "vendor_photo"

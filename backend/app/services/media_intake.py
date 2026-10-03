@@ -7,6 +7,7 @@ Floorplan PNG/PDF/CubiCasa exports deliver as_is (honest — no HDR enhance).
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 VALID_MEDIA_TYPES = ("hdr", "photo", "drone", "reel", "twilight", "staging", "floorplan")
@@ -47,6 +48,19 @@ VISIT_EXTS = (".splat", ".ply", ".spz")
 def _lower(value: Any) -> str:
     return str(value or "").strip().lower()
 
+
+# Delimited "plan" token — OS media_kind / frontend mediaKind.js parity.
+# "Floor Plan.png" / "level-1-plan.jpg" must be as_is floorplan (not HDR enhance).
+# Must NOT match airplane/plant/replant or ground_floor_* listing stills.
+_DELIMITED_PLAN_RE = re.compile(r"(?:^|[_\s-])plan(?:[_\s.-]|$)", re.IGNORECASE)
+
+
+def has_delimited_plan_token(filename: Any = None) -> bool:
+    """True when basename has a delimited plan token (not substring airplane/plant)."""
+    name = _lower(filename).replace("\\", "/").split("/")[-1]
+    if not name:
+        return False
+    return bool(_DELIMITED_PLAN_RE.search(name))
 
 def infer_media_type(
     filename: Any = None,
@@ -101,6 +115,9 @@ def infer_media_type(
     # ("airplane", "explainer") so ordinary stills stay vendor_photo.
     stem = name.rsplit(".", 1)[0] if "." in name else name
     if stem in ("plan", "plans"):
+        return "floorplan"
+    # Delimited plan token — "Floor Plan.png" / "level-1-plan.jpg" (OS/frontend parity).
+    if has_delimited_plan_token(name):
         return "floorplan"
     if (
         "floorplan" in name
