@@ -482,3 +482,49 @@ def test_listing_delivery_filename_jpeg_when_processed_is_jpg():
     )
     assert entry["filename"] == "staging_room.jpg"
     assert entry["upload_id"] == "u1"
+
+
+def test_still_delivery_url_entry_stamps_provider_and_qc_flagged():
+    """Editor + Review honesty on media_delivery when uploads join is empty."""
+    from app.routers.post_production import _still_delivery_url_entry
+
+    flagged = _still_delivery_url_entry(
+        {
+            "id": "u-flag",
+            "filename": "living-0.jpg",
+            "processed_url": "enhanced/job/u.jpg",
+            "qc_status": "flagged",
+            "provider": "bricks_inhouse",
+        },
+        "https://cdn.example/u.jpg",
+        "2099-01-01T00:00:00+00:00",
+    )
+    assert flagged["provider"] == "bricks_inhouse"
+    assert flagged["qc_flagged"] is True
+
+    clean = _still_delivery_url_entry(
+        {
+            "id": "u-ok",
+            "filename": "living-0.jpg",
+            "processed_url": "enhanced/job/u2.jpg",
+            "qc_status": "passed",
+            "provider": "autoenhance",
+        },
+        "https://cdn.example/u2.jpg",
+        "2099-01-01T00:00:00+00:00",
+    )
+    assert clean["provider"] == "autoenhance"
+    assert clean["qc_flagged"] is False
+
+    bare = _still_delivery_url_entry(
+        {
+            "id": "u-bare",
+            "filename": "a.jpg",
+            "processed_url": "a.jpg",
+            "qc_status": "passed",
+        },
+        "https://cdn.example/a.jpg",
+        "2099-01-01T00:00:00+00:00",
+    )
+    assert "provider" not in bare
+

@@ -410,6 +410,10 @@ def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
     kind = _delivery_url_kind_for_upload(upload)
     if kind:
         entry["kind"] = kind
+    # Editor honesty for Fair-Use desk/share when uploads join is empty.
+    prov = str(upload.get("provider") or "").strip()
+    if prov:
+        entry["provider"] = prov
     return entry
 
 
