@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Header, HTTPException
 from ..shared.schemas import JobIntakeRequest, Job, JobStatusUpdate
 from ..shared.database import get_db
+from ..services.jev_hold import jev_hold_decision
 from ..services.vendor_selection import assign_vendor_for_job
 from ..services.notifications import (
     create_notification,
@@ -18,6 +19,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/dispatch", tags=["dispatch"])
 
 ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "akashorter@gmail.com")
+
+
+async def _note_jev_hold(db, job_id: str, yes_probability: float | None) -> None:
+    """Leave a note on the unassigned job. A write failure must not assign it."""
+    probability = f"{yes_probability:.2f}" if isinstance(yes_probability, float) else "n/a"
+    try:
+        await db.table("jobs").update({
+            "dispatch_explanation": (
+                "Held for a person before auto-assign "
+                f"(Jev yes-probability {probability})."
+            ),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", job_id).execute()
+    except Exception:
+        logger.exception("Jev hold note failed for job %s", job_id)
 
 @router.get("/", summary="Dispatch service root")
 async def dispatch_root():
@@ -109,13 +125,30 @@ async def create_dispatch_job(
         # serverless — FastAPI BackgroundTasks often never run after the
         # response, which left paid /book jobs stuck in pending_assignment
         # with empty assignee_id so they never landed on GO.
+        #
+        # Booking intake only: ask Jev whether to hold for a person before
+        # that auto-assign. Progress-capture visits, manual assign, and admin
+        # reassign do not go through this gate. A Jev failure must still assign.
         assignee_id = None
         status = "pending_assignment"
-        try:
-            assignee_id = await assign_vendor_for_job(job_id)
-            status = "assigned" if assignee_id else "dispatch_failed"
-        except Exception:
-            logger.exception("Sync vendor assign failed for job %s", job_id)
+        held = False
+        hold_probability = None
+        if job_data.get("booking_id"):
+            try:
+                decision = await jev_hold_decision(job_data)
+                held = decision.hold
+                hold_probability = decision.yes_probability
+            except Exception:
+                logger.exception("Jev hold gate failed open for job %s", job_id)
+                held = False
+        if held:
+            await _note_jev_hold(db, job_id, hold_probability)
+        else:
+            try:
+                assignee_id = await assign_vendor_for_job(job_id)
+                status = "assigned" if assignee_id else "dispatch_failed"
+            except Exception:
+                logger.exception("Sync vendor assign failed for job %s", job_id)
 
         # Await notify — Vercel serverless drops FastAPI BackgroundTasks after response
         # (same class of bug as pending_assignment with empty assignee_id).
@@ -129,7 +162,7 @@ async def create_dispatch_job(
             )
             pkg_price = job_data.get("package_price")
             package = f"{pkg_name} (${pkg_price})" if pkg_price is not None else pkg_name
-            assignee = assignee_id or "unassigned"
+            assignee = "held for a person" if held else (assignee_id or "unassigned")
             booking_ref = short_booking_ref(job_data.get("booking_id"))
             await create_notification(
                 title="New paid booking",
