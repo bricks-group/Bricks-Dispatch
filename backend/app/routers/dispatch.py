@@ -168,8 +168,17 @@ async def create_dispatch_job(
                     logger.exception("Jev hold gate failed open for job %s", job_id)
                     held = False
             if held:
-                # Note failure is swallowed inside _note_jev_hold and must not assign.
+                # Note or notify failure must not assign.
                 await _note_jev_hold(db, job_id, hold_probability)
+                try:
+                    from ..services.vendor_selection import notify_owner_jev_hold
+                    await notify_owner_jev_hold(
+                        db,
+                        {**job_data, "id": job_id},
+                        hold_probability,
+                    )
+                except Exception:
+                    logger.exception("Jev hold notify failed for job %s", job_id)
             else:
                 try:
                     assignee_id = await assign_vendor_for_job(job_id)

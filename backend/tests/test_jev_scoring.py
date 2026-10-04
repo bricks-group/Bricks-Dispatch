@@ -3,7 +3,7 @@
 assign_vendor_for_job uses that scorer. A Jev failure leaves the ranking unchanged.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -108,3 +108,17 @@ async def test_missing_key_does_not_change_ranking(monkeypatch):
     with patch("app.services.jev_hold.httpx.AsyncClient", FakeClient):
         chosen = await bricks_smart_assign(_job(), [_member("high", 5.0), _member("low", 3.0)])
     assert chosen == "high"
+
+
+@pytest.mark.asyncio
+async def test_poor_fit_that_still_assigns_does_not_notify(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-not-a-real-key")
+    sms = MagicMock(side_effect=AssertionError("poor-fit assign must not text"))
+    email = AsyncMock(side_effect=AssertionError("poor-fit assign must not email"))
+    with patch("app.services.jev_hold.jev_candidate_poor_fits", AsyncMock(return_value={"high": 0.95, "low": 0.05})), \
+            patch("app.notifications.send_dispatch_sms", sms), \
+            patch("app.services.notifications.send_email_via_resend", email):
+        chosen = await bricks_smart_assign(_job(), [_member("high", 5.0), _member("low", 3.0)])
+    assert chosen == "low"
+    assert sms.call_count == 0
+    assert email.await_count == 0

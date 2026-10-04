@@ -114,6 +114,101 @@ async def _notify_owner_no_vendor(job: Job, error_message: str) -> None:
         logger.error(f"Owner no-vendor in-app notify failed for job {job.id}: {e}")
 
 
+HOLD_ADMIN_EMAIL = "admin@brxs.ca"
+
+
+def jev_hold_sms_body(address: str, scheduled_date: str, yes_probability) -> str:
+    """Short owner text. No email address and no new phone number."""
+    place = (address or "").strip() or "a property"
+    when = (scheduled_date or "").strip()
+    if isinstance(yes_probability, float):
+        probability = f"{yes_probability:.2f}"
+    else:
+        probability = "n/a"
+    when_bit = f" on {when}" if when else ""
+    return (
+        f"Bricks held a booking at {place}{when_bit}. "
+        f"Jev yes-probability {probability}. It is unassigned."
+    )
+
+
+def jev_hold_email_subject() -> str:
+    return "Bricks held a booking"
+
+
+def jev_hold_email_body(job: dict, yes_probability) -> str:
+    from .notifications import short_booking_ref
+
+    job = job or {}
+    if isinstance(yes_probability, float):
+        probability = f"{yes_probability:.2f}"
+    else:
+        probability = "n/a"
+    address = (job.get("address") or "").strip() or "n/a"
+    when = (job.get("scheduled_date") or "").strip() or "n/a"
+    booking_ref = short_booking_ref(job.get("booking_id"))
+    return (
+        "Bricks held a booking for a person. It is unassigned.\n"
+        f"Address: {address}\n"
+        f"Date: {when}\n"
+        f"Booking ref: {booking_ref}\n"
+        f"Jev yes-probability: {probability}"
+    )
+
+
+async def notify_owner_jev_hold(db, job: dict, yes_probability) -> None:
+    """SMS the owner profile phone and email admin@brxs.ca. Never raises.
+
+    A failed lookup, SMS, or email must not assign the held job.
+    """
+    from ..shared.job_scope import KAM_MEMBER_ID
+
+    job = job or {}
+    job_id = job.get("id")
+    sms_body = jev_hold_sms_body(
+        job.get("address") or "",
+        job.get("scheduled_date") or "",
+        yes_probability,
+    )
+    phone = ""
+    try:
+        res = await db.table("vendor_members").select("phone").eq(
+            "id", KAM_MEMBER_ID
+        ).maybe_single().execute()
+        phone = ((res.data or {}).get("phone") or "").strip()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+
+        if _is_rest_quota_error(e):
+            try:
+                member = pg_select_vendor_member(KAM_MEMBER_ID) or {}
+                phone = (member.get("phone") or "").strip()
+            except Exception as pg_e:
+                logger.error("Owner phone pg fallback failed for held job %s: %s", job_id, pg_e)
+        if not phone:
+            logger.error("Owner phone lookup failed for held job %s: %s", job_id, type(e).__name__)
+
+    if phone:
+        try:
+            from ..notifications import send_dispatch_sms
+            send_dispatch_sms(phone, sms_body)
+        except Exception as e:
+            logger.error("Jev hold SMS failed for job %s: %s", job_id, type(e).__name__)
+
+    try:
+        from .notifications import _build_html_email, send_email_via_resend
+
+        subject = jev_hold_email_subject()
+        body = jev_hold_email_body(job, yes_probability)
+        await send_email_via_resend(
+            to=HOLD_ADMIN_EMAIL,
+            subject=subject,
+            html=_build_html_email(subject, body),
+        )
+    except Exception as e:
+        logger.error("Jev hold email failed for job %s: %s", job_id, type(e).__name__)
+
+
 async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: str = "") -> None:
     """Record escalation, mark dispatch_failed, email ops, SMS/notify owner."""
     err = error_message or f"No eligible vendor found after {attempt_count} attempt(s)"
