@@ -343,15 +343,22 @@ async def deliver_bracket_group_without_vendor(
                 )
                 # AE full-res skips inhouse format_listing_ready — apply PropTx
                 # 4:3 + long-edge ≤2400 before upload (live Fuze was 2800×1870 3:2).
-                enhanced, export_meta = apply_listing_export(enhanced)
-                enhance_meta = {**enhance_meta, **export_meta}
+                # Soft-fail: keep AE bytes if export throws (do not discard AE → inhouse).
                 provider = "autoenhance"
-                exp = (enhance_meta.get("export") or {})
-                logger.info(
-                    f"Job {job_id}: Autoenhance HDR ok order={enhance_meta.get('order_id')} "
-                    f"listing_export={exp.get('width')}x{exp.get('height')} "
-                    f"aspect_ok={exp.get('aspect_ok')} long_ok={exp.get('long_edge_ok')}"
-                )
+                try:
+                    enhanced, export_meta = apply_listing_export(enhanced)
+                    enhance_meta = {**enhance_meta, **export_meta}
+                    exp = (enhance_meta.get("export") or {})
+                    logger.info(
+                        f"Job {job_id}: Autoenhance HDR ok order={enhance_meta.get('order_id')} "
+                        f"listing_export={exp.get('width')}x{exp.get('height')} "
+                        f"aspect_ok={exp.get('aspect_ok')} long_ok={exp.get('long_edge_ok')}"
+                    )
+                except Exception as export_err:
+                    logger.warning(
+                        f"Job {job_id}: listing_export after Autoenhance HDR failed "
+                        f"({export_err}) — keeping enhanced"
+                    )
         except Exception as e:
             logger.warning(
                 f"Job {job_id}: Autoenhance skipped ({e}) — bricks_inhouse fallback"
@@ -710,15 +717,23 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                         enhanced, enhance_meta = ae.enhance_brackets_sync(
                             [original], [filename], apply_sky=False
                         )
-                        enhanced, export_meta = apply_listing_export(enhanced)
-                        enhance_meta = {**enhance_meta, **export_meta}
+                        # Soft-fail: keep AE bytes if export throws (exterior/single
+                        # HDR leftovers too — do not discard AE → inhouse).
                         provider = "autoenhance"
-                        exp = (enhance_meta.get("export") or {})
-                        logger.info(
-                            f"Job {job_id}: Autoenhance single-frame ok "
-                            f"order={enhance_meta.get('order_id')} "
-                            f"listing_export={exp.get('width')}x{exp.get('height')}"
-                        )
+                        try:
+                            enhanced, export_meta = apply_listing_export(enhanced)
+                            enhance_meta = {**enhance_meta, **export_meta}
+                            exp = (enhance_meta.get("export") or {})
+                            logger.info(
+                                f"Job {job_id}: Autoenhance single-frame ok "
+                                f"order={enhance_meta.get('order_id')} "
+                                f"listing_export={exp.get('width')}x{exp.get('height')}"
+                            )
+                        except Exception as export_err:
+                            logger.warning(
+                                f"Job {job_id}: listing_export after Autoenhance "
+                                f"single-frame failed ({export_err}) — keeping enhanced"
+                            )
                     except Exception as e:
                         logger.warning(
                             f"Job {job_id}: Autoenhance single-frame skipped ({e}) "

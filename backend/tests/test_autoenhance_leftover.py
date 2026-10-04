@@ -721,3 +721,132 @@ def test_deliver_single_default_skips_autoenhance(monkeypatch):
     assert ae_calls == []
     assert updates and updates[0][1]["provider"] == "bricks_inhouse"
     assert uploaded and uploaded[0] == b"\xff\xd8mls_ih"
+
+
+def test_deliver_single_vendor_photo_ae_listing_export_soft_fail_keeps_ae(monkeypatch):
+    """AE single-frame: listing_export throw keeps AE bytes (not inhouse fallback)."""
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
+    updates = []
+    uploaded = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return b"\xff\xd8fakejpg"
+
+    async def fake_up(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/ae.jpg"
+
+    async def fake_qc(*_a, **_k):
+        return None
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.enhance_image = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("inhouse must not run when AE succeeded — soft-fail keeps AE")
+    )
+    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_qc_variant = fake_qc
+    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(RuntimeError("export boom"))
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    fake_mi = ModuleType("app.services.media_intake")
+    fake_mi.delivery_route = lambda _a: "vendor_photo"
+    monkeypatch.setitem(sys.modules, "app.services.media_intake", fake_mi)
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setattr(ae, "is_available", lambda: True)
+    monkeypatch.setattr(
+        ae,
+        "enhance_brackets_sync",
+        lambda *a, **k: (b"\xff\xd8ae_raw", {"order_id": "ord-sf", "provider": "autoenhance"}),
+    )
+
+    # Exterior-tagged single leftover (filename cue) — still vendor_photo route
+    asset = {"id": "u-ae-sf", "file_url": "raw/exterior_front.jpg", "filename": "exterior_front.jpg"}
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-ae-sf", asset))
+    assert updates and updates[0][1]["provider"] == "autoenhance"
+    assert uploaded == [b"\xff\xd8ae_raw"]
+
+
+def test_bracket_group_ae_listing_export_soft_fail_keeps_ae(monkeypatch):
+    """AE HDR bracket: listing_export throw keeps AE bytes (not inhouse fallback)."""
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
+    updates = []
+    uploaded = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return b"\xff\xd8fakejpg"
+
+    async def fake_up(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/ae_hdr.jpg"
+
+    async def fake_qc(*_a, **_k):
+        return None
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.enhance_bracket = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("inhouse must not run when AE succeeded — soft-fail keeps AE")
+    )
+    fake_pes.exposure_bias_from_name = lambda n: 0.0 if "_0" in n else -2.0
+    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_qc_variant = fake_qc
+    fake_pes.apply_listing_export = lambda b: (_ for _ in ()).throw(RuntimeError("export boom"))
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setattr(ae, "is_available", lambda: True)
+    monkeypatch.setattr(
+        ae,
+        "enhance_brackets_sync",
+        lambda *a, **k: (b"\xff\xd8ae_hdr", {"order_id": "ord-hdr", "provider": "autoenhance"}),
+    )
+
+    group = [
+        {"id": "u1", "file_url": "p1", "filename": "ext_-2.jpg"},
+        {"id": "u2", "file_url": "p2", "filename": "ext_0.jpg"},
+        {"id": "u3", "file_url": "p3", "filename": "ext_+2.jpg"},
+    ]
+    _run(pp.deliver_bracket_group_without_vendor(MagicMock(storage=MagicMock()), "job-ae-hdr", group, apply_sky=True))
+    providers = {uid: u["provider"] for uid, u in updates}
+    assert providers["u2"] == "autoenhance"
+    assert providers["u1"] == "bracket_sibling"
+    assert uploaded == [b"\xff\xd8ae_hdr"]
+
+
+def test_apply_listing_export_exterior_portrait_and_3x2_aspect_ok():
+    """Exterior portrait + 3:2 singles must leave aspect_ok after PropTx export."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.photo_enhance_service import (
+        LISTING_MAX_LONG_EDGE,
+        apply_listing_export,
+        listing_export_invariants,
+    )
+
+    for w, h, label in ((1800, 2700, "portrait"), (2800, 1870, "3:2"), (3000, 2000, "3:2-big")):
+        img = Image.new("RGB", (w, h), (90, 140, 200))
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        out, meta = apply_listing_export(buf.getvalue())
+        inv = listing_export_invariants(out)
+        assert inv["aspect_ok"] is True, f"{label} aspect_ok"
+        assert inv["long_edge_ok"] is True, f"{label} long_ok"
+        assert inv["landscape"] is True, f"{label} landscape"
+        assert inv["long_edge"] <= LISTING_MAX_LONG_EDGE
+        assert meta.get("listing_export_applied") is True
