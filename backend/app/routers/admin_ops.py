@@ -224,10 +224,9 @@ async def verify_document(
         api_error(404, "Document not found", "document_not_found")
 
     doc = res.data[0]
-    # Denormalize the expiry onto vendor_members so member_eligible_for_job()
-    # can gate dispatch on it without an extra query per candidate. Only coi
-    # and wsib are dispatch-blocking documents; other doc_types (hst_registry,
-    # id_verification, rpas_certificate, resume) don't have a lapse concept.
+    # Optional record only. Copy a verified COI/WSIB expiry onto the member
+    # for history. These dates do not suspend the vendor or block approval,
+    # assignment, or dispatch.
     if status == "verified" and doc.get("doc_type") in ("coi", "wsib") and doc.get("expiry_date"):
         column = "coi_expires_on" if doc["doc_type"] == "coi" else "wsib_expires_on"
         await db.table("vendor_members").update({
@@ -561,13 +560,10 @@ async def reconcile_noshow_claims(
 # ---------------------------------------------------------------------------
 # Vendor compliance expiry scan
 #
-# IC agreement Clause 6 requires current COI/WSIB before every dispatched job,
-# and vendor_os.py already enforces that gate at dispatch time (lapsed ->
-# automatic suspension). This scan is the proactive half: surface COI/WSIB
-# expiring soon so ops can chase renewals *before* a vendor gets suspended
-# mid-pipeline, mirroring the churn-scan / reconcile-noshow admin patterns
-# already established in this repo and Bricks-Companion. Homies AI has no
-# equivalent concept -- it has no independent-contractor network at all.
+# Informational only. COI and WSIB proof are not required to apply, be
+# approved, or be dispatched. This scan reports stored expiry dates so ops
+# can see them. It does not suspend a vendor, reject an application, or
+# hold a job.
 # ---------------------------------------------------------------------------
 
 @router.get("/compliance-expiry-scan")
@@ -578,7 +574,7 @@ async def compliance_expiry_scan(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    Scan active vendors' COI/WSIB documents for lapsed or soon-to-lapse coverage.
+    Report stored COI/WSIB expiry dates. Does not change vendor or job status.
 
     notify=false (default): report only, sends nothing.
     notify=true: sends one digest admin notification (Resend + in-app) if any

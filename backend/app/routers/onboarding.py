@@ -610,10 +610,9 @@ async def upload_compliance_document(
 
     await (await get_db()).table("vendor_documents").insert(doc.dict()).execute()
 
-    # COI and WSIB are the two IC-agreement Clause 6 compliance documents with
-    # hard minimums (coverage amount, additional insured, clearance/exemption) —
-    # auto-validate them on upload so applicants get a fast pending/flagged
-    # signal instead of waiting on manual admin review to catch a bad upload.
+    # Optional. A COI or WSIB upload can be validated and stored on the
+    # document row. The outcome does not block apply, approval, assignment,
+    # or dispatch, and it does not suspend the member or hold a job.
     if doc_type in ("coi", "wsib"):
         from ..services.compliance_validator import validate_compliance_document
 

@@ -340,10 +340,9 @@ class VendorMember(BaseModel):
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     insurance_policy_number: Optional[str] = None
-    # Denormalized from vendor_documents.expiry_date when a coi/wsib doc is
-    # marked verified (admin_ops.py::verify_document). NULL = no verified
-    # doc on file yet; has_lapsed_insurance() only trips on a confirmed past
-    # date, never on NULL -- see that function's docstring.
+    # Optional copies of a verified COI/WSIB expiry (admin_ops.verify_document).
+    # Historical storage only. Apply, approval, assignment, and dispatch do
+    # not read these fields and do not require a COI or WSIB record.
     coi_expires_on: Optional[str] = None
     wsib_expires_on: Optional[str] = None
     internal_notes: str = ""
