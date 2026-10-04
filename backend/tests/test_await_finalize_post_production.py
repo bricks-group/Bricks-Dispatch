@@ -458,6 +458,94 @@ def test_merge_missing_still_urls_skips_already_present():
     assert merged[1]["upload_id"] == "u2"
 
 
+def test_merge_still_urls_backfills_hollow_kind():
+    """Late fold must stamp kind onto already-present hollow delivery_urls rows."""
+    existing = [
+        {"upload_id": "u-drone", "url": "https://cdn.example/dji.jpg", "filename": "DJI_0001.jpg"},
+        {"upload_id": "u-photo", "url": "https://cdn.example/a.jpg", "filename": "a.jpg"},
+    ]
+    stills = [
+        {"upload_id": "u-drone", "url": "https://cdn.example/dji.jpg",
+         "filename": "DJI_0001.jpg", "kind": "drone", "qc_flagged": False},
+        {"upload_id": "u-photo", "url": "https://cdn.example/a.jpg",
+         "filename": "a.jpg", "qc_flagged": False},
+    ]
+    merged = pp._merge_missing_still_urls(existing, stills)
+    assert merged is not None
+    assert len(merged) == 2
+    assert merged[0]["kind"] == "drone"
+    assert merged[0].get("qc_flagged") is False
+    assert "kind" not in merged[1]  # HDR/plain photo stays untagged
+    # do not overwrite non-empty kind
+    existing2 = [
+        {"upload_id": "u-drone", "url": "https://cdn.example/dji.jpg",
+         "filename": "DJI_0001.jpg", "kind": "reel"},
+    ]
+    stills2 = [
+        {"upload_id": "u-drone", "url": "https://cdn.example/dji.jpg",
+         "filename": "DJI_0001.jpg", "kind": "drone"},
+    ]
+    assert pp._merge_missing_still_urls(existing2, stills2) is None
+    # idempotent after backfill
+    assert pp._merge_missing_still_urls(merged, stills) is None
+
+
+def test_merge_still_urls_prunes_qc_rejected():
+    """QC-rejected upload_id must leave delivery_urls; session/Visit rows stay."""
+    existing = [
+        {"url": "https://api.brxs.ca/api/public/floorplans/j/sess-fp",
+         "filename": "Floor plan", "session_id": "sess-fp", "kind": "floorplan"},
+        {"upload_id": "u-bad", "url": "https://cdn.example/bad.jpg", "filename": "bad.jpg"},
+        {"upload_id": "u-ok", "url": "https://cdn.example/ok.jpg", "filename": "ok.jpg"},
+        {"url": "https://visit.example/v", "filename": "Virtual Visit", "kind": "visit"},
+    ]
+    stills = [
+        {"upload_id": "u-ok", "url": "https://cdn.example/ok.jpg", "filename": "ok.jpg"},
+    ]
+    merged = pp._merge_missing_still_urls(
+        existing, stills, rejected_ids={"u-bad"}
+    )
+    assert merged is not None
+    uids = [u.get("upload_id") for u in merged if isinstance(u, dict)]
+    assert "u-bad" not in uids
+    assert "u-ok" in uids
+    assert any(u.get("session_id") == "sess-fp" for u in merged)
+    assert any(u.get("kind") == "visit" for u in merged)
+    # idempotent
+    assert pp._merge_missing_still_urls(merged, stills, rejected_ids={"u-bad"}) is None
+
+
+def test_merge_still_urls_append_kind_backfill_and_prune_together():
+    """Append + kind backfill + prune each make a durable change."""
+    existing = [
+        {"url": "https://api.brxs.ca/api/public/tours/j/sess-t",
+         "filename": "3D tour", "session_id": "sess-t", "kind": "splat"},
+        {"upload_id": "u-rej", "url": "https://cdn.example/rej.jpg", "filename": "rej.jpg"},
+        {"upload_id": "u-hollow", "url": "https://cdn.example/dji.jpg",
+         "filename": "DJI_0002.jpg"},
+    ]
+    stills = [
+        {"upload_id": "u-hollow", "url": "https://cdn.example/dji.jpg",
+         "filename": "DJI_0002.jpg", "kind": "drone", "qc_flagged": False},
+        {"upload_id": "u-new", "url": "https://cdn.example/new.jpg",
+         "filename": "new.jpg"},
+    ]
+    merged = pp._merge_missing_still_urls(
+        existing, stills, rejected_ids={"u-rej"}
+    )
+    assert merged is not None
+    assert any(u.get("session_id") == "sess-t" for u in merged)
+    assert not any(u.get("upload_id") == "u-rej" for u in merged)
+    hollow = next(u for u in merged if u.get("upload_id") == "u-hollow")
+    assert hollow["kind"] == "drone"
+    assert any(u.get("upload_id") == "u-new" for u in merged)
+    assert len(merged) == 3  # tour + hollow + new
+    # second pass: nothing left
+    assert pp._merge_missing_still_urls(
+        merged, stills, rejected_ids={"u-rej"}
+    ) is None
+
+
 def test_finalize_folds_stills_when_capture_only_media_delivery_exists(monkeypatch):
     """Capture-first media_delivery: late enhance stills must patch delivery_urls."""
     existing_row = {

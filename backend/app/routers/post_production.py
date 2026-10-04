@@ -249,12 +249,25 @@ def _merge_missing_visit_urls(existing_urls, visit_urls: list | None) -> list[di
     return existing + added
 
 
-def _merge_missing_still_urls(existing_urls, still_urls: list[dict]) -> list[dict] | None:
-    """Append listing stills missing from an existing media_delivery.delivery_urls.
+def _merge_missing_still_urls(
+    existing_urls,
+    still_urls: list[dict],
+    rejected_ids: set[str] | frozenset[str] | None = None,
+) -> list[dict] | None:
+    """Reconcile listing stills into an existing media_delivery.delivery_urls.
 
     Capture-only (or Visit-only / partial) finalize can create media_delivery before
     enhance finishes more stills. Later enhance/reconcile must fold those photos in
-    without re-running QC, payout, or agent email. Returns None when nothing new.
+    without re-running QC, payout, or agent email.
+
+    Also:
+    - Prune upload-based still rows whose upload_id/id is QC-rejected (rejected_ids).
+      Keep floorplan/tour/Visit/session rows that are not uploads-based stills.
+    - Backfill kind onto hollow existing still rows from fresh still_urls (do not
+      overwrite a non-empty kind). Optionally refresh qc_flagged from fresh.
+    - Append stills missing by upload_id (unchanged).
+
+    Returns None when nothing durable changed.
     """
     existing = list(existing_urls or []) if isinstance(existing_urls, list) else []
     if isinstance(existing_urls, str):
@@ -264,23 +277,64 @@ def _merge_missing_still_urls(existing_urls, still_urls: list[dict]) -> list[dic
             existing = list(parsed) if isinstance(parsed, list) else []
         except Exception:
             existing = []
-    seen_uids = {
-        str(u.get("upload_id") or u.get("id") or "")
-        for u in existing
-        if isinstance(u, dict) and (u.get("upload_id") or u.get("id"))
-    }
-    added: list[dict] = []
+    rejected = {str(x) for x in (rejected_ids or ()) if x}
+    fresh_by_uid: dict[str, dict] = {}
+    for su in still_urls or []:
+        if not isinstance(su, dict):
+            continue
+        uid = str(su.get("upload_id") or su.get("id") or "")
+        if uid:
+            fresh_by_uid[uid] = su
+
+    changed = False
+    out: list = []
+    seen_uids: set[str] = set()
+    for u in existing:
+        if not isinstance(u, dict):
+            out.append(u)
+            continue
+        uid = str(u.get("upload_id") or u.get("id") or "")
+        # Drop QC-rejected upload rows (session/Visit leftovers without matching
+        # upload_id stay; rejected_ids only comes from uploads.qc_status).
+        if uid and uid in rejected:
+            changed = True
+            continue
+        row = u
+        if uid and uid in fresh_by_uid:
+            fresh = fresh_by_uid[uid]
+            existing_kind = str(row.get("kind") or "").strip()
+            fresh_kind = str(fresh.get("kind") or "").strip()
+            need_kind = (not existing_kind) and bool(fresh_kind)
+            need_qc = (
+                "qc_flagged" in fresh
+                and row.get("qc_flagged") != fresh.get("qc_flagged")
+            )
+            if need_kind or need_qc:
+                row = dict(u)
+                if need_kind:
+                    row["kind"] = fresh_kind
+                if need_qc:
+                    row["qc_flagged"] = fresh.get("qc_flagged")
+                changed = True
+        if uid:
+            seen_uids.add(uid)
+        out.append(row)
+
     for su in still_urls or []:
         if not isinstance(su, dict):
             continue
         uid = str(su.get("upload_id") or su.get("id") or "")
         if not uid or uid in seen_uids:
             continue
-        added.append(su)
+        if uid in rejected:
+            continue
+        out.append(su)
         seen_uids.add(uid)
-    if not added:
+        changed = True
+
+    if not changed:
         return None
-    return existing + added
+    return out
 
 
 
@@ -412,7 +466,14 @@ async def _fold_late_into_existing_delivery(
     capture_urls = _delivery_urls_from_capture_sessions(job_id, sessions or [])
     raw_urls = existing.get("delivery_urls") if isinstance(existing, dict) else None
 
-    merged_stills = _merge_missing_still_urls(raw_urls, still_urls)
+    rejected_ids = {
+        str(u.get("id") or "")
+        for u in (uploads or [])
+        if isinstance(u, dict) and u.get("qc_status") == "rejected" and u.get("id")
+    }
+    merged_stills = _merge_missing_still_urls(
+        raw_urls, still_urls, rejected_ids=rejected_ids or None
+    )
     cur = merged_stills if merged_stills is not None else raw_urls
     merged_capture = _merge_missing_capture_urls(cur, capture_urls)
     cur2 = merged_capture if merged_capture is not None else cur
