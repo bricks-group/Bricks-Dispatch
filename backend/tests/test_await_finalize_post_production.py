@@ -907,3 +907,236 @@ def test_visit_sign_returns_bucket():
     fn = src.split("async def sign_visit_upload")[1].split("async def deliver_virtual_visit")[0]
     assert '"bucket": STORAGE_BUCKET' in fn or "'bucket': STORAGE_BUCKET" in fn
 
+
+
+def test_late_fold_runs_qc_and_skips_rejected_still(monkeypatch):
+    """Late-fold: done still missing qc_status → run_qc_for_job; rejected not folded."""
+    existing = {
+        "id": "md-late",
+        "delivery_urls": [
+            {
+                "url": "https://api.brxs.ca/api/public/floorplans/job-qc/sess-fp",
+                "filename": "Floor plan",
+                "session_id": "sess-fp",
+                "kind": "floorplan",
+            },
+        ],
+    }
+    still_pre = {
+        "id": "u-late",
+        "filename": "living.jpg",
+        "file_url": "raw/living.jpg",
+        "processed_url": "https://cdn.example/living.jpg",
+        "processing_status": "done",
+        "qc_status": None,
+        "provider": None,
+    }
+    still_post = {**still_pre, "qc_status": "rejected"}
+
+    fetch_n = {"n": 0}
+
+    uploads_tbl = MagicMock()
+    uploads_tbl.select.return_value = uploads_tbl
+    uploads_tbl.eq.return_value = uploads_tbl
+
+    async def uploads_execute():
+        fetch_n["n"] += 1
+        # first fetch: missing qc; second (post-QC): rejected
+        data = [still_pre] if fetch_n["n"] == 1 else [still_post]
+        return MagicMock(data=data)
+
+    uploads_tbl.execute = uploads_execute
+
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    cap_tbl.execute = AsyncMock(return_value=MagicMock(data=[]))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+
+    qc_calls = []
+
+    async def fake_qc(job_id):
+        qc_calls.append(job_id)
+        return {"approved": 0, "rejected": 1, "flagged": 0}
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+
+    folded = asyncio.run(pp._fold_late_into_existing_delivery("job-qc", existing))
+
+    assert qc_calls == ["job-qc"]
+    # rejected still must not appear; floorplan-only merge may still return False
+    # if nothing changed — but prune of nothing + no new stills → False is ok,
+    # OR if somehow patch happens, u-late must be absent.
+    if folded:
+        urls = md_tbl.update.call_args[0][0]["delivery_urls"]
+        assert not any(u.get("upload_id") == "u-late" for u in urls)
+    else:
+        assert not md_tbl.update.called
+    assert fetch_n["n"] >= 2
+
+
+def test_late_fold_skips_qc_when_stills_already_have_qc_status(monkeypatch):
+    """Late-fold: every ready listing still already has qc_status → no QC call."""
+    existing = {
+        "id": "md-ok",
+        "delivery_urls": [
+            {
+                "url": "https://api.brxs.ca/api/public/floorplans/job-ok/sess-fp",
+                "filename": "Floor plan",
+                "session_id": "sess-fp",
+                "kind": "floorplan",
+            },
+        ],
+    }
+    still = {
+        "id": "u-ok",
+        "filename": "living.jpg",
+        "file_url": "raw/living.jpg",
+        "processed_url": "https://cdn.example/living.jpg",
+        "processing_status": "done",
+        "qc_status": "accepted",
+        "provider": None,
+    }
+
+    uploads_tbl = _uploads_chain([still])
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    cap_tbl.execute = AsyncMock(return_value=MagicMock(data=[]))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+    qc_calls = []
+
+    async def fake_qc(job_id):
+        qc_calls.append(job_id)
+        return {}
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+
+    folded = asyncio.run(pp._fold_late_into_existing_delivery("job-ok", existing))
+
+    assert qc_calls == []
+    assert folded is True
+    urls = md_tbl.update.call_args[0][0]["delivery_urls"]
+    assert any(u.get("upload_id") == "u-ok" for u in urls)
+
+
+def test_late_fold_capture_only_no_listing_stills_skips_qc(monkeypatch):
+    """Capture-only fold (no listing stills needing QC) → no run_qc_for_job."""
+    existing = {
+        "id": "md-cap",
+        "delivery_urls": [],
+    }
+    fp = {
+        "id": "sess-fp",
+        "kind": "floorplan",
+        "status": "delivered",
+        "output_storage_path": "capture/job-cap/sess-fp/plan.png",
+    }
+
+    uploads_tbl = _uploads_chain([])
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    call_n = {"n": 0}
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+
+    async def cap_exec():
+        call_n["n"] += 1
+        if call_n["n"] % 2 == 1:
+            return MagicMock(data=[fp])
+        return MagicMock(data=[])
+
+    cap_tbl.execute = cap_exec
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+    qc_calls = []
+
+    async def fake_qc(job_id):
+        qc_calls.append(job_id)
+        return {}
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(
+        pp,
+        "_delivery_urls_from_capture_sessions",
+        lambda job_id, sessions: [
+            {
+                "url": f"https://api.brxs.ca/api/public/floorplans/{job_id}/sess-fp",
+                "filename": "Floor plan",
+                "session_id": "sess-fp",
+                "kind": "floorplan",
+            }
+        ]
+        if sessions
+        else [],
+    )
+
+    folded = asyncio.run(pp._fold_late_into_existing_delivery("job-cap", existing))
+
+    assert qc_calls == []
+    assert folded is True
+    urls = md_tbl.update.call_args[0][0]["delivery_urls"]
+    assert any(u.get("session_id") == "sess-fp" for u in urls)
+
+
+def test_late_fold_source_documents_qc_before_merge():
+    src = Path(pp.__file__).read_text()
+    fn = src.split("async def _fold_late_into_existing_delivery")[1].split(
+        "async def _fold_capture_into_existing_delivery"
+    )[0]
+    assert "Runs QC on listing stills missing qc_status before fold" in fn
+    assert "still no payout/email" in fn
+    assert "run_qc_for_job" in fn
+    # QC before building still delivery urls
+    assert fn.find("run_qc_for_job") < fn.find("_listing_still_delivery_urls")

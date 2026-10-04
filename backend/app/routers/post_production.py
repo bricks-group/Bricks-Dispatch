@@ -448,18 +448,62 @@ async def _fold_late_into_existing_delivery(
     *,
     visit_urls: list | None = None,
 ) -> bool:
-    """If media_delivery exists, merge stills + late floor/tour/Visit. No payout/email."""
+    """If media_delivery exists, merge stills + late floor/tour/Visit.
+
+    Runs QC on listing stills missing qc_status before fold; still no payout/email.
+    """
     db = await get_db()
-    try:
-        res_uploads = await db.table("uploads").select(
-            "id, filename, file_url, processed_url, processing_status, qc_status, provider"
-        ).eq("job_id", job_id).execute()
-        uploads = res_uploads.data or []
-    except Exception as e:
-        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
-        if not _is_rest_quota_error(e):
-            raise
-        uploads = pg_select_uploads_by_job_id(job_id)
+
+    async def _fetch_uploads():
+        try:
+            res_uploads = await db.table("uploads").select(
+                "id, filename, file_url, processed_url, processing_status, qc_status, provider"
+            ).eq("job_id", job_id).execute()
+            return res_uploads.data or []
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+            if not _is_rest_quota_error(e):
+                raise
+            return pg_select_uploads_by_job_id(job_id)
+
+    uploads = await _fetch_uploads()
+
+    # Capture-first / Visit-first can create media_delivery before enhance QC.
+    # Full finalize runs run_qc_for_job before delivery_urls; late-fold must too
+    # for ready listing stills that still lack qc_status (else rejected prune misses).
+    def _ready_still_missing_qc(u: dict) -> bool:
+        if not isinstance(u, dict):
+            return False
+        if u.get("processing_status") == "failed":
+            return False
+        if u.get("processing_status") in ("processing", "pending"):
+            return False
+        if not is_listing_still_delivery_row(u):
+            return False
+        if not (u.get("processed_url") or u.get("file_url")):
+            return False
+        qc = u.get("qc_status")
+        if qc is not None and str(qc).strip():
+            return False
+        return True
+
+    need_qc = [u for u in (uploads or []) if _ready_still_missing_qc(u)]
+    if need_qc:
+        try:
+            qc_counts = await run_qc_for_job(job_id)
+            logger.info(
+                "Job %s: late-fold QC complete — %s (%s still(s) needed QC)",
+                job_id,
+                qc_counts,
+                len(need_qc),
+            )
+        except Exception as e:
+            logger.error(
+                "Job %s: late-fold QC agent failed (continuing to merge): %s",
+                job_id,
+                e,
+            )
+        uploads = await _fetch_uploads()
 
     still_urls = await _listing_still_delivery_urls(uploads)
     sessions = await _list_delivered_capture_sessions(db, job_id)
