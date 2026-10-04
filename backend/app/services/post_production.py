@@ -31,8 +31,35 @@ async def _safe_update_upload(db, upload_id: str, update: dict) -> None:
 # BoxBrownie / third-party virtual staging is intentionally disabled (Kam 2026-09-12).
 # Staging uploads deliver originals to the listing file — never call vendors or claim furniture was staged.
 # Owned Bricks staging ships later. Fotello/Autoenhance remain optional HDR enhance only.
+# POSTPROD_STILLS_PROVIDER selects leftover stills editor (Kam: AE is NOT locked).
+#   inhouse (default) — bricks_inhouse / Enfuse path; never call Autoenhance
+#   autoenhance       — prefer AE when key+plan available; soft-fail to inhouse
+# Aliases: ae→autoenhance; bricks_inhouse→inhouse. Unknown values → inhouse.
+_POSTPROD_STILLS_PROVIDER_ENV = "POSTPROD_STILLS_PROVIDER"
 AUTOENHANCE_API_KEY = os.environ.get("AUTOENHANCE_API_KEY")
 FOTELLO_API_KEY = os.environ.get("FOTELLO_API_KEY")
+
+
+def stills_provider_preference() -> str:
+    """Return 'inhouse' or 'autoenhance' for leftover vendor stills.
+
+    Default is inhouse so production does not treat Autoenhance as the locked
+    stills editor. Set POSTPROD_STILLS_PROVIDER=autoenhance to prefer AE.
+    """
+    raw = (os.environ.get(_POSTPROD_STILLS_PROVIDER_ENV) or "inhouse").strip().lower()
+    if raw in ("autoenhance", "ae"):
+        return "autoenhance"
+    if raw in ("inhouse", "bricks_inhouse", ""):
+        return "inhouse"
+    logger.warning(
+        f"Unknown {_POSTPROD_STILLS_PROVIDER_ENV}={raw!r} — using inhouse"
+    )
+    return "inhouse"
+
+
+def prefer_autoenhance_stills() -> bool:
+    """True only when env explicitly selects Autoenhance for leftover stills."""
+    return stills_provider_preference() == "autoenhance"
 
 
 async def trigger_boxbrownie_staging(source_url: str, room_type: str = "Living Room", style_preset: str = "modern") -> Optional[str]:
@@ -186,8 +213,8 @@ async def process_job_assets(job_id: str):
             leftover.append(asset)
             continue
 
-        # Launch path: sync leftover enhance (Autoenhance v3 HDR brackets when
-        # AUTOENHANCE_API_KEY is set + plan active, else bricks_inhouse).
+        # Launch path: sync leftover enhance (provider via POSTPROD_STILLS_PROVIDER;
+        # default inhouse; autoenhance only when env selects it + key/plan ok).
         # Do NOT submit vendor_photo to async Fotello/AE v2 — that leaves rows
         # in processing waiting for callbacks and skips bracket HDR merge.
         leftover.append(asset)
@@ -304,10 +331,10 @@ async def deliver_bracket_group_without_vendor(
     enhanced = None
     enhance_meta = {}
     provider = "bricks_inhouse"
-    # Prefer Autoenhance v3 HDR for day vendor brackets (mls_safe: no invent sky).
-    # Twilight (apply_sky=False) stays in-house. Fail-fast to bricks_inhouse on
-    # No Plan / errors so listing delivery never hangs on a vendor API.
-    if apply_sky:
+    # Day vendor brackets: Autoenhance only when POSTPROD_STILLS_PROVIDER=autoenhance
+    # (mls_safe: no invent sky). Default inhouse. Twilight stays in-house.
+    # Fail-fast to bricks_inhouse on No Plan / errors so listing never hangs.
+    if apply_sky and prefer_autoenhance_stills():
         try:
             from . import autoenhance_service as ae
             if ae.is_available():
@@ -677,8 +704,8 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             if original:
                 enhanced = None
                 filename = str(asset.get("filename") or "still.jpg")
-                # Prefer Autoenhance for single-frame leftovers (number_of_brackets=1).
-                if ae.is_available():
+                # Autoenhance single-frame only when POSTPROD_STILLS_PROVIDER=autoenhance.
+                if prefer_autoenhance_stills() and ae.is_available():
                     try:
                         enhanced, enhance_meta = ae.enhance_brackets_sync(
                             [original], [filename], apply_sky=False

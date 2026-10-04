@@ -1,4 +1,4 @@
-"""Autoenhance v3 leftover path: prefer AE when available; fail-fast to inhouse; no async v2."""
+"""Leftover stills provider: POSTPROD_STILLS_PROVIDER gate; AE opt-in; fail-fast to inhouse."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -72,6 +72,7 @@ def test_bracket_group_prefers_autoenhance_then_uploads(monkeypatch):
     monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
 
     monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
     monkeypatch.setattr(ae, "is_available", lambda: True)
     monkeypatch.setattr(
         ae,
@@ -139,6 +140,7 @@ def test_bracket_group_falls_back_inhouse_on_no_plan(monkeypatch):
     monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
 
     monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
     monkeypatch.setattr(ae, "is_available", lambda: True)
 
     def boom(*_a, **_k):
@@ -349,6 +351,7 @@ def test_deliver_single_vendor_photo_prefers_autoenhance(monkeypatch):
     monkeypatch.setitem(sys.modules, "app.services.media_intake", fake_mi)
 
     monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
     monkeypatch.setattr(ae, "is_available", lambda: True)
     monkeypatch.setattr(
         ae,
@@ -416,6 +419,7 @@ def test_deliver_single_vendor_photo_falls_back_inhouse(monkeypatch):
     monkeypatch.setitem(sys.modules, "app.services.media_intake", fake_mi)
 
     monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
     monkeypatch.setattr(ae, "is_available", lambda: True)
 
     def boom(*_a, **_k):
@@ -587,3 +591,133 @@ def test_deliver_single_vendor_photo_inhouse_listing_export_soft_fail(monkeypatc
     assert updates and updates[0][1]["provider"] == "bricks_inhouse"
     assert uploaded == [b"\xff\xd8inhouse"]
 
+
+def test_stills_provider_preference_defaults_inhouse(monkeypatch):
+    monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
+    assert pp.stills_provider_preference() == "inhouse"
+    assert pp.prefer_autoenhance_stills() is False
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
+    assert pp.stills_provider_preference() == "autoenhance"
+    assert pp.prefer_autoenhance_stills() is True
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "ae")
+    assert pp.stills_provider_preference() == "autoenhance"
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "bricks_inhouse")
+    assert pp.stills_provider_preference() == "inhouse"
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "nope")
+    assert pp.stills_provider_preference() == "inhouse"
+
+
+def test_bracket_group_default_skips_autoenhance(monkeypatch):
+    """Default POSTPROD_STILLS_PROVIDER=inhouse must not call AE even if available."""
+    updates = []
+    ae_calls = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return b"\xff\xd8fakejpg"
+
+    async def fake_qc(*_a, **_k):
+        return None
+
+    uploaded = []
+
+    async def fake_up_track(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/path.jpg"
+
+    def fake_enhance(*_a, **_k):
+        return b"\xff\xd8inhouse", {"provider": "bricks_inhouse"}
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.enhance_bracket = fake_enhance
+    fake_pes.exposure_bias_from_name = lambda n: 0.0 if "_0" in n else -2.0
+    fake_pes.upload_enhanced = fake_up_track
+    fake_pes.upload_qc_variant = fake_qc
+    fake_pes.apply_listing_export = lambda b: (
+        b"\xff\xd8mls_ih",
+        {"listing_export_applied": True, "export": {"width": 2400, "height": 1800}},
+    )
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
+    monkeypatch.setattr(ae, "is_available", lambda: True)
+
+    def track_ae(*a, **k):
+        ae_calls.append(1)
+        raise AssertionError("AE must not run when provider defaults to inhouse")
+
+    monkeypatch.setattr(ae, "enhance_brackets_sync", track_ae)
+
+    group = [
+        {"id": "u1", "file_url": "p1", "filename": "room_-2.jpg"},
+        {"id": "u2", "file_url": "p2", "filename": "room_0.jpg"},
+    ]
+    _run(pp.deliver_bracket_group_without_vendor(MagicMock(storage=MagicMock()), "job-ih", group, apply_sky=True))
+    assert ae_calls == []
+    assert any(u.get("provider") == "bricks_inhouse" for _, u in updates)
+    assert uploaded and uploaded[0] == b"\xff\xd8mls_ih"
+
+
+def test_deliver_single_default_skips_autoenhance(monkeypatch):
+    updates = []
+    ae_calls = []
+
+    async def fake_safe(_db, uid, update):
+        updates.append((uid, update))
+
+    async def fake_dl(_path):
+        return b"\xff\xd8fakejpg"
+
+    uploaded = []
+
+    async def fake_up(_storage, _job, _uid, data):
+        uploaded.append(data)
+        return "processed/ih.jpg"
+
+    async def fake_qc(*_a, **_k):
+        return None
+
+    def fake_enhance(original, return_meta=False):
+        meta = {"provider": "bricks_inhouse", "mls_quarantine": False}
+        return (b"\xff\xd8inhouse", meta) if return_meta else b"\xff\xd8inhouse"
+
+    fake_pes = ModuleType("app.services.photo_enhance_service")
+    fake_pes.enhance_image = fake_enhance
+    fake_pes.upload_enhanced = fake_up
+    fake_pes.upload_qc_variant = fake_qc
+    fake_pes.apply_listing_export = lambda b: (
+        b"\xff\xd8mls_ih",
+        {"listing_export_applied": True, "export": {"width": 2400, "height": 1800}},
+    )
+    monkeypatch.setitem(sys.modules, "app.services.photo_enhance_service", fake_pes)
+
+    fake_storage = ModuleType("app.services.storage")
+    fake_storage.download_bytes = fake_dl
+    monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
+
+    fake_mi = ModuleType("app.services.media_intake")
+    fake_mi.delivery_route = lambda _a: "vendor_photo"
+    monkeypatch.setitem(sys.modules, "app.services.media_intake", fake_mi)
+
+    monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
+    monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
+    monkeypatch.setattr(ae, "is_available", lambda: True)
+
+    def track_ae(*a, **k):
+        ae_calls.append(1)
+        raise AssertionError("AE must not run on default inhouse")
+
+    monkeypatch.setattr(ae, "enhance_brackets_sync", track_ae)
+
+    asset = {"id": "u-def", "file_url": "raw/p.jpg", "filename": "kitchen.jpg"}
+    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-def", asset))
+    assert ae_calls == []
+    assert updates and updates[0][1]["provider"] == "bricks_inhouse"
+    assert uploaded and uploaded[0] == b"\xff\xd8mls_ih"
