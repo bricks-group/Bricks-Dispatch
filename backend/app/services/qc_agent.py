@@ -109,43 +109,75 @@ async def run_qc_on_upload(
     """
     Runs QC on a single upload: OpenCV coded pre-pass first, vision QC only when needed.
     Returns dict with: qc_status, qc_score, qc_notes, qc_source.
-    Falls through to 'passed' if both are unavailable (fail open — never block delivery due to QC outage).
+    OpenCV can hold (flagged/rejected) even when vision is unset. Vision outage
+    fails open only when OpenCV did not already flag/reject.
     """
     if not QC_ENABLED:
         return {"qc_status": "passed", "qc_score": 100, "qc_notes": "QC agent disabled", "qc_source": "disabled"}
 
-    if not _vision_qc_configured():
-        logger.warning(f"QC: no vision QC provider configured — skipping QC for upload {upload_id}")
-        return {"qc_status": "passed", "qc_score": 100, "qc_notes": "QC skipped (no provider configured)", "qc_source": "skipped"}
-
+    vision_configured = _vision_qc_configured()
     image_bytes = await _fetch_image_bytes(image_url)
     if not image_bytes:
         return {"qc_status": "passed", "qc_score": 100, "qc_notes": "QC skipped (image unavailable)", "qc_source": "skipped"}
 
-    # OpenCV pre-pass: fast coded checks before the (paid, external) vision QC call
+    # OpenCV pre-pass: always run when bytes are available (holds without Gemini).
     _high_value = package in ("luxury", "estate")
+    cv_result = None
+    cv_source = None
+    cv_status = None
     try:
         from .qc_opencv import analyze_image_cv
         cv_result = analyze_image_cv(image_bytes, is_exterior=is_exterior)
         cv_source = cv_result.get("source", "opencv")
         cv_status = cv_result.get("status", "passed")
+    except ImportError:
+        cv_result = None
+        cv_source = "opencv_unavailable"
+        cv_status = None
 
-        # Skip vision QC if OpenCV is confident AND this isn't a high-value package
-        if cv_source == "opencv" and cv_status == "passed" and not _high_value:
-            notes = "OpenCV pre-pass: passed"
+    # No vision provider: OpenCV alone can pass / flag / reject (hold).
+    if not vision_configured:
+        if cv_result is not None and cv_source == "opencv":
+            notes = f"OpenCV QC (no vision provider): {cv_status}"
             if cv_result.get("issues"):
                 notes += " Issues: " + "; ".join(cv_result["issues"])
-            logger.info(f"QC upload {upload_id}: OpenCV passed — vision QC skipped (package={package or 'unknown'})")
-            return _qc_payload("passed", cv_result.get("score", 100), notes, "opencv", cv_result)
-
-        # OpenCV flagged/rejected or high-value package: fall through to vision QC
-        if cv_source == "opencv":
             logger.info(
-                f"QC upload {upload_id}: OpenCV {cv_status} "
-                f"(score={cv_result.get('score')}, high_value={_high_value}) — running vision QC"
+                f"QC upload {upload_id}: OpenCV {cv_status} without vision "
+                f"(score={cv_result.get('score')})"
             )
-    except ImportError:
-        pass
+            return _qc_payload(
+                cv_status,
+                cv_result.get("score", 100),
+                notes,
+                "opencv",
+                cv_result,
+            )
+        logger.warning(
+            f"QC: no vision QC provider configured — skipping QC for upload {upload_id}"
+        )
+        return {
+            "qc_status": "passed",
+            "qc_score": 100,
+            "qc_notes": "QC skipped (no provider configured)",
+            "qc_source": "skipped",
+        }
+
+    # Vision configured: skip vision if OpenCV is confident AND not high-value.
+    if cv_result is not None and cv_source == "opencv" and cv_status == "passed" and not _high_value:
+        notes = "OpenCV pre-pass: passed"
+        if cv_result.get("issues"):
+            notes += " Issues: " + "; ".join(cv_result["issues"])
+        logger.info(
+            f"QC upload {upload_id}: OpenCV passed — vision QC skipped "
+            f"(package={package or 'unknown'})"
+        )
+        return _qc_payload("passed", cv_result.get("score", 100), notes, "opencv", cv_result)
+
+    if cv_result is not None and cv_source == "opencv":
+        logger.info(
+            f"QC upload {upload_id}: OpenCV {cv_status} "
+            f"(score={cv_result.get('score')}, high_value={_high_value}) — running vision QC"
+        )
 
     try:
         result = await run_vision_qc(image_bytes, _QC_PROMPT)
@@ -168,8 +200,31 @@ async def run_qc_on_upload(
 
     except Exception as e:
         logger.error(f"QC: vision provider call failed for upload {upload_id}: {e}")
-        # Fail open — QC outage must never block delivery
-        return {"qc_status": "passed", "qc_score": 100, "qc_notes": f"QC skipped (error: {type(e).__name__})", "qc_source": "skipped"}
+        # Keep OpenCV hold when it already flagged/rejected; fail-open only otherwise.
+        if (
+            cv_result is not None
+            and cv_source == "opencv"
+            and cv_status in ("flagged", "rejected")
+        ):
+            notes = f"OpenCV hold kept after vision error ({type(e).__name__}): {cv_status}"
+            if cv_result.get("issues"):
+                notes += " Issues: " + "; ".join(cv_result["issues"])
+            logger.warning(
+                f"QC upload {upload_id}: retaining OpenCV {cv_status} after vision failure"
+            )
+            return _qc_payload(
+                cv_status,
+                cv_result.get("score", 100),
+                notes,
+                "opencv",
+                cv_result,
+            )
+        return {
+            "qc_status": "passed",
+            "qc_score": 100,
+            "qc_notes": f"QC skipped (error: {type(e).__name__})",
+            "qc_source": "skipped",
+        }
 
 
 async def run_qc_for_job(job_id: str) -> dict:
