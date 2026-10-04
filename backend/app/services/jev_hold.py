@@ -121,14 +121,14 @@ def booking_decision_state(job: dict) -> dict:
     }
 
 
-def yes_probability(payload: Any) -> Optional[float]:
+def yes_probability(payload: Any, question_key: str = HOLD_QUESTION_KEY) -> Optional[float]:
     """Read answers.<question>.noul. None when the body is not a usable noul."""
     if not isinstance(payload, dict):
         return None
     answers = payload.get("answers")
     if not isinstance(answers, dict):
         return None
-    answer = answers.get(HOLD_QUESTION_KEY)
+    answer = answers.get(question_key)
     if not isinstance(answer, dict) or "noul" not in answer:
         return None
     try:
@@ -147,15 +147,18 @@ def _decision_body(job: dict) -> dict:
                 "instructions": HOLD_INSTRUCTIONS,
                 "criteria": {
                     "true": (
-                        "A person should review this booking before anyone is assigned. "
-                        "The service, location, missing fields, or vendor match quality "
-                        "is incomplete, contradictory, or a poor fit for automatic assignment."
+                        "A person should review this booking before anyone is assigned "
+                        "because the request is contradictory or otherwise a poor fit for "
+                        "automatic assignment. Do not answer true only because service, "
+                        "date, or address is blank, because lat/lng are missing, or because "
+                        "no photographer has been scored yet."
                     ),
                     "false": (
-                        "Auto-assign with the existing rules. A city or street address is "
-                        "enough location even when lat/lng are missing. Vendor match quality "
-                        "labeled unscored means no photographer has been scored yet, and that "
-                        "alone is not a reason to hold."
+                        "Auto-assign with the existing rules. Paid bookings already have "
+                        "service, date, and a street address; blanks in those fields are "
+                        "not a hold by themselves. Missing lat/lng is not a hold. Vendor "
+                        "match quality labeled unscored means no photographer has been "
+                        "scored yet, and that alone is not a reason to hold."
                     ),
                 },
             }
@@ -163,9 +166,172 @@ def _decision_body(job: dict) -> dict:
     }
 
 
+SCORE_INSTRUCTIONS = "Is this photographer a poor fit for automatic assignment to this booking?"
+
+
+def apply_jev_fit(base_score: float, poor_fit: Optional[float]) -> float:
+    """Scale today's score by Jev fit. None leaves the score unchanged.
+
+    poor_fit is a yes-probability that this photographer is a poor fit.
+    Fit is 1 - that probability, so 0 poor-fit does not change the score.
+    """
+    if poor_fit is None:
+        return base_score
+    try:
+        probability = float(poor_fit)
+    except (TypeError, ValueError):
+        return base_score
+    probability = max(0.0, min(1.0, probability))
+    return round(float(base_score) * (1.0 - probability), 3)
+
+
+def _question_key_for_vendor(vendor_id: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in str(vendor_id))
+    return f"poor_fit_{safe}"
+
+
+def _vendor_dict(vendor: Any) -> dict:
+    if isinstance(vendor, dict):
+        return vendor
+    if hasattr(vendor, "model_dump"):
+        return vendor.model_dump()
+    if hasattr(vendor, "dict"):
+        return vendor.dict()
+    return {}
+
+
+def candidate_match_state(job: dict, vendors: list) -> dict:
+    """Booking fields already on the job, plus each candidate's existing profile."""
+    people = []
+    for vendor in vendors:
+        row = _vendor_dict(vendor)
+        people.append({
+            "id": row.get("id"),
+            "tier": row.get("tier"),
+            "specialty": row.get("specialty") or "",
+            "skills": row.get("skills") or [],
+            "home_city": row.get("home_city") or "",
+            "service_areas": row.get("service_areas") or [],
+            "on_time_rate": row.get("on_time_rate"),
+            "quality_rating": row.get("quality_rating"),
+            "active_assignments": row.get("active_assignments"),
+        })
+    return {
+        "booking": booking_decision_state(job),
+        "candidates": people,
+    }
+
+
+def _score_body(job: dict, vendors: list) -> tuple[dict, dict]:
+    keys = {}
+    questions = {}
+    for vendor in vendors:
+        row = _vendor_dict(vendor)
+        vendor_id = row.get("id")
+        if not vendor_id:
+            continue
+        key = _question_key_for_vendor(str(vendor_id))
+        keys[key] = str(vendor_id)
+        questions[key] = {
+            "type": "noul",
+            "instructions": SCORE_INSTRUCTIONS,
+            "criteria": {
+                "true": (
+                    "This photographer is a poor fit for automatic assignment to this "
+                    "booking given their tier, skills, and location versus the booking's "
+                    "service and address."
+                ),
+                "false": (
+                    "Acceptable to auto-assign under the existing rules. Missing lat/lng "
+                    "is not a poor fit. A photographer who has not been scored yet is not "
+                    "a poor fit by itself. Blank service, date, or address is not a poor "
+                    "fit by itself."
+                ),
+            },
+        }
+    body = {
+        "model": JEV_MODEL,
+        "state": candidate_match_state(job, vendors),
+        "questions": questions,
+    }
+    return body, keys
+
+
+def _openrouter_key() -> str:
+    return (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+
+
+async def _post_decision(body: dict) -> Optional[dict]:
+    """POST one Decisions call. None on missing key, timeout, HTTP error, or bad JSON."""
+    api_key = _openrouter_key()
+    if not api_key:
+        return None
+    async with httpx.AsyncClient(timeout=JEV_TIMEOUT_SECONDS) as client:
+        resp = await client.post(
+            DECISIONS_URL,
+            json=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+    if resp.status_code != 200:
+        return None
+    payload = resp.json()
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+async def jev_candidate_poor_fits(job: dict, vendors: list) -> dict:
+    """Vendor id -> poor-fit yes-probability.
+
+    Empty dict on missing key, timeout, HTTP error, or a body with no usable
+    noul, so today's scores stay unchanged. A candidate with no noul is omitted.
+    """
+    vendors = list(vendors or [])
+    if not vendors:
+        return {}
+    if not _openrouter_key():
+        logger.info("OPENROUTER_API_KEY unset — Jev score skipped, ranking unchanged")
+        return {}
+    booking_id = (job or {}).get("booking_id") or (job or {}).get("id")
+    try:
+        body, keys = _score_body(job, vendors)
+        if not keys:
+            return {}
+        payload = await _post_decision(body)
+    except Exception as exc:
+        logger.warning(
+            "Jev score failed open for booking %s (%s) — ranking unchanged",
+            booking_id,
+            type(exc).__name__,
+        )
+        return {}
+    if payload is None:
+        logger.warning(
+            "Jev score returned no decision for booking %s — ranking unchanged",
+            booking_id,
+        )
+        return {}
+    found = {}
+    for key, vendor_id in keys.items():
+        probability = yes_probability(payload, key)
+        if probability is None:
+            continue
+        found[vendor_id] = probability
+    if not found:
+        logger.warning(
+            "Jev score returned no noul for booking %s — ranking unchanged",
+            booking_id,
+        )
+        return {}
+    return found
+
+
 async def jev_hold_decision(job: dict) -> JevHoldDecision:
     """Ask Jev whether to hold. Fail-open: only a yes-probability above 0.7 holds."""
-    api_key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    api_key = _openrouter_key()
     if not api_key:
         logger.info("OPENROUTER_API_KEY unset — Jev hold gate skipped, auto-assign continues")
         return JevHoldDecision(hold=False)

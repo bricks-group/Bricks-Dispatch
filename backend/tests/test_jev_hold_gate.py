@@ -267,3 +267,32 @@ def test_openrouter_key_is_not_hardcoded():
     assert 'os.environ.get("OPENROUTER_API_KEY")' in src
     assert "sk-or-" not in src
     assert "Bearer " not in src or "Bearer {api_key}" in src
+
+
+@pytest.mark.asyncio
+async def test_paid_booking_blanks_are_not_a_hold_by_themselves(monkeypatch):
+    """A low yes-probability still auto-assigns even when optional fields are blank."""
+
+    async def post(self, url, json=None, headers=None):
+        return _Resp(200, _noul(0.2))
+
+    payload = _payload(city="", package_name="", scheduled_date="")
+    result, assign, _, db = await _intake(monkeypatch, payload, _client(post))
+
+    assert result["status"] == "assigned"
+    assert result["assignee_id"] == "member_kam"
+    assert assign.await_count == 1
+    assert db.jobs.updates == []
+
+
+def test_hold_criteria_do_not_treat_paid_booking_blanks_as_a_hold():
+    from app.services.jev_hold import _decision_body
+
+    criteria = _decision_body({"booking_id": "bk"})["questions"]["hold_for_human"]["criteria"]
+    true = criteria["true"].lower()
+    false = criteria["false"].lower()
+    assert "do not answer true only because" in true
+    assert "lat/lng" in true
+    assert "not a hold by themselves" in false
+    assert "missing lat/lng is not a hold" in false
+    assert "not a reason to hold" in false
