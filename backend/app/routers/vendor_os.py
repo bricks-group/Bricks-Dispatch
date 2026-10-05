@@ -913,7 +913,10 @@ async def get_vendor_availability(
         ).table("vendor_availability").select("*").eq(
             "vendor_id", vendor_id
         ).eq("member_id", actor_id).maybe_single().execute()
-        record = res.data
+        # maybe_single() is None when the member has no availability row yet
+        # (every new GO photographer). None.data was a CORS-less 500 before the
+        # default-create branch below could run.
+        record = _maybe_single_row(res)
     except Exception as e:
         # Fair-Use: PostgREST availability read 402 — load/create via Postgres.
         if not _is_rest_quota_error(e):
@@ -925,6 +928,11 @@ async def get_vendor_availability(
             return default
         return record
     if not record:
+        # Empty REST body can also be a Fair-Use silent miss: do not insert a
+        # duplicate (vendor_id, member_id) over a row Postgres already has.
+        existing = pg_select_vendor_availability(actor_id, vendor_id)
+        if existing:
+            return existing
         default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
         try:
             await (await get_db()).table("vendor_availability").insert(default).execute()
@@ -998,11 +1006,13 @@ async def update_vendor_availability(
         ).table("vendor_availability").select("*").eq(
             "vendor_id", vendor_id
         ).eq("member_id", actor_id).maybe_single().execute()
-        return res.data
+        saved = _maybe_single_row(res)
+        if saved:
+            return saved
     except Exception as e:
         if not _is_rest_quota_error(e):
             raise
-        return pg_select_vendor_availability(actor_id, vendor_id)
+    return pg_select_vendor_availability(actor_id, vendor_id) or row
 
 
 
