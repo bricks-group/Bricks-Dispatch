@@ -272,3 +272,111 @@ def test_hold_notice_says_files_when_a_video_or_plan_is_held():
     assert "listing files back" in qc_hold_email_body({"address": "10 King St"}, held)
     assert photos_only([{"filename": "bath.jpg"}])
     assert "1 listing photo " in qc_hold_sms_body("", 1)
+
+
+def test_legacy_unreadable_floorplan_hold_predicate():
+    """Only rejected floor plans/PDFs with unreadable_image are eligible to recheck."""
+    f = qmk.is_legacy_unreadable_floorplan_hold
+    assert f({
+        "filename": "floorplan.pdf",
+        "qc_status": "rejected",
+        "qc_notes": "OpenCV QC (no vision provider): rejected Issues: unreadable_image",
+    })
+    assert f({
+        "filename": "Floor Plan.png",
+        "qc_status": "rejected",
+        "qc_notes": "OpenCV hold kept after vision error: rejected Issues: unreadable_image",
+    })
+    # Real photo hold — must not match even if notes somehow mention unreadable_image
+    assert not f({
+        "filename": "kitchen.jpg",
+        "qc_status": "rejected",
+        "qc_notes": "OpenCV QC: rejected Issues: soft_focus; unreadable_image",
+    })
+    assert not f({
+        "filename": "kitchen.jpg",
+        "qc_status": "rejected",
+        "qc_notes": "Issues: soft_focus",
+    })
+    # Honest floor-plan hold from the new plan check — must not match
+    assert not f({
+        "filename": "floorplan.pdf",
+        "qc_status": "rejected",
+        "qc_notes": "Floor plan looks blank (no linework; ink 0.0000).",
+    })
+    assert not f({
+        "filename": "floorplan.pdf",
+        "qc_status": "passed",
+        "qc_notes": "Issues: unreadable_image",
+    })
+    assert not f({
+        "filename": "floorplan.pdf",
+        "qc_status": "rejected",
+        "qc_notes": "",
+    })
+
+
+def test_job_qc_rechecks_legacy_unreadable_floorplan_preserves_photo_hold(monkeypatch):
+    """Stuck PDF plan held as unreadable_image is re-run; soft_focus photo stay held."""
+    rows = [
+        {
+            "id": "photo-hold",
+            "file_url": "out/kitchen.jpg",
+            "processed_url": "out/kitchen.jpg",
+            "qc_variant_url": None,
+            "qc_status": "rejected",
+            "qc_notes": "OpenCV QC: rejected Issues: soft_focus",
+            "processing_status": "done",
+            "filename": "kitchen.jpg",
+            "provider": "bricks_inhouse",
+        },
+        {
+            "id": "fp-stuck",
+            "file_url": "raw/floorplan.pdf",
+            "processed_url": "raw/floorplan.pdf",
+            "qc_variant_url": None,
+            "qc_status": "rejected",
+            "qc_notes": "OpenCV QC (no vision provider): rejected Issues: unreadable_image",
+            "processing_status": "done",
+            "filename": "floorplan.pdf",
+            "provider": "floorplan",
+        },
+        {
+            "id": "fp-blank",
+            "file_url": "raw/blank-plan.png",
+            "processed_url": "raw/blank-plan.png",
+            "qc_variant_url": None,
+            "qc_status": "rejected",
+            "qc_notes": "Floor plan looks blank (no linework; ink 0.0001).",
+            "processing_status": "done",
+            "filename": "Floor Plan.png",
+            "provider": "floorplan",
+        },
+        {
+            "id": "photo-ok",
+            "file_url": "out/living.jpg",
+            "processed_url": "out/living.jpg",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "OpenCV pre-pass: passed",
+            "processing_status": "done",
+            "filename": "living.jpg",
+            "provider": "bricks_inhouse",
+        },
+    ]
+    fetched = {
+        "floorplan.pdf": b"%PDF-1.6\n...",
+        "blank-plan.png": _png(Image.new("RGB", (800, 600), "white")),
+    }
+    qc_agent, writes, photo_reviewed = _install_job(monkeypatch, rows, fetched)
+    summary = _run(qc_agent.run_qc_for_job("job-legacy"))
+
+    assert photo_reviewed == []  # existing photo verdicts preserved — no photo re-score
+    assert "photo-hold" not in writes
+    assert "photo-ok" not in writes
+    assert "fp-blank" not in writes  # honest plan hold preserved
+    assert writes["fp-stuck"]["qc_status"] == "passed"
+    assert "Floor plan PDF" in writes["fp-stuck"]["qc_notes"]
+    assert summary["rejected"] == 2  # photo-hold + fp-blank tallied
+    assert summary["passed"] == 2  # photo-ok + fp-stuck
+

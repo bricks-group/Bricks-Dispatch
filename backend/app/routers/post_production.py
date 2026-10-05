@@ -32,6 +32,7 @@ from ..services.media_intake import (
     pick_visit_upload,
 )
 from ..services.qc_agent import run_qc_for_job
+from ..services.qc_media_kinds import is_legacy_unreadable_floorplan_hold
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.auth import get_own_internal_api_key
 from ..shared.database import get_db
@@ -466,7 +467,8 @@ async def _fold_late_into_existing_delivery(
 ) -> bool:
     """If media_delivery exists, merge stills + late floor/tour/Visit.
 
-    Runs QC on listing stills missing qc_status before fold; still no payout/client email.
+    Runs QC on listing stills missing qc_status before fold, and re-checks floor
+    plans still held as unreadable_image from the old listing-photo QC; still no payout/client email.
     Owner gets a QC-hold notice only for stills that just ran QC and were held.
     """
     db = await get_db()
@@ -474,7 +476,7 @@ async def _fold_late_into_existing_delivery(
     async def _fetch_uploads():
         try:
             res_uploads = await db.table("uploads").select(
-                "id, filename, file_url, processed_url, processing_status, qc_status, provider"
+                "id, filename, file_url, processed_url, processing_status, qc_status, qc_notes, provider"
             ).eq("job_id", job_id).execute()
             return res_uploads.data or []
         except Exception as e:
@@ -504,12 +506,29 @@ async def _fold_late_into_existing_delivery(
             return False
         return True
 
-    need_qc = [u for u in (uploads or []) if _ready_still_missing_qc(u)]
+    def _ready_legacy_floorplan_unreadable_recheck(u: dict) -> bool:
+        """Floor plan/PDF held as unreadable_image by old photo QC — re-run plan check."""
+        if not isinstance(u, dict):
+            return False
+        if u.get("processing_status") == "failed":
+            return False
+        if u.get("processing_status") in ("processing", "pending"):
+            return False
+        if not is_listing_still_delivery_row(u):
+            return False
+        if not (u.get("processed_url") or u.get("file_url")):
+            return False
+        return is_legacy_unreadable_floorplan_hold(u)
+
+    need_qc = [
+        u for u in (uploads or [])
+        if _ready_still_missing_qc(u) or _ready_legacy_floorplan_unreadable_recheck(u)
+    ]
     if need_qc:
         try:
             qc_counts = await run_qc_for_job(job_id)
             logger.info(
-                "Job %s: late-fold QC complete — %s (%s still(s) needed QC)",
+                "Job %s: late-fold QC complete — %s (%s upload(s) needed QC / legacy floor-plan recheck)",
                 job_id,
                 qc_counts,
                 len(need_qc),

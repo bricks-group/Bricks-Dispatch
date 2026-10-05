@@ -61,6 +61,22 @@ def qc_kind_for_upload(upload: Optional[dict]) -> str:
     return "still"
 
 
+def is_legacy_unreadable_floorplan_hold(upload: Optional[dict]) -> bool:
+    """True when a floor plan/PDF was held by the old listing-photo QC as unreadable_image.
+
+    Those rows keep qc_status=rejected, so late-fold would otherwise never re-run QC.
+    Only this exact prior reason is eligible — real photo holds and honest floor-plan
+    holds (blank, not a PDF, etc.) stay untouched.
+    """
+    row = upload if isinstance(upload, dict) else {}
+    if str(row.get("qc_status") or "").strip().lower() != "rejected":
+        return False
+    notes = str(row.get("qc_notes") or "").lower()
+    if "unreadable_image" not in notes:
+        return False
+    return qc_kind_for_upload(row) == "floorplan"
+
+
 def _verdict(status: str, score: int, notes: str, source: str) -> dict:
     return {
         "qc_status": status,

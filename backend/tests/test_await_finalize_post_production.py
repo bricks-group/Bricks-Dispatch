@@ -1135,8 +1135,153 @@ def test_late_fold_source_documents_qc_before_merge():
     fn = src.split("async def _fold_late_into_existing_delivery")[1].split(
         "async def _fold_capture_into_existing_delivery"
     )[0]
-    assert "Runs QC on listing stills missing qc_status before fold" in fn
+    assert "re-checks floor" in fn and "unreadable_image" in fn
     assert "still no payout/client email" in fn
     assert "run_qc_for_job" in fn
     # QC before building still delivery urls
     assert fn.find("run_qc_for_job") < fn.find("_listing_still_delivery_urls")
+
+
+def test_late_fold_rechecks_legacy_unreadable_floorplan(monkeypatch):
+    """Late-fold: floor plan held as unreadable_image triggers QC even with qc_status set."""
+    existing = {
+        "id": "md-fp",
+        "delivery_urls": [
+            {
+                "url": "https://cdn.example/living.jpg",
+                "filename": "living.jpg",
+                "upload_id": "u-ok",
+            },
+        ],
+    }
+    still_ok = {
+        "id": "u-ok",
+        "filename": "living.jpg",
+        "file_url": "raw/living.jpg",
+        "processed_url": "https://cdn.example/living.jpg",
+        "processing_status": "done",
+        "qc_status": "accepted",
+        "qc_notes": "ok",
+        "provider": None,
+    }
+    fp_stuck_pre = {
+        "id": "u-fp",
+        "filename": "floorplan.pdf",
+        "file_url": "raw/floorplan.pdf",
+        "processed_url": "https://cdn.example/floorplan.pdf",
+        "processing_status": "done",
+        "qc_status": "rejected",
+        "qc_notes": "OpenCV QC (no vision provider): rejected Issues: unreadable_image",
+        "provider": "floorplan",
+    }
+    fp_stuck_post = {**fp_stuck_pre, "qc_status": "passed", "qc_notes": "Floor plan PDF opens."}
+
+    fetch_n = {"n": 0}
+    uploads_tbl = MagicMock()
+    uploads_tbl.select.return_value = uploads_tbl
+    uploads_tbl.eq.return_value = uploads_tbl
+
+    async def uploads_execute():
+        fetch_n["n"] += 1
+        data = [still_ok, fp_stuck_pre] if fetch_n["n"] == 1 else [still_ok, fp_stuck_post]
+        return MagicMock(data=data)
+
+    uploads_tbl.execute = uploads_execute
+
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    cap_tbl.execute = AsyncMock(return_value=MagicMock(data=[]))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+    qc_calls = []
+
+    async def fake_qc(job_id):
+        qc_calls.append(job_id)
+        return {"passed": 1, "rejected": 0}
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+
+    folded = asyncio.run(pp._fold_late_into_existing_delivery("job-fp", existing))
+
+    assert qc_calls == ["job-fp"]
+    assert folded is True
+    urls = md_tbl.update.call_args[0][0]["delivery_urls"]
+    assert any(u.get("upload_id") == "u-fp" for u in urls)
+    assert any(u.get("upload_id") == "u-ok" for u in urls)
+
+
+def test_late_fold_skips_qc_for_real_photo_hold_and_honest_plan_hold(monkeypatch):
+    """Late-fold must not re-run QC for soft_focus photos or blank plan holds."""
+    existing = {"id": "md-hold", "delivery_urls": []}
+    photo_hold = {
+        "id": "u-blur",
+        "filename": "kitchen.jpg",
+        "file_url": "raw/kitchen.jpg",
+        "processed_url": "https://cdn.example/kitchen.jpg",
+        "processing_status": "done",
+        "qc_status": "rejected",
+        "qc_notes": "OpenCV QC: rejected Issues: soft_focus",
+        "provider": None,
+    }
+    plan_blank = {
+        "id": "u-blank",
+        "filename": "Floor Plan.png",
+        "file_url": "raw/blank.png",
+        "processed_url": "raw/blank.png",
+        "processing_status": "done",
+        "qc_status": "rejected",
+        "qc_notes": "Floor plan looks blank (no linework; ink 0.0001).",
+        "provider": "floorplan",
+    }
+    uploads_tbl = _uploads_chain([photo_hold, plan_blank])
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    cap_tbl.execute = AsyncMock(return_value=MagicMock(data=[]))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+    qc_calls = []
+
+    async def fake_qc(job_id):
+        qc_calls.append(job_id)
+        return {}
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+
+    asyncio.run(pp._fold_late_into_existing_delivery("job-hold", existing))
+    assert qc_calls == []
+

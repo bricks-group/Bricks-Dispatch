@@ -244,14 +244,19 @@ async def run_qc_for_job(job_id: str) -> dict:
     package_name = maybe_single_row(job_res).get("package_name", "") or ""
 
     res = await db.table("uploads").select(
-        "id, file_url, processed_url, qc_variant_url, qc_status, processing_status, filename, provider"
+        "id, file_url, processed_url, qc_variant_url, qc_status, qc_notes, processing_status, filename, provider"
     ).eq("job_id", job_id).execute()
     uploads = [u for u in (res.data or []) if u.get("processing_status") in ("done", "skipped", None, "pending")]
 
     counts = {"total": 0, "passed": 0, "flagged": 0, "rejected": 0}
     image_upload_count = 0
 
-    from .qc_media_kinds import qc_kind_for_upload, run_floorplan_qc, run_video_qc
+    from .qc_media_kinds import (
+        is_legacy_unreadable_floorplan_hold,
+        qc_kind_for_upload,
+        run_floorplan_qc,
+        run_video_qc,
+    )
 
     for u in uploads:
         filename = (u.get("filename") or "").lower()
@@ -267,6 +272,23 @@ async def run_qc_for_job(job_id: str) -> dict:
             counts["passed"] += 1
             counts["total"] += 1
             continue
+
+        # Keep prior QC unless this is a stuck floor plan held as unreadable_image
+        # by the old listing-photo check (late-fold otherwise never re-runs it),
+        # or an unedited-original row that must stay stamped held.
+        existing_qc = str(u.get("qc_status") or "").strip()
+        if existing_qc:
+            is_original = str(u.get("provider") or "").lower() == "original"
+            recheck_legacy_plan = kind == "floorplan" and is_legacy_unreadable_floorplan_hold(u)
+            if not recheck_legacy_plan and not (
+                is_original and is_listing_still_delivery_row(u)
+            ):
+                st = existing_qc.lower()
+                counts["total"] += 1
+                counts[st] = counts.get(st, 0) + 1
+                if kind == "still" and is_listing_still_delivery_row(u):
+                    image_upload_count += 1
+                continue
 
         # Drone / reel video and floor plans get their own check (can hold the
         # file back) instead of the listing-photo check. Not counted toward the
