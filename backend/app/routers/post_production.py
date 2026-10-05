@@ -454,7 +454,8 @@ async def _fold_late_into_existing_delivery(
 ) -> bool:
     """If media_delivery exists, merge stills + late floor/tour/Visit.
 
-    Runs QC on listing stills missing qc_status before fold; still no payout/email.
+    Runs QC on listing stills missing qc_status before fold; still no payout/client email.
+    Owner gets a QC-hold notice only for stills that just ran QC and were held.
     """
     db = await get_db()
 
@@ -500,6 +501,11 @@ async def _fold_late_into_existing_delivery(
                 job_id,
                 qc_counts,
                 len(need_qc),
+            )
+            from ..services.qc_hold_notify import notify_owner_qc_hold
+
+            await notify_owner_qc_hold(
+                db, job_id, qc_counts, only_ids=[u.get("id") for u in need_qc]
             )
         except Exception as e:
             logger.error(
@@ -669,6 +675,9 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
     try:
         qc_counts = await run_qc_for_job(job_id)
         logger.info(f"Job {job_id}: QC complete — {qc_counts}")
+        from ..services.qc_hold_notify import notify_owner_qc_hold
+
+        await notify_owner_qc_hold(db, job_id, qc_counts)
     except Exception as e:
         logger.error(f"Job {job_id}: QC agent failed (continuing to delivery): {e}")
 

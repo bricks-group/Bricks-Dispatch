@@ -1136,7 +1136,7 @@ def test_late_fold_source_documents_qc_before_merge():
         "async def _fold_capture_into_existing_delivery"
     )[0]
     assert "Runs QC on listing stills missing qc_status before fold" in fn
-    assert "still no payout/email" in fn
+    assert "still no payout/client email" in fn
     assert "run_qc_for_job" in fn
     # QC before building still delivery urls
     assert fn.find("run_qc_for_job") < fn.find("_listing_still_delivery_urls")
