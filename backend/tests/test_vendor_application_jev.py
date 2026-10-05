@@ -134,8 +134,25 @@ def _client(post_impl):
     return FakeClient
 
 
-def _noul(probability, key=APPLICANT_QUESTION_KEY):
-    return {"answers": {key: {"type": "noul", "noul": probability}}}
+def _noul(probability, reasons=None, key=APPLICANT_QUESTION_KEY):
+    answers = {key: {"type": "noul", "noul": probability}}
+    for reason_key, value in (reasons or {}).items():
+        answers[reason_key] = {"type": "noul", "noul": value}
+    return {"answers": answers}
+
+
+def _assert_plain_copy(text):
+    low = text.lower()
+    assert "jev" not in low
+    assert "poor-fit" not in low
+    assert "yes-probability" not in low
+
+
+def _assert_no_printed_score(text):
+    import re
+    # CSS in the email shell uses values like -0.5px. Only flag a score token.
+    visible = re.sub(r"<[^>]+>", " ", text)
+    assert re.search(r"\b0\.\d+\b", visible) is None
 
 
 async def _apply(monkeypatch, client_cls, api_key="test-not-a-real-key", channels_fail=False):
@@ -183,7 +200,12 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
 
     async def post(self, url, json=None, headers=None):
         calls.append({"url": url, "json": json, "headers": headers})
-        return _Resp(200, _noul(0.91))
+        return _Resp(200, _noul(0.91, {
+            "equipment": 0.82,
+            "city": 0.2,
+            "portfolio": 0.66,
+            "drone": 0.1,
+        }))
 
     result, db = await _apply(monkeypatch, _client(post))
 
@@ -205,7 +227,10 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     call = calls[0]
     assert call["url"] == DECISIONS_URL
     assert call["json"]["model"] == JEV_MODEL
-    assert list(call["json"]["questions"]) == [APPLICANT_QUESTION_KEY]
+    assert set(call["json"]["questions"]) == {
+        APPLICANT_QUESTION_KEY, "equipment", "city", "portfolio", "drone",
+    }
+    assert len(calls) == 1
     question = call["json"]["questions"][APPLICANT_QUESTION_KEY]
     assert question["type"] == "noul"
     assert question["instructions"] == APPLICANT_INSTRUCTIONS
@@ -226,7 +251,10 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     assert sms_to == "+14165550100"
     assert sms_body == (
         "New Bricks photographer application: Alex Rivera in Toronto. "
-        "Jev poor-fit 0.91. Pending your approval."
+        "This looks like a weak fit.\n"
+        "- Equipment does not look suitable for this work.\n"
+        "- The portfolio does not look like a fit for this work.\n"
+        "Pending your approval."
     )
     assert db.email.await_count == 1
     assert db.email.await_args.kwargs["subject"] == (
@@ -235,9 +263,16 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     html = db.email.await_args.kwargs["html"]
     assert "Alex Rivera in Toronto applied as a photographer." in html
     assert "Pending your approval." in html
-    assert "Jev poor-fit 0.91" in html
-    assert "yes-probability" not in html
-    assert "yes-probability" not in sms_body
+    assert "This looks like a weak fit." in html
+    assert "- Equipment does not look suitable for this work." in html
+    assert "- The portfolio does not look like a fit for this work." in html
+    assert "The city does not look like a fit" not in html
+    assert "Drone certification does not look like a fit" not in html
+    _assert_plain_copy(sms_body)
+    _assert_plain_copy(html)
+    _assert_plain_copy(db.email.await_args.kwargs["subject"])
+    _assert_no_printed_score(sms_body)
+    _assert_no_printed_score(html)
     _assert_no_personal_mailbox(db)
 
 
@@ -271,12 +306,16 @@ async def test_jev_failure_still_notifies_and_stays_pending(monkeypatch, mode):
         "New Bricks photographer application: Alex Rivera in Toronto. "
         "Pending your approval."
     )
-    assert "yes-probability" not in sms_body
-    assert "poor-fit" not in sms_body
+    assert "weak fit" not in sms_body
+    assert sms_body.count("\n- ") == 0
     html = db.email.await_args.kwargs["html"]
     assert "Pending your approval." in html
-    assert "yes-probability" not in html
-    assert "poor-fit" not in html
+    assert "weak fit" not in html
+    assert "- " not in html
+    _assert_plain_copy(sms_body)
+    _assert_plain_copy(html)
+    _assert_no_printed_score(sms_body)
+    _assert_no_printed_score(html)
     _assert_no_personal_mailbox(db)
 
 
@@ -295,6 +334,60 @@ async def test_notify_failure_leaves_application_pending(monkeypatch):
     assert db.email.await_count == 1
     assert "approved" not in member["onboarding_status"]
     assert "rejected" not in member["onboarding_status"]
+
+
+
+def test_fit_sentences_and_reason_bullets():
+    from app.services.jev_hold import applicant_reason_lines
+    from app.services.vendor_selection import (
+        vendor_application_email_body,
+        vendor_application_sms_body,
+    )
+
+    weak_reasons = applicant_reason_lines(
+        _noul(0.91, {"equipment": 0.8, "city": 0.2, "portfolio": 0.51, "drone": 0.5}),
+        0.91,
+    )
+    assert weak_reasons == (
+        "Equipment does not look suitable for this work.",
+        "The portfolio does not look like a fit for this work.",
+    )
+    ok_reasons = applicant_reason_lines(
+        _noul(0.7, {"equipment": 0.5, "city": 0.2, "portfolio": 0.9, "drone": 0.1}),
+        0.7,
+    )
+    assert ok_reasons == (
+        "Equipment looks suitable for this work.",
+        "The city looks like a fit for this work.",
+        "Drone certification looks like a fit for this work.",
+    )
+    no_factors = applicant_reason_lines(_noul(0.91), 0.91)
+    assert no_factors == ()
+
+    sms = vendor_application_sms_body(
+        "Alex Rivera", "Toronto", "photographer", 0.4, ok_reasons
+    )
+    email = vendor_application_email_body(
+        "Alex Rivera", "Toronto", "photographer", 0.4, ok_reasons
+    )
+    assert "This does not look like a weak fit." in sms
+    assert "This does not look like a weak fit." in email
+    assert "- Equipment looks suitable for this work." in sms
+    assert "portfolio" not in sms.lower()
+    bare = vendor_application_sms_body("Alex Rivera", "Toronto", "photographer", 0.91, ())
+    assert bare == (
+        "New Bricks photographer application: Alex Rivera in Toronto. "
+        "This looks like a weak fit.\n"
+        "Pending your approval."
+    )
+    silent = vendor_application_sms_body(
+        "Alex Rivera", "Toronto", "photographer", None, ("Equipment looks suitable for this work.",)
+    )
+    assert "weak fit" not in silent
+    assert "Equipment" not in silent
+    for copy in (sms, email, bare, silent):
+        _assert_plain_copy(copy)
+        _assert_no_printed_score(copy)
 
 
 def test_application_notify_source_has_no_personal_gmail():

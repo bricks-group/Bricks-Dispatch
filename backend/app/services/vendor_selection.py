@@ -209,16 +209,56 @@ async def notify_owner_jev_hold(db, job: dict, yes_probability) -> None:
         logger.error("Jev hold email failed for job %s: %s", job_id, type(e).__name__)
 
 
-def vendor_application_sms_body(name: str, city: str, vendor_type: str, yes_probability) -> str:
-    """Owner text. Name, city, and Jev poor-fit probability when there is one."""
+def vendor_application_fit_line(yes_probability) -> str:
+    """Plain sentence for a person. Empty when there is no score.
+
+    The number is how sure the check is that the applicant is a poor fit.
+    Above 0.7 is a weak fit. 0.7 and below is not. No name, no decimal.
+    """
+    if not isinstance(yes_probability, float):
+        return ""
+    if yes_probability > 0.7:
+        return "This looks like a weak fit."
+    return "This does not look like a weak fit."
+
+
+def _human_reason_lines(yes_probability, reasons) -> list:
+    """Bullets only when there is a score. Drop jargon, names, and decimals."""
+    if not isinstance(yes_probability, float):
+        return []
+    import re
+    decimal = re.compile(r"\d+\.\d+")
+    banned = ("jev", "poor-fit", "yes-probability")
+    lines = []
+    for reason in reasons or ():
+        line = " ".join(str(reason or "").split())
+        if line.startswith("- "):
+            line = line[2:].strip()
+        if not line:
+            continue
+        low = line.lower()
+        if any(word in low for word in banned) or decimal.search(line):
+            continue
+        if not line.endswith("."):
+            line += "."
+        lines.append(line)
+    return lines
+
+
+def vendor_application_sms_body(name: str, city: str, vendor_type: str, yes_probability, reasons=()) -> str:
+    """Owner text. Fit sentence and plain bullets only when there is a score."""
     who = (name or "").strip() or "Someone"
     where = (city or "").strip() or "an unknown city"
     kind = (vendor_type or "").strip() or "vendor"
-    body = f"New Bricks {kind} application: {who} in {where}."
-    if isinstance(yes_probability, float):
-        body += f" Jev poor-fit {yes_probability:.2f}."
-    body += " Pending your approval."
-    return body
+    fit = vendor_application_fit_line(yes_probability)
+    head = f"New Bricks {kind} application: {who} in {where}."
+    bullets = _human_reason_lines(yes_probability, reasons)
+    if not fit:
+        return f"{head} Pending your approval."
+    parts = [f"{head} {fit}"]
+    parts.extend(f"- {line}" for line in bullets)
+    parts.append("Pending your approval.")
+    return "\n".join(parts)
 
 
 def vendor_application_email_subject(name: str) -> str:
@@ -226,16 +266,16 @@ def vendor_application_email_subject(name: str) -> str:
     return f"New vendor application pending your approval: {who}"
 
 
-def vendor_application_email_body(name: str, city: str, vendor_type: str, yes_probability) -> str:
+def vendor_application_email_body(name: str, city: str, vendor_type: str, yes_probability, reasons=()) -> str:
     who = (name or "").strip() or "Someone"
     where = (city or "").strip() or "an unknown city"
     kind = (vendor_type or "").strip() or "vendor"
-    lines = [
-        f"{who} in {where} applied as a {kind}.",
-        "Pending your approval.",
-    ]
-    if isinstance(yes_probability, float):
-        lines.append(f"Jev poor-fit {yes_probability:.2f}")
+    lines = [f"{who} in {where} applied as a {kind}."]
+    fit = vendor_application_fit_line(yes_probability)
+    if fit:
+        lines.append(fit)
+    lines.extend(f"- {line}" for line in _human_reason_lines(yes_probability, reasons))
+    lines.append("Pending your approval.")
     return "\n".join(lines)
 
 
@@ -246,6 +286,7 @@ async def notify_owner_vendor_application(
     city: str,
     vendor_type: str,
     yes_probability,
+    reasons=(),
 ) -> None:
     """SMS the owner profile phone and email admin@brxs.ca. Never raises.
 
@@ -254,7 +295,7 @@ async def notify_owner_vendor_application(
     """
     from ..shared.job_scope import KAM_MEMBER_ID
 
-    sms_body = vendor_application_sms_body(name, city, vendor_type, yes_probability)
+    sms_body = vendor_application_sms_body(name, city, vendor_type, yes_probability, reasons)
     phone = ""
     try:
         res = await db.table("vendor_members").select("phone").eq(
@@ -284,7 +325,7 @@ async def notify_owner_vendor_application(
         from .notifications import _build_html_email, send_email_via_resend
 
         subject = vendor_application_email_subject(name)
-        body = vendor_application_email_body(name, city, vendor_type, yes_probability)
+        body = vendor_application_email_body(name, city, vendor_type, yes_probability, reasons)
         await send_email_via_resend(
             to=HOLD_ADMIN_EMAIL,
             subject=subject,

@@ -382,6 +382,42 @@ async def jev_hold_decision(job: dict) -> JevHoldDecision:
 
 APPLICANT_QUESTION_KEY = "poor_fit"
 APPLICANT_INSTRUCTIONS = "Does this applicant look like a poor fit for Bricks photographer work?"
+# A factor at or below this is not a reason the applicant looks weak.
+_REASON_POOR_FIT = 0.5
+
+# Same decision call. Plain sentences only. No name and no number in the text.
+_APPLICANT_REASONS = (
+    (
+        "equipment",
+        "Does the equipment look like a poor fit for Bricks photographer work?",
+        "Equipment does not look suitable for this work.",
+        "Equipment looks suitable for this work.",
+    ),
+    (
+        "city",
+        "Does the city look like a poor fit for Bricks photographer work?",
+        "The city does not look like a fit for this work.",
+        "The city looks like a fit for this work.",
+    ),
+    (
+        "portfolio",
+        "Does the portfolio look like a poor fit for Bricks photographer work?",
+        "The portfolio does not look like a fit for this work.",
+        "The portfolio looks like a fit for this work.",
+    ),
+    (
+        "drone",
+        "Does drone certification look like a poor fit for Bricks photographer work?",
+        "Drone certification does not look like a fit for this work.",
+        "Drone certification looks like a fit for this work.",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class ApplicantFitDecision:
+    yes_probability: Optional[float] = None
+    reasons: tuple = ()
 
 
 def applicant_decision_state(applicant: dict) -> dict:
@@ -403,40 +439,72 @@ def applicant_decision_state(applicant: dict) -> dict:
     }
 
 
+def _applicant_questions() -> dict:
+    questions = {
+        APPLICANT_QUESTION_KEY: {
+            "type": "noul",
+            "instructions": APPLICANT_INSTRUCTIONS,
+            "criteria": {
+                "true": (
+                    "This applicant looks like a poor fit for Bricks photographer "
+                    "work given their name, city, vendor type, equipment, portfolio, "
+                    "and drone certification."
+                ),
+                "false": (
+                    "This applicant does not look like a poor fit for Bricks "
+                    "photographer work. A short field, a missing portfolio link, or "
+                    "drone certification being false is not a poor fit by itself."
+                ),
+            },
+        }
+    }
+    for key, instructions, _weak, _ok in _APPLICANT_REASONS:
+        questions[key] = {
+            "type": "noul",
+            "instructions": instructions,
+            "criteria": {
+                "true": "This part of the application is a poor fit for Bricks photographer work.",
+                "false": (
+                    "This part is acceptable, or there is not enough there to call it a poor fit. "
+                    "A blank field or drone certification being false is not a poor fit by itself."
+                ),
+            },
+        }
+    return questions
+
+
 def _applicant_body(applicant: dict) -> dict:
     return {
         "model": JEV_MODEL,
         "state": applicant_decision_state(applicant),
-        "questions": {
-            APPLICANT_QUESTION_KEY: {
-                "type": "noul",
-                "instructions": APPLICANT_INSTRUCTIONS,
-                "criteria": {
-                    "true": (
-                        "This applicant looks like a poor fit for Bricks photographer "
-                        "work given their name, city, vendor type, equipment, portfolio, "
-                        "and drone certification."
-                    ),
-                    "false": (
-                        "This applicant does not look like a poor fit for Bricks "
-                        "photographer work. A short field, a missing portfolio link, or "
-                        "drone certification being false is not a poor fit by itself."
-                    ),
-                },
-            }
-        },
+        "questions": _applicant_questions(),
     }
 
 
-async def jev_applicant_poor_fit(applicant: dict) -> Optional[float]:
-    """Yes-probability that this applicant is a poor fit.
+def applicant_reason_lines(payload: Any, overall: float) -> tuple:
+    """Plain bullets that support the fit sentence. Skip a factor with no score."""
+    weak = overall > 0.7
+    lines = []
+    for key, _instructions, weak_line, ok_line in _APPLICANT_REASONS:
+        probability = yes_probability(payload, key)
+        if probability is None:
+            continue
+        if weak and probability > _REASON_POOR_FIT:
+            lines.append(weak_line)
+        elif not weak and probability <= _REASON_POOR_FIT:
+            lines.append(ok_line)
+    return tuple(lines)
 
-    None on a missing key, timeout, HTTP error, or a body with no usable noul.
-    Never approves or rejects. The caller still notifies.
+
+async def jev_applicant_poor_fit(applicant: dict) -> ApplicantFitDecision:
+    """One decision: poor-fit score plus plain reason lines.
+
+    Missing key, timeout, HTTP error, or no overall score returns no score and
+    no reasons. Never approves or rejects. The caller still notifies.
     """
     if not _openrouter_key():
         logger.info("OPENROUTER_API_KEY unset — Jev applicant score skipped")
-        return None
+        return ApplicantFitDecision()
     try:
         payload = await _post_decision(_applicant_body(applicant))
     except Exception as exc:
@@ -444,13 +512,14 @@ async def jev_applicant_poor_fit(applicant: dict) -> Optional[float]:
             "Jev applicant score failed open (%s) — application still notifies",
             type(exc).__name__,
         )
-        return None
+        return ApplicantFitDecision()
     if payload is None:
         logger.warning("Jev applicant score returned no decision — application still notifies")
-        return None
+        return ApplicantFitDecision()
     probability = yes_probability(payload, APPLICANT_QUESTION_KEY)
     if probability is None:
         logger.warning("Jev applicant score returned no noul — application still notifies")
-        return None
-    logger.info("Jev applicant score yes_probability=%.3f", probability)
-    return probability
+        return ApplicantFitDecision()
+    reasons = applicant_reason_lines(payload, probability)
+    logger.info("Jev applicant score yes_probability=%.3f reasons=%s", probability, len(reasons))
+    return ApplicantFitDecision(yes_probability=probability, reasons=reasons)

@@ -301,12 +301,16 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     type_label = {"photographer": "photographer", "stager": "stager", "cleaner": "cleaner"}.get(vtype, "vendor")
 
     poor_fit = None
+    reasons = ()
     try:
         from ..services.jev_hold import jev_applicant_poor_fit
-        poor_fit = await jev_applicant_poor_fit(_applicant_jev_fields(application))
+        decision = await jev_applicant_poor_fit(_applicant_jev_fields(application))
+        poor_fit = getattr(decision, "yes_probability", None)
+        reasons = tuple(getattr(decision, "reasons", ()) or ())
     except Exception as exc:
         logger.warning("Jev applicant score failed open (%s)", type(exc).__name__)
         poor_fit = None
+        reasons = ()
 
     if isinstance(poor_fit, float):
         await _store_applicant_jev_probability(result["member_id"], existing_notes, poor_fit)
@@ -319,6 +323,7 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
             city=application.city,
             vendor_type=vtype,
             yes_probability=poor_fit,
+            reasons=reasons,
         )
     except Exception as exc:
         logger.error("Vendor application owner notify failed (%s)", type(exc).__name__)
