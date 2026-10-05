@@ -266,7 +266,31 @@ def vendor_application_email_subject(name: str) -> str:
     return f"New vendor application pending your approval: {who}"
 
 
-def vendor_application_email_body(name: str, city: str, vendor_type: str, yes_probability, reasons=()) -> str:
+def _portfolio_lines(portfolio_links) -> list:
+    """Public portfolio URLs only. Not an email address and not a phone."""
+    lines = []
+    seen = set()
+    for raw in portfolio_links or ():
+        url = " ".join(str(raw or "").split())
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        if "@" in url or url in seen:
+            continue
+        seen.add(url)
+        lines.append(url)
+    if not lines:
+        return []
+    return ["Portfolio:", *lines]
+
+
+def vendor_application_email_body(
+    name: str,
+    city: str,
+    vendor_type: str,
+    yes_probability,
+    reasons=(),
+    portfolio_links=(),
+) -> str:
     who = (name or "").strip() or "Someone"
     where = (city or "").strip() or "an unknown city"
     kind = (vendor_type or "").strip() or "vendor"
@@ -275,6 +299,7 @@ def vendor_application_email_body(name: str, city: str, vendor_type: str, yes_pr
     if fit:
         lines.append(fit)
     lines.extend(f"- {line}" for line in _human_reason_lines(yes_probability, reasons))
+    lines.extend(_portfolio_lines(portfolio_links))
     lines.append("Pending your approval.")
     return "\n".join(lines)
 
@@ -287,6 +312,7 @@ async def notify_owner_vendor_application(
     vendor_type: str,
     yes_probability,
     reasons=(),
+    portfolio_links=(),
 ) -> None:
     """SMS the owner profile phone and email admin@brxs.ca. Never raises.
 
@@ -325,7 +351,12 @@ async def notify_owner_vendor_application(
         from .notifications import _build_html_email, send_email_via_resend
 
         subject = vendor_application_email_subject(name)
-        body = vendor_application_email_body(name, city, vendor_type, yes_probability, reasons)
+        body = vendor_application_email_body(
+            name, city, vendor_type, yes_probability, reasons, portfolio_links
+        )
+        # Kam alone. No cc, no bcc, no applicant, no hiring@, no personal Gmail.
+        if HOLD_ADMIN_EMAIL != "admin@brxs.ca":
+            raise RuntimeError("vendor application email recipient drifted")
         await send_email_via_resend(
             to=HOLD_ADMIN_EMAIL,
             subject=subject,

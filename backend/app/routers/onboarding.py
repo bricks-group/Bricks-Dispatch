@@ -226,6 +226,20 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
 
 
 
+
+def _application_portfolio_links(application: "VendorApplicationCreate") -> list:
+    """Links already on the application. Uploaded files are included when the URL is public."""
+    links = []
+    for raw in application.portfolio_links or []:
+        links.append(str(raw or "").strip())
+    for sample in application.portfolio_samples or []:
+        row = sample.dict() if hasattr(sample, "dict") else (sample or {})
+        if not isinstance(row, dict):
+            continue
+        for key in ("link", "url", "thumb_url"):
+            links.append(str(row.get(key) or "").strip())
+    return [link for link in links if link]
+
 def _applicant_jev_fields(application: "VendorApplicationCreate") -> dict:
     """Fields already stored on the application. No token, email, or phone."""
     samples = []
@@ -324,6 +338,7 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
             vendor_type=vtype,
             yes_probability=poor_fit,
             reasons=reasons,
+            portfolio_links=_application_portfolio_links(application),
         )
     except Exception as exc:
         logger.error("Vendor application owner notify failed (%s)", type(exc).__name__)

@@ -268,6 +268,14 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     assert "- The portfolio does not look like a fit for this work." in html
     assert "The city does not look like a fit" not in html
     assert "Drone certification does not look like a fit" not in html
+    assert "Portfolio:" in html
+    assert "https://portfolio.example.com/alex" in html
+    assert "https://portfolio.example.com/alex" not in sms_body
+    assert db.email.await_args.kwargs["to"] == "admin@brxs.ca"
+    assert "cc" not in db.email.await_args.kwargs
+    assert "bcc" not in db.email.await_args.kwargs
+    assert db.email.await_args.kwargs["to"] != "alex.rivera.example@example.com"
+    assert sms_to == "+14165550100"
     _assert_plain_copy(sms_body)
     _assert_plain_copy(html)
     _assert_plain_copy(db.email.await_args.kwargs["subject"])
@@ -310,6 +318,10 @@ async def test_jev_failure_still_notifies_and_stays_pending(monkeypatch, mode):
     assert sms_body.count("\n- ") == 0
     html = db.email.await_args.kwargs["html"]
     assert "Pending your approval." in html
+    assert "https://portfolio.example.com/alex" in html
+    assert "cc" not in db.email.await_args.kwargs
+    assert "bcc" not in db.email.await_args.kwargs
+    assert db.email.await_args.kwargs["to"] == "admin@brxs.ca"
     assert "weak fit" not in html
     assert "- " not in html
     _assert_plain_copy(sms_body)
@@ -385,7 +397,26 @@ def test_fit_sentences_and_reason_bullets():
     )
     assert "weak fit" not in silent
     assert "Equipment" not in silent
-    for copy in (sms, email, bare, silent):
+    mailed = vendor_application_email_body(
+        "Alex Rivera",
+        "Toronto",
+        "photographer",
+        None,
+        (),
+        [
+            "https://portfolio.example.com/alex",
+            "storage/key/not-a-link",
+            "alex.rivera.example@example.com",
+            "https://cdn.example.com/sample.jpg",
+        ],
+    )
+    assert "Portfolio:" in mailed
+    assert "https://portfolio.example.com/alex" in mailed
+    assert "https://cdn.example.com/sample.jpg" in mailed
+    assert "storage/key" not in mailed
+    assert "alex.rivera.example@example.com" not in mailed
+    assert "weak fit" not in mailed
+    for copy in (sms, email, bare, silent, mailed):
         _assert_plain_copy(copy)
         _assert_no_printed_score(copy)
 
@@ -400,6 +431,8 @@ def test_application_notify_source_has_no_personal_gmail():
     for mailbox in _BANNED_MAILBOXES:
         assert mailbox not in body
     assert 'to=HOLD_ADMIN_EMAIL' in body
+    assert "cc=" not in body
+    assert "bcc=" not in body
     assert "admin@brxs.ca" in src[src.index("HOLD_ADMIN_EMAIL"):src.index("HOLD_ADMIN_EMAIL") + 80]
 
     onboarding = Path(__file__).resolve().parents[1].joinpath(
