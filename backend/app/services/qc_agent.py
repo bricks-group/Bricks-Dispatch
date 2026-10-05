@@ -25,7 +25,7 @@ from typing import Optional
 
 import httpx
 
-from .media_intake import VIDEO_EXTS, is_visit_file
+from .media_intake import VIDEO_EXTS, is_listing_still_delivery_row, is_visit_file
 from .qc_vision_provider import is_configured as _vision_qc_configured, run_vision_qc
 
 logger = logging.getLogger(__name__)
@@ -263,6 +263,14 @@ async def run_qc_for_job(job_id: str) -> dict:
             }).eq("id", u["id"]).execute()
             counts["passed"] += 1
             counts["total"] += 1
+            continue
+
+        # HDR bracket siblings (non-primary exposures) share the primary's
+        # processed_url and never reach the listing. QC the merged primary
+        # once: re-reviewing each sibling re-fetched the full-res edit per
+        # exposure, inflated the deliverable count ~5x, and made one held
+        # still read as five in the owner hold notice.
+        if not is_listing_still_delivery_row(u):
             continue
 
         # Auto-edit failed → unedited original stays held. Do not let a vision /

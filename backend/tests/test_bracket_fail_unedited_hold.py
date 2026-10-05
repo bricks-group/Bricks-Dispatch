@@ -147,6 +147,9 @@ def test_run_qc_preserves_unedited_original_hold(monkeypatch):
 
     fake_db_mod = ModuleType("app.shared.database")
     fake_db_mod.get_db = fake_get_db
+    fake_db_mod.maybe_single_row = lambda res: (
+        res.data if isinstance(getattr(res, "data", None), dict) else {}
+    )
     monkeypatch.setitem(sys.modules, "app.shared.database", fake_db_mod)
     monkeypatch.setattr(qc_agent, "run_qc_on_upload", no_review)
 

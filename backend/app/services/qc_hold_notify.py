@@ -34,6 +34,10 @@ def held_rows(uploads, only_ids: Optional[Iterable[str]] = None) -> list[dict]:
     for u in uploads or []:
         if not isinstance(u, dict) or u.get("qc_status") != "rejected":
             continue
+        # One held still is one photo: bracket siblings (and Visit rows) are
+        # not listing stills, so a stale sibling verdict never inflates the notice.
+        if str(u.get("provider") or "").strip().lower() in ("bracket_sibling", "visit"):
+            continue
         uid = str(u.get("id") or "")
         if limit is not None and uid not in limit:
             continue
@@ -122,7 +126,7 @@ async def _job_row(db, job_id: str) -> dict:
 async def _uploads(db, job_id: str) -> list[dict]:
     try:
         res = await db.table("uploads").select(
-            "id, filename, qc_status, qc_notes"
+            "id, filename, qc_status, qc_notes, provider"
         ).eq("job_id", job_id).execute()
         return getattr(res, "data", None) or []
     except Exception as e:
