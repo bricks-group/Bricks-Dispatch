@@ -33,6 +33,17 @@ _TILT_FLAG_DEG = 1.5
 _TILT_HOLD_DEG = 4.0
 
 
+# Underexposed delivery. crushed_blacks only counts pure-zero pixels, so a
+# fused still that came out murky overall (e.g. a Mertens merge that "reads
+# dark") sailed through. Median luminance on the canonical 1024 frame: on 37
+# finished pro listing edits (AutoHDR / BoxBrownie / Photomatix) the darkest
+# edited interior sits at ~106; single unedited mid-exposure frames sit at
+# ~36-57. Below the flag line goes to Review; below the hold line the still is
+# held. Real dusk shots (twilight) are dark on purpose and are exempt.
+_DARK_FLAG_MEDIAN = 70
+_DARK_HOLD_MEDIAN = 50
+
+
 def _weighted_median(pairs):
     pairs = sorted(pairs, key=lambda t: t[0])
     total = sum(w for _, w in pairs)
@@ -77,7 +88,7 @@ def measure_roll_tilt(gray) -> Optional[float]:
     return lm if abs(lm) < abs(rm) else rm
 
 
-def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False) -> dict:
+def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False, is_twilight: bool = False) -> dict:
     try:
         import cv2
         import numpy as np
@@ -126,6 +137,15 @@ def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False) -> dict:
         issues.append("blown_highlights")
         score -= 15
 
+    median_luma = float(np.median(blur_check_gray))
+    if not is_twilight:
+        if median_luma < _DARK_HOLD_MEDIAN:
+            issues.append("underexposed")
+            score -= 35
+        elif median_luma < _DARK_FLAG_MEDIAN:
+            issues.append("underexposed")
+            score -= 15
+
     roll_tilt = None
     try:
         roll_tilt = measure_roll_tilt(blur_check_gray)
@@ -163,6 +183,7 @@ def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False) -> dict:
             "dark_pixel_pct": round(dark_pixel_pct, 4),
             "bright_pixel_pct": round(bright_pixel_pct, 4),
             "aspect_ratio": round(aspect_ratio, 4),
+            "median_luma": round(median_luma, 1),
             "roll_tilt_deg": None if roll_tilt is None else round(roll_tilt, 2),
         },
     }

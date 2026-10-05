@@ -105,6 +105,7 @@ async def run_qc_on_upload(
     image_url: str,
     package: str = "",
     is_exterior: bool = False,
+    is_twilight: bool = False,
 ) -> dict:
     """
     Runs QC on a single upload: OpenCV coded pre-pass first, vision QC only when needed.
@@ -127,7 +128,7 @@ async def run_qc_on_upload(
     cv_status = None
     try:
         from .qc_opencv import analyze_image_cv
-        cv_result = analyze_image_cv(image_bytes, is_exterior=is_exterior)
+        cv_result = analyze_image_cv(image_bytes, is_exterior=is_exterior, is_twilight=is_twilight)
         cv_source = cv_result.get("source", "opencv")
         cv_status = cv_result.get("status", "passed")
     except ImportError:
@@ -292,7 +293,14 @@ async def run_qc_for_job(job_id: str) -> dict:
         # Heuristic: filenames containing "ext" or "exterior" are exterior shots
         is_exterior = any(kw in filename for kw in ("ext", "exterior", "front", "back", "drone"))
 
-        qc = await run_qc_on_upload(u["id"], signed_url, package=package_name, is_exterior=is_exterior)
+        # Real dusk shots are dark on purpose — exempt from the underexposed check.
+        from .media_intake import infer_media_type
+
+        is_twilight = infer_media_type(filename=filename, file_url=u.get("file_url")) == "twilight"
+
+        qc = await run_qc_on_upload(
+            u["id"], signed_url, package=package_name, is_exterior=is_exterior, is_twilight=is_twilight
+        )
         # Soft-fail metadata (mls_quarantine / qc_people_*) is returned to callers
         # and summarized in qc_notes — only known uploads columns are persisted.
         persist = {
