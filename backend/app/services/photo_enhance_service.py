@@ -342,7 +342,8 @@ def _to_srgb_rgb(img: Image.Image) -> Image.Image:
     """Flatten to 8-bit sRGB RGB — drop exotic ICC / CMYK casts for MLS JPEG."""
     if img.mode == "CMYK":
         img = img.convert("RGB")
-    # Pillow ImageCms is optional; convert("RGB") + strip info is enough for desk.
+    # Pixels are already sRGB: image_io.open_rgb colour-converts embedded
+    # P3 / Adobe RGB profiles before anything reaches export.
     rgb = img.convert("RGB")
     # Drop embedded ICC / EXIF so portals see plain sRGB JPEG without wild casts.
     rgb.info = {}
