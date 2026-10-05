@@ -18,8 +18,8 @@ from .vendor_profile import (
     min_tier_for_job,
     ORG_VENDOR_ID,
     preferred_tier_for_job,
+    specialty_matches_job,
     travel_within_cap,
-    vendor_skills,
     _missing_column,
 )
 from .shoot_duration import (
@@ -598,8 +598,7 @@ def pick_vendor_rule_based(
 
     def selection_score(v: VendorMember):
         owner_bonus = 1 if is_platform_owner(v) else 0
-        have = vendor_skills(v)
-        specialty_match = 1 if v.specialty == job.job_type or job.job_type in have else 0
+        specialty_match = 1 if specialty_matches_job(v, job) else 0
         tier_match = 1 if v.tier == preferred_tier else 0
         # Higher tier wins premium/luxury packages when preferred_tier is top.
         tier_rank = v.tier or 1

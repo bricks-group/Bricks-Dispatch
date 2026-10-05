@@ -23,7 +23,7 @@ from typing import List, Optional
 import httpx
 from ..shared.schemas import Job, VendorMember
 from ..shared.geospatial import haversine_km as _haversine_km
-from ..services.vendor_profile import member_eligible_for_job, travel_within_cap
+from ..services.vendor_profile import member_eligible_for_job, specialty_matches_job, travel_within_cap
 from ..services.shoot_duration import previous_job_coords, vendor_slot_conflicts
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ def _score_vendor(
     When return_breakdown=True, returns (score, breakdown_dict) instead of score.
     """
     # Specialty match: binary
-    specialty = 1.0 if v.specialty == job.job_type else 0.0
+    specialty = 1.0 if specialty_matches_job(v, job) else 0.0
 
     # Tier preference match: binary (already gated on min_tier upstream)
     tier = 1.0 if v.tier == preferred_tier else 0.0

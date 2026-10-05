@@ -18,6 +18,47 @@ ORG_VENDOR_ID = "default_vendor"
 TIER_LABELS = {1: "C", 2: "B", 3: "A"}  # display only; pay is the rate card
 TOP_TIER = 3
 SKILL_KEYS = ("photo", "drone", "reel", "tour", "twilight")
+
+# Free-text specialty / job_type labels that map onto SKILL_KEYS (www / Companion /
+# media_intake portfolio lockstep). Used by assign scoring so specialty=reel still
+# boosts legacy job_type=video after vendor_skills drops the phantom "video" label.
+_SKILL_KEY_ALIASES = {
+    "video": "reel",
+    "cinematic": "reel",
+    "cinematic_reel": "reel",
+    "photography": "photo",
+    "photos": "photo",
+    "hdr": "photo",
+    "virtual": "tour",
+    "3d": "tour",
+    "polycam": "tour",
+}
+
+
+def normalize_skill_key(raw: Any) -> str:
+    """Map specialty/job_type free text onto SKILL_KEYS when an alias exists."""
+    key = str(raw or "").strip().lower()
+    return _SKILL_KEY_ALIASES.get(key, key)
+
+
+def specialty_matches_job(member: Any, job: Any) -> bool:
+    """Soft specialty boost for assign scoring — video/reel/cinematic lockstep.
+
+    Hard-gate uses job_required_skills ⊆ vendor_skills. Rule-based scoring used
+    ``specialty == job_type or job_type in have``; after video→reel skill alias,
+    have never contains the phantom "video" label, so specialty=reel (and
+    skills=["reel"]) lost the specialty boost on in-flight job_type=video.
+    Normalize both sides the same way vendor_skills / job_required_skills do.
+    """
+    m = _as_dict(member)
+    j = _as_dict(job)
+    spec = normalize_skill_key(m.get("specialty"))
+    jt = normalize_skill_key(j.get("job_type") or "photo")
+    if spec and jt and spec == jt:
+        return True
+    have = vendor_skills(member)
+    return bool(jt and jt in have)
+
 VENDOR_TYPES = ("photographer", "stager", "cleaner")
 VENDOR_TYPE_ALIASES = {
     "photo": "photographer",
