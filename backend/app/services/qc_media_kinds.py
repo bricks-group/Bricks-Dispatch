@@ -65,6 +65,23 @@ def qc_kind_for_upload(upload: Optional[dict]) -> str:
     return "still"
 
 
+# public.uploads.qc_status column default — "not reviewed yet", not a verdict.
+QC_UNREVIEWED = ("", "pending")
+
+
+def has_qc_verdict(upload: Optional[dict]) -> bool:
+    """True when QC already recorded a verdict (passed / flagged / rejected / legacy).
+
+    public.uploads.qc_status defaults to 'pending' on insert (Bricks Canada).
+    A truthy-string check read that default as an existing verdict, so
+    run_qc_for_job and late-fold skipped every fresh upload and listing stills
+    reached the client never reviewed. Null / '' / 'pending' = not reviewed;
+    any other value (incl. legacy approved/accepted) is kept as before.
+    """
+    row = upload if isinstance(upload, dict) else {}
+    return str(row.get("qc_status") or "").strip().lower() not in QC_UNREVIEWED
+
+
 def is_legacy_unreadable_floorplan_hold(upload: Optional[dict]) -> bool:
     """True when a floor plan/PDF was held by the old listing-photo QC as unreadable_image.
 

@@ -33,7 +33,11 @@ from ..services.media_intake import (
     pick_visit_upload,
 )
 from ..services.qc_agent import run_qc_for_job
-from ..services.qc_media_kinds import is_legacy_non_image_asset_pass, is_legacy_unreadable_floorplan_hold
+from ..services.qc_media_kinds import (
+    has_qc_verdict,
+    is_legacy_non_image_asset_pass,
+    is_legacy_unreadable_floorplan_hold,
+)
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.auth import get_own_internal_api_key
 from ..shared.database import get_db
@@ -503,10 +507,8 @@ async def _fold_late_into_existing_delivery(
             return False
         if not (u.get("processed_url") or u.get("file_url")):
             return False
-        qc = u.get("qc_status")
-        if qc is not None and str(qc).strip():
-            return False
-        return True
+        # qc_status defaults to 'pending' on insert — not a verdict.
+        return not has_qc_verdict(u)
 
     def _ready_legacy_floorplan_unreadable_recheck(u: dict) -> bool:
         """Floor plan/PDF held as unreadable_image by old photo QC — re-run plan check."""
@@ -538,10 +540,8 @@ async def _fold_late_into_existing_delivery(
             return False
         if not (u.get("processed_url") or u.get("file_url")):
             return False
-        qc = u.get("qc_status")
-        if qc is not None and str(qc).strip():
-            return False
-        return True
+        # qc_status defaults to 'pending' on insert — not a verdict.
+        return not has_qc_verdict(u)
 
     def _ready_legacy_non_image_recheck(u: dict) -> bool:
         """Visit/video auto-passed as Non-image asset — re-run container check.

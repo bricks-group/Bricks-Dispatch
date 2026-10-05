@@ -228,6 +228,23 @@ async def run_qc_on_upload(
         }
 
 
+async def _persist_qc(db, upload_id: str, fields: dict) -> None:
+    """Write QC fields via REST; Postgres on Fair-Use 402.
+
+    Without the fallback the first QC write raised under PostgREST 402 and
+    finalize logged "QC agent failed (continuing to delivery)" — stills went
+    to the client with no verdict.
+    """
+    try:
+        await db.table("uploads").update(fields).eq("id", upload_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_upload
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_upload(upload_id, fields):
+            raise
+
+
 async def run_qc_for_job(job_id: str) -> dict:
     """
     Runs QC on all done uploads for a job. Updates qc_status on each upload.
@@ -240,18 +257,35 @@ async def run_qc_for_job(job_id: str) -> dict:
     db = await get_db()
 
     from ..shared.database import maybe_single_row
-    job_res = await db.table("jobs").select("package_name").eq("id", job_id).maybe_single().execute()
-    package_name = maybe_single_row(job_res).get("package_name", "") or ""
+    try:
+        job_res = await db.table("jobs").select("package_name").eq("id", job_id).maybe_single().execute()
+        package_name = maybe_single_row(job_res).get("package_name", "") or ""
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        package_name = (pg_select_job_by_id(job_id) or {}).get("package_name", "") or ""
 
-    res = await db.table("uploads").select(
-        "id, file_url, processed_url, qc_variant_url, qc_status, qc_notes, processing_status, filename, provider"
-    ).eq("job_id", job_id).execute()
-    uploads = [u for u in (res.data or []) if u.get("processing_status") in ("done", "skipped", None, "pending")]
+    try:
+        res = await db.table("uploads").select(
+            "id, file_url, processed_url, qc_variant_url, qc_status, qc_notes, processing_status, filename, provider"
+        ).eq("job_id", job_id).execute()
+        all_uploads = res.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+        if not _is_rest_quota_error(e):
+            raise
+        all_uploads = pg_select_uploads_by_job_id(job_id)
+    # Only finished rows. processing_status='pending' / 'processing' is still
+    # in enhance: a verdict on the raw file would stick (has_qc_verdict) and
+    # the enhanced listing still would never be reviewed.
+    uploads = [u for u in all_uploads if u.get("processing_status") in ("done", "skipped", None)]
 
     counts = {"total": 0, "passed": 0, "flagged": 0, "rejected": 0}
     image_upload_count = 0
 
     from .qc_media_kinds import (
+        has_qc_verdict,
         is_legacy_non_image_asset_pass,
         is_legacy_unreadable_floorplan_hold,
         qc_kind_for_upload,
@@ -268,8 +302,9 @@ async def run_qc_for_job(job_id: str) -> dict:
         # by the old listing-photo check, a Visit/video auto-passed as
         # "Non-image asset — QC skipped" (pre-container QC), or an
         # unedited-original row that must stay stamped held.
+        # qc_status defaults to 'pending' on insert — that is not a verdict.
         existing_qc = str(u.get("qc_status") or "").strip()
-        if existing_qc:
+        if has_qc_verdict(u):
             is_original = str(u.get("provider") or "").lower() == "original"
             recheck_legacy_plan = kind == "floorplan" and is_legacy_unreadable_floorplan_hold(u)
             recheck_legacy_non_image = kind in ("visit", "video") and is_legacy_non_image_asset_pass(u)
@@ -290,12 +325,12 @@ async def run_qc_for_job(job_id: str) -> dict:
         if kind == "visit" or is_visit_file(filename):
             raw_name = u.get("filename") or ""
             if not is_visit_file(raw_name):
-                await db.table("uploads").update({
+                await _persist_qc(db, u["id"], {
                     "qc_status": "passed",
                     "qc_score": 100,
                     "qc_notes": "Visit link — QC skipped",
                     "qc_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("id", u["id"]).execute()
+                })
                 counts["passed"] += 1
                 counts["total"] += 1
                 continue
@@ -306,12 +341,12 @@ async def run_qc_for_job(job_id: str) -> dict:
             if not signed:
                 continue
             qc = await run_visit_qc(u["id"], signed, filename=raw_name)
-            await db.table("uploads").update({
+            await _persist_qc(db, u["id"], {
                 "qc_status": qc["qc_status"],
                 "qc_score": qc["qc_score"],
                 "qc_notes": qc["qc_notes"],
                 "qc_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", u["id"]).execute()
+            })
             counts["total"] += 1
             counts[qc["qc_status"]] = counts.get(qc["qc_status"], 0) + 1
             continue
@@ -330,12 +365,12 @@ async def run_qc_for_job(job_id: str) -> dict:
                 qc = await run_video_qc(u["id"], signed)
             else:
                 qc = await run_floorplan_qc(u["id"], signed, filename=u.get("filename") or "")
-            await db.table("uploads").update({
+            await _persist_qc(db, u["id"], {
                 "qc_status": qc["qc_status"],
                 "qc_score": qc["qc_score"],
                 "qc_notes": qc["qc_notes"],
                 "qc_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", u["id"]).execute()
+            })
             counts["total"] += 1
             counts[qc["qc_status"]] = counts.get(qc["qc_status"], 0) + 1
             continue
@@ -353,10 +388,10 @@ async def run_qc_for_job(job_id: str) -> dict:
         if str(u.get("provider") or "").lower() == "original":
             from .post_production import unedited_original_hold
 
-            await db.table("uploads").update({
+            await _persist_qc(db, u["id"], {
                 **unedited_original_hold(),
                 "qc_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", u["id"]).execute()
+            })
             counts["total"] += 1
             counts["rejected"] += 1
             image_upload_count += 1
@@ -392,7 +427,7 @@ async def run_qc_for_job(job_id: str) -> dict:
             "qc_notes": qc["qc_notes"],
             "qc_at": datetime.now(timezone.utc).isoformat(),
         }
-        await db.table("uploads").update(persist).eq("id", u["id"]).execute()
+        await _persist_qc(db, u["id"], persist)
 
         status = qc["qc_status"]
         counts["total"] += 1
