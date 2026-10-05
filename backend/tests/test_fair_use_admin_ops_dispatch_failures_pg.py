@@ -17,13 +17,16 @@ class _QuotaErr(Exception):
 def test_pg_select_dispatch_failed_jobs_sql(monkeypatch):
     cur = MagicMock()
     cur.fetchall.return_value = [
-        ("job-f1", "bk-1", "1 Main", "Toronto", None, "Essentials", None, None, None, None, None, None, "dispatch_failed"),
+        (
+            "job-f1", "bk-1", "1 Main", "Toronto", None, "Essentials", None,
+            None, None, None, None, None, "dispatch_failed", None, "",
+        ),
     ]
     cur.description = [
         ("id",), ("booking_id",), ("address",), ("city",), ("job_type",),
         ("package_name",), ("min_tier_required",), ("scheduled_date",),
         ("time_window_start",), ("time_window_end",), ("created_at",),
-        ("updated_at",), ("status",),
+        ("updated_at",), ("status",), ("dispatch_explanation",), ("assignee_id",),
     ]
     cur.__enter__ = lambda s: s
     cur.__exit__ = MagicMock(return_value=False)
@@ -37,7 +40,9 @@ def test_pg_select_dispatch_failed_jobs_sql(monkeypatch):
     assert rows[0]["id"] == "job-f1"
     assert rows[0]["status"] == "dispatch_failed"
     sql = cur.execute.call_args[0][0]
-    assert "dispatch_failed" in sql or cur.execute.call_args[0][1][0] == "dispatch_failed"
+    assert "dispatch_failed" in sql
+    assert "held_for_review" in sql
+    assert "Held for a person" in cur.execute.call_args[0][1][0]
     assert cur.execute.call_args[0][1][1:] == (10, 2)
 
 
@@ -251,3 +256,244 @@ def test_manual_reassign_409_when_not_failed(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         asyncio.run(ao.manual_reassign_dispatch_failure("job-ok"))
     assert ei.value.status_code == 409
+
+
+def test_list_dispatch_failures_includes_held_for_review(monkeypatch):
+    """REST path: held_for_review (+ legacy hold note) land next to dispatch_failed."""
+    rows = [
+        {
+            "id": "job-hold",
+            "booking_id": "bk-h",
+            "address": "12 King",
+            "city": "Toronto",
+            "status": "held_for_review",
+            "dispatch_explanation": "Held for a person before auto-assign (Jev yes-probability 0.91).",
+            "assignee_id": "",
+            "updated_at": "2026-10-05T14:00:00+00:00",
+        },
+        {
+            "id": "job-fail",
+            "booking_id": "bk-f",
+            "address": "9 Queen",
+            "city": "Mississauga",
+            "status": "dispatch_failed",
+            "dispatch_explanation": None,
+            "assignee_id": "",
+            "updated_at": "2026-10-05T13:00:00+00:00",
+        },
+        {
+            "id": "job-plain",
+            "status": "pending_assignment",
+            "dispatch_explanation": None,
+            "assignee_id": "",
+            "updated_at": "2026-10-05T12:00:00+00:00",
+        },
+        {
+            "id": "job-legacy-hold",
+            "status": "pending_assignment",
+            "dispatch_explanation": "Held for a person before auto-assign (Jev yes-probability 0.88).",
+            "assignee_id": "",
+            "updated_at": "2026-10-05T12:30:00+00:00",
+        },
+    ]
+    state = {"calls": 0}
+
+    class Chain:
+        def select(self, *_a, **_k):
+            return self
+
+        def in_(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def range(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            state["calls"] += 1
+            m = MagicMock()
+            m.data = rows if state["calls"] == 1 else []
+            return m
+
+    class Db:
+        def table(self, name):
+            return Chain()
+
+    monkeypatch.setattr(ao, "resolve_vendor_actor_id", AsyncMock(return_value=KAM_MEMBER_ID))
+    monkeypatch.setattr(
+        ao,
+        "get_vendor_member",
+        AsyncMock(return_value={"id": KAM_MEMBER_ID, "role": "owner", "title": "Owner"}),
+    )
+    monkeypatch.setattr(ao, "is_vendor_admin", lambda _m: True)
+    monkeypatch.setattr(ao, "get_db", AsyncMock(return_value=Db()))
+
+    out = asyncio.run(ao.list_dispatch_failures(limit=20, offset=0))
+    ids = [i["id"] for i in out["items"]]
+    assert ids[0] == "job-hold"
+    assert "job-fail" in ids
+    assert "job-legacy-hold" in ids
+    assert "job-plain" not in ids
+    by_id = {i["id"]: i for i in out["items"]}
+    assert by_id["job-hold"]["queue_kind"] == "held_for_review"
+    assert by_id["job-fail"]["queue_kind"] == "dispatch_failed"
+    assert by_id["job-legacy-hold"]["queue_kind"] == "held_for_review"
+
+
+def test_release_held_job_runs_assign(monkeypatch):
+    job = {
+        "id": "job-hold",
+        "status": "held_for_review",
+        "dispatch_explanation": "Held for a person before auto-assign (Jev yes-probability 0.91).",
+        "assignee_id": "",
+    }
+    updates = []
+    assign_calls = []
+
+    class Chain:
+        def __init__(self):
+            self._op = None
+
+        def select(self, *_a, **_k):
+            self._op = "select"
+            return self
+
+        def update(self, payload):
+            self._op = "update"
+            updates.append(payload)
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def maybe_single(self):
+            return self
+
+        async def execute(self):
+            m = MagicMock()
+            m.data = dict(job) if self._op == "select" else (updates[-1:] if updates else [])
+            return m
+
+    class Db:
+        def table(self, name):
+            return Chain()
+
+    monkeypatch.setattr(ao, "resolve_vendor_actor_id", AsyncMock(return_value=KAM_MEMBER_ID))
+    monkeypatch.setattr(
+        ao,
+        "get_vendor_member",
+        AsyncMock(return_value={"id": KAM_MEMBER_ID, "role": "owner"}),
+    )
+    monkeypatch.setattr(ao, "is_vendor_admin", lambda _m: True)
+    monkeypatch.setattr(ao, "get_db", AsyncMock(return_value=Db()))
+
+    async def _assign(jid):
+        assign_calls.append(jid)
+        return KAM_MEMBER_ID
+
+    monkeypatch.setattr(ao, "assign_vendor_for_job", _assign)
+
+    out = asyncio.run(ao.release_held_dispatch_job("job-hold"))
+    assert out["released"] is True
+    assert out["assigned"] is True
+    assert out["assigned_member_id"] == KAM_MEMBER_ID
+    assert assign_calls == ["job-hold"]
+    assert updates and updates[0]["status"] == "pending_assignment"
+    assert updates[0]["assignee_id"] == ""
+    assert "Released from Jev hold" in updates[0]["dispatch_explanation"]
+
+
+def test_release_409_on_dispatch_failed(monkeypatch):
+    class Chain:
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def maybe_single(self):
+            return self
+
+        async def execute(self):
+            m = MagicMock()
+            m.data = {"id": "job-fail", "status": "dispatch_failed", "dispatch_explanation": None}
+            return m
+
+    class Db:
+        def table(self, name):
+            return Chain()
+
+    monkeypatch.setattr(ao, "resolve_vendor_actor_id", AsyncMock(return_value=KAM_MEMBER_ID))
+    monkeypatch.setattr(
+        ao,
+        "get_vendor_member",
+        AsyncMock(return_value={"id": KAM_MEMBER_ID, "role": "owner"}),
+    )
+    monkeypatch.setattr(ao, "is_vendor_admin", lambda _m: True)
+    monkeypatch.setattr(ao, "get_db", AsyncMock(return_value=Db()))
+
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(ao.release_held_dispatch_job("job-fail"))
+    assert ei.value.status_code == 409
+
+
+def test_release_legacy_pending_hold_note(monkeypatch):
+    """Pre-held_for_review rows (pending_assignment + note) still release."""
+    job = {
+        "id": "job-legacy",
+        "status": "pending_assignment",
+        "dispatch_explanation": "Held for a person before auto-assign (Jev yes-probability 0.85).",
+        "assignee_id": "",
+    }
+    updates = []
+
+    class Chain:
+        def __init__(self):
+            self._op = None
+
+        def select(self, *_a, **_k):
+            self._op = "select"
+            return self
+
+        def update(self, payload):
+            self._op = "update"
+            updates.append(payload)
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def maybe_single(self):
+            return self
+
+        async def execute(self):
+            m = MagicMock()
+            m.data = dict(job) if self._op == "select" else updates[-1:]
+            return m
+
+    class Db:
+        def table(self, name):
+            return Chain()
+
+    monkeypatch.setattr(ao, "resolve_vendor_actor_id", AsyncMock(return_value=KAM_MEMBER_ID))
+    monkeypatch.setattr(
+        ao,
+        "get_vendor_member",
+        AsyncMock(return_value={"id": KAM_MEMBER_ID, "role": "owner"}),
+    )
+    monkeypatch.setattr(ao, "is_vendor_admin", lambda _m: True)
+    monkeypatch.setattr(ao, "get_db", AsyncMock(return_value=Db()))
+    monkeypatch.setattr(ao, "assign_vendor_for_job", AsyncMock(return_value=None))
+
+    out = asyncio.run(ao.release_held_dispatch_job("job-legacy"))
+    assert out["released"] is True
+    assert out["assigned"] is False
+    assert updates and updates[0]["status"] == "pending_assignment"

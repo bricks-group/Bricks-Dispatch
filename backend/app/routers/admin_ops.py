@@ -660,8 +660,44 @@ async def compliance_expiry_scan(
 
 
 # ---------------------------------------------------------------------------
-# Dispatch failure manual queue
+# Dispatch failure + Jev-hold manual queue
 # ---------------------------------------------------------------------------
+
+_DISPATCH_QUEUE_STATUSES = ("dispatch_failed", "held_for_review")
+_JEV_HOLD_NOTE_MARKER = "Held for a person"
+_DISPATCH_QUEUE_SELECT = (
+    "id, booking_id, address, city, job_type, package_name, min_tier_required, "
+    "scheduled_date, time_window_start, time_window_end, created_at, updated_at, "
+    "status, dispatch_explanation, assignee_id"
+)
+
+
+def _is_jev_hold_row(job: dict) -> bool:
+    """True when the job is (or was left as) a Jev human-hold."""
+    status = str((job or {}).get("status") or "").strip()
+    if status == "held_for_review":
+        return True
+    if status == "pending_assignment":
+        note = str((job or {}).get("dispatch_explanation") or "")
+        return _JEV_HOLD_NOTE_MARKER in note
+    return False
+
+
+def _dispatch_queue_kind(job: dict) -> str:
+    status = str((job or {}).get("status") or "").strip()
+    if status == "dispatch_failed":
+        return "dispatch_failed"
+    if _is_jev_hold_row(job):
+        return "held_for_review"
+    return status or "unknown"
+
+
+def _sort_queue_jobs(jobs: list) -> list:
+    def _key(j: dict):
+        return str(j.get("updated_at") or j.get("created_at") or ""), str(j.get("id") or "")
+
+    return sorted(jobs, key=_key, reverse=True)
+
 
 @router.get("/dispatch-failures")
 async def list_dispatch_failures(
@@ -671,11 +707,14 @@ async def list_dispatch_failures(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    List jobs stuck in dispatch_failed status, joined with their ops_escalation record.
-    Returns newest first. Use POST /dispatch-failures/{job_id}/reassign to retry.
+    Admin recovery queue: dispatch_failed + Jev held_for_review (and legacy
+    pending_assignment rows that still carry the hold note).
+
+    Newest first. Retry failed assign via POST .../reassign; release a Jev hold
+    via POST .../release (clears hold + runs auto-assign).
 
     Fair-Use: when Canada PostgREST returns 402, list jobs + escalations via Postgres
-    so Owner can still recover failed auto-assign while Storage quota is locked.
+    so Owner can still recover failed auto-assign / holds while Storage quota is locked.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
@@ -691,11 +730,24 @@ async def list_dispatch_failures(
     db = await get_db()
     jobs: list = []
     try:
+        # Pull failed + held + pending_assignment candidates (admin queue is small),
+        # then keep true queue rows in Python — covers legacy Jev holds that still
+        # sit on pending_assignment with the hold note and empty assignee.
         res_jobs = await db.table("jobs").select(
-            "id, booking_id, address, city, job_type, package_name, min_tier_required, "
-            "scheduled_date, time_window_start, time_window_end, created_at, updated_at"
-        ).eq("status", "dispatch_failed").order("updated_at", desc=True).range(offset, offset + limit - 1).execute()
-        jobs = res_jobs.data or []
+            _DISPATCH_QUEUE_SELECT
+        ).in_(
+            "status",
+            ["dispatch_failed", "held_for_review", "pending_assignment"],
+        ).order("updated_at", desc=True).range(0, 199).execute()
+        candidates = list(res_jobs.data or [])
+        kept = []
+        for row in candidates:
+            status = str(row.get("status") or "").strip()
+            if status in _DISPATCH_QUEUE_STATUSES:
+                kept.append(row)
+            elif _is_jev_hold_row(row) and not str(row.get("assignee_id") or "").strip():
+                kept.append(row)
+        jobs = _sort_queue_jobs(kept)[offset: offset + limit]
     except Exception as e:
         if not _is_rest_quota_error(e):
             raise
@@ -723,6 +775,7 @@ async def list_dispatch_failures(
         esc = escalation_by_job.get(j["id"])
         items.append({
             **j,
+            "queue_kind": _dispatch_queue_kind(j),
             "escalation": esc,
         })
 
@@ -772,7 +825,10 @@ async def manual_reassign_dispatch_failure(
     if job_row.get("status") != "dispatch_failed":
         raise HTTPException(
             status_code=409,
-            detail=f"Job is in status '{job_row.get('status')}' — only dispatch_failed jobs can be manually reassigned",
+            detail=(
+                f"Job is in status '{job_row.get('status')}' — only dispatch_failed "
+                "jobs can be manually reassigned (use /release for Jev holds)"
+            ),
         )
 
     # Reset to pending_assignment so assign_vendor_for_job can proceed
@@ -806,6 +862,92 @@ async def manual_reassign_dispatch_failure(
         "job_id": job_id,
         "assigned": False,
         "detail": "No eligible vendor found. Job returned to dispatch_failed. A new escalation has been written.",
+    }
+
+
+@router.post("/dispatch-failures/{job_id}/release")
+async def release_held_dispatch_job(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Release a Jev-held booking (held_for_review, or legacy pending_assignment
+    with the hold note) back to auto-assign.
+
+    Clears the hold stamp, resets to pending_assignment, then runs
+    assign_vendor_for_job. Does not touch dispatch_failed rows — use /reassign.
+    Fair-Use: job load/reset fall back to Postgres on PostgREST 402.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_job_by_id,
+        pg_update_job,
+    )
+
+    db = await get_db()
+    job_row = None
+    try:
+        res = await db.table("jobs").select(
+            "id, status, dispatch_explanation, assignee_id"
+        ).eq("id", job_id).maybe_single().execute()
+        job_row = _maybe_single_row(res) or None
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        job_row = pg_select_job_by_id(job_id)
+
+    if not job_row:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if not _is_jev_hold_row(job_row):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Job is in status '{job_row.get('status')}' — only Jev-held jobs "
+                "(held_for_review or pending_assignment with hold note) can be released "
+                "(use /reassign for dispatch_failed)"
+            ),
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    reset_fields = {
+        "status": "pending_assignment",
+        "assignee_id": "",
+        "dispatch_explanation": "Released from Jev hold for auto-assign.",
+        "updated_at": now,
+    }
+    try:
+        await db.table("jobs").update(reset_fields).eq("id", job_id).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, reset_fields):
+            raise HTTPException(status_code=500, detail="Could not release held job (Fair-Use PG)")
+
+    assigned_member_id = await assign_vendor_for_job(job_id)
+
+    if assigned_member_id:
+        return {
+            "job_id": job_id,
+            "released": True,
+            "assigned": True,
+            "assigned_member_id": assigned_member_id,
+        }
+
+    return {
+        "job_id": job_id,
+        "released": True,
+        "assigned": False,
+        "detail": (
+            "Hold released but no eligible vendor found. "
+            "Job is now dispatch_failed — use /reassign after fixing supply."
+        ),
     }
 
 

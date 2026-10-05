@@ -2730,8 +2730,11 @@ def pg_upsert_push_token(row: dict) -> Optional[dict]:
 
 
 def pg_select_dispatch_failed_jobs(limit: int = 50, offset: int = 0) -> list[dict]:
-    """List jobs with status=dispatch_failed via Postgres (Fair-Use 402).
+    """List admin dispatch queue jobs via Postgres (Fair-Use 402).
 
+    Includes status=dispatch_failed, held_for_review, and legacy
+    pending_assignment rows whose dispatch_explanation still carries the
+    Jev "Held for a person" note (empty assignee only).
     Columns match admin_ops.list_dispatch_failures select list.
     Ordered by updated_at DESC. limit/offset clamped to safe bounds.
     """
@@ -2746,7 +2749,8 @@ def pg_select_dispatch_failed_jobs(limit: int = 50, offset: int = 0) -> list[dic
 
     cols = (
         "id, booking_id, address, city, job_type, package_name, min_tier_required, "
-        "scheduled_date, time_window_start, time_window_end, created_at, updated_at, status"
+        "scheduled_date, time_window_start, time_window_end, created_at, updated_at, "
+        "status, dispatch_explanation, assignee_id"
     )
     conn = _pg_connect()
     if not conn:
@@ -2756,10 +2760,15 @@ def pg_select_dispatch_failed_jobs(limit: int = 50, offset: int = 0) -> list[dic
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT {cols} FROM public.jobs "
-                "WHERE status = %s "
+                "WHERE status IN ('dispatch_failed', 'held_for_review') "
+                "   OR ("
+                "        status = 'pending_assignment' "
+                "        AND COALESCE(assignee_id, '') = '' "
+                "        AND dispatch_explanation ILIKE %s"
+                "   ) "
                 "ORDER BY updated_at DESC NULLS LAST "
                 "LIMIT %s OFFSET %s",
-                ("dispatch_failed", lim, off),
+                ("%Held for a person%", lim, off),
             )
             rows = _rows_from_cursor(cur)
             logger.warning(
