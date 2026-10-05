@@ -67,7 +67,7 @@ def test_finalize_visit_only_delivers_and_registers(monkeypatch):
         "file_url": "visits/job-v/room.ply",
         "processed_url": "visits/job-v/room.ply",
         "processing_status": "done",
-        "qc_status": None,
+        "qc_status": "passed",
         "provider": "visit",
     }
 
@@ -1493,3 +1493,159 @@ def test_late_fold_rechecks_legacy_unavailable_skip_pass(monkeypatch):
     # Both rejected still and video pruned from delivery_urls
     assert not any(u.get("upload_id") == "u-still" for u in urls)
     assert not any(u.get("upload_id") == "u-vid" for u in urls)
+
+
+def test_listing_still_delivery_urls_skips_unreviewed_qc(monkeypatch):
+    """Pending/null qc_status must not fold onto the listing (QC fail-open leak)."""
+    async def fake_signed(path):
+        return f"https://cdn.example/signed/{path}"
+
+    monkeypatch.setattr(pp, "get_signed_download_url", fake_signed)
+
+    uploads = [
+        {
+            "id": "up-ok",
+            "filename": "living.jpg",
+            "processed_url": "p/living.jpg",
+            "processing_status": "done",
+            "qc_status": "passed",
+            "provider": "autoenhance",
+        },
+        {
+            "id": "up-pending",
+            "filename": "kitchen.jpg",
+            "processed_url": "p/kitchen.jpg",
+            "processing_status": "done",
+            "qc_status": "pending",
+            "provider": "autoenhance",
+        },
+        {
+            "id": "up-null",
+            "filename": "bath.jpg",
+            "processed_url": "p/bath.jpg",
+            "processing_status": "done",
+            "qc_status": None,
+            "provider": "autoenhance",
+        },
+        {
+            "id": "up-flag",
+            "filename": "soft.jpg",
+            "processed_url": "p/soft.jpg",
+            "processing_status": "done",
+            "qc_status": "flagged",
+            "provider": "autoenhance",
+        },
+    ]
+    urls = asyncio.run(pp._listing_still_delivery_urls(uploads))
+    ids = [u["upload_id"] for u in urls]
+    assert ids == ["up-ok", "up-flag"]
+
+
+def test_finalize_skips_unreviewed_still_when_qc_fails(monkeypatch):
+    """QC exception must not land pending-default stills on the listing."""
+    pending = {
+        "id": "up-p",
+        "filename": "living.jpg",
+        "file_url": "jobs/j/living.jpg",
+        "processed_url": "jobs/j/living.jpg",
+        "processing_status": "done",
+        "qc_status": "pending",
+        "provider": "autoenhance",
+    }
+    db = MagicMock()
+    uploads_tbl = _uploads_chain([pending])
+    md_empty = MagicMock()
+    md_empty.data = None
+    md_tbl = MagicMock()
+    md_tbl.select.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.maybe_single.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=md_empty)
+    md_tbl.upsert.return_value = md_tbl
+
+    jobs_tbl = MagicMock()
+    jobs_tbl.update.return_value = jobs_tbl
+    jobs_tbl.eq.return_value = jobs_tbl
+    jobs_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    cap_tbl = _capture_sessions_chain([])
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "jobs":
+            return jobs_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db.table.side_effect = table
+
+    async def boom(_job_id):
+        raise RuntimeError("vision down")
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", boom)
+
+    asyncio.run(pp._finalize_job_if_complete("job-pending"))
+
+    # No deliverable stills → qc_failed (not delivered with unreviewed still)
+    assert jobs_tbl.update.call_args[0][0]["status"] == "qc_failed"
+    md_tbl.upsert.assert_not_called()
+
+
+def test_late_fold_does_not_merge_unreviewed_still_after_qc_fail(monkeypatch):
+    """Late-fold QC fail must not add pending stills into existing delivery."""
+    existing = {
+        "id": "md-1",
+        "delivery_urls": [{"upload_id": "up-old", "url": "https://cdn/old.jpg"}],
+    }
+    pending = {
+        "id": "up-new",
+        "filename": "new.jpg",
+        "processed_url": "p/new.jpg",
+        "processing_status": "done",
+        "qc_status": "pending",
+        "provider": "autoenhance",
+    }
+
+    async def boom(_job_id):
+        raise RuntimeError("qc down")
+
+    uploads_tbl = MagicMock()
+    uploads_tbl.select.return_value = uploads_tbl
+    uploads_tbl.eq.return_value = uploads_tbl
+    uploads_tbl.execute = AsyncMock(return_value=MagicMock(data=[pending]))
+
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+
+    async def fake_signed(path):
+        return f"https://cdn.example/{path}"
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", boom)
+    monkeypatch.setattr(pp, "get_signed_download_url", fake_signed)
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+    monkeypatch.setattr(
+        pp, "_list_delivered_capture_sessions", AsyncMock(return_value=[])
+    )
+
+    folded = asyncio.run(pp._fold_late_into_existing_delivery("job-late", existing))
+    # Pending still skipped → no new stills to merge; capture/visit empty → False
+    assert folded is False
+    md_tbl.update.assert_not_called()

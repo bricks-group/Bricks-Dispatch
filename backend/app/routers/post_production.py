@@ -445,6 +445,10 @@ async def _listing_still_delivery_urls(uploads: list) -> list[dict]:
             continue
         if u.get("qc_status") == "rejected":
             continue
+        # Null/''/pending = never reviewed (DB default). QC-fail "continuing to
+        # merge" used to fold these onto the listing unreviewed — hold back.
+        if not has_qc_verdict(u):
+            continue
         if u.get("processing_status") == "failed":
             continue
         # Do not fold in-flight stills — wait until enhance marks them done.
@@ -771,6 +775,8 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
 
         await notify_owner_qc_hold(db, job_id, qc_counts)
     except Exception as e:
+        # Still continue — Visit/capture may deliver — but unreviewed stills are
+        # skipped below (has_qc_verdict). Do not land pending defaults on listing.
         logger.error(f"Job {job_id}: QC agent failed (continuing to delivery): {e}")
 
     # Re-fetch uploads after QC (qc_status now populated)
@@ -794,6 +800,14 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
         # Skip rejected uploads — not delivered
         if u.get("qc_status") == "rejected":
             logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — QC rejected")
+            continue
+        # Skip unreviewed (null/''/pending). QC agent exception used to
+        # "continue to delivery" with the DB default still pending — unreviewed
+        # stills reached the client. Late-fold re-runs QC; until then hold back.
+        if not has_qc_verdict(u):
+            logger.info(
+                f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — QC not reviewed yet"
+            )
             continue
         # Skip failed uploads — processing failed, raw file_url not deliverable
         if u.get("processing_status") == "failed":

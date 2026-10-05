@@ -368,13 +368,19 @@ def _is_visit_upload_row(upload: Any = None) -> bool:
 def pick_visit_upload(uploads: list | None) -> Optional[dict]:
     """First Visit upload for property_visits registration (.splat > .ply > .spz).
 
-    Skips QC-rejected Visit rows so a broken .ply/.splat/.spz held by visit
-    container check is never registered on the listing.
+    Skips QC-rejected and unreviewed (null/''/pending) Visit rows so a broken
+    or never-reviewed .ply/.splat/.spz is never registered on the listing.
+    Same honesty as listing-still delivery (has_qc_verdict) — inlined here to
+    avoid a media_intake ↔ qc_media_kinds import cycle.
     """
+    def _visit_qc_ready(u: Any) -> bool:
+        status = str((u or {}).get("qc_status") or "").strip().lower()
+        # pending/empty = DB default, not a verdict; rejected = held.
+        return status not in ("", "pending", "rejected")
+
     visits = [
         u for u in (uploads or [])
-        if _is_visit_upload_row(u)
-        and str((u or {}).get("qc_status") or "").strip().lower() != "rejected"
+        if _is_visit_upload_row(u) and _visit_qc_ready(u)
     ]
     if not visits:
         return None

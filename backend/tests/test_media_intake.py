@@ -85,23 +85,26 @@ def test_pick_visit_upload_prefers_splat_then_ply_then_spz():
     assert pick_visit_upload([]) is None
     assert pick_visit_upload([{"filename": "a.jpg"}]) is None
 
-    only_spz = pick_visit_upload([{"id": "1", "filename": "room.spz"}])
+    only_spz = pick_visit_upload([{"id": "1", "filename": "room.spz", "qc_status": "passed"}])
     assert only_spz["id"] == "1"
 
-    only_ply = pick_visit_upload([{"id": "2", "filename": "room.ply"}, {"id": "3", "filename": "a.jpg"}])
+    only_ply = pick_visit_upload([
+        {"id": "2", "filename": "room.ply", "qc_status": "passed"},
+        {"id": "3", "filename": "a.jpg"},
+    ])
     assert only_ply["id"] == "2"
 
     mixed = pick_visit_upload([
-        {"id": "spz", "filename": "a.spz"},
-        {"id": "ply", "filename": "b.ply"},
-        {"id": "splat", "filename": "c.splat"},
+        {"id": "spz", "filename": "a.spz", "qc_status": "passed"},
+        {"id": "ply", "filename": "b.ply", "qc_status": "passed"},
+        {"id": "splat", "filename": "c.splat", "qc_status": "passed"},
         {"id": "jpg", "filename": "d.jpg"},
     ])
     assert mixed["id"] == "splat"
 
     ply_over_spz = pick_visit_upload([
-        {"id": "spz", "filename": "a.spz"},
-        {"id": "ply", "filename": "b.ply"},
+        {"id": "spz", "filename": "a.spz", "qc_status": "passed"},
+        {"id": "ply", "filename": "b.ply", "qc_status": "passed"},
     ])
     assert ply_over_spz["id"] == "ply"
 
@@ -173,7 +176,13 @@ def test_listing_still_excludes_provider_visit():
 
 def test_pick_visit_upload_includes_provider_visit():
     """GO enhance marks Visit rows provider=visit even if filename is odd."""
-    row = {"id": "v1", "filename": "mesh.bin", "provider": "visit", "file_url": "visits/j/mesh.bin"}
+    row = {
+        "id": "v1",
+        "filename": "mesh.bin",
+        "provider": "visit",
+        "file_url": "visits/j/mesh.bin",
+        "qc_status": "passed",
+    }
     assert pick_visit_upload([{"filename": "a.jpg"}, row])["id"] == "v1"
     assert pick_visit_upload([{"filename": "a.jpg", "provider": "bricks_inhouse"}]) is None
 
@@ -322,3 +331,45 @@ def test_infer_delimited_plan_token_os_frontend_parity():
         "mime_type": "image/jpeg",
         "file_url": "p/gf.jpg",
     }) == "vendor_photo"
+
+
+def test_pick_visit_upload_skips_unreviewed():
+    """Null/pending Visit must not register on the listing (same as rejected)."""
+    pending = {
+        "id": "pend",
+        "filename": "room.ply",
+        "provider": "visit",
+        "qc_status": "pending",
+    }
+    empty = {
+        "id": "empty",
+        "filename": "room.splat",
+        "provider": "visit",
+        "qc_status": None,
+    }
+    ok = {
+        "id": "good",
+        "filename": "room.ply",
+        "provider": "visit",
+        "qc_status": "passed",
+    }
+    flagged = {
+        "id": "soft",
+        "filename": "room.spz",
+        "provider": "visit",
+        "qc_status": "flagged",
+    }
+    assert pick_visit_upload([pending]) is None
+    assert pick_visit_upload([empty]) is None
+    assert pick_visit_upload([pending, empty]) is None
+    assert pick_visit_upload([pending, ok])["id"] == "good"
+    # flagged Visit still registers (reviewable, not held)
+    assert pick_visit_upload([flagged])["id"] == "soft"
+    # Prefer .splat over .ply when both reviewed — pending splat must not win
+    pending_splat = {
+        "id": "bad-splat",
+        "filename": "room.splat",
+        "provider": "visit",
+        "qc_status": "pending",
+    }
+    assert pick_visit_upload([pending_splat, ok])["id"] == "good"

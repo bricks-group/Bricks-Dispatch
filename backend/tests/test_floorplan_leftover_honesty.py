@@ -268,6 +268,7 @@ def test_listing_still_delivery_urls_tags_floorplan_kind(monkeypatch):
             "filename": "cubicasa_export.png",
             "file_url": "p/cubicasa_export.png",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "as_is",
         },
         {
@@ -276,6 +277,7 @@ def test_listing_still_delivery_urls_tags_floorplan_kind(monkeypatch):
             "file_url": "p/plan.pdf",
             "mime_type": "application/pdf",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "as_is",
         },
     ]
@@ -316,6 +318,7 @@ def test_listing_still_delivery_urls_tags_drone_reel_kind(monkeypatch):
             "filename": "DJI_0042.JPG",
             "processed_url": "p/DJI_0042.JPG",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "as_is",
         },
         {
@@ -323,6 +326,7 @@ def test_listing_still_delivery_urls_tags_drone_reel_kind(monkeypatch):
             "filename": "aerial-front.jpg",
             "file_url": "p/aerial-front.jpg",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "as_is",
         },
         {
@@ -331,6 +335,7 @@ def test_listing_still_delivery_urls_tags_drone_reel_kind(monkeypatch):
             "file_url": "p/reel_clip.mp4",
             "mime_type": "video/mp4",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "as_is",
         },
     ]
@@ -366,6 +371,7 @@ def test_listing_still_delivery_urls_tags_staging_twilight_kind(monkeypatch):
             "filename": "staging_kitchen.jpg",
             "processed_url": "p/staging_kitchen.jpg",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "as_is",
         },
         {
@@ -373,6 +379,7 @@ def test_listing_still_delivery_urls_tags_staging_twilight_kind(monkeypatch):
             "filename": "twilight_rear.jpg",
             "file_url": "p/twilight_rear.jpg",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "bricks_inhouse",
         },
         {
@@ -381,6 +388,7 @@ def test_listing_still_delivery_urls_tags_staging_twilight_kind(monkeypatch):
             "file_url": "p/rear.jpg",
             "media_type": "dusk",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "bricks_inhouse",
         },
         {
@@ -389,6 +397,7 @@ def test_listing_still_delivery_urls_tags_staging_twilight_kind(monkeypatch):
             "file_url": "p/room.jpg",
             "media_type": "virtual_staging",
             "processing_status": "done",
+            "qc_status": "passed",
             "provider": "as_is",
         },
     ]
