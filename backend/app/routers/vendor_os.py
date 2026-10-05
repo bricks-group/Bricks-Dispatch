@@ -118,10 +118,21 @@ async def _listings_by_ids(db, ids) -> dict:
 
 
 
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row.
+
+    Reading .data on that None is AttributeError. The global handler turns it
+    into HTTP 500 with no CORS, so the browser shows net::ERR_FAILED instead
+    of the route's 404 or Postgres fallback.
+    """
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
+
 async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, *, admin_all: bool = False) -> dict:
     try:
         res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        job = res.data or {}
+        job = _maybe_single_row(res)
     except Exception as e:
         # Fair-Use: PostgREST job reads 402 — load via Postgres so confirm-arrive /
         # check-in / status can still authorize against the assigned row.
@@ -129,6 +140,10 @@ async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, 
         if not _is_rest_quota_error(e):
             raise
         job = pg_select_job_by_id(job_id) or {}
+    if not job.get("id"):
+        # Empty REST body can also mean Fair-Use silent failure (no exception).
+        from ..shared.pg_fallback import pg_select_job_by_id
+        job = pg_select_job_by_id(job_id) or job
     allow_all = admin_all and is_vendor_admin(actor_member)
     if not job_visible_to(job, actor_id, actor_member, assigned_only=not allow_all, admin_all=allow_all):
         api_error(404, "Job not found", "job_not_found")
@@ -552,7 +567,8 @@ async def get_vendor_os_job(
         job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
         listings = await _listings_by_ids(db, [job.get("transaction_id")])
         res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
-        job["assignee_name"] = (res_member.data or {}).get("name") if res_member.data else "Unassigned"
+        member_row = _maybe_single_row(res_member)
+        job["assignee_name"] = member_row.get("name") or "Unassigned"
         return _apply_listing(job, listings)
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
