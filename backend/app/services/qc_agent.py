@@ -69,6 +69,21 @@ async def _fetch_image_bytes(url: str) -> Optional[bytes]:
         return None
 
 
+def _image_unavailable_hold(detail: str) -> dict:
+    """QC hold when a listing still cannot be reviewed (no bytes / no URL).
+
+    Same spirit as download_bytes miss → unedited_original_hold: never leave
+    qc_status=pending so finalize would deliver an unreviewed still. Late-fold
+    prune + hold notices already understand rejected + image_unavailable.
+    """
+    detail = (detail or "could not review listing still").strip()
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": f"image_unavailable — {detail}",
+        "qc_source": "unavailable",
+    }
+
 
 def _qc_payload(status, score, notes, source, cv_result=None) -> dict:
     """QC row fields + PropTx people soft-fail metadata for Frame/GO."""
@@ -126,14 +141,9 @@ async def run_qc_on_upload(
             "QC upload %s: image_unavailable — holding (bytes not fetched)",
             upload_id,
         )
-        return {
-            "qc_status": "rejected",
-            "qc_score": 0,
-            "qc_notes": (
-                "image_unavailable — could not fetch listing still for QC review"
-            ),
-            "qc_source": "unavailable",
-        }
+        return _image_unavailable_hold(
+            "could not fetch listing still for QC review"
+        )
 
     # OpenCV pre-pass: always run when bytes are available (holds without Gemini).
     _high_value = package in ("luxury", "estate")
@@ -416,10 +426,37 @@ async def run_qc_for_job(job_id: str) -> dict:
         # resolution to judge sharpness/exposure/composition, not the original.
         path = u.get("qc_variant_url") or u.get("processed_url") or u.get("file_url")
         if not path:
+            # No path to review — hold. Leaving qc_status=pending would let
+            # finalize deliver an unreviewed still (only rejected is pruned).
+            await _persist_qc(db, u["id"], {
+                **_image_unavailable_hold(
+                    "no storage path for listing still QC review"
+                ),
+                "qc_at": datetime.now(timezone.utc).isoformat(),
+            })
+            counts["total"] += 1
+            counts["rejected"] += 1
+            image_upload_count += 1
             continue
 
-        signed_url = await get_signed_download_url(path, expiry=300)
+        # HTTPS processed_url (Autoenhance / public Blob) must not be re-signed —
+        # Visit/video/floorplan and finalize already passthrough. Signing an
+        # https URL as a Storage path returns None; the old `continue` left
+        # qc_status=pending and finalize delivered the still unreviewed.
+        if str(path).startswith("https://"):
+            signed_url = path
+        else:
+            signed_url = await get_signed_download_url(path, expiry=300)
         if not signed_url:
+            await _persist_qc(db, u["id"], {
+                **_image_unavailable_hold(
+                    "could not sign listing still for QC review"
+                ),
+                "qc_at": datetime.now(timezone.utc).isoformat(),
+            })
+            counts["total"] += 1
+            counts["rejected"] += 1
+            image_upload_count += 1
             continue
 
         # Heuristic: filenames containing "ext" or "exterior" are exterior shots
