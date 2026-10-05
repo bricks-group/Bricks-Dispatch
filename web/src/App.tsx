@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
-import { logout, me } from './lib/api';
+import { logout, me, isRateLimited, retryAfterSeconds } from './lib/api';
 import { supabase } from './lib/supabase';
 import { AvailabilityPage } from './pages/AvailabilityPage';
 import { EarningsPage } from './pages/EarningsPage';
@@ -35,21 +35,61 @@ function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
   );
 }
 
+function RateLimitedNotice({ retryAfter, onRetry }: { retryAfter?: number; onRetry: () => void }) {
+  return (
+    <div style={{ padding: 28, maxWidth: 460 }}>
+      <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>Too many requests</h1>
+      <p style={{ color: 'var(--c-ink-soft)', marginTop: 0 }}>
+        You are still signed in. Dispatch is limiting requests from this browser
+        {retryAfter ? ` for about ${retryAfter} seconds` : ''}.
+      </p>
+      <button type="button" onClick={onRetry}>Retry</button>
+    </div>
+  );
+}
+
 function ProtectedLayout() {
   const [loading, setLoading] = useState(true);
   const [isAuthed, setIsAuthed] = useState(false);
   const [member, setMember] = useState<AuthMember | null>(null);
   const [name, setName] = useState('');
+  const [rateLimited, setRateLimited] = useState(false);
+  const [retryAfter, setRetryAfter] = useState<number | undefined>(undefined);
   const navigate = useNavigate();
 
-  useEffect(() => {
+  const refreshSession = () => {
+    setLoading(true);
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) { setLoading(false); setIsAuthed(false); return; }
+      if (!session) {
+        setLoading(false);
+        setIsAuthed(false);
+        setRateLimited(false);
+        return;
+      }
       me()
-        .then((m) => { setIsAuthed(true); setMember(m); setName(m.name); })
-        .catch(() => setIsAuthed(false))
+        .then((m) => {
+          setIsAuthed(true);
+          setMember(m);
+          setName(m.name);
+          setRateLimited(false);
+        })
+        .catch((err) => {
+          // 429 is backpressure, not an expired session. Do not send the user to /login.
+          if (isRateLimited(err)) {
+            setIsAuthed(true);
+            setRateLimited(true);
+            setRetryAfter(retryAfterSeconds(err));
+            return;
+          }
+          setRateLimited(false);
+          setIsAuthed(false);
+        })
         .finally(() => setLoading(false));
     });
+  };
+
+  useEffect(() => {
+    refreshSession();
   }, []);
 
   const onLogout = async () => {
@@ -58,6 +98,7 @@ function ProtectedLayout() {
   };
 
   if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
+  if (rateLimited) return <RateLimitedNotice retryAfter={retryAfter} onRetry={refreshSession} />;
   if (!isAuthed) return <Navigate to="/login" replace />;
 
   // Pending / inactive / Applicant — block Today/Jobs/Capture until Hiring approval.
@@ -91,22 +132,43 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [ok, setOk] = useState(false);
   const [allowed, setAllowed] = useState(false);
-  useEffect(() => {
+  const [rateLimited, setRateLimited] = useState(false);
+  const [retryAfter, setRetryAfter] = useState<number | undefined>(undefined);
+
+  const refreshSession = () => {
+    setLoading(true);
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (!session) { setOk(false); setLoading(false); return; }
+      if (!session) {
+        setOk(false);
+        setRateLimited(false);
+        setLoading(false);
+        return;
+      }
       setOk(true);
       try {
         const m = await me();
         setAllowed(hasAppAccess(m));
-      } catch {
+        setRateLimited(false);
+      } catch (err) {
+        if (isRateLimited(err)) {
+          setRateLimited(true);
+          setRetryAfter(retryAfterSeconds(err));
+          return;
+        }
+        setRateLimited(false);
         setAllowed(false);
       } finally {
         setLoading(false);
       }
     });
+  };
+
+  useEffect(() => {
+    refreshSession();
   }, []);
   if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
   if (!ok) return <Navigate to="/login" replace />;
+  if (rateLimited) return <RateLimitedNotice retryAfter={retryAfter} onRetry={refreshSession} />;
   if (!allowed) return <UnderReviewPage />;
   return <>{children}</>;
 }

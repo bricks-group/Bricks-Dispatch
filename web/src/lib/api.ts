@@ -39,10 +39,54 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   });
 
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({}));
-    throw new Error(detail.detail || `Request failed with ${res.status}`);
+    const body = await res.json().catch(() => ({} as { detail?: unknown; error?: unknown; retry_after?: unknown }));
+    const code = typeof body.error === 'string' ? body.error : undefined;
+    const retryRaw = body.retry_after ?? res.headers.get('Retry-After');
+    const retryNum = Number(retryRaw);
+    const retryAfter = Number.isFinite(retryNum) ? retryNum : undefined;
+    if (res.status === 429 || code === 'rate_limited') {
+      const wait = retryAfter != null ? ` Try again in ${retryAfter}s.` : '';
+      throw new ApiError(`Too many requests.${wait}`, {
+        status: 429,
+        code: 'rate_limited',
+        retryAfter,
+      });
+    }
+    const detail = body.detail;
+    const message = typeof detail === 'string' && detail
+      ? detail
+      : `Request failed with ${res.status}`;
+    throw new ApiError(message, { status: res.status, code });
   }
   return res.json();
+}
+
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  retryAfter?: number;
+  constructor(message: string, init: { status: number; code?: string; retryAfter?: number }) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = init.status;
+    this.code = init.code;
+    this.retryAfter = init.retryAfter;
+  }
+}
+
+/** 429 / rate_limited is not a logged-out session. Callers must keep the token and retry. */
+export function isRateLimited(err: unknown): boolean {
+  const e = err as { status?: number; code?: string; message?: string } | null;
+  if (!e) return false;
+  if (e.status === 429 || e.code === 'rate_limited') return true;
+  const msg = `${e.message || ''}`.toLowerCase();
+  return msg.includes('rate_limited') || msg.includes('too many requests');
+}
+
+export function retryAfterSeconds(err: unknown): number | undefined {
+  const n = (err as { retryAfter?: number } | null)?.retryAfter;
+  return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
 }
 
 export const api = {
@@ -150,9 +194,16 @@ async function fairUsePasswordLogin(email: string, password: string): Promise<Au
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
-  const body = await res.json().catch(() => ({}));
+  const body = await res.json().catch(() => ({} as { detail?: unknown; error?: unknown; retry_after?: unknown }));
   if (!res.ok) {
-    const detail = (body as { detail?: unknown }).detail ?? body;
+    const code = typeof body.error === 'string' ? body.error : undefined;
+    const retryNum = Number(body.retry_after ?? res.headers.get('Retry-After'));
+    const retryAfter = Number.isFinite(retryNum) ? retryNum : undefined;
+    if (res.status === 429 || code === 'rate_limited') {
+      const wait = retryAfter != null ? ` Try again in ${retryAfter}s.` : '';
+      throw new ApiError(`Too many requests.${wait}`, { status: 429, code: 'rate_limited', retryAfter });
+    }
+    const detail = body.detail ?? body;
     throw new Error(parseApiErrorDetail(detail, `Login failed (${res.status})`));
   }
   const access = (body as { access_token?: string }).access_token;

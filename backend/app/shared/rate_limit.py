@@ -77,6 +77,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             oldest = _hits[ip][0]
             retry_after = int(window - (now - oldest)) + 1
             logger.warning(f"Rate limit hit: {request.url.path} from {ip}")
+            # This return never reaches inner middleware. CORS must wrap this
+            # middleware (see install_browser_middleware) or the browser drops the 429.
             return Response(
                 status_code=429,
                 content='{"error":"rate_limited","detail":"Too many requests","retry_after":%d}' % retry_after,
