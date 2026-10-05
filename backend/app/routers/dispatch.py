@@ -22,10 +22,16 @@ ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "akashorte
 
 
 async def _note_jev_hold(db, job_id: str, yes_probability: float | None) -> None:
-    """Leave a note on the unassigned job. A write failure must not assign it."""
+    """Stamp held_for_review + note. A write failure must not assign it.
+
+    Admin GET /api/admin/dispatch-failures lists held_for_review next to
+    dispatch_failed so Jev holds are visible without digging email. Release via
+    POST /api/admin/dispatch-failures/{job_id}/release.
+    """
     probability = f"{yes_probability:.2f}" if isinstance(yes_probability, float) else "n/a"
     try:
         await db.table("jobs").update({
+            "status": "held_for_review",
             "dispatch_explanation": (
                 "Held for a person before auto-assign "
                 f"(Jev yes-probability {probability})."
@@ -142,6 +148,8 @@ async def create_dispatch_job(
                 logger.exception("Jev hold gate failed open for job %s", job_id)
                 held = False
         if held:
+            # Note or notify failure must not assign.
+            status = "held_for_review"
             await _note_jev_hold(db, job_id, hold_probability)
         else:
             try:

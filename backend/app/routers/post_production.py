@@ -87,12 +87,21 @@ async def _finalize_job_if_complete(job_id: str) -> None:
         logger.info(f"Job {job_id}: {len(in_flight)} upload(s) still in-flight (processing/pending) — waiting")
         return
 
-    # Run QC vision agent on all processed uploads before delivery
+    # Run QC vision agent on all processed uploads before delivery.
+    # Then tell the owner if any listing files were held back. Notify never
+    # raises and must not block delivery. Main has no late-fold path.
+    qc_counts = None
     try:
         qc_counts = await run_qc_for_job(job_id)
         logger.info(f"Job {job_id}: QC complete — {qc_counts}")
     except Exception as e:
         logger.error(f"Job {job_id}: QC agent failed (continuing to delivery): {e}")
+
+    try:
+        from ..services.qc_hold_notify import notify_owner_qc_hold
+        await notify_owner_qc_hold(db, job_id, qc_counts)
+    except Exception as e:
+        logger.error(f"Job {job_id}: QC hold notify failed (continuing to delivery): {e}")
 
     # Re-fetch uploads after QC (qc_status now populated)
     res_uploads = await db.table("uploads").select(
