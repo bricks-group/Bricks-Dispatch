@@ -81,6 +81,24 @@ def is_legacy_unreadable_floorplan_hold(upload: Optional[dict]) -> bool:
     return qc_kind_for_upload(row) == "floorplan"
 
 
+def is_legacy_non_image_asset_pass(upload: Optional[dict]) -> bool:
+    """True when Visit/video was auto-passed as "Non-image asset — QC skipped".
+
+    Before Visit container QC (feae411) and video container QC (b154726), both
+    kinds were stamped passed without a bytes check. Those rows keep
+    qc_status=passed, so late-fold / run_qc_for_job would otherwise never hold a
+    broken .ply/.splat/.spz or a still-saved-as-.mp4. Only this exact prior note
+    is eligible — honest Visit/video container passes and photo verdicts stay.
+    """
+    row = upload if isinstance(upload, dict) else {}
+    if str(row.get("qc_status") or "").strip().lower() != "passed":
+        return False
+    notes = str(row.get("qc_notes") or "").lower()
+    if "non-image asset" not in notes:
+        return False
+    return qc_kind_for_upload(row) in ("visit", "video")
+
+
 def _verdict(status: str, score: int, notes: str, source: str) -> dict:
     return {
         "qc_status": status,

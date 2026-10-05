@@ -1288,3 +1288,102 @@ def test_late_fold_skips_qc_for_real_photo_hold_and_honest_plan_hold(monkeypatch
     asyncio.run(pp._fold_late_into_existing_delivery("job-hold", existing))
     assert qc_calls == []
 
+def test_late_fold_rechecks_legacy_non_image_visit_video(monkeypatch):
+    """Late-fold: Visit/video Non-image auto-pass triggers QC even with qc_status set."""
+    existing = {
+        "id": "md-ni",
+        "delivery_urls": [
+            {
+                "url": "https://cdn.example/fake.mp4",
+                "filename": "fake.mp4",
+                "upload_id": "u-vid",
+                "kind": "reel",
+            },
+        ],
+    }
+    video_legacy_pre = {
+        "id": "u-vid",
+        "filename": "fake.mp4",
+        "file_url": "raw/fake.mp4",
+        "processed_url": "https://cdn.example/fake.mp4",
+        "processing_status": "done",
+        "qc_status": "passed",
+        "qc_notes": "Non-image asset — QC skipped",
+        "provider": "as_is",
+    }
+    visit_legacy_pre = {
+        "id": "u-vis",
+        "filename": "bad.splat",
+        "file_url": "raw/bad.splat",
+        "processed_url": "https://cdn.example/bad.splat",
+        "processing_status": "done",
+        "qc_status": "passed",
+        "qc_notes": "Non-image asset — QC skipped",
+        "provider": "visit",
+    }
+    video_legacy_post = {
+        **video_legacy_pre,
+        "qc_status": "rejected",
+        "qc_notes": "Video file is a still image, not a video.",
+    }
+    visit_legacy_post = {
+        **visit_legacy_pre,
+        "qc_status": "rejected",
+        "qc_notes": "Visit file is an error page/text, not a Visit asset.",
+    }
+
+    fetch_n = {"n": 0}
+    uploads_tbl = MagicMock()
+    uploads_tbl.select.return_value = uploads_tbl
+    uploads_tbl.eq.return_value = uploads_tbl
+
+    async def uploads_execute():
+        fetch_n["n"] += 1
+        data = (
+            [video_legacy_pre, visit_legacy_pre]
+            if fetch_n["n"] == 1
+            else [video_legacy_post, visit_legacy_post]
+        )
+        return MagicMock(data=data)
+
+    uploads_tbl.execute = uploads_execute
+
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    cap_tbl.execute = AsyncMock(return_value=MagicMock(data=[]))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+    qc_calls = []
+
+    async def fake_qc(job_id):
+        qc_calls.append(job_id)
+        return {"passed": 0, "rejected": 2}
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+
+    folded = asyncio.run(pp._fold_late_into_existing_delivery("job-ni", existing))
+
+    assert qc_calls == ["job-ni"]
+    # Rejected video pruned from delivery_urls; Visit never was a still row.
+    assert folded is True
+    urls = md_tbl.update.call_args[0][0]["delivery_urls"]
+    assert not any(u.get("upload_id") == "u-vid" for u in urls)
+

@@ -33,7 +33,7 @@ from ..services.media_intake import (
     pick_visit_upload,
 )
 from ..services.qc_agent import run_qc_for_job
-from ..services.qc_media_kinds import is_legacy_unreadable_floorplan_hold
+from ..services.qc_media_kinds import is_legacy_non_image_asset_pass, is_legacy_unreadable_floorplan_hold
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.auth import get_own_internal_api_key
 from ..shared.database import get_db
@@ -470,7 +470,7 @@ async def _fold_late_into_existing_delivery(
 
     Runs QC on listing stills / Visit files missing qc_status before fold, and
     re-checks floor plans still held as unreadable_image from the old listing-photo
-    QC; still no payout/client email. Owner gets a QC-hold notice only for files
+    QC plus Visit/video auto-passed as Non-image asset (pre-container QC); still no payout/client email. Owner gets a QC-hold notice only for files
     that just ran QC and were held.
     """
     db = await get_db()
@@ -543,17 +543,34 @@ async def _fold_late_into_existing_delivery(
             return False
         return True
 
+    def _ready_legacy_non_image_recheck(u: dict) -> bool:
+        """Visit/video auto-passed as Non-image asset — re-run container check.
+
+        Pre-container-QC rows keep qc_status=passed, so missing-qc predicates miss
+        them; without this a broken .ply/.mp4 stayed on the listing forever.
+        """
+        if not isinstance(u, dict):
+            return False
+        if u.get("processing_status") == "failed":
+            return False
+        if u.get("processing_status") in ("processing", "pending"):
+            return False
+        if not (u.get("processed_url") or u.get("file_url")):
+            return False
+        return is_legacy_non_image_asset_pass(u)
+
     need_qc = [
         u for u in (uploads or [])
         if _ready_still_missing_qc(u)
         or _ready_legacy_floorplan_unreadable_recheck(u)
         or _ready_visit_file_missing_qc(u)
+        or _ready_legacy_non_image_recheck(u)
     ]
     if need_qc:
         try:
             qc_counts = await run_qc_for_job(job_id)
             logger.info(
-                "Job %s: late-fold QC complete — %s (%s upload(s) needed QC / legacy floor-plan / Visit recheck)",
+                "Job %s: late-fold QC complete — %s (%s upload(s) needed QC / legacy floor-plan / Visit / Non-image recheck)",
                 job_id,
                 qc_counts,
                 len(need_qc),

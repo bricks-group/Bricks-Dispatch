@@ -252,6 +252,7 @@ async def run_qc_for_job(job_id: str) -> dict:
     image_upload_count = 0
 
     from .qc_media_kinds import (
+        is_legacy_non_image_asset_pass,
         is_legacy_unreadable_floorplan_hold,
         qc_kind_for_upload,
         run_floorplan_qc,
@@ -264,13 +265,15 @@ async def run_qc_for_job(job_id: str) -> dict:
         kind = qc_kind_for_upload(u)
 
         # Keep prior QC unless this is a stuck floor plan held as unreadable_image
-        # by the old listing-photo check (late-fold otherwise never re-runs it),
-        # or an unedited-original row that must stay stamped held.
+        # by the old listing-photo check, a Visit/video auto-passed as
+        # "Non-image asset — QC skipped" (pre-container QC), or an
+        # unedited-original row that must stay stamped held.
         existing_qc = str(u.get("qc_status") or "").strip()
         if existing_qc:
             is_original = str(u.get("provider") or "").lower() == "original"
             recheck_legacy_plan = kind == "floorplan" and is_legacy_unreadable_floorplan_hold(u)
-            if not recheck_legacy_plan and not (
+            recheck_legacy_non_image = kind in ("visit", "video") and is_legacy_non_image_asset_pass(u)
+            if not recheck_legacy_plan and not recheck_legacy_non_image and not (
                 is_original and is_listing_still_delivery_row(u)
             ):
                 st = existing_qc.lower()

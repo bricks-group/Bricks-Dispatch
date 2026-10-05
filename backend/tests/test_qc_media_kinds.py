@@ -431,3 +431,138 @@ def test_job_qc_rechecks_legacy_unreadable_floorplan_preserves_photo_hold(monkey
     assert summary["rejected"] == 2  # photo-hold + fp-blank tallied
     assert summary["passed"] == 2  # photo-ok + fp-stuck
 
+def test_legacy_non_image_asset_pass_predicate():
+    """Only Visit/video auto-passed as Non-image asset are eligible to recheck."""
+    f = qmk.is_legacy_non_image_asset_pass
+    assert f({
+        "filename": "scan.splat",
+        "qc_status": "passed",
+        "qc_notes": "Non-image asset — QC skipped",
+        "provider": "visit",
+    })
+    assert f({
+        "filename": "DJI_0001.MP4",
+        "qc_status": "passed",
+        "qc_notes": "Non-image asset — QC skipped",
+    })
+    assert f({
+        "filename": "room.ply",
+        "qc_status": "passed",
+        "qc_notes": "Non-image asset - QC skipped",  # dash variant in lower()
+        "provider": "visit",
+    })
+    # Honest Visit/video container pass — must not recheck
+    assert not f({
+        "filename": "scan.splat",
+        "qc_status": "passed",
+        "qc_notes": "Visit container OK (splat).",
+        "provider": "visit",
+    })
+    assert not f({
+        "filename": "reel_tour.mp4",
+        "qc_status": "passed",
+        "qc_notes": "Video container OK (MP4/MOV).",
+    })
+    # Photo / floor plan — never match
+    assert not f({
+        "filename": "kitchen.jpg",
+        "qc_status": "passed",
+        "qc_notes": "Non-image asset — QC skipped",
+    })
+    assert not f({
+        "filename": "floorplan.pdf",
+        "qc_status": "passed",
+        "qc_notes": "Non-image asset — QC skipped",
+    })
+    # Rejected Visit — not this legacy path (already held)
+    assert not f({
+        "filename": "scan.splat",
+        "qc_status": "rejected",
+        "qc_notes": "Non-image asset — QC skipped",
+        "provider": "visit",
+    })
+    assert not f({
+        "filename": "scan.splat",
+        "qc_status": "passed",
+        "qc_notes": "",
+        "provider": "visit",
+    })
+
+
+def test_job_qc_rechecks_legacy_non_image_visit_and_video(monkeypatch):
+    """Non-image auto-pass Visit/video are re-run; honest container passes stay."""
+    rows = [
+        {
+            "id": "visit-legacy",
+            "file_url": "raw/bad.splat",
+            "processed_url": "raw/bad.splat",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "Non-image asset — QC skipped",
+            "processing_status": "done",
+            "filename": "bad.splat",
+            "provider": "visit",
+        },
+        {
+            "id": "video-legacy",
+            "file_url": "raw/fake.mp4",
+            "processed_url": "raw/fake.mp4",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "Non-image asset — QC skipped",
+            "processing_status": "done",
+            "filename": "fake.mp4",
+            "provider": "as_is",
+        },
+        {
+            "id": "visit-ok",
+            "file_url": "raw/good.ply",
+            "processed_url": "raw/good.ply",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "Visit container OK (PLY).",
+            "processing_status": "done",
+            "filename": "good.ply",
+            "provider": "visit",
+        },
+        {
+            "id": "video-ok",
+            "file_url": "raw/good.mp4",
+            "processed_url": "raw/good.mp4",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "Video container OK (MP4/MOV).",
+            "processing_status": "done",
+            "filename": "good.mp4",
+            "provider": "as_is",
+        },
+        {
+            "id": "photo-ok",
+            "file_url": "out/living.jpg",
+            "processed_url": "out/living.jpg",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "OpenCV pre-pass: passed",
+            "processing_status": "done",
+            "filename": "living.jpg",
+            "provider": "bricks_inhouse",
+        },
+    ]
+    fetched = {
+        "bad.splat": b"<!DOCTYPE html><html>NoSuchKey</html>",
+        "fake.mp4": b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 40,
+        "good.ply": PLY_HEAD,
+        "good.mp4": MP4_HEAD,
+    }
+    qc_agent, writes, photo_reviewed = _install_job(monkeypatch, rows, fetched)
+    summary = _run(qc_agent.run_qc_for_job("job-nonimage"))
+
+    assert photo_reviewed == []
+    assert "visit-ok" not in writes
+    assert "video-ok" not in writes
+    assert "photo-ok" not in writes
+    assert writes["visit-legacy"]["qc_status"] == "rejected"
+    assert "error page" in writes["visit-legacy"]["qc_notes"].lower()
+    assert writes["video-legacy"]["qc_status"] == "rejected"
+    assert "still image" in writes["video-legacy"]["qc_notes"].lower()
+    assert summary["rejected"] >= 2
