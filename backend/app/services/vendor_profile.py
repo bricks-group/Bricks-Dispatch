@@ -195,11 +195,17 @@ def vendor_skills(member: Any) -> set[str]:
             skills.add("photo")
         if key in ("virtual", "3d", "polycam"):
             skills.add("tour")
+        # www / Companion cinematic reel — never leave a non-SKILL_KEYS "video"
+        # label that hard-gates assign against reel-capable vendors.
+        if key in ("video", "cinematic", "cinematic_reel"):
+            skills.add("reel")
     spec = str(m.get("specialty") or "").strip().lower()
     if spec in ("photo", "photography", "photos"):
         skills.add("photo")
     elif spec == "virtual":
         skills.add("tour")
+    elif spec in ("video", "cinematic", "cinematic_reel", "reel"):
+        skills.add("reel")
     elif spec:
         skills.add(spec)
     if m.get("drone_certified") or has_advanced_rpas(m):
@@ -249,6 +255,10 @@ def job_required_skills(job: Any) -> set[str]:
         skills.add("photo")
     elif jt == "virtual":
         skills.add("tour")
+    elif jt in ("reel", "video", "cinematic", "cinematic_reel"):
+        # SKILL_KEYS has reel, not video. Pre-fa52afd Companion Story/Showcase/Suite
+        # stamped job_type=video and hard-gated assign against reel vendors.
+        skills.add("reel")
     elif jt in ("stager", "staging", "cleaner", "cleaning"):
         pass
     else:
@@ -257,7 +267,12 @@ def job_required_skills(job: Any) -> set[str]:
     blob = " ".join(keys) + " " + jt
     if jt == "drone" or "drone" in keys:
         skills.add("drone")
-    if "reel" in blob:
+    # Cinematic reel aliases (www / Companion / media_intake portfolio lockstep).
+    if (
+        "reel" in blob
+        or keys & {"reel", "video", "cinematic", "cinematic_reel"}
+        or jt in ("reel", "video", "cinematic", "cinematic_reel")
+    ):
         skills.add("reel")
     if "tour" in blob or "virtual" in blob:
         skills.add("tour")
