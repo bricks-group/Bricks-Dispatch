@@ -254,6 +254,7 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
         "This looks like a weak fit.\n"
         "- Equipment does not look suitable for this work.\n"
         "- The portfolio does not look like a fit for this work.\n"
+        "https://portfolio.example.com/alex\n"
         "Pending your approval."
     )
     assert db.email.await_count == 1
@@ -270,7 +271,7 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     assert "Drone certification does not look like a fit" not in html
     assert "Portfolio:" in html
     assert "https://portfolio.example.com/alex" in html
-    assert "https://portfolio.example.com/alex" not in sms_body
+    assert "\nhttps://portfolio.example.com/alex\n" in sms_body
     assert db.email.await_args.kwargs["to"] == "admin@brxs.ca"
     assert "cc" not in db.email.await_args.kwargs
     assert "bcc" not in db.email.await_args.kwargs
@@ -311,7 +312,8 @@ async def test_jev_failure_still_notifies_and_stays_pending(monkeypatch, mode):
     assert db.sms.call_count == 1
     sms_body = db.sms.call_args.args[1]
     assert sms_body == (
-        "New Bricks photographer application: Alex Rivera in Toronto. "
+        "New Bricks photographer application: Alex Rivera in Toronto.\n"
+        "https://portfolio.example.com/alex\n"
         "Pending your approval."
     )
     assert "weak fit" not in sms_body
@@ -415,8 +417,32 @@ def test_fit_sentences_and_reason_bullets():
     assert "https://cdn.example.com/sample.jpg" in mailed
     assert "storage/key" not in mailed
     assert "alex.rivera.example@example.com" not in mailed
+    sms_link = vendor_application_sms_body(
+        "Alex Rivera",
+        "Toronto",
+        "photographer",
+        None,
+        (),
+        [
+            "https://portfolio.example.com/alex",
+            "storage/key/not-a-link",
+            "alex.rivera.example@example.com",
+        ],
+    )
+    assert sms_link == (
+        "New Bricks photographer application: Alex Rivera in Toronto.\n"
+        "https://portfolio.example.com/alex\n"
+        "Pending your approval."
+    )
+    sms_none = vendor_application_sms_body(
+        "Alex Rivera", "Toronto", "photographer", None, (), ["storage/key/not-a-link"]
+    )
+    assert sms_none == (
+        "New Bricks photographer application: Alex Rivera in Toronto. Pending your approval."
+    )
+    assert "http" not in sms_none
     assert "weak fit" not in mailed
-    for copy in (sms, email, bare, silent, mailed):
+    for copy in (sms, email, bare, silent, mailed, sms_link, sms_none):
         _assert_plain_copy(copy)
         _assert_no_printed_score(copy)
 

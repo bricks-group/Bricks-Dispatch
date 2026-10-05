@@ -245,18 +245,27 @@ def _human_reason_lines(yes_probability, reasons) -> list:
     return lines
 
 
-def vendor_application_sms_body(name: str, city: str, vendor_type: str, yes_probability, reasons=()) -> str:
-    """Owner text. Fit sentence and plain bullets only when there is a score."""
+def vendor_application_sms_body(
+    name: str,
+    city: str,
+    vendor_type: str,
+    yes_probability,
+    reasons=(),
+    portfolio_links=(),
+) -> str:
+    """Owner text. Fit sentence and bullets when there is a score. Public portfolio URL on its own line."""
     who = (name or "").strip() or "Someone"
     where = (city or "").strip() or "an unknown city"
     kind = (vendor_type or "").strip() or "vendor"
     fit = vendor_application_fit_line(yes_probability)
     head = f"New Bricks {kind} application: {who} in {where}."
     bullets = _human_reason_lines(yes_probability, reasons)
-    if not fit:
+    urls = _public_portfolio_urls(portfolio_links)
+    if not fit and not urls:
         return f"{head} Pending your approval."
-    parts = [f"{head} {fit}"]
+    parts = [f"{head} {fit}"] if fit else [head]
     parts.extend(f"- {line}" for line in bullets)
+    parts.extend(urls)
     parts.append("Pending your approval.")
     return "\n".join(parts)
 
@@ -266,9 +275,9 @@ def vendor_application_email_subject(name: str) -> str:
     return f"New vendor application pending your approval: {who}"
 
 
-def _portfolio_lines(portfolio_links) -> list:
-    """Public portfolio URLs only. Not an email address and not a phone."""
-    lines = []
+def _public_portfolio_urls(portfolio_links) -> list:
+    """Public http(s) portfolio URLs only. Not an email address and not a phone."""
+    urls = []
     seen = set()
     for raw in portfolio_links or ():
         url = " ".join(str(raw or "").split())
@@ -277,10 +286,15 @@ def _portfolio_lines(portfolio_links) -> list:
         if "@" in url or url in seen:
             continue
         seen.add(url)
-        lines.append(url)
-    if not lines:
+        urls.append(url)
+    return urls
+
+
+def _portfolio_lines(portfolio_links) -> list:
+    urls = _public_portfolio_urls(portfolio_links)
+    if not urls:
         return []
-    return ["Portfolio:", *lines]
+    return ["Portfolio:", *urls]
 
 
 def vendor_application_email_body(
@@ -321,7 +335,7 @@ async def notify_owner_vendor_application(
     """
     from ..shared.job_scope import KAM_MEMBER_ID
 
-    sms_body = vendor_application_sms_body(name, city, vendor_type, yes_probability, reasons)
+    sms_body = vendor_application_sms_body(name, city, vendor_type, yes_probability, reasons, portfolio_links)
     phone = ""
     try:
         res = await db.table("vendor_members").select("phone").eq(
