@@ -22,6 +22,13 @@ from ..services.post_production import process_job_assets
 from fastapi import BackgroundTasks
 from ..shared.auth import get_vendor_member, resolve_vendor_actor_id
 from ..shared.database import get_db
+
+
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row."""
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
 from ..shared.errors import api_error
 from ..shared.schemas import UploadRecord
 
@@ -58,7 +65,7 @@ async def _actor_job(authorization, x_user_id, job_id: str):
         res_job = await db.table("jobs").select(
             "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
         ).eq("id", job_id).maybe_single().execute()
-        job = res_job.data or {}
+        job = _maybe_single_row(res_job)
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
         if not _is_rest_quota_error(e):
@@ -234,7 +241,7 @@ async def complete_stills_upload(
         res_fresh = await db.table("jobs").select(
             "status, deliverables_count, uploaded_count"
         ).eq("id", job_id).maybe_single().execute()
-        fresh = res_fresh.data or job
+        fresh = _maybe_single_row(res_fresh) or job
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
         if _is_rest_quota_error(e):
@@ -294,7 +301,7 @@ async def list_uploads(
         job = {}
         try:
             res_job = await sb.table("jobs").select("id, vendor_id, assignee_id").eq("id", job_id).maybe_single().execute()
-            job = res_job.data or {}
+            job = _maybe_single_row(res_job)
         except Exception as e:
             from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
             if not _is_rest_quota_error(e):
@@ -368,7 +375,7 @@ async def create_upload(
         res_job = await db.table("jobs").select(
             "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
         ).eq("id", job_id).maybe_single().execute()
-        job_row = res_job.data or {}
+        job_row = _maybe_single_row(res_job)
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
         if not _is_rest_quota_error(e):
@@ -436,7 +443,7 @@ async def create_upload(
         job_status = job_row.get("status", "")
         try:
             res_fresh = await db.table("jobs").select("status").eq("id", job_id).maybe_single().execute()
-            job_status = (res_fresh.data or {}).get("status", "") or job_status
+            job_status = _maybe_single_row(res_fresh).get("status", "") or job_status
         except Exception as e:
             from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
             if _is_rest_quota_error(e):
@@ -470,14 +477,15 @@ async def get_upload(
 
     db = await get_db()
     res = await db.table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
-    if not res.data:
+    upload_row = _maybe_single_row(res)
+    if not upload_row:
         api_error(404, "Upload not found", "upload_not_found")
 
-    res_job = await db.table("jobs").select("id").eq("id", res.data["job_id"]).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
+    res_job = await db.table("jobs").select("id").eq("id", upload_row["job_id"]).eq("vendor_id", vendor_id).maybe_single().execute()
+    if not _maybe_single_row(res_job):
         api_error(404, "Upload not found", "upload_not_found")
 
-    return res.data
+    return upload_row
 
 
 @router.delete("/{upload_id}")
@@ -497,21 +505,23 @@ async def delete_upload(
 
     # Fetch the upload to find its job_id
     res_upload = await db.table("uploads").select("id, job_id").eq("id", upload_id).maybe_single().execute()
-    if not res_upload.data:
+    upload_row = _maybe_single_row(res_upload)
+    if not upload_row:
         api_error(404, "Upload not found", "upload_not_found")
 
-    upload_job_id = res_upload.data["job_id"]
+    upload_job_id = upload_row["job_id"]
 
     # Verify the job belongs to this vendor
     res_job = await db.table("jobs").select("id, uploaded_count").eq("id", upload_job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
+    job_row = _maybe_single_row(res_job)
+    if not job_row:
         api_error(404, "Job not found", "job_not_found")
 
     # Delete the upload record
     await db.table("uploads").delete().eq("id", upload_id).execute()
 
     # Decrement job.uploaded_count (floor at 0)
-    current = res_job.data.get("uploaded_count") or 0
+    current = job_row.get("uploaded_count") or 0
     new_count = max(current - 1, 0)
     await db.table("jobs").update({
         "uploaded_count": new_count,

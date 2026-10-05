@@ -22,6 +22,12 @@ from ..shared.schemas import PushTokenRegister
 router = APIRouter(prefix="/api", tags=["notifications"])
 
 
+
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row."""
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
 async def _actor(authorization: Optional[str], x_user_id: Optional[str]) -> str:
     return await resolve_vendor_actor_id(authorization, x_user_id)
 
@@ -96,7 +102,7 @@ async def mark_one_read(
     row: dict = {}
     try:
         res = await db.table("notifications").select("*").eq("id", notification_id).maybe_single().execute()
-        row = res.data or {}
+        row = _maybe_single_row(res)
     except Exception as exc:
         from ..shared.pg_fallback import (
             _is_rest_quota_error,

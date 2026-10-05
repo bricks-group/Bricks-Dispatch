@@ -65,7 +65,8 @@ async def stripe_connect_webhook(
         res = await db.table("contractors").select("id").eq(
             "stripe_account_id", account_id
         ).maybe_single().execute()
-        row = res.data or {}
+        data = getattr(res, "data", None) if res is not None else None
+        row = data if isinstance(data, dict) else {}
     except Exception as e:
         if _is_rest_quota_error(e):
             row = pg_select_contractor_by_stripe_account_id(account_id) or {}

@@ -661,9 +661,12 @@ async def attach_job_listing(
         if office_id:
             tq = tq.eq("brokerage_id", office_id)
         t_res = await tq.maybe_single().execute()
-        if not t_res.data:
+        # maybe_single() is None when the listing/transaction row is missing —
+        # None.data was a CORS-less 500 instead of the 404 below.
+        txn_row = _maybe_single_row(t_res)
+        if not txn_row:
             api_error(404, "Listing not found", "listing_not_found")
-        listing = _listing_public(t_res.data)
+        listing = _listing_public(txn_row)
 
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({
@@ -786,7 +789,7 @@ async def assign_job_to_member(
     db = await get_db()
     try:
         res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        existing_job = res_job.data or {}
+        existing_job = _maybe_single_row(res_job)
     except Exception as e:
         # Fair-Use: PostgREST job reads 402 — load via Postgres so Owner assign still works.
         if not _is_rest_quota_error(e):
@@ -797,7 +800,7 @@ async def assign_job_to_member(
     if member_id and member_id.lower() not in ("auto", "unassign", "none", "null"):
         try:
             res_member = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-            target = res_member.data
+            target = _maybe_single_row(res_member) or None
         except Exception as e:
             if not _is_rest_quota_error(e):
                 raise
@@ -841,7 +844,7 @@ async def assign_job_to_member(
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if member_id == "auto" else "manual"})
     try:
         res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        final = res_final.data or {}
+        final = _maybe_single_row(res_final)
     except Exception as e:
         if not _is_rest_quota_error(e):
             raise
@@ -860,7 +863,7 @@ async def assign_job_to_member(
     if new_assignee_id:
         try:
             named = await db.table("vendor_members").select("id, name").eq("id", new_assignee_id).maybe_single().execute()
-            final["assignee_name"] = (named.data or {}).get("name") or "Unassigned"
+            final["assignee_name"] = _maybe_single_row(named).get("name") or "Unassigned"
         except Exception as e:
             if _is_rest_quota_error(e):
                 named_row = pg_select_vendor_member(new_assignee_id) or {}
@@ -1517,7 +1520,7 @@ async def get_vendor_performance(
     # Recomputing from job.updated_at here is inaccurate for delivered jobs where updated_at
     # reflects delivery time (hours later), not completion time.
     res_member = await (await get_db()).table("vendor_members").select("on_time_rate").eq("id", actor_id).maybe_single().execute()
-    on_time_rate_pct = round(((res_member.data or {}).get("on_time_rate") or 0) * 100, 1)
+    on_time_rate_pct = round((_maybe_single_row(res_member).get("on_time_rate") or 0) * 100, 1)
     return {
         "completion_rate": round((len(completed) / len(week_jobs) * 100), 1) if week_jobs else 0.0,
         "on_time_rate": on_time_rate_pct,
@@ -1534,7 +1537,9 @@ async def get_vendor_settings(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
-    settings = res.data
+    # New vendors have no settings row yet — None.data was a CORS-less 500
+    # before the default-insert branch could run.
+    settings = _maybe_single_row(res)
     if not settings:
         default = VendorSettings(vendor_id=vendor_id).dict()
         await (await get_db()).table("vendor_settings").insert(default).execute()
@@ -1565,7 +1570,11 @@ async def update_vendor_settings(
     
     await write_audit_event(actor_id, "settings", vendor_id, "update", vendor_id=vendor_id, details=update_data)
     res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
-    return res.data
+    # Upsert already wrote; a null re-read must not 500 — return merged defaults.
+    row = _maybe_single_row(res)
+    if row:
+        return row
+    return {**VendorSettings(vendor_id=vendor_id).dict(), **update_data}
 
 
 # ---------------------------------------------------------------------------
@@ -1850,7 +1859,7 @@ async def update_vendor_job_status(
                     res_m = await db.table("vendor_members").select(
                         "total_assignments, on_time_rate"
                     ).eq("id", assignee_id).maybe_single().execute()
-                    member_row = res_m.data
+                    member_row = _maybe_single_row(res_m) or None
                 except Exception as e:
                     if not _is_rest_quota_error(e):
                         raise
@@ -2043,7 +2052,7 @@ async def _validate_noshow_claim(
     existing = await db.table("agent_noshow_trip_fees").select("id, status").eq(
         "job_id", job_id
     ).maybe_single().execute()
-    if existing.data:
+    if _maybe_single_row(existing):
         return {"ok": False, "reason": "A no-show claim already exists for this job"}
 
     # Gate 4: time window — claim must be filed within T-15 to T+90 of shoot start.
@@ -2156,9 +2165,10 @@ async def _validate_noshow_claim(
             res_b = await db.table("bookings").select("status, cancelled_at").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            if res_b.data:
-                bk_status = res_b.data.get("status", "")
-                cancelled_at = res_b.data.get("cancelled_at")
+            bk_row = _maybe_single_row(res_b)
+            if bk_row:
+                bk_status = bk_row.get("status", "")
+                cancelled_at = bk_row.get("cancelled_at")
                 if bk_status == "cancelled" and cancelled_at:
                     try:
                         cancel_dt = datetime.fromisoformat(cancelled_at.replace("Z", "+00:00"))
@@ -2204,7 +2214,7 @@ async def _validate_noshow_claim(
             res_this_bk = await db.table("bookings").select("user_id").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            agent_user_id = (res_this_bk.data or {}).get("user_id") if res_this_bk.data else None
+            agent_user_id = _maybe_single_row(res_this_bk).get("user_id")
             if agent_user_id:
                 res_agent_bks = await db.table("bookings").select("id").eq(
                     "user_id", agent_user_id
@@ -2259,9 +2269,9 @@ async def escalate_absent_agent(
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    job = res_job.data
 
     if job.get("assignee_id") != actor_id:
         raise HTTPException(status_code=403, detail="Not assigned to this job")
@@ -2296,14 +2306,15 @@ async def escalate_absent_agent(
             res_bk = await db.table("bookings").select("user_id").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            if res_bk.data:
-                user_id = res_bk.data.get("user_id")
+            bk_row = _maybe_single_row(res_bk)
+            if bk_row:
+                user_id = bk_row.get("user_id")
                 if user_id:
                     res_user = await db.table("users").select("phone").eq(
                         "id", user_id
                     ).maybe_single().execute()
-                    if res_user.data:
-                        agent_phone = res_user.data.get("phone")
+                    # Missing user row: skip SMS notify, do not 500.
+                    agent_phone = _maybe_single_row(res_user).get("phone")
         except Exception as e:
             logger.warning(f"Could not fetch agent phone for escalation (job {job_id}): {e}")
 
@@ -2373,10 +2384,10 @@ async def report_agent_no_show(
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = res_job.data
     vendor_id = job.get("vendor_id", "default_vendor")
     assignee_id = job.get("assignee_id")
     booking_id = job.get("booking_id")
@@ -2478,10 +2489,10 @@ async def report_contractor_no_show(
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = res_job.data
     assignee_id = job.get("assignee_id")
     now = datetime.now(timezone.utc).isoformat()
 
@@ -2490,10 +2501,12 @@ async def report_contractor_no_show(
             res_m = await db.table("vendor_members").select(
                 "total_assignments, cancel_rate, on_time_rate"
             ).eq("id", assignee_id).maybe_single().execute()
-            if res_m.data:
-                prev_total = res_m.data.get("total_assignments") or 0
+            # Missing member row: skip cancel_rate update, do not 500.
+            m_row = _maybe_single_row(res_m)
+            if m_row:
+                prev_total = m_row.get("total_assignments") or 0
                 total = prev_total + 1
-                prev_cancel = res_m.data.get("cancel_rate") or 0.0
+                prev_cancel = m_row.get("cancel_rate") or 0.0
                 prev_cancels = round(prev_cancel * prev_total)
                 new_cancel_rate = round((prev_cancels + 1) / total, 4)
                 # on_time_rate is NOT updated here — contractor no-shows are cancellations,

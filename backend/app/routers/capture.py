@@ -247,6 +247,12 @@ def _shape_session(
     }
 
 
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row."""
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
+
 async def _actor_and_job(
     authorization: Optional[str],
     x_user_id: Optional[str],
@@ -781,7 +787,7 @@ async def commit_frame(
             session_res = await db.table("capture_sessions").select("*").eq("id", session_id).eq(
                 "job_id", job_id
             ).maybe_single().execute()
-            session = session_res.data or {}
+            session = _maybe_single_row(session_res)
         except Exception as e:
             from ..shared.pg_fallback import _is_rest_quota_error
             from ..shared.pg_capture import pg_select_session_by_id
@@ -850,7 +856,7 @@ async def commit_frame(
                 room_res = await db.table("capture_rooms").select("id, frames").eq("id", room_id).eq(
                     "session_id", session_id
                 ).maybe_single().execute()
-                room = room_res.data or {}
+                room = _maybe_single_row(room_res)
             except Exception as e:
                 from ..shared.pg_fallback import _is_rest_quota_error
                 from ..shared.pg_capture import pg_select_rooms
@@ -1293,7 +1299,7 @@ async def submit_session(
 async def _session_by_id(db, session_id: str) -> Optional[dict]:
     try:
         res = await db.table("capture_sessions").select("*").eq("id", session_id).maybe_single().execute()
-        return res.data or None
+        return _maybe_single_row(res) or None
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error
         from ..shared.pg_capture import pg_select_session_by_id

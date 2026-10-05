@@ -36,6 +36,18 @@ from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
 from ..shared.auth import get_own_internal_api_key
 from ..shared.database import get_db
 
+
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row.
+
+    Reading .data on that None is AttributeError (CORS-less HTTP 500). Treat
+    null/non-dict data as no row so enhance-provider webhooks can ignore
+    unknown ids with the existing 2xx received:true convention.
+    """
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/post-production", tags=["post-production"])
@@ -638,7 +650,7 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
         existing_delivery = await db.table("media_delivery").select(
             "id, delivery_urls"
         ).eq("job_id", job_id).maybe_single().execute()
-        existing = existing_delivery.data
+        existing = _maybe_single_row(existing_delivery) or None
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_media_delivery_by_job_id
         if not _is_rest_quota_error(e):
@@ -878,7 +890,7 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
     job = {}
     try:
         res_job = await db.table("jobs").select("booking_id, address").eq("id", job_id).maybe_single().execute()
-        job = res_job.data or {}
+        job = _maybe_single_row(res_job)
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
         if not _is_rest_quota_error(e):
@@ -958,12 +970,13 @@ async def fotello_callback(
 
     db = await get_db()
     res = await db.table("uploads").select("id, job_id").eq("provider_job_id", provider_job_id).eq("provider", "fotello").maybe_single().execute()
-    if not res.data:
+    row = _maybe_single_row(res)
+    if not row:
         logger.warning(f"Fotello callback: no upload found for provider_job_id={provider_job_id}")
         return {"received": True}
 
-    upload_id = res.data["id"]
-    job_id = res.data["job_id"]
+    upload_id = row["id"]
+    job_id = row["job_id"]
 
     await _mark_upload_done(upload_id, processed_url)
     # Await in-request: Vercel serverless drops FastAPI BackgroundTasks after the HTTP
@@ -1000,12 +1013,13 @@ async def autoenhance_callback(
 
     db = await get_db()
     res = await db.table("uploads").select("id, job_id").eq("provider_job_id", provider_job_id).eq("provider", "autoenhance").maybe_single().execute()
-    if not res.data:
+    row = _maybe_single_row(res)
+    if not row:
         logger.warning(f"Autoenhance callback: no upload for provider_job_id={provider_job_id}")
         return {"received": True}
 
-    upload_id = res.data["id"]
-    job_id = res.data["job_id"]
+    upload_id = row["id"]
+    job_id = row["job_id"]
 
     await _mark_upload_done(upload_id, processed_url)
     # Await in-request: Vercel serverless drops FastAPI BackgroundTasks after the HTTP
@@ -1047,12 +1061,13 @@ async def boxbrownie_callback(
 
     db = await get_db()
     res = await db.table("uploads").select("id, job_id").eq("provider_job_id", provider_job_id).eq("provider", "boxbrownie").maybe_single().execute()
-    if not res.data:
+    row = _maybe_single_row(res)
+    if not row:
         logger.warning(f"BoxBrownie callback: no upload found for provider_job_id={provider_job_id}")
         return {"received": True}
 
-    upload_id = res.data["id"]
-    job_id = res.data["job_id"]
+    upload_id = row["id"]
+    job_id = row["job_id"]
 
     await _mark_upload_done(upload_id, processed_url)
     # Await in-request: Vercel serverless drops FastAPI BackgroundTasks after the HTTP

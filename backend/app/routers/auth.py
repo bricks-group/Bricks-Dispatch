@@ -41,7 +41,9 @@ async def vendor_os_verify(payload: dict):
             from ..shared.job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
             db = await get_db()
             member_res = await db.table("vendor_members").select("*").eq("id", user.id).maybe_single().execute()
-            rows = [member_res.data] if member_res.data else []
+            # maybe_single() is None when no member row — None.data was AttributeError.
+            _mdata = getattr(member_res, "data", None) if member_res is not None else None
+            rows = [_mdata] if isinstance(_mdata, dict) else []
             if user.email:
                 by_email = await db.table("vendor_members").select("*").ilike("email", user.email).limit(10).execute()
                 for row in by_email.data or []:
@@ -49,8 +51,9 @@ async def vendor_os_verify(payload: dict):
                         rows.append(row)
             if (user.email or "").lower() in KAM_EMAILS or str(user.id).lower().startswith("0c3fa7c2"):
                 kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
-                if kam.data and kam.data.get("id") not in {r.get("id") for r in rows}:
-                    rows.append(kam.data)
+                _kdata = getattr(kam, "data", None) if kam is not None else None
+                if isinstance(_kdata, dict) and _kdata.get("id") not in {r.get("id") for r in rows}:
+                    rows.append(_kdata)
             picked = pick_canonical_member(rows, user.id, user.email or "")
             if not picked:
                 await db.table("vendor_members").insert({

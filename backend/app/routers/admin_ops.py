@@ -6,6 +6,13 @@ from fastapi import APIRouter, Header, HTTPException
 
 from ..shared.auth import is_vendor_admin, get_vendor_member, resolve_vendor_actor_id, require_vendor_admin
 from ..shared.database import get_db
+
+
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row."""
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import VendorMemberUpdate, VendorLead
@@ -177,7 +184,8 @@ async def _require_applicant_in_own_vendor(db, member_id: str, vendor_id: str):
     applicant documents by guessing/observing a member_id, not just their own
     vendor's. Fail closed if the applicant isn't in the caller's vendor org."""
     res = await db.table("vendor_members").select("vendor_id").eq("id", member_id).maybe_single().execute()
-    if not res.data or res.data.get("vendor_id") != vendor_id:
+    row = _maybe_single_row(res)
+    if not row or row.get("vendor_id") != vendor_id:
         api_error(404, "Applicant not found", "applicant_not_found")
 
 @router.get("/applicants/{member_id}/documents")
@@ -269,7 +277,7 @@ async def validate_rpas_batch(
         member_id = doc["member_id"]
         try:
             res_m = await db.table("vendor_members").select("name").eq("id", member_id).maybe_single().execute()
-            vendor_name = (res_m.data or {}).get("name", "")
+            vendor_name = _maybe_single_row(res_m).get("name", "")
 
             image_url = await get_signed_download_url(doc["file_url"])
             if not image_url:
@@ -376,10 +384,9 @@ async def review_noshow_claim(
     res_claim = await db.table("agent_noshow_trip_fees").select("*").eq(
         "id", claim_id
     ).maybe_single().execute()
-    if not res_claim.data:
+    claim = _maybe_single_row(res_claim)
+    if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
-
-    claim = res_claim.data
     if claim.get("status") != "pending_review":
         raise HTTPException(
             status_code=409,
@@ -484,8 +491,9 @@ async def reconcile_noshow_claims(
             res_bk = await db.table("bookings").select(
                 "id, status"
             ).eq("id", booking_id).maybe_single().execute()
+            bk_row = _maybe_single_row(res_bk)
 
-            if not res_bk.data:
+            if not bk_row:
                 mismatches.append({
                     "type": "booking_missing",
                     "fee_id": fee["id"],
@@ -494,7 +502,7 @@ async def reconcile_noshow_claims(
                 })
                 continue
 
-            bk_status = res_bk.data.get("status", "")
+            bk_status = bk_row.get("status", "")
             # pending_review fees are held for admin approval; the Booking retention webhook
             # fires only after approval — these are expected not to show retained yet.
             if fee.get("status") == "pending_review":
@@ -752,7 +760,7 @@ async def manual_reassign_dispatch_failure(
     job_row = None
     try:
         res = await db.table("jobs").select("id, status").eq("id", job_id).maybe_single().execute()
-        job_row = res.data
+        job_row = _maybe_single_row(res) or None
     except Exception as e:
         if not _is_rest_quota_error(e):
             raise
