@@ -25,7 +25,7 @@ from typing import Optional
 
 import httpx
 
-from .media_intake import VIDEO_EXTS, is_listing_still_delivery_row, is_visit_file
+from .media_intake import is_listing_still_delivery_row, is_visit_file
 from .qc_vision_provider import is_configured as _vision_qc_configured, run_vision_qc
 
 logger = logging.getLogger(__name__)
@@ -251,10 +251,13 @@ async def run_qc_for_job(job_id: str) -> dict:
     counts = {"total": 0, "passed": 0, "flagged": 0, "rejected": 0}
     image_upload_count = 0
 
+    from .qc_media_kinds import qc_kind_for_upload, run_floorplan_qc, run_video_qc
+
     for u in uploads:
         filename = (u.get("filename") or "").lower()
-        # Skip Visit/3D + video — not reviewable by vision model
-        if is_visit_file(filename) or filename.endswith(VIDEO_EXTS):
+        kind = qc_kind_for_upload(u)
+        # Visit/3D splats are not a viewable listing file — not reviewed here.
+        if kind == "visit" or is_visit_file(filename):
             await db.table("uploads").update({
                 "qc_status": "passed",
                 "qc_score": 100,
@@ -263,6 +266,30 @@ async def run_qc_for_job(job_id: str) -> dict:
             }).eq("id", u["id"]).execute()
             counts["passed"] += 1
             counts["total"] += 1
+            continue
+
+        # Drone / reel video and floor plans get their own check (can hold the
+        # file back) instead of the listing-photo check. Not counted toward the
+        # package photo count.
+        if kind in ("video", "floorplan") and is_listing_still_delivery_row(u):
+            src = u.get("processed_url") or u.get("file_url")
+            if not src:
+                continue
+            signed = src if str(src).startswith("https://") else await get_signed_download_url(src, expiry=300)
+            if not signed:
+                continue
+            if kind == "video":
+                qc = await run_video_qc(u["id"], signed)
+            else:
+                qc = await run_floorplan_qc(u["id"], signed, filename=u.get("filename") or "")
+            await db.table("uploads").update({
+                "qc_status": qc["qc_status"],
+                "qc_score": qc["qc_score"],
+                "qc_notes": qc["qc_notes"],
+                "qc_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", u["id"]).execute()
+            counts["total"] += 1
+            counts[qc["qc_status"]] = counts.get(qc["qc_status"], 0) + 1
             continue
 
         # HDR bracket siblings (non-primary exposures) share the primary's

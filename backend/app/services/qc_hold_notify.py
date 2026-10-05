@@ -1,4 +1,4 @@
-"""Tell the owner when automatic QC holds listing stills back.
+"""Tell the owner when automatic QC holds listing files back.
 
 Kam rule: QC can hold a file back from client delivery. A hold nobody hears
 about is a silent short delivery, so text the owner profile phone and email
@@ -45,18 +45,29 @@ def held_rows(uploads, only_ids: Optional[Iterable[str]] = None) -> list[dict]:
     return out
 
 
-def qc_hold_sms_body(address: str, held_count: int) -> str:
+def photos_only(rows) -> bool:
+    """True when every held row is a listing photo (not a video / floor plan)."""
+    from .qc_media_kinds import qc_kind_for_upload
+
+    return all(qc_kind_for_upload(u) == "still" for u in rows or [])
+
+
+def _noun(held_count: int, photos: bool) -> str:
+    base = "photo" if photos else "file"
+    return base if held_count == 1 else f"{base}s"
+
+
+def qc_hold_sms_body(address: str, held_count: int, photos: bool = True) -> str:
     place = (address or "").strip() or "a property"
-    noun = "photo" if held_count == 1 else "photos"
+    noun = _noun(held_count, photos)
     return (
         f"Bricks QC held back {held_count} listing {noun} at {place}. "
         "They were not sent to the client. Details went to the admin inbox."
     )
 
 
-def qc_hold_email_subject(held_count: int) -> str:
-    noun = "photo" if held_count == 1 else "photos"
-    return f"Bricks QC held back {held_count} listing {noun}"
+def qc_hold_email_subject(held_count: int, photos: bool = True) -> str:
+    return f"Bricks QC held back {held_count} listing {_noun(held_count, photos)}"
 
 
 def qc_hold_email_body(job: dict, rows: list[dict]) -> str:
@@ -66,8 +77,9 @@ def qc_hold_email_body(job: dict, rows: list[dict]) -> str:
     address = (job.get("address") or "").strip() or "n/a"
     when = (job.get("scheduled_date") or "").strip() or "n/a"
     booking_ref = short_booking_ref(job.get("booking_id"))
+    noun = "photos" if photos_only(rows) else "files"
     lines = [
-        "Automatic QC held these listing photos back. They were not sent to the client.",
+        f"Automatic QC held these listing {noun} back. They were not sent to the client.",
         f"Address: {address}",
         f"Date: {when}",
         f"Booking ref: {booking_ref}",
@@ -160,6 +172,7 @@ async def notify_owner_qc_hold(
         if not rows:
             return False
         job = await _job_row(db, job_id)
+        photos = photos_only(rows)
         sent = False
 
         phone = await _owner_phone(db)
@@ -167,7 +180,7 @@ async def notify_owner_qc_hold(
             try:
                 from ..notifications import send_dispatch_sms
 
-                if send_dispatch_sms(phone, qc_hold_sms_body(job.get("address") or "", len(rows))):
+                if send_dispatch_sms(phone, qc_hold_sms_body(job.get("address") or "", len(rows), photos)):
                     sent = True
             except Exception as e:
                 logger.error("QC hold SMS failed for job %s: %s", job_id, type(e).__name__)
@@ -175,7 +188,7 @@ async def notify_owner_qc_hold(
         try:
             from .notifications import _build_html_email, send_email_via_resend
 
-            subject = qc_hold_email_subject(len(rows))
+            subject = qc_hold_email_subject(len(rows), photos)
             ok = await send_email_via_resend(
                 to=QC_HOLD_ADMIN_EMAIL,
                 subject=subject,
