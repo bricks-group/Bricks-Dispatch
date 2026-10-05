@@ -57,6 +57,25 @@ def stills_provider_preference() -> str:
     return "inhouse"
 
 
+UNEDITED_ORIGINAL_QC_NOTE = (
+    "Auto-edit failed — unedited original held. Every listing still must be "
+    "auto-edited before client delivery."
+)
+
+
+def unedited_original_hold() -> dict:
+    """QC hold for a listing still whose auto-edit failed (provider=original).
+
+    Kam rule: every client deliverable is auto-edited; automatic QC can hold a
+    file back. run_qc_for_job preserves this hold (does not re-score it to pass).
+    """
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": UNEDITED_ORIGINAL_QC_NOTE,
+    }
+
+
 def prefer_autoenhance_stills() -> bool:
     """True only when env explicitly selects Autoenhance for leftover stills."""
     return stills_provider_preference() == "autoenhance"
@@ -389,9 +408,25 @@ async def deliver_bracket_group_without_vendor(
         processed = await upload_enhanced(db.storage, job_id, primary_id, enhanced)
         qc_path = await upload_qc_variant(db.storage, job_id, primary_id, enhanced)
     except Exception as e:
-        logger.error(f"Bracket enhance failed for job {job_id}: {e} — delivering originals")
+        # Never spray every exposure (−2…+2 EV) onto the listing as separate stills.
+        # Single-frame auto-edit the primary (closest to 0 EV); siblings share its
+        # result. If single-frame enhance also fails, the primary is QC-held
+        # (unedited original) by deliver_asset_without_vendor.
+        logger.error(
+            f"Bracket enhance failed for job {job_id}: {e} — single-frame primary "
+            f"{primary_id}; {len(loaded) - 1} sibling(s) folded"
+        )
+        primary_processed = await deliver_asset_without_vendor(db, job_id, primary)
         for asset in loaded:
-            await deliver_asset_without_vendor(db, job_id, asset)
+            uid = asset.get("id")
+            if uid == primary_id:
+                continue
+            await _safe_update_upload(db, uid, {
+                "processing_status": "done",
+                "processed_url": primary_processed or primary.get("file_url"),
+                "provider": "bracket_sibling",
+                "processed_at": now,
+            })
         return
 
     for asset in loaded:
@@ -690,12 +725,14 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
                 f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
             )[:500]
+        if provider == "original":
+            update.update(unedited_original_hold())
         await _safe_update_upload(db, upload_id, update)
         logger.info(
             f"Job {job_id}: twilight upload {upload_id} delivered "
             f"provider={provider} (apply_sky=False)"
         )
-        return
+        return processed
 
     if route == "vendor_photo":
         try:
@@ -780,4 +817,11 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
             f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
         )[:500]
+    if provider == "original":
+        update.update(unedited_original_hold())
+        logger.warning(
+            f"Job {job_id}: upload {upload_id} auto-edit failed — unedited original "
+            "QC-held (not delivered to client)"
+        )
     await _safe_update_upload(db, upload_id, update)
+    return processed

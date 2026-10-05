@@ -242,7 +242,7 @@ async def run_qc_for_job(job_id: str) -> dict:
     package_name = (job_res.data or {}).get("package_name", "") or ""
 
     res = await db.table("uploads").select(
-        "id, file_url, processed_url, qc_variant_url, qc_status, processing_status, filename"
+        "id, file_url, processed_url, qc_variant_url, qc_status, processing_status, filename, provider"
     ).eq("job_id", job_id).execute()
     uploads = [u for u in (res.data or []) if u.get("processing_status") in ("done", "skipped", None, "pending")]
 
@@ -261,6 +261,20 @@ async def run_qc_for_job(job_id: str) -> dict:
             }).eq("id", u["id"]).execute()
             counts["passed"] += 1
             counts["total"] += 1
+            continue
+
+        # Auto-edit failed → unedited original stays held. Do not let a vision /
+        # OpenCV pass re-score it into client delivery (every still auto-edited).
+        if str(u.get("provider") or "").lower() == "original":
+            from .post_production import unedited_original_hold
+
+            await db.table("uploads").update({
+                **unedited_original_hold(),
+                "qc_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", u["id"]).execute()
+            counts["total"] += 1
+            counts["rejected"] += 1
+            image_upload_count += 1
             continue
 
         # Prefer the small QC-review variant over the full-res file — cuts
