@@ -2,7 +2,7 @@
 
 Kam rule: every client deliverable goes through automatic QC that can hold a
 file back. Listing stills (HDR, drone stills, staging, twilight, reel stills)
-already go through the OpenCV/vision photo check in qc_agent. Two kinds did
+already go through the OpenCV/vision photo check in qc_agent. Three kinds did
 not get an honest check:
 
 - Floor plans (PNG/JPEG/PDF). The photo check cannot decode a PDF, so every
@@ -13,6 +13,10 @@ not get an honest check:
   looked at. A video is now held when it is empty or is not a video
   container at all (e.g. an error page or a still saved as .mp4). Only the
   first bytes are fetched; nothing is re-encoded or edited.
+- Visit / 3D (.ply / .splat / .spz). Were auto-passed as "Non-image asset".
+  A Visit file is now held when it is empty or is not a Visit container
+  (error page / still / wrong bytes). No edit, no re-encode, no viewer —
+  first bytes only. Polycam URL / link-only Visit rows stay skipped.
 
 A file that cannot be fetched fails open, same as listing stills.
 """
@@ -158,6 +162,100 @@ def check_video_head(head: Optional[bytes], total_size: Optional[int] = None) ->
     else:
         why = "not a recognized video container"
     return _verdict("rejected", 0, f"Video file is {why}.", "video_check")
+
+
+def check_visit_head(
+    head: Optional[bytes],
+    total_size: Optional[int] = None,
+    filename: str = "",
+) -> dict:
+    """Hold a Visit/3D file that is empty or not a .ply/.splat/.spz container.
+
+    Never judges scan quality (no editor / no viewer); just that the delivered
+    file is a Visit asset, not an error page or a still saved with a Visit
+    extension.
+    """
+    name = (filename or "").lower()
+    if total_size == 0 or not head:
+        return _verdict("rejected", 0, "Visit file is empty.", "visit_check")
+    if len(head) < 4:
+        return _verdict(
+            "rejected",
+            0,
+            "Visit file is truncated (too small to be a Visit asset).",
+            "visit_check",
+        )
+
+    snippet = head[:64].lstrip().lower()
+    if snippet.startswith((b"<!doctype", b"<html", b"<?xml", b"{")):
+        return _verdict(
+            "rejected", 0, "Visit file is an error page/text, not a Visit asset.", "visit_check"
+        )
+    if head[:3] == b"\xff\xd8\xff" or head[:8] == b"\x89PNG\r\n\x1a\n":
+        return _verdict(
+            "rejected", 0, "Visit file is a still image, not a Visit asset.", "visit_check"
+        )
+    if b"%PDF-" in head[:1024]:
+        return _verdict(
+            "rejected", 0, "Visit file is a PDF, not a Visit asset.", "visit_check"
+        )
+
+    # PLY: ASCII header starts with "ply" then whitespace/newline.
+    if name.endswith(".ply") or head[:3].lower() == b"ply":
+        if head[:3].lower() == b"ply" and (len(head) == 3 or head[3:4] in b" \t\r\n"):
+            return _verdict("passed", 100, "Visit container OK (PLY).", "visit_check")
+        return _verdict(
+            "rejected", 0, "Visit file is not a readable PLY (missing ply header).", "visit_check"
+        )
+
+    # SPZ: Niantic v4 "NGSP" magic, or legacy gzip-wrapped v1–3.
+    if name.endswith(".spz") or head[:4] == b"NGSP" or head[:2] == b"\x1f\x8b":
+        if head[:4] == b"NGSP" or head[:2] == b"\x1f\x8b":
+            return _verdict("passed", 100, "Visit container OK (SPZ).", "visit_check")
+        return _verdict(
+            "rejected", 0, "Visit file is not a recognized SPZ container.", "visit_check"
+        )
+
+    # .splat (antimatter15): headerless fixed 32-byte records. No magic —
+    # hold when size is known and not a multiple of 32, or looks like junk.
+    if name.endswith(".splat"):
+        if total_size is not None:
+            if total_size < 32:
+                return _verdict(
+                    "rejected",
+                    0,
+                    "Visit file is truncated (too small to be a splat).",
+                    "visit_check",
+                )
+            if total_size % 32 != 0:
+                return _verdict(
+                    "rejected",
+                    0,
+                    "Visit file is not a recognized splat container (size not a multiple of 32).",
+                    "visit_check",
+                )
+        # Enough head bytes to be at least one record, and not text-like.
+        if len(head) >= 32:
+            return _verdict("passed", 100, "Visit container OK (splat).", "visit_check")
+        return _verdict(
+            "rejected",
+            0,
+            "Visit file is truncated (too small to be a splat).",
+            "visit_check",
+        )
+
+    return _verdict(
+        "rejected", 0, "Visit file is not a recognized Visit container.", "visit_check"
+    )
+
+
+async def run_visit_qc(upload_id: str, url: str, filename: str = "") -> dict:
+    head, total = await fetch_head(url)
+    if head is None:
+        return _verdict("passed", 100, "QC skipped (Visit unavailable)", "skipped")
+    verdict = check_visit_head(head, total, filename)
+    logger.info("QC upload %s: Visit %s", upload_id, verdict["qc_status"])
+    return verdict
 
 
 def _total_from_headers(resp: httpx.Response) -> Optional[int]:

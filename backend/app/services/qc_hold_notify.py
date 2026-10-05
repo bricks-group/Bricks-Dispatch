@@ -34,9 +34,10 @@ def held_rows(uploads, only_ids: Optional[Iterable[str]] = None) -> list[dict]:
     for u in uploads or []:
         if not isinstance(u, dict) or u.get("qc_status") != "rejected":
             continue
-        # One held still is one photo: bracket siblings (and Visit rows) are
-        # not listing stills, so a stale sibling verdict never inflates the notice.
-        if str(u.get("provider") or "").strip().lower() in ("bracket_sibling", "visit"):
+        # One held still is one photo: bracket siblings are not listing stills,
+        # so a stale sibling verdict never inflates the notice. Visit/3D files
+        # that fail container QC are real holds and stay in the notice (as files).
+        if str(u.get("provider") or "").strip().lower() == "bracket_sibling":
             continue
         uid = str(u.get("id") or "")
         if limit is not None and uid not in limit:

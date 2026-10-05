@@ -256,22 +256,12 @@ async def run_qc_for_job(job_id: str) -> dict:
         qc_kind_for_upload,
         run_floorplan_qc,
         run_video_qc,
+        run_visit_qc,
     )
 
     for u in uploads:
         filename = (u.get("filename") or "").lower()
         kind = qc_kind_for_upload(u)
-        # Visit/3D splats are not a viewable listing file — not reviewed here.
-        if kind == "visit" or is_visit_file(filename):
-            await db.table("uploads").update({
-                "qc_status": "passed",
-                "qc_score": 100,
-                "qc_notes": "Non-image asset — QC skipped",
-                "qc_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", u["id"]).execute()
-            counts["passed"] += 1
-            counts["total"] += 1
-            continue
 
         # Keep prior QC unless this is a stuck floor plan held as unreadable_image
         # by the old listing-photo check (late-fold otherwise never re-runs it),
@@ -289,6 +279,39 @@ async def run_qc_for_job(job_id: str) -> dict:
                 if kind == "still" and is_listing_still_delivery_row(u):
                     image_upload_count += 1
                 continue
+
+        # Visit / 3D (.ply/.splat/.spz): container check can hold a broken file
+        # back. Polycam URL / link-only Visit (no Visit extension) stays skipped.
+        # Not counted toward the package photo count. Visit is not a listing
+        # still (is_listing_still_delivery_row is False), so this runs alone.
+        if kind == "visit" or is_visit_file(filename):
+            raw_name = u.get("filename") or ""
+            if not is_visit_file(raw_name):
+                await db.table("uploads").update({
+                    "qc_status": "passed",
+                    "qc_score": 100,
+                    "qc_notes": "Visit link — QC skipped",
+                    "qc_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", u["id"]).execute()
+                counts["passed"] += 1
+                counts["total"] += 1
+                continue
+            src = u.get("processed_url") or u.get("file_url")
+            if not src:
+                continue
+            signed = src if str(src).startswith("https://") else await get_signed_download_url(src, expiry=300)
+            if not signed:
+                continue
+            qc = await run_visit_qc(u["id"], signed, filename=raw_name)
+            await db.table("uploads").update({
+                "qc_status": qc["qc_status"],
+                "qc_score": qc["qc_score"],
+                "qc_notes": qc["qc_notes"],
+                "qc_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", u["id"]).execute()
+            counts["total"] += 1
+            counts[qc["qc_status"]] = counts.get(qc["qc_status"], 0) + 1
+            continue
 
         # Drone / reel video and floor plans get their own check (can hold the
         # file back) instead of the listing-photo check. Not counted toward the

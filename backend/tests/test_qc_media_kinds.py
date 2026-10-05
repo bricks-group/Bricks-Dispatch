@@ -1,4 +1,4 @@
-"""Floor plans and drone/reel video get their own automatic QC that can hold them."""
+"""Floor plans, drone/reel video, and Visit/3D get their own automatic QC that can hold them."""
 from __future__ import annotations
 
 import asyncio
@@ -88,6 +88,41 @@ def test_video_container_check():
         v = qmk.check_video_head(head)
         assert v["qc_status"] == "rejected" and why in v["qc_notes"], v
     assert qmk.check_video_head(MP4_HEAD, 0)["qc_status"] == "rejected"
+
+
+PLY_HEAD = b"ply\nformat binary_little_endian 1.0\nelement vertex 1\nend_header\n" + b"\x00" * 32
+SPZ_HEAD = b"NGSP" + bytes(28)  # v4 plaintext header start
+SPLAT_ONE = b"\x00" * 32  # one antimatter15 record
+
+
+def test_visit_container_check():
+    assert qmk.check_visit_head(PLY_HEAD, len(PLY_HEAD), "room.ply")["qc_status"] == "passed"
+    assert qmk.check_visit_head(SPZ_HEAD, 4096, "room.spz")["qc_status"] == "passed"
+    assert qmk.check_visit_head(b"\x1f\x8b" + b"\x00" * 40, 9000, "legacy.spz")["qc_status"] == "passed"
+    assert qmk.check_visit_head(SPLAT_ONE * 10, 320, "scan.splat")["qc_status"] == "passed"
+    held = [
+        (b"", None, "scan.splat", "empty"),
+        (b"<!DOCTYPE html><html>NoSuchKey</html>", 200, "scan.splat", "error page"),
+        (b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 40, 80, "room.ply", "still image"),
+        (b"not-a-ply-file-xxxxxx", 80, "room.ply", "PLY"),
+        (b"\x00" * 64, 64, "room.spz", "SPZ"),
+        (SPLAT_ONE, 33, "scan.splat", "multiple of 32"),
+        (b"\x00" * 16, 16, "scan.splat", "truncated"),
+    ]
+    for head, total, name, why in held:
+        v = qmk.check_visit_head(head, total, name)
+        assert v["qc_status"] == "rejected" and why.lower() in v["qc_notes"].lower(), (name, why, v)
+    assert qmk.check_visit_head(PLY_HEAD, 0, "room.ply")["qc_status"] == "rejected"
+
+
+def test_visit_fetch_failure_fails_open(monkeypatch):
+    async def boom(url, n=0):
+        return None, None
+    monkeypatch.setattr(qmk, "fetch_head", boom)
+    v = _run(qmk.run_visit_qc("v", "https://x", "scan.splat"))
+    assert v["qc_status"] == "passed" and v["qc_source"] == "skipped"
+
+
 
 
 class _FakeResp:
@@ -245,23 +280,39 @@ def test_job_qc_holds_broken_video_and_blank_plan_passes_pdf_plan(monkeypatch):
         _row("f2", "Floor Plan.png", "raw/blank.png", "floorplan"),
         _row("v1", "DJI_0001.MP4", "raw/DJI_0001.MP4"),
         _row("v2", "reel_tour.mp4", "raw/reel_tour.mp4"),
+        _row("vv1", "room.ply", "raw/room.ply", "visit"),
+        _row("vv2", "scan.splat", "raw/scan.splat", "visit"),
+        _row("vv3", "mesh.bin", "raw/mesh.bin", "visit"),  # link-ish — skipped
     ]
     fetched = {
         "floorplan.pdf": b"%PDF-1.6\n...",
         "blank.png": _png(Image.new("RGB", (800, 600), "white")),
         "DJI_0001.MP4": MP4_HEAD,
         "reel_tour.mp4": b"<html><body>NoSuchKey</body></html>",
+        "room.ply": PLY_HEAD,
+        "scan.splat": b"<html><body>NoSuchKey</body></html>",
+        "mesh.bin": b"whatever",
     }
     qc_agent, writes, photo_reviewed = _install_job(monkeypatch, rows, fetched)
     summary = _run(qc_agent.run_qc_for_job("job-k"))
 
-    assert photo_reviewed == ["s1"]  # plans/videos never hit the listing-photo check
+    assert photo_reviewed == ["s1"]  # plans/videos/Visit never hit the listing-photo check
     assert writes["f1"]["qc_status"] == "passed"
     assert writes["f2"]["qc_status"] == "rejected"
     assert writes["v1"]["qc_status"] == "passed"
     assert writes["v2"]["qc_status"] == "rejected"
-    assert summary["total"] == 5 and summary["rejected"] == 2 and summary["passed"] == 3
+    assert writes["vv1"]["qc_status"] == "passed"
+    assert writes["vv2"]["qc_status"] == "rejected"
+    assert writes["vv3"]["qc_status"] == "passed"
+    assert "Visit link" in writes["vv3"]["qc_notes"]
+    assert summary["total"] == 8 and summary["rejected"] == 3 and summary["passed"] == 5
     assert summary["count_check"]["actual"] == 1  # package photo count is photos only
+
+
+def test_hold_notice_says_files_when_visit_is_held():
+    held = [{"filename": "scan.splat", "qc_notes": "Visit file is empty.", "provider": "visit"}]
+    assert not photos_only(held)
+    assert "1 listing file " in qc_hold_sms_body("10 King St", 1, photos=False)
 
 
 def test_hold_notice_says_files_when_a_video_or_plan_is_held():

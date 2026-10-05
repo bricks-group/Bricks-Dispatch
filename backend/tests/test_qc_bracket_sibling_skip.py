@@ -106,7 +106,9 @@ def test_hold_notice_ignores_stale_sibling_verdicts():
         {"id": "p1", "filename": "kitchen_0.jpg", "qc_status": "rejected", "provider": "bricks_inhouse"},
         {"id": "s0", "filename": "kitchen_-2.jpg", "qc_status": "rejected", "provider": "bracket_sibling"},
         {"id": "s1", "filename": "kitchen_+2.jpg", "qc_status": "rejected", "provider": "Bracket_Sibling"},
-        {"id": "v1", "filename": "scan.bin", "qc_status": "rejected", "provider": "visit"},
+        # Visit container holds are real (owner notice) — only bracket siblings are skipped.
+        {"id": "v1", "filename": "scan.splat", "qc_status": "rejected", "provider": "visit",
+         "qc_notes": "Visit file is empty."},
         {"id": "o1", "filename": "bath.jpg", "qc_status": "rejected", "provider": "original"},
     ]
-    assert [u["id"] for u in held_rows(rows)] == ["p1", "o1"]
+    assert [u["id"] for u in held_rows(rows)] == ["p1", "v1", "o1"]

@@ -178,6 +178,29 @@ def test_pick_visit_upload_includes_provider_visit():
     assert pick_visit_upload([{"filename": "a.jpg", "provider": "bricks_inhouse"}]) is None
 
 
+def test_pick_visit_upload_skips_qc_rejected():
+    """Broken Visit held by container QC must not register on the listing."""
+    held = {
+        "id": "bad",
+        "filename": "room.splat",
+        "provider": "visit",
+        "qc_status": "rejected",
+        "file_url": "visits/j/room.splat",
+    }
+    ok = {
+        "id": "good",
+        "filename": "room.ply",
+        "provider": "visit",
+        "qc_status": "passed",
+        "file_url": "visits/j/room.ply",
+    }
+    assert pick_visit_upload([held]) is None
+    assert pick_visit_upload([held, ok])["id"] == "good"
+    # Prefer .splat over .ply when both pass — rejected splat must not win
+    held_splat = {**held, "id": "bad-splat", "filename": "room.splat"}
+    assert pick_visit_upload([held_splat, ok])["id"] == "good"
+
+
 def test_durable_media_filename_prefixes_and_no_double():
     assert durable_media_filename("IMG_0001.JPG", "twilight") == "twilight_IMG_0001.JPG"
     assert durable_media_filename("IMG_0001.JPG", "drone") == "aerial_IMG_0001.JPG"

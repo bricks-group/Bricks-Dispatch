@@ -366,8 +366,16 @@ def _is_visit_upload_row(upload: Any = None) -> bool:
 
 
 def pick_visit_upload(uploads: list | None) -> Optional[dict]:
-    """First Visit upload for property_visits registration (.splat > .ply > .spz)."""
-    visits = [u for u in (uploads or []) if _is_visit_upload_row(u)]
+    """First Visit upload for property_visits registration (.splat > .ply > .spz).
+
+    Skips QC-rejected Visit rows so a broken .ply/.splat/.spz held by visit
+    container check is never registered on the listing.
+    """
+    visits = [
+        u for u in (uploads or [])
+        if _is_visit_upload_row(u)
+        and str((u or {}).get("qc_status") or "").strip().lower() != "rejected"
+    ]
     if not visits:
         return None
     visits.sort(key=lambda u: _visit_pick_rank((u or {}).get("filename")))
