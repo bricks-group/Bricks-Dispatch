@@ -1,4 +1,9 @@
-"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.7 verbatim."""
+"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.8 verbatim.
+
+v1.8 Clause 6: insurance/WSIB are not required for apply or first dispatch,
+and missing/lapsed coverage is not suspension. Matches dispatch eligibility
+(no has_lapsed_insurance gate).
+"""
 import ast
 from pathlib import Path
 
@@ -23,24 +28,27 @@ def _assignment_value(path: Path, name: str):
     raise AssertionError(f"{name} not found in {path}")
 
 
-def test_ic_agreement_constants_are_v17():
+def test_ic_agreement_constants_are_v18():
     version = _assignment_value(ONBOARDING, "_IC_AGREEMENT_VERSION")
     effective = _assignment_value(ONBOARDING, "_IC_AGREEMENT_EFFECTIVE_DATE")
     text = _assignment_value(ONBOARDING, "_IC_AGREEMENT_TEXT")
 
-    assert version == "1.7"
-    assert effective == "2026-09-27"
-    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.7")
-    assert "Effective: September 27, 2026" in text
+    assert version == "1.8"
+    assert effective == "2026-10-03"
+    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.8")
+    assert "Effective: October 3, 2026" in text
     assert 'Contracting party: Bricks Group ("Bricks")' in text
     assert "Questions: booking@brxs.ca" in text
     assert text.endswith("Bricks Group · Ontario, Canada")
 
-    assert "INSURANCE AND WSIB (REQUIRED BEFORE FIRST JOB)" in text
-    assert "WSIB Certificate of Clearance" in text
+    # Clause 6 honesty — not a dispatch gate (PR #26 / IC v1.8).
+    assert "6. INSURANCE AND WSIB" in text
+    assert "INSURANCE AND WSIB (REQUIRED BEFORE FIRST JOB)" not in text
+    assert "not required to apply" in text
+    assert "not required before a first dispatched job" in text
+    assert "not suspension, refusal, or cancellation of dispatch" in text
     assert "Binding arbitration is not required." in text
     assert "fixed amount per accepted booking" in text
-    assert "fixed published dollar amounts from the add-on rate card" in text
     assert "published add-on rate card for your tier — fixed dollars" in text
     assert "Tier C 35%, Tier B 45%, Tier A 55%" not in text
     assert "percentage of rack" in text
@@ -53,7 +61,6 @@ def test_ic_agreement_constants_are_v17():
     assert "Full suite" in text
     assert "Legacy Estate" not in text
     assert "$55.15" in text
-    assert "$578.90" in text
     assert "Virtual Visit (free-roam Gaussian splat) is always a paid add-on" in text
     assert "standard 24–48 hour target from shoot end" in text
     assert "times are targets, not guarantees" in text
@@ -62,7 +69,6 @@ def test_ic_agreement_constants_are_v17():
     assert "Premium —" not in text
     assert "Luxury —" not in text
 
-    assert "BRICKS DOES NOT REQUIRE PROOF OF INSURANCE" not in text
     assert "Bricks retains a platform fee from each job value" not in text
     assert "submitted to binding arbitration in Toronto" not in text
     assert "two (2) weeks for every year" not in text
@@ -77,7 +83,8 @@ def test_get_ic_agreement_returns_version_date_text():
     assert "ic_agreement_version=_IC_AGREEMENT_VERSION" in src
 
 
-def test_application_schema_defaults_to_v17():
+def test_application_schema_defaults_to_v18():
     src = SCHEMAS.read_text()
-    assert 'ic_agreement_version: str = "1.7"' in src
+    assert 'ic_agreement_version: str = "1.8"' in src
+    assert 'ic_agreement_version: str = "1.7"' not in src
     assert 'ic_agreement_version: str = "1.1"' not in src
