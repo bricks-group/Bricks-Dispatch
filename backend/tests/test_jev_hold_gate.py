@@ -137,7 +137,7 @@ async def test_high_hold_probability_skips_auto_assign(monkeypatch):
 
     result, assign, notify, db = await _intake(monkeypatch, _payload(), _client(post))
 
-    assert result["status"] == "pending_assignment"
+    assert result["status"] == "held_for_review"
     assert result["assignee_id"] == ""
     assert assign.await_count == 0
     assert len(calls) == 1
@@ -157,6 +157,7 @@ async def test_high_hold_probability_skips_auto_assign(monkeypatch):
     assert "lng" in state["missing_fields"]
     assert state["vendor_match_quality"]["label"] == "below_min_tier"
     assert db.jobs.updates
+    assert db.jobs.updates[0]["status"] == "held_for_review"
     assert "Held for a person" in db.jobs.updates[0]["dispatch_explanation"]
     assert notify.await_count == 1
     body = notify.await_args.kwargs["body"]
