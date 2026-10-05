@@ -24,6 +24,29 @@ def _is_rest_quota_error(err: object) -> bool:
     )
 
 
+def _is_jwt_signature_or_parse_error(err: object) -> bool:
+    """Auth.get_user rejects fair-use HS256 mints as signature-invalid.
+
+    Real Supabase sessions still prefer get_user (success path). Only when
+    Auth reports parse/signature failure do we fall through to local verify
+    with SUPABASE_JWT_SECRET (same secret mint_supabase_access_token uses).
+    """
+    e = str(err or "").lower()
+    return any(
+        tok in e
+        for tok in (
+            "unable to parse or verify signature",
+            "token signature is invalid",
+            "signature is invalid",
+            "invalid jwt",
+            "could not be decoded",
+            "error decoding",
+            "jwt malformed",
+            "not enough segments",
+        )
+    )
+
+
 def decode_supabase_user_from_jwt(token: str) -> Optional[tuple]:
     """Local HS256 verify when Auth API is Fair-Use blocked. Returns (user_id, email)."""
     secret = (os.environ.get("SUPABASE_JWT_SECRET") or "").strip()
@@ -246,8 +269,12 @@ async def resolve_vendor_actor_id(
                         api_error(403, "Vendor member not found", "vendor_member_not_found")
                     return member["id"]
             except Exception as e:
-                # Fair-Use locks Auth API — verify JWT locally with SUPABASE_JWT_SECRET
-                if _is_rest_quota_error(e):
+                # Fair-Use locks Auth API (402) OR Auth rejects locally-minted
+                # HS256 fair-use JWTs (signature invalid) — verify with the same
+                # SUPABASE_JWT_SECRET used by mint_supabase_access_token.
+                # Do not fall through on unrelated Auth errors; garbage tokens
+                # still 401 when local decode fails.
+                if _is_rest_quota_error(e) or _is_jwt_signature_or_parse_error(e):
                     decoded = decode_supabase_user_from_jwt(token)
                     if decoded:
                         uid, email = decoded
