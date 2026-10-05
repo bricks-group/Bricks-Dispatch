@@ -226,7 +226,7 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     assert sms_to == "+14165550100"
     assert sms_body == (
         "New Bricks photographer application: Alex Rivera in Toronto. "
-        "Jev yes-probability 0.91. Pending your approval."
+        "Jev poor-fit 0.91. Pending your approval."
     )
     assert db.email.await_count == 1
     assert db.email.await_args.kwargs["subject"] == (
@@ -235,7 +235,9 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     html = db.email.await_args.kwargs["html"]
     assert "Alex Rivera in Toronto applied as a photographer." in html
     assert "Pending your approval." in html
-    assert "Jev yes-probability: 0.91" in html
+    assert "Jev poor-fit 0.91" in html
+    assert "yes-probability" not in html
+    assert "yes-probability" not in sms_body
     _assert_no_personal_mailbox(db)
 
 
@@ -270,9 +272,11 @@ async def test_jev_failure_still_notifies_and_stays_pending(monkeypatch, mode):
         "Pending your approval."
     )
     assert "yes-probability" not in sms_body
+    assert "poor-fit" not in sms_body
     html = db.email.await_args.kwargs["html"]
     assert "Pending your approval." in html
     assert "yes-probability" not in html
+    assert "poor-fit" not in html
     _assert_no_personal_mailbox(db)
 
 

@@ -210,13 +210,13 @@ async def notify_owner_jev_hold(db, job: dict, yes_probability) -> None:
 
 
 def vendor_application_sms_body(name: str, city: str, vendor_type: str, yes_probability) -> str:
-    """Owner text. Name, city, and Jev's yes-probability when there is one."""
+    """Owner text. Name, city, and Jev poor-fit probability when there is one."""
     who = (name or "").strip() or "Someone"
     where = (city or "").strip() or "an unknown city"
     kind = (vendor_type or "").strip() or "vendor"
     body = f"New Bricks {kind} application: {who} in {where}."
     if isinstance(yes_probability, float):
-        body += f" Jev yes-probability {yes_probability:.2f}."
+        body += f" Jev poor-fit {yes_probability:.2f}."
     body += " Pending your approval."
     return body
 
@@ -235,7 +235,7 @@ def vendor_application_email_body(name: str, city: str, vendor_type: str, yes_pr
         "Pending your approval.",
     ]
     if isinstance(yes_probability, float):
-        lines.append(f"Jev yes-probability: {yes_probability:.2f}")
+        lines.append(f"Jev poor-fit {yes_probability:.2f}")
     return "\n".join(lines)
 
 
