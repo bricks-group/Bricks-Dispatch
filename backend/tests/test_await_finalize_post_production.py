@@ -880,7 +880,10 @@ def test_visit_file_deliver_always_folds_kind_visit():
     fn = src.split("async def deliver_virtual_visit")[1].split("@router.put")[0]
     assert '"kind": "visit"' in fn or "'kind': 'visit'" in fn
     assert "storage_path" in fn
-    assert "MAX_GET_EXPIRY" in fn
+    # Long-lived GET (7d) minted by _visit_file_get_url (also used for Visit QC).
+    assert "_visit_file_get_url" in fn
+    helper = src.split("async def _visit_file_get_url")[1].split("async def _visit_file_qc")[0]
+    assert "MAX_GET_EXPIRY" in helper
     assert "delivery_urls.append(entry)" in fn
     # Never leave file path with empty delivery_urls when register ok
     assert "delivery_urls = []" in fn  # init still there

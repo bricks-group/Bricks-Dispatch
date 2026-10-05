@@ -1,0 +1,261 @@
+"""GO /visit/deliver must QC Visit files before they land on the listing.
+
+The Visit file bridge (storage_path from /visit/sign) creates no uploads row,
+so job QC never sees it. Without a gate here an empty / error-page /
+still-as-.splat file was registered on property_visits, folded into
+media_delivery, emailed to the client, and paid out.
+"""
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+def _fn_src() -> str:
+    cap = Path(__file__).resolve().parents[1] / "app/routers/capture.py"
+    return cap.read_text()
+
+
+def test_visit_deliver_source_runs_qc_before_register():
+    """Container check must run before register_property_visit / notify / finalize."""
+    src = _fn_src()
+    fn = src.split("async def deliver_virtual_visit")[1].split("@router.put")[0]
+    assert "_visit_file_qc" in fn
+    assert "visit_file_rejected" in fn
+    assert "visit_bridge=True" in fn
+    qc_pos = fn.find("_visit_file_qc")
+    reg_pos = fn.find("register_property_visit")
+    notify_pos = fn.find("notify_capture_delivered")
+    fin_pos = fn.find("visit_bridge=True")
+    assert qc_pos != -1 and reg_pos != -1 and qc_pos < reg_pos
+    assert notify_pos != -1 and qc_pos < notify_pos
+    assert fin_pos != -1 and qc_pos < fin_pos
+    # Polycam URL path must not call Visit file QC (no storage_path).
+    assert "if storage_path:" in fn
+    assert "_visit_file_get_url" in src
+    assert "run_visit_qc" in src
+
+
+def test_visit_file_qc_rejects_before_listing(monkeypatch):
+    """Rejected Visit file → 422; no register / notify / finalize."""
+    from app.routers import capture as cap
+    from fastapi import HTTPException
+
+    job = {"id": "job-v", "address": "1 Test St", "booking_id": "b1"}
+    monkeypatch.setattr(
+        cap, "_actor_and_job", AsyncMock(return_value=("actor", job))
+    )
+    monkeypatch.setattr(
+        cap,
+        "job_capture_entitlements",
+        lambda _j: {"visit": True},
+    )
+    monkeypatch.setattr(cap, "kind_purchased", lambda _j, _k: True)
+
+    async def fake_get_url(_path):
+        return "https://example.test/visit.splat"
+
+    async def fake_qc(_url, _path):
+        return {
+            "qc_status": "rejected",
+            "qc_score": 0,
+            "qc_notes": "Visit file is a still image, not a Visit asset.",
+        }
+
+    monkeypatch.setattr(cap, "_visit_file_get_url", fake_get_url)
+    monkeypatch.setattr(cap, "_visit_file_qc", fake_qc)
+
+    register = AsyncMock(return_value=True)
+    notify = AsyncMock()
+    finalize = AsyncMock()
+
+    with patch(
+        "app.services.client_comms.register_property_visit", register
+    ), patch(
+        "app.services.client_comms.notify_capture_delivered", notify
+    ), patch(
+        "app.routers.post_production._finalize_job_if_complete", finalize
+    ):
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(
+                cap.deliver_virtual_visit(
+                    payload={
+                        "job_id": "job-v",
+                        "storage_path": "visits/job-v/abc.splat",
+                    }
+                )
+            )
+
+    assert ei.value.status_code == 422
+    detail = ei.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "visit_file_rejected"
+    assert "still image" in (detail.get("message") or "").lower()
+    assert register.await_count == 0
+    assert notify.await_count == 0
+    assert finalize.await_count == 0
+
+
+def test_visit_file_qc_pass_registers(monkeypatch):
+    """Passed Visit file → register + notify + finalize (existing bridge)."""
+    from app.routers import capture as cap
+
+    job = {"id": "job-v", "address": "1 Test St", "booking_id": "b1"}
+    monkeypatch.setattr(
+        cap, "_actor_and_job", AsyncMock(return_value=("actor", job))
+    )
+    monkeypatch.setattr(
+        cap,
+        "job_capture_entitlements",
+        lambda _j: {"visit": True},
+    )
+    monkeypatch.setattr(cap, "kind_purchased", lambda _j, _k: True)
+
+    async def fake_get_url(_path):
+        return "https://example.test/visit.ply"
+
+    async def fake_qc(_url, _path):
+        return {"qc_status": "passed", "qc_score": 100, "qc_notes": "Visit container OK (PLY)."}
+
+    monkeypatch.setattr(cap, "_visit_file_get_url", fake_get_url)
+    monkeypatch.setattr(cap, "_visit_file_qc", fake_qc)
+
+    register = AsyncMock(return_value=True)
+    notify = AsyncMock()
+    finalize = AsyncMock()
+
+    db = MagicMock()
+    jobs_tbl = MagicMock()
+    jobs_tbl.update.return_value = jobs_tbl
+    jobs_tbl.eq.return_value = jobs_tbl
+    jobs_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+    db.table.return_value = jobs_tbl
+    monkeypatch.setattr(cap, "get_db", AsyncMock(return_value=db))
+
+    with patch(
+        "app.services.client_comms.register_property_visit", register
+    ), patch(
+        "app.services.client_comms.notify_capture_delivered", notify
+    ), patch(
+        "app.routers.post_production._finalize_job_if_complete", finalize
+    ):
+        out = asyncio.run(
+            cap.deliver_virtual_visit(
+                payload={
+                    "job_id": "job-v",
+                    "storage_path": "visits/job-v/abc.ply",
+                }
+            )
+        )
+
+    assert out["ok"] is True
+    assert out["mode"] == "file"
+    assert register.await_count == 1
+    assert register.await_args.kwargs.get("storage_path") == "visits/job-v/abc.ply"
+    assert notify.await_count == 1
+    delivery_urls = notify.await_args.kwargs.get("delivery_urls")
+    assert delivery_urls and delivery_urls[0]["kind"] == "visit"
+    assert delivery_urls[0]["url"] == "https://example.test/visit.ply"
+    assert finalize.await_count == 1
+    assert finalize.await_args.kwargs.get("visit_bridge") is True
+
+
+def test_polycam_url_skips_visit_file_qc(monkeypatch):
+    """Polycam / link-only Visit is not a file container — no Visit file QC."""
+    from app.routers import capture as cap
+
+    job = {"id": "job-v", "address": "1 Test St", "booking_id": "b1"}
+    monkeypatch.setattr(
+        cap, "_actor_and_job", AsyncMock(return_value=("actor", job))
+    )
+    monkeypatch.setattr(
+        cap,
+        "job_capture_entitlements",
+        lambda _j: {"visit": True},
+    )
+    monkeypatch.setattr(cap, "kind_purchased", lambda _j, _k: True)
+    monkeypatch.setattr(
+        cap,
+        "_normalize_visit_url",
+        lambda u: u.strip() if u else "",
+    )
+
+    qc = AsyncMock(
+        return_value={"qc_status": "rejected", "qc_notes": "should not run"}
+    )
+    monkeypatch.setattr(cap, "_visit_file_qc", qc)
+
+    register = AsyncMock(return_value=True)
+    notify = AsyncMock()
+    finalize = AsyncMock()
+    db = MagicMock()
+    jobs_tbl = MagicMock()
+    jobs_tbl.update.return_value = jobs_tbl
+    jobs_tbl.eq.return_value = jobs_tbl
+    jobs_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+    db.table.return_value = jobs_tbl
+    monkeypatch.setattr(cap, "get_db", AsyncMock(return_value=db))
+
+    with patch(
+        "app.services.client_comms.register_property_visit", register
+    ), patch(
+        "app.services.client_comms.notify_capture_delivered", notify
+    ), patch(
+        "app.routers.post_production._finalize_job_if_complete", finalize
+    ):
+        out = asyncio.run(
+            cap.deliver_virtual_visit(
+                payload={
+                    "job_id": "job-v",
+                    "polycam_url": "https://poly.cam/capture/abc",
+                }
+            )
+        )
+
+    assert out["ok"] is True
+    assert out["mode"] == "url"
+    assert qc.await_count == 0
+    assert register.await_count == 1
+    assert finalize.await_count == 1
+
+
+def test_visit_file_qc_fail_open_no_url(monkeypatch):
+    """No signed GET → fail open (passed/skipped), same as run_visit_qc."""
+    from app.routers import capture as cap
+
+    out = asyncio.run(cap._visit_file_qc(None, "visits/j/a.ply"))
+    assert out["qc_status"] == "passed"
+    assert "skipped" in (out.get("qc_notes") or "").lower()
+
+
+@pytest.mark.parametrize(
+    "head,total,path,status",
+    [
+        (b"<!DOCTYPE html><html>Error</html>", 40, "visits/j/a.splat", "rejected"),
+        (b"\xff\xd8\xff\xe0" + b"\x00" * 60, 64, "visits/j/a.splat", "rejected"),
+        (b"", 0, "visits/j/a.ply", "rejected"),
+        (b"ply\nformat binary_little_endian 1.0\n", 1024, "visits/j/a.ply", "passed"),
+        (b"NGSP" + b"\x00" * 60, 64, "visits/j/a.spz", "passed"),
+        (b"\x01" * 64, 64, "visits/j/a.splat", "passed"),
+    ],
+)
+def test_visit_file_qc_container_check(monkeypatch, head, total, path, status):
+    """_visit_file_qc uses the same first-bytes check as job Visit QC."""
+    from app.routers import capture as cap
+    from app.services import qc_media_kinds as qmk
+
+    monkeypatch.setattr(qmk, "fetch_head", AsyncMock(return_value=(head, total)))
+    out = asyncio.run(cap._visit_file_qc("https://example.test/x", path))
+    assert out["qc_status"] == status
+
+
+def test_visit_file_qc_fetch_failure_fails_open(monkeypatch):
+    from app.routers import capture as cap
+    from app.services import qc_media_kinds as qmk
+
+    monkeypatch.setattr(qmk, "fetch_head", AsyncMock(return_value=(None, None)))
+    out = asyncio.run(cap._visit_file_qc("https://example.test/x", "visits/j/a.ply"))
+    assert out["qc_status"] == "passed"

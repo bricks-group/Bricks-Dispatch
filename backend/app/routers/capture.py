@@ -1670,6 +1670,48 @@ async def sign_visit_upload(
     }
 
 
+async def _visit_file_get_url(storage_path: str) -> Optional[str]:
+    """Long-lived GET (7d) for a GO Visit file; HMAC Blob proxy under Fair Use.
+
+    Share/desk late-fold must outlive a 24h signed URL. None when neither
+    Storage signing nor the Blob proxy is available.
+    """
+    from ..services.storage import MAX_GET_EXPIRY, blob_fallback_enabled, build_hmac_proxy_url
+
+    signed = None
+    try:
+        signed = await get_signed_download_url(storage_path, expiry=MAX_GET_EXPIRY)
+    except Exception:
+        signed = None
+    if signed:
+        return signed
+    if blob_fallback_enabled():
+        try:
+            return build_hmac_proxy_url("GET", storage_path, MAX_GET_EXPIRY)
+        except Exception:
+            return None
+    return None
+
+
+async def _visit_file_qc(url: Optional[str], storage_path: str) -> dict:
+    """Same first-bytes Visit container check job QC runs on Visit uploads.
+
+    Fails open (passed / skipped) when the file cannot be fetched — parity
+    with run_visit_qc and listing stills. Never judges scan quality.
+    """
+    from ..services.qc_media_kinds import run_visit_qc
+
+    if not url:
+        return {"qc_status": "passed", "qc_notes": "QC skipped (Visit unavailable)"}
+    try:
+        return await run_visit_qc(storage_path, url, filename=storage_path)
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "Visit file QC failed open for %s: %s", storage_path, type(e).__name__
+        )
+        return {"qc_status": "passed", "qc_notes": "QC skipped (Visit check error)"}
+
+
 @router.post("/visit/deliver")
 async def deliver_virtual_visit(
     payload: dict = Body(default={}),
@@ -1702,6 +1744,23 @@ async def deliver_virtual_visit(
         if ext not in ("splat", "ply", "spz"):
             api_error(400, "Visit file must be .splat, .ply, or .spz", "bad_visit_file")
 
+    # Visit file bridge: sign the GET first so the container check runs BEFORE
+    # anything lands on the listing (property_visits, media_delivery, client
+    # email, payout). This GO path writes no uploads row, so job QC never sees
+    # it — without this an empty / error-page / still-as-.splat file was
+    # delivered to the client as their Virtual Visit.
+    visit_file_url = await _visit_file_get_url(storage_path) if storage_path else None
+    if storage_path:
+        qc = await _visit_file_qc(visit_file_url, storage_path)
+        if str(qc.get("qc_status") or "") == "rejected":
+            api_error(
+                422,
+                f"{qc.get('qc_notes') or 'Visit file is not a Visit asset.'} "
+                "Nothing was added to the listing — re-export the scan as "
+                ".ply, .splat, or .spz and upload it again.",
+                "visit_file_rejected",
+            )
+
     from ..services.client_comms import notify_capture_delivered, register_property_visit
 
     if polycam_url:
@@ -1724,25 +1783,14 @@ async def deliver_virtual_visit(
         # Parity with Polycam URL: always fold kind=visit into media_delivery.
         # Prefer long-lived GET (7d) so share/desk late-fold outlives a 24h signed URL.
         # Keep storage_path on the row so OS can re-sign when property_visits is empty.
-        from ..services.storage import MAX_GET_EXPIRY, blob_fallback_enabled, build_hmac_proxy_url
         delivery_urls = []
         entry = {
             "filename": "Virtual Visit",
             "kind": "visit",
             "storage_path": storage_path,
         }
-        signed = None
-        try:
-            signed = await get_signed_download_url(storage_path, expiry=MAX_GET_EXPIRY)
-        except Exception:
-            signed = None
-        if signed:
-            entry["url"] = signed
-        elif blob_fallback_enabled():
-            try:
-                entry["url"] = build_hmac_proxy_url("GET", storage_path, MAX_GET_EXPIRY)
-            except Exception:
-                pass
+        if visit_file_url:
+            entry["url"] = visit_file_url
         delivery_urls.append(entry)
         output = storage_path
 
