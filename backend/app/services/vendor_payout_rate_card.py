@@ -3,6 +3,11 @@
 Source: /workspace/ship/VENDOR_PAYOUT_REPRICE_20260927.md
 Five packages × four footprint bands × tiers C/B/A (vendor_tier 1/2/3).
 Kept in sync with supabase/migrations/0012_vendor_payout_reprice_www_packages.sql.
+
+VENDOR_PAYOUT_RACK_CAD follows www / Companion package ladder with REEL_RATE
+[199,249,299,349] (Story/Showcase/Full 447/596/746 Small). Payout CELLS stay
+the Sep 27 fixed cents — margin check uses the live rack; do not auto-bump
+vendor pay without an explicit reprice.
 """
 
 from __future__ import annotations
@@ -32,6 +37,10 @@ VENDOR_PAYOUT_CELLS_CENTS: dict[tuple[str, str], tuple[int, int, int]] = {
 }
 
 # Client rack CAD pre-tax used for margin checks (draft §3).
+# Client rack = www / Companion package ladder (CAD pre-tax).
+# PHOTO+DRONE[+REEL][+TOUR][+TWILIGHT]. REEL_RATE lockstep [199,249,299,349]
+# (was package-embedded [149,179,209,249] → story/showcase/full 397/546/696).
+# Vendor payout CELLS unchanged — fixed cents stay; share drops slightly, still ≤50%.
 VENDOR_PAYOUT_RACK_CAD: dict[tuple[str, str], float] = {
     ("photos_only", "small"): 149.0,
     ("photos_only", "mid"): 199.0,
@@ -41,18 +50,18 @@ VENDOR_PAYOUT_RACK_CAD: dict[tuple[str, str], float] = {
     ("essentials", "mid"): 318.0,
     ("essentials", "large"): 388.0,
     ("essentials", "xl"): 458.0,
-    ("story", "small"): 397.0,
-    ("story", "mid"): 497.0,
-    ("story", "large"): 597.0,
-    ("story", "xl"): 707.0,
-    ("showcase", "small"): 546.0,
-    ("showcase", "mid"): 696.0,
-    ("showcase", "large"): 846.0,
-    ("showcase", "xl"): 1006.0,
-    ("full", "small"): 696.0,
-    ("full", "mid"): 866.0,
-    ("full", "large"): 1031.0,
-    ("full", "xl"): 1206.0,
+    ("story", "small"): 447.0,
+    ("story", "mid"): 567.0,
+    ("story", "large"): 687.0,
+    ("story", "xl"): 807.0,
+    ("showcase", "small"): 596.0,
+    ("showcase", "mid"): 766.0,
+    ("showcase", "large"): 936.0,
+    ("showcase", "xl"): 1106.0,
+    ("full", "small"): 746.0,
+    ("full", "mid"): 936.0,
+    ("full", "large"): 1121.0,
+    ("full", "xl"): 1306.0,
 }
 
 WWW_PACKAGE_IDS = ("photos_only", "essentials", "story", "showcase", "full")

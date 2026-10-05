@@ -11,6 +11,7 @@ from app.services.vendor_payout_rate_card import (
     STAGING_PAYOUT_PER_IMAGE_CENTS,
     VISIT_PAYOUT_CELLS_CENTS,
     VENDOR_PAYOUT_CELLS_CENTS,
+    VENDOR_PAYOUT_RACK_CAD,
     WWW_PACKAGE_IDS,
     addon_payout_cents,
     all_cells_under_half_rack,
@@ -110,3 +111,37 @@ def test_visit_and_staging_cells_under_half_and_exact():
     assert addon_payout_cents([{"key": "tour"}], 2000, 2) == 0
     # estate is not a visit alias
     assert addon_payout_cents([{"key": "estate"}], 2000, 1) == 0
+
+def test_package_rack_matches_www_reel_rate_ladder():
+    """Story/Showcase/Full rack must sum www REEL_RATE [199,249,299,349].
+
+    Leftover from package-embedded reel [149,179,209,249] left Dispatch
+    VENDOR_PAYOUT_RACK_CAD at 397/546/696 while Companion/www charge
+    447/596/746 after REEL lockstep. Photos/Essentials unchanged.
+    Vendor payout CELLS stay fixed (share drops, still ≤50%).
+    """
+    photo = [149, 199, 249, 299]
+    drone = [99, 119, 139, 159]
+    reel = [199, 249, 299, 349]
+    tour = [149, 199, 249, 299]
+    twilight = [150, 170, 185, 200]
+    bands = ("small", "mid", "large", "xl")
+    essentials = [p + d for p, d in zip(photo, drone)]
+    story = [e + r for e, r in zip(essentials, reel)]
+    showcase = [s + t for s, t in zip(story, tour)]
+    full = [s + t for s, t in zip(showcase, twilight)]
+    for band, p in zip(bands, photo):
+        assert VENDOR_PAYOUT_RACK_CAD[("photos_only", band)] == float(p)
+    for band, e in zip(bands, essentials):
+        assert VENDOR_PAYOUT_RACK_CAD[("essentials", band)] == float(e)
+    for band, s in zip(bands, story):
+        assert VENDOR_PAYOUT_RACK_CAD[("story", band)] == float(s)
+    for band, s in zip(bands, showcase):
+        assert VENDOR_PAYOUT_RACK_CAD[("showcase", band)] == float(s)
+    for band, f in zip(bands, full):
+        assert VENDOR_PAYOUT_RACK_CAD[("full", band)] == float(f)
+    # Small ladder lockstep with www STORY_FROM/SHOWCASE_FROM/FULL_FROM
+    assert VENDOR_PAYOUT_RACK_CAD[("story", "small")] == 447.0
+    assert VENDOR_PAYOUT_RACK_CAD[("showcase", "small")] == 596.0
+    assert VENDOR_PAYOUT_RACK_CAD[("full", "small")] == 746.0
+
