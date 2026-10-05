@@ -115,11 +115,15 @@ async def lookup_vendor_member(actor_id: str, email: Optional[str] = None) -> Op
                 seen.add(rid)
                 rows.append(row)
 
+        # postgrest maybe_single().execute() is None when there is no row. Applicants
+        # and owner-added members have a random member id != auth uid, so the by-id
+        # read is often empty; reading .data on None used to 401/500 GO before the
+        # email match below could find them.
         by_id = await db.table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
-        add(by_id.data)
+        add(getattr(by_id, "data", None))
         if str(actor_id or "").lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
             kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
-            add(kam.data)
+            add(getattr(kam, "data", None))
         if email_l:
             by_email = await db.table("vendor_members").select("*").ilike("email", email_l).limit(10).execute()
             for row in by_email.data or []:
