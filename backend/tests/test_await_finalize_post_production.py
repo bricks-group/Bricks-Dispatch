@@ -1649,3 +1649,117 @@ def test_late_fold_does_not_merge_unreviewed_still_after_qc_fail(monkeypatch):
     # Pending still skipped → no new stills to merge; capture/visit empty → False
     assert folded is False
     md_tbl.update.assert_not_called()
+
+
+def test_merge_still_urls_prunes_unreviewed_pending():
+    """Pending/null upload_ids must leave delivery_urls (legacy pre-verdict leak)."""
+    existing = [
+        {"url": "https://api.brxs.ca/api/public/floorplans/j/sess-fp",
+         "filename": "Floor plan", "session_id": "sess-fp", "kind": "floorplan"},
+        {"upload_id": "u-pending", "url": "https://cdn.example/p.jpg", "filename": "p.jpg"},
+        {"upload_id": "u-empty", "url": "https://cdn.example/e.jpg", "filename": "e.jpg"},
+        {"upload_id": "u-ok", "url": "https://cdn.example/ok.jpg", "filename": "ok.jpg"},
+        {"url": "https://visit.example/v", "filename": "Virtual Visit", "kind": "visit"},
+    ]
+    stills = [
+        {"upload_id": "u-ok", "url": "https://cdn.example/ok.jpg", "filename": "ok.jpg"},
+    ]
+    # Same set late-fold builds via _delivery_prune_upload_ids
+    prune = {"u-pending", "u-empty"}
+    merged = pp._merge_missing_still_urls(existing, stills, rejected_ids=prune)
+    assert merged is not None
+    uids = [u.get("upload_id") for u in merged if isinstance(u, dict)]
+    assert "u-pending" not in uids
+    assert "u-empty" not in uids
+    assert "u-ok" in uids
+    assert any(u.get("session_id") == "sess-fp" for u in merged)
+    assert any(u.get("kind") == "visit" for u in merged)
+    assert pp._merge_missing_still_urls(merged, stills, rejected_ids=prune) is None
+
+
+def test_delivery_prune_upload_ids_holds_pending_and_rejected():
+    uploads = [
+        {"id": "a", "qc_status": "passed"},
+        {"id": "b", "qc_status": "flagged"},
+        {"id": "c", "qc_status": "rejected"},
+        {"id": "d", "qc_status": "pending"},
+        {"id": "e", "qc_status": ""},
+        {"id": "f", "qc_status": None},
+        {"id": "g"},  # missing key → unreviewed
+        {"id": "", "qc_status": "rejected"},  # no id
+        {"qc_status": "pending"},  # no id
+    ]
+    held = pp._delivery_prune_upload_ids(uploads)
+    assert held == {"c", "d", "e", "f", "g"}
+
+
+def test_late_fold_prunes_legacy_pending_still_when_qc_fails(monkeypatch):
+    """Pre-ebfa1ea pending row already on delivery must be pruned even if QC fails."""
+    existing = {
+        "id": "md-1",
+        "delivery_urls": [
+            {"upload_id": "up-pending", "url": "https://cdn/pending.jpg", "filename": "pending.jpg"},
+            {"upload_id": "up-ok", "url": "https://cdn/ok.jpg", "filename": "ok.jpg"},
+            {"url": "https://visit.example/v", "filename": "Virtual Visit", "kind": "visit"},
+        ],
+    }
+    uploads = [
+        {
+            "id": "up-pending",
+            "filename": "pending.jpg",
+            "processed_url": "p/pending.jpg",
+            "processing_status": "done",
+            "qc_status": "pending",
+            "provider": "autoenhance",
+        },
+        {
+            "id": "up-ok",
+            "filename": "ok.jpg",
+            "processed_url": "p/ok.jpg",
+            "processing_status": "done",
+            "qc_status": "passed",
+            "provider": "autoenhance",
+        },
+    ]
+
+    async def boom(_job_id):
+        raise RuntimeError("qc down")
+
+    uploads_tbl = MagicMock()
+    uploads_tbl.select.return_value = uploads_tbl
+    uploads_tbl.eq.return_value = uploads_tbl
+    uploads_tbl.execute = AsyncMock(return_value=MagicMock(data=uploads))
+
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+
+    async def fake_signed(path):
+        return f"https://cdn.example/{path}"
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", boom)
+    monkeypatch.setattr(pp, "get_signed_download_url", fake_signed)
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+    monkeypatch.setattr(
+        pp, "_list_delivered_capture_sessions", AsyncMock(return_value=[])
+    )
+
+    folded = asyncio.run(pp._fold_late_into_existing_delivery("job-legacy-pend", existing))
+    assert folded is True
+    md_tbl.update.assert_called_once()
+    urls = md_tbl.update.call_args[0][0]["delivery_urls"]
+    assert not any(u.get("upload_id") == "up-pending" for u in urls)
+    assert any(u.get("upload_id") == "up-ok" for u in urls)
+    assert any(u.get("kind") == "visit" for u in urls)

@@ -268,6 +268,28 @@ def _merge_missing_visit_urls(existing_urls, visit_urls: list | None) -> list[di
     return existing + added
 
 
+
+def _delivery_prune_upload_ids(uploads: list | None) -> set[str]:
+    """Upload ids that must not stay on media_delivery.delivery_urls.
+
+    QC-rejected (held) and never-reviewed (null/''/pending DB default) — same
+    honesty as _listing_still_delivery_urls / has_qc_verdict. Passed/flagged/
+    legacy accepted stay. Pre-ebfa1ea jobs could already have pending rows in
+    delivery_urls; late-fold must prune them even when QC fails mid-pass.
+    """
+    out: set[str] = set()
+    for u in uploads or []:
+        if not isinstance(u, dict):
+            continue
+        uid = str(u.get("id") or "")
+        if not uid:
+            continue
+        status = str(u.get("qc_status") or "").strip().lower()
+        if status == "rejected" or not has_qc_verdict(u):
+            out.add(uid)
+    return out
+
+
 def _merge_missing_still_urls(
     existing_urls,
     still_urls: list[dict],
@@ -280,7 +302,8 @@ def _merge_missing_still_urls(
     without re-running QC, payout, or agent email.
 
     Also:
-    - Prune upload-based still rows whose upload_id/id is QC-rejected (rejected_ids).
+    - Prune upload-based still rows whose upload_id/id is in rejected_ids
+      (QC-rejected AND unreviewed pending/null/'' — has_qc_verdict false).
       Keep floorplan/tour/Visit/session rows that are not uploads-based stills.
     - Backfill kind onto hollow existing still rows from fresh still_urls (do not
       overwrite a non-empty kind). Optionally refresh qc_flagged from fresh.
@@ -313,8 +336,8 @@ def _merge_missing_still_urls(
             out.append(u)
             continue
         uid = str(u.get("upload_id") or u.get("id") or "")
-        # Drop QC-rejected upload rows (session/Visit leftovers without matching
-        # upload_id stay; rejected_ids only comes from uploads.qc_status).
+        # Drop QC-rejected / unreviewed upload rows (session/Visit leftovers
+        # without matching upload_id stay; rejected_ids from uploads.qc_status).
         if uid and uid in rejected:
             changed = True
             continue
@@ -616,11 +639,10 @@ async def _fold_late_into_existing_delivery(
     capture_urls = _delivery_urls_from_capture_sessions(job_id, sessions or [])
     raw_urls = existing.get("delivery_urls") if isinstance(existing, dict) else None
 
-    rejected_ids = {
-        str(u.get("id") or "")
-        for u in (uploads or [])
-        if isinstance(u, dict) and u.get("qc_status") == "rejected" and u.get("id")
-    }
+    # Prune rejected AND unreviewed (pending/null) — OS/Companion hold them off
+    # client share, but media_delivery must not keep pre-verdict rows either
+    # (especially when late-fold QC fails and cannot re-score them).
+    rejected_ids = _delivery_prune_upload_ids(uploads)
     merged_stills = _merge_missing_still_urls(
         raw_urls, still_urls, rejected_ids=rejected_ids or None
     )
