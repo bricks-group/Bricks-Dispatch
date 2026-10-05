@@ -119,7 +119,21 @@ async def run_qc_on_upload(
     vision_configured = _vision_qc_configured()
     image_bytes = await _fetch_image_bytes(image_url)
     if not image_bytes:
-        return {"qc_status": "passed", "qc_score": 100, "qc_notes": "QC skipped (image unavailable)", "qc_source": "skipped"}
+        # Honesty: never auto-pass an unreviewed listing still. Same spirit as
+        # download_bytes miss → unedited_original_hold — hold with a clear
+        # reason late-fold prune + hold notices already understand (rejected).
+        logger.warning(
+            "QC upload %s: image_unavailable — holding (bytes not fetched)",
+            upload_id,
+        )
+        return {
+            "qc_status": "rejected",
+            "qc_score": 0,
+            "qc_notes": (
+                "image_unavailable — could not fetch listing still for QC review"
+            ),
+            "qc_source": "unavailable",
+        }
 
     # OpenCV pre-pass: always run when bytes are available (holds without Gemini).
     _high_value = package in ("luxury", "estate")

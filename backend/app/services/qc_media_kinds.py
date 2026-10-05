@@ -18,7 +18,9 @@ not get an honest check:
   (error page / still / wrong bytes). No edit, no re-encode, no viewer —
   first bytes only. Polycam URL / link-only Visit rows stay skipped.
 
-A file that cannot be fetched fails open, same as listing stills.
+Floor plan / video / Visit that cannot be fetched still fail open (pass with
+a skip note). Listing stills do not: run_qc_on_upload holds with
+image_unavailable so an unreviewed photo cannot reach the client.
 """
 from __future__ import annotations
 
