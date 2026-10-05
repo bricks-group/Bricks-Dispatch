@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import httpx
 
-from ..shared.database import get_db
+from ..shared.database import get_db, maybe_single_row
 from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.schemas import Job, VendorMember
 from .webhooks import send_dispatch_status_update_webhook
@@ -80,7 +80,7 @@ async def _notify_owner_no_vendor(job: Job, error_message: str) -> None:
         res = await (await get_db()).table("vendor_members").select("phone,email").eq(
             "id", KAM_MEMBER_ID
         ).maybe_single().execute()
-        phone = ((res.data or {}).get("phone") or "").strip()
+        phone = (maybe_single_row(res).get("phone") or "").strip()
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
 
@@ -175,7 +175,7 @@ async def notify_owner_jev_hold(db, job: dict, yes_probability) -> None:
         res = await db.table("vendor_members").select("phone").eq(
             "id", KAM_MEMBER_ID
         ).maybe_single().execute()
-        phone = ((res.data or {}).get("phone") or "").strip()
+        phone = (maybe_single_row(res).get("phone") or "").strip()
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
 
@@ -341,7 +341,7 @@ async def notify_owner_vendor_application(
         res = await db.table("vendor_members").select("phone").eq(
             "id", KAM_MEMBER_ID
         ).maybe_single().execute()
-        phone = ((res.data or {}).get("phone") or "").strip()
+        phone = (maybe_single_row(res).get("phone") or "").strip()
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
 
@@ -702,7 +702,7 @@ async def _update_job_assignee(
     try:
         from .notifications import notify_assignment
         res = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        await notify_assignment(res.data or {"id": job_id}, member_id)
+        await notify_assignment(maybe_single_row(res) or {"id": job_id}, member_id)
     except Exception as e:
         logger.error(f"Vendor assignment notify failed for job {job_id}: {e}")
 
@@ -727,7 +727,7 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
     db = await get_db()
     try:
         res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        job_doc = res.data
+        job_doc = maybe_single_row(res) or None
     except Exception as e:
         if not _is_rest_quota_error(e):
             raise

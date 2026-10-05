@@ -178,8 +178,9 @@ async def process_job_assets(job_id: str):
         return
 
     try:
+        from ..shared.database import maybe_single_row
         res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        job = res_job.data
+        job = maybe_single_row(res_job) or None
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
         if not _is_rest_quota_error(e):

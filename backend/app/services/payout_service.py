@@ -162,12 +162,11 @@ async def get_fixed_payout_amount(db, package_id: str | None, sqft: int | None, 
 
 
 async def _db_select_job(db, job_id: str) -> dict | None:
+    from ..shared.database import maybe_single_row
     from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
     try:
         res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        if res and res.data:
-            return res.data
-        return None
+        return maybe_single_row(res) or None
     except Exception as e:
         if _is_rest_quota_error(e):
             return pg_select_job_by_id(job_id)
@@ -175,12 +174,13 @@ async def _db_select_job(db, job_id: str) -> dict | None:
 
 
 async def _db_select_vendor_member(db, assignee_id: str) -> dict:
+    from ..shared.database import maybe_single_row
     from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
     try:
         res_m = await db.table("vendor_members").select(
             "id, tier, hst_number, role, title, payout_mode, email"
         ).eq("id", assignee_id).maybe_single().execute()
-        return res_m.data or {}
+        return maybe_single_row(res_m)
     except Exception as e:
         if _is_rest_quota_error(e):
             return pg_select_vendor_member(actor_id=assignee_id) or {}
@@ -188,10 +188,11 @@ async def _db_select_vendor_member(db, assignee_id: str) -> dict:
 
 
 async def _db_select_payout_by_job(db, job_id: str) -> dict | None:
+    from ..shared.database import maybe_single_row
     from ..shared.pg_fallback import _is_rest_quota_error, pg_select_payout_by_job_id
     try:
         existing = await db.table("payouts").select("*").eq("job_id", job_id).maybe_single().execute()
-        return existing.data if existing and existing.data else None
+        return maybe_single_row(existing) or None
     except Exception as e:
         if _is_rest_quota_error(e):
             return pg_select_payout_by_job_id(job_id)

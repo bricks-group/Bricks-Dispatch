@@ -1370,10 +1370,12 @@ async def google_calendar_oauth_callback(
     vendor_id = "default_vendor"
     db = await get_db()
     try:
-        row = await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
-        if not (row and row.data):
+        row = _maybe_single_row(
+            await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
+        )
+        if not row:
             return _err("Unknown vendor member in OAuth state")
-        vendor_id = row.data.get("vendor_id") or vendor_id
+        vendor_id = row.get("vendor_id") or vendor_id
     except Exception as e:
         logger.warning("OAuth member lookup failed: %s", e)
         return _err("Could not resolve vendor member for OAuth state")
@@ -1436,10 +1438,12 @@ async def microsoft_calendar_oauth_callback(
     vendor_id = "default_vendor"
     db = await get_db()
     try:
-        row = await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
-        if not (row and row.data):
+        row = _maybe_single_row(
+            await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
+        )
+        if not row:
             return _err("Unknown vendor member in OAuth state")
-        vendor_id = row.data.get("vendor_id") or vendor_id
+        vendor_id = row.get("vendor_id") or vendor_id
     except Exception as e:
         logger.warning("OAuth member lookup failed: %s", e)
         return _err("Could not resolve vendor member for OAuth state")

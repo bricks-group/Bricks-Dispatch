@@ -156,8 +156,9 @@ async def _load_job(job_id: str, columns: str) -> dict:
 
     try:
         db = await get_db()
+        from ..shared.database import maybe_single_row
         res = await db.table("jobs").select(columns).eq("id", job_id).maybe_single().execute()
-        data = res.data or {}
+        data = maybe_single_row(res)
         if data:
             return data
         # Empty body can be a silent Fair-Use failure — try Postgres once.
@@ -185,9 +186,11 @@ async def _resolve_photographer_name(assignee_id: str | None, fallback: str) -> 
     try:
         from ..shared.database import get_db
         db = await get_db()
+        from ..shared.database import maybe_single_row
         res = await db.table("vendor_members").select("name").eq("id", assignee_id).maybe_single().execute()
-        if res.data:
-            return _photographer_name_from(res.data, fallback)
+        row = maybe_single_row(res)
+        if row:
+            return _photographer_name_from(row, fallback)
         member = pg_select_vendor_member(actor_id=assignee_id)
         return _photographer_name_from(member, fallback)
     except Exception as exc:

@@ -466,11 +466,12 @@ async def _load_connections(db, member_id: str, *, decrypt: bool = True) -> list
         logger.debug("vendor_calendar_connections read failed (soft): %s", e)
         # Fall back to columns on vendor_members if table missing
         try:
+            from ..shared.database import maybe_single_row
             m = await db.table("vendor_members").select(
                 "id, google_calendar_token, microsoft_calendar_token, apple_caldav_url, "
                 "apple_caldav_password, calendar_ics_url"
             ).eq("id", member_id).maybe_single().execute()
-            doc = m.data or {}
+            doc = maybe_single_row(m)
             if doc.get("google_calendar_token"):
                 rows.append({"provider": "google", "access_token": doc["google_calendar_token"], "member_id": member_id})
             if doc.get("microsoft_calendar_token"):

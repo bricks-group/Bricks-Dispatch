@@ -4,7 +4,7 @@ import os
 import re
 from datetime import date as _date
 from zoneinfo import ZoneInfo
-from ..shared.database import get_db
+from ..shared.database import get_db, maybe_single_row
 from ..shared.job_timezone import resolve_job_iana, tz_abbrev
 from ..shared.schemas import NotificationRecord
 
@@ -597,14 +597,15 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
     db = await get_db()
     try:
         existing = await db.table("push_tokens").select("id").eq("token", token).maybe_single().execute()
-        if existing.data:
+        existing_row = maybe_single_row(existing)
+        if existing_row:
             await db.table("push_tokens").update({
                 "member_id": member_id,
                 "platform": platform,
                 "active": True,
                 "updated_at": now,
-            }).eq("id", existing.data["id"]).execute()
-            return {"registered": True, "id": existing.data["id"]}
+            }).eq("id", existing_row["id"]).execute()
+            return {"registered": True, "id": existing_row["id"]}
     except Exception as exc:
         from ..shared.pg_fallback import (
             _is_rest_quota_error,
@@ -725,7 +726,7 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
     member: dict = {}
     try:
         res = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-        member = res.data or {}
+        member = maybe_single_row(res)
     except Exception as exc:
         logger.error("Assignment notify: failed to load member %s: %s", member_id, exc)
 

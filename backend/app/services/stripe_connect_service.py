@@ -12,6 +12,7 @@ import logging
 import os
 import stripe as stripe_lib
 from supabase import create_client, Client
+from app.shared.database import maybe_single_row
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
             response = supabase.table("contractors").select(
                 "id, stripe_account_id, connect_status"
             ).eq("vendor_id", resolved_vendor_id).maybe_single().execute()
-            return response.data
+            return maybe_single_row(response) or None
         except Exception as e:
             if _is_rest_quota_error(e):
                 return pg_select_contractor_by_vendor_id(resolved_vendor_id)
@@ -164,7 +165,7 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
             member_res = supabase.table("vendor_members").select("vendor_id").eq(
                 "id", contractor_id
             ).maybe_single().execute()
-            member = member_res.data or {}
+            member = maybe_single_row(member_res)
         except Exception as e:
             if _is_rest_quota_error(e):
                 member = pg_select_vendor_member(actor_id=contractor_id) or {}
@@ -221,7 +222,7 @@ async def create_connect_account_and_link(
         response = supabase.table("contractors").select("id, stripe_account_id").eq(
             "vendor_id", vendor_id
         ).maybe_single().execute()
-        contractor = response.data
+        contractor = maybe_single_row(response) or None
     except Exception as e:
         if _is_rest_quota_error(e):
             contractor = pg_select_contractor_by_vendor_id(vendor_id)

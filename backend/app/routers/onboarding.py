@@ -13,7 +13,7 @@ import re
 
 from ..services.storage import upload_file
 from ..services.notifications import create_notification
-from ..shared.database import get_db
+from ..shared.database import get_db, maybe_single_row
 from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, VendorMember, VendorDocument
 from ..shared.portfolio import (
     PORTFOLIO_MEDIA_TYPES,
@@ -377,7 +377,7 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         res_existing = await (await get_db()).table("vendor_members").select("*").eq(
             "email", email_l
         ).maybe_single().execute()
-        existing = res_existing.data if res_existing else None
+        existing = maybe_single_row(res_existing) or None
     except Exception as e:
         if _is_rest_quota_error(e):
             existing = pg_select_vendor_member(email=email_l)
@@ -538,9 +538,10 @@ async def validate_rpas_certificate(member_id: str, request: Request):
     db = await get_db()
 
     res_m = await db.table("vendor_members").select("name, drone_certified").eq("id", member_id).maybe_single().execute()
-    if not res_m.data:
+    member_row = maybe_single_row(res_m)
+    if not member_row:
         raise HTTPException(status_code=404, detail="Member not found")
-    vendor_name = res_m.data.get("name", "")
+    vendor_name = member_row.get("name", "")
 
     # Find most recent rpas_certificate document for this member
     res_d = await db.table("vendor_documents").select("id, file_url, status").eq(
@@ -617,7 +618,7 @@ async def get_application_status(member_id: str, token: Optional[str] = None):
     Check the status of an onboarding application.
     """
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Application not found.")
     _check_application_token(member, token)
@@ -651,7 +652,7 @@ async def upload_compliance_document(
     Client must send member_id + application_token (or token) from /apply.
     """
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
     _check_application_token(member, token or application_token)
@@ -762,7 +763,7 @@ async def validate_compliance(member_id: str, doc_type: str, request: Request):
     db = await get_db()
 
     res_m = await db.table("vendor_members").select("name").eq("id", member_id).maybe_single().execute()
-    if not res_m.data:
+    if not maybe_single_row(res_m):
         raise HTTPException(status_code=404, detail="Member not found")
 
     res_d = await db.table("vendor_documents").select("id, file_url, status").eq(
@@ -825,7 +826,7 @@ async def upload_portfolio_sample(
         )
 
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
     _check_application_token(member, token)

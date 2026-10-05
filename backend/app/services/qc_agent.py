@@ -238,8 +238,9 @@ async def run_qc_for_job(job_id: str) -> dict:
 
     db = await get_db()
 
+    from ..shared.database import maybe_single_row
     job_res = await db.table("jobs").select("package_name").eq("id", job_id).maybe_single().execute()
-    package_name = (job_res.data or {}).get("package_name", "") or ""
+    package_name = maybe_single_row(job_res).get("package_name", "") or ""
 
     res = await db.table("uploads").select(
         "id, file_url, processed_url, qc_variant_url, qc_status, processing_status, filename, provider"

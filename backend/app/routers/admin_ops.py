@@ -129,7 +129,7 @@ async def update_applicant_status(
         existing = await (await get_db()).table("vendor_members").select(
             "vendor_type,role,title"
         ).eq("id", member_id).maybe_single().execute()
-        row = (existing.data or {}) if existing else {}
+        row = _maybe_single_row(existing)
         from ..services.vendor_profile import (
             is_platform_owner,
             member_vendor_type,
