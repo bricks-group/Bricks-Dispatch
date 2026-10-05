@@ -246,8 +246,6 @@ async def complete_stills_upload(
     return record.dict()
 
 
-@router.get("")
-
 def _annotate_inferred_media_type(rows: list | None) -> list:
     """Attach inferred media_type for GO Mark complete (not a DB column).
 
@@ -268,6 +266,7 @@ def _annotate_inferred_media_type(rows: list | None) -> list:
     return out
 
 
+@router.get("")
 async def list_uploads(
     job_id: Optional[str] = None,
     authorization: Optional[str] = Header(default=None, alias="Authorization"),

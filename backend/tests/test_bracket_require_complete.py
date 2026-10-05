@@ -227,6 +227,105 @@ def test_list_uploads_annotates_inferred_media_type():
     assert rows[2]["media_type"] == "reel"
 
 
+def test_get_uploads_job_id_is_not_body_rows_422(monkeypatch):
+    """GET /api/uploads?job_id= must hit list_uploads, not a required JSON body.
+
+    Uses the ASGI app directly. Starlette TestClient is unusable here when
+    httpx and httpx2 metaclasses conflict.
+    """
+    import json
+
+    from fastapi import FastAPI
+
+    from app.routers import uploads as up
+
+    class Chain:
+        def __init__(self, data):
+            self._data = data
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def maybe_single(self):
+            return self
+
+        async def execute(self):
+            out = MagicMock()
+            out.data = self._data
+            return out
+
+    class Db:
+        def table(self, name):
+            if name == "jobs":
+                return Chain({"id": "job-1", "vendor_id": "vend", "assignee_id": "photog-1"})
+            return Chain([
+                {"id": "u1", "filename": "DJI_9.jpg", "mime_type": "image/jpeg", "job_id": "job-1"},
+            ])
+
+    async def _actor(*_a, **_k):
+        return "photog-1"
+
+    async def _member(actor_id, email=None):
+        return {"id": actor_id, "vendor_id": "vend"}
+
+    async def _db():
+        return Db()
+
+    monkeypatch.setattr(up, "resolve_vendor_actor_id", _actor)
+    monkeypatch.setattr(up, "get_vendor_member", _member)
+    monkeypatch.setattr(up, "get_db", _db)
+
+    app = FastAPI()
+    app.include_router(up.router)
+    get_routes = [
+        r for r in up.router.routes
+        if getattr(r, "path", "") == "/api/uploads" and "GET" in (getattr(r, "methods", None) or set())
+    ]
+    assert len(get_routes) == 1
+    assert get_routes[0].endpoint.__name__ == "list_uploads"
+
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/api/uploads",
+        "raw_path": b"/api/uploads",
+        "query_string": b"job_id=job-1",
+        "headers": [],
+        "client": ("127.0.0.1", 123),
+        "server": ("test", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+    start = next(m for m in messages if m["type"] == "http.response.start")
+    status = start["status"]
+    raw = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
+    body = json.loads(raw.decode() or "null")
+    assert status != 422, body
+    assert status == 200
+    assert isinstance(body, list)
+    assert body[0]["filename"] == "DJI_9.jpg"
+    assert body[0]["media_type"] == "drone"
+
+
 class _QuotaErr(Exception):
     def __str__(self):
         return "402 Payment Required: exceed_storage_size_quota"
