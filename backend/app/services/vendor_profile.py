@@ -29,6 +29,15 @@ _SKILL_KEY_ALIASES = {
     "photography": "photo",
     "photos": "photo",
     "hdr": "photo",
+    # www / OS / Companion stamp job_type=floor_plan_only (stripe-webhook +
+    # book_checkout + PACKAGES). SKILL_KEYS has photo, not floor_plan* — without
+    # this alias hard-gate needed.issubset(have) demands a phantom skill no
+    # photo vendor has, so floor-plan-only books never auto-assign.
+    "floor_plan": "photo",
+    "floorplan": "photo",
+    "floor_plan_only": "photo",
+    "floorplans": "photo",
+    "2d_floor_plan": "photo",
     "virtual": "tour",
     "3d": "tour",
     "polycam": "tour",
@@ -42,13 +51,14 @@ def normalize_skill_key(raw: Any) -> str:
 
 
 def specialty_matches_job(member: Any, job: Any) -> bool:
-    """Soft specialty boost for assign scoring — video/reel/cinematic lockstep.
+    """Soft specialty boost for assign scoring — video/reel + floor_plan→photo lockstep.
 
     Hard-gate uses job_required_skills ⊆ vendor_skills. Rule-based scoring used
-    ``specialty == job_type or job_type in have``; after video→reel skill alias,
-    have never contains the phantom "video" label, so specialty=reel (and
-    skills=["reel"]) lost the specialty boost on in-flight job_type=video.
-    Normalize both sides the same way vendor_skills / job_required_skills do.
+    ``specialty == job_type or job_type in have``; after video→reel / floor_plan→photo
+    skill aliases, have never contains the phantom labels, so specialty=reel|photo
+    (and skills=["reel"|"photo"]) lost the specialty boost on in-flight
+    job_type=video|floor_plan_only. Normalize both sides the same way
+    vendor_skills / job_required_skills do.
     """
     m = _as_dict(member)
     j = _as_dict(job)
@@ -240,8 +250,13 @@ def vendor_skills(member: Any) -> set[str]:
         # label that hard-gates assign against reel-capable vendors.
         if key in ("video", "cinematic", "cinematic_reel"):
             skills.add("reel")
+        # Floor-plan-only books stamp floor_plan* — map onto photo (SKILL_KEYS).
+        if key in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
+            skills.add("photo")
     spec = str(m.get("specialty") or "").strip().lower()
     if spec in ("photo", "photography", "photos"):
+        skills.add("photo")
+    elif spec in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
         skills.add("photo")
     elif spec == "virtual":
         skills.add("tour")
@@ -293,6 +308,11 @@ def job_required_skills(job: Any) -> set[str]:
     jt = str(j.get("job_type") or "photo").lower()
     skills: set[str] = set()
     if jt in ("photo", "photography", ""):
+        skills.add("photo")
+    elif jt in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
+        # SKILL_KEYS has photo, not floor_plan*. www stripe-webhook / OS
+        # book_checkout / Companion PACKAGES stamp job_type=floor_plan_only —
+        # hard-gate must not demand a phantom skill photo vendors lack.
         skills.add("photo")
     elif jt == "virtual":
         skills.add("tour")
