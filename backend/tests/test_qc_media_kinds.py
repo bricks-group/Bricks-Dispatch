@@ -115,12 +115,16 @@ def test_visit_container_check():
     assert qmk.check_visit_head(PLY_HEAD, 0, "room.ply")["qc_status"] == "rejected"
 
 
-def test_visit_fetch_failure_fails_open(monkeypatch):
+def test_visit_fetch_failure_holds(monkeypatch):
+    """Fetch miss must hold (image_unavailable), not fail-open as passed."""
     async def boom(url, n=0):
         return None, None
     monkeypatch.setattr(qmk, "fetch_head", boom)
     v = _run(qmk.run_visit_qc("v", "https://x", "scan.splat"))
-    assert v["qc_status"] == "passed" and v["qc_source"] == "skipped"
+    assert v["qc_status"] == "rejected"
+    assert v["qc_source"] == "unavailable"
+    assert "image_unavailable" in (v.get("qc_notes") or "").lower()
+    assert "skipped (visit unavailable)" not in (v.get("qc_notes") or "").lower()
 
 
 
@@ -186,8 +190,11 @@ def test_fetch_head_reads_only_first_bytes_and_total(monkeypatch):
     assert seen["range"] == "bytes=0-65535"
     assert _run(qmk.fetch_head("https://blob/empty.mp4")) == (b"", 0)
     assert _run(qmk.run_video_qc("v", "https://blob/empty.mp4"))["qc_status"] == "rejected"
-    # fetch failure (403) fails open, never holds on our own outage
-    assert _run(qmk.run_video_qc("v", "https://blob/gone.mp4"))["qc_source"] == "skipped"
+    # fetch failure (403) holds — same honesty as listing-still image_unavailable
+    gone = _run(qmk.run_video_qc("v", "https://blob/gone.mp4"))
+    assert gone["qc_status"] == "rejected"
+    assert gone["qc_source"] == "unavailable"
+    assert "image_unavailable" in (gone.get("qc_notes") or "").lower()
 
 
 def test_total_from_content_range():
@@ -195,12 +202,25 @@ def test_total_from_content_range():
     assert qmk._total_from_headers(r) == 48_000_000
 
 
-def test_video_fetch_failure_fails_open(monkeypatch):
+def test_video_fetch_failure_holds(monkeypatch):
     async def boom(url, n=0):
         return None, None
     monkeypatch.setattr(qmk, "fetch_head", boom)
     v = _run(qmk.run_video_qc("v", "https://x"))
-    assert v["qc_status"] == "passed" and v["qc_source"] == "skipped"
+    assert v["qc_status"] == "rejected"
+    assert v["qc_source"] == "unavailable"
+    assert "image_unavailable" in (v.get("qc_notes") or "").lower()
+
+
+def test_floorplan_fetch_failure_holds(monkeypatch):
+    async def boom(url):
+        return None
+    monkeypatch.setattr("app.services.qc_agent._fetch_image_bytes", boom)
+    v = _run(qmk.run_floorplan_qc("fp", "https://x", "plan.png"))
+    assert v["qc_status"] == "rejected"
+    assert v["qc_source"] == "unavailable"
+    assert "image_unavailable" in (v.get("qc_notes") or "").lower()
+    assert "skipped (floor plan unavailable)" not in (v.get("qc_notes") or "").lower()
 
 
 def _install_job(monkeypatch, rows, fetched):

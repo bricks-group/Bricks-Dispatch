@@ -360,9 +360,29 @@ async def run_qc_for_job(job_id: str) -> dict:
                 continue
             src = u.get("processed_url") or u.get("file_url")
             if not src:
+                # No path to review — hold. Leaving pending would let finalize
+                # deliver an unreviewed Visit (only rejected is pruned).
+                await _persist_qc(db, u["id"], {
+                    **_image_unavailable_hold(
+                        "no storage path for Visit QC review"
+                    ),
+                    "qc_at": datetime.now(timezone.utc).isoformat(),
+                })
+                counts["total"] += 1
+                counts["rejected"] += 1
                 continue
+            # HTTPS (public Blob) passthrough — signing an https URL as a
+            # Storage path returns None; the old continue left pending.
             signed = src if str(src).startswith("https://") else await get_signed_download_url(src, expiry=300)
             if not signed:
+                await _persist_qc(db, u["id"], {
+                    **_image_unavailable_hold(
+                        "could not sign Visit for QC review"
+                    ),
+                    "qc_at": datetime.now(timezone.utc).isoformat(),
+                })
+                counts["total"] += 1
+                counts["rejected"] += 1
                 continue
             qc = await run_visit_qc(u["id"], signed, filename=raw_name)
             await _persist_qc(db, u["id"], {
@@ -380,10 +400,29 @@ async def run_qc_for_job(job_id: str) -> dict:
         # package photo count.
         if kind in ("video", "floorplan") and is_listing_still_delivery_row(u):
             src = u.get("processed_url") or u.get("file_url")
+            label = "video" if kind == "video" else "floor plan"
             if not src:
+                await _persist_qc(db, u["id"], {
+                    **_image_unavailable_hold(
+                        f"no storage path for {label} QC review"
+                    ),
+                    "qc_at": datetime.now(timezone.utc).isoformat(),
+                })
+                counts["total"] += 1
+                counts["rejected"] += 1
                 continue
+            # HTTPS passthrough — same as Visit / listing stills. Sign miss
+            # used to continue with pending and finalize delivered unreviewed.
             signed = src if str(src).startswith("https://") else await get_signed_download_url(src, expiry=300)
             if not signed:
+                await _persist_qc(db, u["id"], {
+                    **_image_unavailable_hold(
+                        f"could not sign {label} for QC review"
+                    ),
+                    "qc_at": datetime.now(timezone.utc).isoformat(),
+                })
+                counts["total"] += 1
+                counts["rejected"] += 1
                 continue
             if kind == "video":
                 qc = await run_video_qc(u["id"], signed)

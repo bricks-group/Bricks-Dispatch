@@ -347,3 +347,136 @@ def test_run_qc_for_job_missing_path_holds(monkeypatch):
     assert uid == "still-nopath"
     assert fields["qc_status"] == "rejected"
     assert "image_unavailable" in (fields.get("qc_notes") or "").lower()
+
+
+def test_run_qc_for_job_visit_sign_miss_holds(monkeypatch):
+    """Visit Storage sign miss must reject, not leave pending (finalize prune)."""
+    monkeypatch.setattr(qc, "QC_ENABLED", True)
+    writes = []
+    rows = [
+        {
+            "id": "visit-sign",
+            "filename": "scan.ply",
+            "file_url": "visits/j1/scan.ply",
+            "processed_url": None,
+            "qc_variant_url": None,
+            "qc_status": "pending",
+            "qc_notes": None,
+            "processing_status": "done",
+            "provider": "visit",
+        }
+    ]
+
+    async def fake_get_db():
+        return _job_db(rows, writes)
+
+    monkeypatch.setattr("app.shared.database.get_db", fake_get_db)
+    monkeypatch.setattr(
+        "app.services.storage.get_signed_download_url",
+        AsyncMock(return_value=None),
+    )
+
+    def boom_visit(*_a, **_k):
+        raise AssertionError("run_visit_qc must not run without a URL")
+
+    monkeypatch.setattr("app.services.qc_media_kinds.run_visit_qc", boom_visit)
+    monkeypatch.setattr(
+        "app.services.qc_opencv.verify_deliverable_count",
+        lambda *_a, **_k: {"ok": True, "expected": None, "actual": 0, "issue": None},
+    )
+
+    counts = _run(qc.run_qc_for_job("j1"))
+    assert counts.get("rejected", 0) >= 1
+    assert writes
+    uid, fields = writes[0]
+    assert uid == "visit-sign"
+    assert fields["qc_status"] == "rejected"
+    assert "image_unavailable" in (fields.get("qc_notes") or "").lower()
+    assert "sign" in (fields.get("qc_notes") or "").lower()
+
+
+def test_run_qc_for_job_video_missing_path_holds(monkeypatch):
+    """Done video with no file/processed path must hold, not stay pending."""
+    monkeypatch.setattr(qc, "QC_ENABLED", True)
+    writes = []
+    rows = [
+        {
+            "id": "vid-nopath",
+            "filename": "reel.mp4",
+            "file_url": None,
+            "processed_url": None,
+            "qc_variant_url": None,
+            "qc_status": "pending",
+            "qc_notes": None,
+            "processing_status": "done",
+            "provider": "as_is",
+            "mime_type": "video/mp4",
+        }
+    ]
+
+    async def fake_get_db():
+        return _job_db(rows, writes)
+
+    monkeypatch.setattr("app.shared.database.get_db", fake_get_db)
+    monkeypatch.setattr(
+        "app.services.storage.get_signed_download_url",
+        AsyncMock(side_effect=AssertionError("must not sign empty path")),
+    )
+    monkeypatch.setattr(
+        "app.services.qc_opencv.verify_deliverable_count",
+        lambda *_a, **_k: {"ok": True, "expected": None, "actual": 0, "issue": None},
+    )
+
+    counts = _run(qc.run_qc_for_job("j1"))
+    assert counts.get("rejected", 0) >= 1
+    assert writes
+    uid, fields = writes[0]
+    assert uid == "vid-nopath"
+    assert fields["qc_status"] == "rejected"
+    assert "image_unavailable" in (fields.get("qc_notes") or "").lower()
+
+
+def test_run_qc_for_job_floorplan_sign_miss_holds(monkeypatch):
+    """Floor plan Storage sign miss must reject, not leave pending."""
+    monkeypatch.setattr(qc, "QC_ENABLED", True)
+    writes = []
+    rows = [
+        {
+            "id": "fp-sign",
+            "filename": "plan.png",
+            "file_url": "jobs/j1/plan.png",
+            "processed_url": "jobs/j1/plan.png",
+            "qc_variant_url": None,
+            "qc_status": "pending",
+            "qc_notes": None,
+            "processing_status": "done",
+            "provider": "as_is",
+        }
+    ]
+
+    async def fake_get_db():
+        return _job_db(rows, writes)
+
+    monkeypatch.setattr("app.shared.database.get_db", fake_get_db)
+    monkeypatch.setattr(
+        "app.services.storage.get_signed_download_url",
+        AsyncMock(return_value=None),
+    )
+
+    def boom_fp(*_a, **_k):
+        raise AssertionError("run_floorplan_qc must not run without a URL")
+
+    monkeypatch.setattr("app.services.qc_media_kinds.run_floorplan_qc", boom_fp)
+    monkeypatch.setattr(
+        "app.services.qc_opencv.verify_deliverable_count",
+        lambda *_a, **_k: {"ok": True, "expected": None, "actual": 0, "issue": None},
+    )
+
+    counts = _run(qc.run_qc_for_job("j1"))
+    assert counts.get("rejected", 0) >= 1
+    assert writes
+    uid, fields = writes[0]
+    assert uid == "fp-sign"
+    assert fields["qc_status"] == "rejected"
+    assert "image_unavailable" in (fields.get("qc_notes") or "").lower()
+    assert "sign" in (fields.get("qc_notes") or "").lower()

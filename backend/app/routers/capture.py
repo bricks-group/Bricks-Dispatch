@@ -1696,20 +1696,26 @@ async def _visit_file_get_url(storage_path: str) -> Optional[str]:
 async def _visit_file_qc(url: Optional[str], storage_path: str) -> dict:
     """Same first-bytes Visit container check job QC runs on Visit uploads.
 
-    Fails open (passed / skipped) when the file cannot be fetched — parity
-    with run_visit_qc and listing stills. Never judges scan quality.
+    Holds (rejected + image_unavailable) when the file cannot be signed or
+    fetched — parity with run_visit_qc / listing stills. Deliver path already
+    422s on rejected so an unchecked Visit never lands on the listing.
+    Never judges scan quality (no auto-edit claim).
     """
-    from ..services.qc_media_kinds import run_visit_qc
+    from ..services.qc_media_kinds import _media_unavailable_hold, run_visit_qc
 
     if not url:
-        return {"qc_status": "passed", "qc_notes": "QC skipped (Visit unavailable)"}
+        return _media_unavailable_hold(
+            "could not sign Visit for QC review"
+        )
     try:
         return await run_visit_qc(storage_path, url, filename=storage_path)
     except Exception as e:
         logging.getLogger(__name__).warning(
-            "Visit file QC failed open for %s: %s", storage_path, type(e).__name__
+            "Visit file QC hold (check error) for %s: %s", storage_path, type(e).__name__
         )
-        return {"qc_status": "passed", "qc_notes": "QC skipped (Visit check error)"}
+        return _media_unavailable_hold(
+            f"Visit QC check error ({type(e).__name__})"
+        )
 
 
 @router.post("/visit/deliver")

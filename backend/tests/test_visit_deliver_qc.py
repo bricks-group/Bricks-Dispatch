@@ -222,13 +222,14 @@ def test_polycam_url_skips_visit_file_qc(monkeypatch):
     assert finalize.await_count == 1
 
 
-def test_visit_file_qc_fail_open_no_url(monkeypatch):
-    """No signed GET → fail open (passed/skipped), same as run_visit_qc."""
+def test_visit_file_qc_holds_no_url(monkeypatch):
+    """No signed GET → hold (image_unavailable), same as run_visit_qc."""
     from app.routers import capture as cap
 
     out = asyncio.run(cap._visit_file_qc(None, "visits/j/a.ply"))
-    assert out["qc_status"] == "passed"
-    assert "skipped" in (out.get("qc_notes") or "").lower()
+    assert out["qc_status"] == "rejected"
+    assert "image_unavailable" in (out.get("qc_notes") or "").lower()
+    assert "skipped" not in (out.get("qc_notes") or "").lower()
 
 
 @pytest.mark.parametrize(
@@ -252,10 +253,11 @@ def test_visit_file_qc_container_check(monkeypatch, head, total, path, status):
     assert out["qc_status"] == status
 
 
-def test_visit_file_qc_fetch_failure_fails_open(monkeypatch):
+def test_visit_file_qc_fetch_failure_holds(monkeypatch):
     from app.routers import capture as cap
     from app.services import qc_media_kinds as qmk
 
     monkeypatch.setattr(qmk, "fetch_head", AsyncMock(return_value=(None, None)))
     out = asyncio.run(cap._visit_file_qc("https://example.test/x", "visits/j/a.ply"))
-    assert out["qc_status"] == "passed"
+    assert out["qc_status"] == "rejected"
+    assert "image_unavailable" in (out.get("qc_notes") or "").lower()
