@@ -22,7 +22,9 @@ Floor plan / video / Visit that cannot be fetched used to fail open (pass
 with a skip note), so an unreviewed file could reach the client — same honesty
 hole listing stills closed with image_unavailable. Fetch miss / empty head now
 holds with rejected + image_unavailable; late-fold prune and hold notices
-already understand that verdict. No backfill of old skip-pass rows.
+already understand that verdict. Old skip-pass rows ("QC skipped (... unavailable)")
+are re-checked on the next delivery/late-fold QC pass (same narrow pattern as
+Non-image asset / unreadable_image) — no DB migration.
 """
 from __future__ import annotations
 
@@ -118,6 +120,32 @@ def is_legacy_non_image_asset_pass(upload: Optional[dict]) -> bool:
     if "non-image asset" not in notes:
         return False
     return qc_kind_for_upload(row) in ("visit", "video")
+
+
+
+def is_legacy_unavailable_skip_pass(upload: Optional[dict]) -> bool:
+    """True when a deliverable was auto-passed as QC skipped (... unavailable).
+
+    Before image_unavailable holds (586427b stills; cb66e7e Visit/video/floorplan),
+    fetch miss stamped passed with a skip note so an unreviewed file could reach
+    the client. Those rows keep qc_status=passed, so late-fold / run_qc_for_job
+    would otherwise never re-hold them. Only these exact prior notes are eligible
+    — honest container/photo passes, provider/error skips, and real holds stay.
+    """
+    row = upload if isinstance(upload, dict) else {}
+    if str(row.get("qc_status") or "").strip().lower() != "passed":
+        return False
+    notes = str(row.get("qc_notes") or "").lower()
+    kind = qc_kind_for_upload(row)
+    if "qc skipped (image unavailable)" in notes:
+        return kind == "still"
+    if "qc skipped (visit unavailable)" in notes:
+        return kind == "visit"
+    if "qc skipped (video unavailable)" in notes:
+        return kind == "video"
+    if "qc skipped (floor plan unavailable)" in notes:
+        return kind == "floorplan"
+    return False
 
 
 def _verdict(status: str, score: int, notes: str, source: str) -> dict:

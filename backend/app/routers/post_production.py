@@ -36,6 +36,7 @@ from ..services.qc_agent import run_qc_for_job
 from ..services.qc_media_kinds import (
     has_qc_verdict,
     is_legacy_non_image_asset_pass,
+    is_legacy_unavailable_skip_pass,
     is_legacy_unreadable_floorplan_hold,
 )
 from ..services.storage import get_signed_download_url, SIGNED_URL_EXPIRY
@@ -474,8 +475,9 @@ async def _fold_late_into_existing_delivery(
 
     Runs QC on listing stills / Visit files missing qc_status before fold, and
     re-checks floor plans still held as unreadable_image from the old listing-photo
-    QC plus Visit/video auto-passed as Non-image asset (pre-container QC); still no payout/client email. Owner gets a QC-hold notice only for files
-    that just ran QC and were held.
+    QC, Visit/video auto-passed as Non-image asset (pre-container QC), and
+    fetch-miss auto-passes ("QC skipped (... unavailable)"); still no payout/client email.
+    Owner gets a QC-hold notice only for files that just ran QC and were held.
     """
     db = await get_db()
 
@@ -559,18 +561,35 @@ async def _fold_late_into_existing_delivery(
             return False
         return is_legacy_non_image_asset_pass(u)
 
+    def _ready_legacy_unavailable_recheck(u: dict) -> bool:
+        """Fetch-miss auto-pass ("QC skipped (... unavailable)") — re-run QC.
+
+        Pre-image_unavailable rows keep qc_status=passed, so missing-qc predicates
+        miss them; without this an unreviewed still/Visit/video/plan stayed delivered.
+        """
+        if not isinstance(u, dict):
+            return False
+        if u.get("processing_status") == "failed":
+            return False
+        if u.get("processing_status") in ("processing", "pending"):
+            return False
+        if not (u.get("processed_url") or u.get("file_url")):
+            return False
+        return is_legacy_unavailable_skip_pass(u)
+
     need_qc = [
         u for u in (uploads or [])
         if _ready_still_missing_qc(u)
         or _ready_legacy_floorplan_unreadable_recheck(u)
         or _ready_visit_file_missing_qc(u)
         or _ready_legacy_non_image_recheck(u)
+        or _ready_legacy_unavailable_recheck(u)
     ]
     if need_qc:
         try:
             qc_counts = await run_qc_for_job(job_id)
             logger.info(
-                "Job %s: late-fold QC complete — %s (%s upload(s) needed QC / legacy floor-plan / Visit / Non-image recheck)",
+                "Job %s: late-fold QC complete — %s (%s upload(s) needed QC / legacy floor-plan / Visit / Non-image / unavailable recheck)",
                 job_id,
                 qc_counts,
                 len(need_qc),

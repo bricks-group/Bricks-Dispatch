@@ -1387,3 +1387,109 @@ def test_late_fold_rechecks_legacy_non_image_visit_video(monkeypatch):
     urls = md_tbl.update.call_args[0][0]["delivery_urls"]
     assert not any(u.get("upload_id") == "u-vid" for u in urls)
 
+
+
+def test_late_fold_rechecks_legacy_unavailable_skip_pass(monkeypatch):
+    """Late-fold: fetch-miss skip-pass still/video triggers QC even with qc_status set."""
+    existing = {
+        "id": "md-unavail",
+        "delivery_urls": [
+            {
+                "url": "https://cdn.example/dark.jpg",
+                "filename": "dark.jpg",
+                "upload_id": "u-still",
+            },
+            {
+                "url": "https://cdn.example/fake.mp4",
+                "filename": "fake.mp4",
+                "upload_id": "u-vid",
+                "kind": "reel",
+            },
+        ],
+    }
+    still_legacy_pre = {
+        "id": "u-still",
+        "filename": "dark.jpg",
+        "file_url": "out/dark.jpg",
+        "processed_url": "https://cdn.example/dark.jpg",
+        "processing_status": "done",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (image unavailable)",
+        "provider": "bricks_inhouse",
+    }
+    video_legacy_pre = {
+        "id": "u-vid",
+        "filename": "fake.mp4",
+        "file_url": "raw/fake.mp4",
+        "processed_url": "https://cdn.example/fake.mp4",
+        "processing_status": "done",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (video unavailable)",
+        "provider": "as_is",
+    }
+    still_legacy_post = {
+        **still_legacy_pre,
+        "qc_status": "rejected",
+        "qc_notes": "image_unavailable — could not fetch listing still for QC review",
+    }
+    video_legacy_post = {
+        **video_legacy_pre,
+        "qc_status": "rejected",
+        "qc_notes": "Video file is a still image, not a video.",
+    }
+
+    fetch_n = {"n": 0}
+    uploads_tbl = MagicMock()
+    uploads_tbl.select.return_value = uploads_tbl
+    uploads_tbl.eq.return_value = uploads_tbl
+
+    async def uploads_execute():
+        fetch_n["n"] += 1
+        data = (
+            [still_legacy_pre, video_legacy_pre]
+            if fetch_n["n"] == 1
+            else [still_legacy_post, video_legacy_post]
+        )
+        return MagicMock(data=data)
+
+    uploads_tbl.execute = uploads_execute
+
+    md_tbl = MagicMock()
+    md_tbl.update.return_value = md_tbl
+    md_tbl.eq.return_value = md_tbl
+    md_tbl.execute = AsyncMock(return_value=MagicMock(data=None))
+
+    cap_tbl = MagicMock()
+    cap_tbl.select.return_value = cap_tbl
+    cap_tbl.eq.return_value = cap_tbl
+    cap_tbl.execute = AsyncMock(return_value=MagicMock(data=[]))
+
+    def table(name):
+        if name == "uploads":
+            return uploads_tbl
+        if name == "media_delivery":
+            return md_tbl
+        if name == "capture_sessions":
+            return cap_tbl
+        return MagicMock()
+
+    db = MagicMock()
+    db.table.side_effect = table
+    qc_calls = []
+
+    async def fake_qc(job_id):
+        qc_calls.append(job_id)
+        return {"passed": 0, "rejected": 2}
+
+    monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(pp, "run_qc_for_job", fake_qc)
+    monkeypatch.setattr(pp, "_delivery_urls_from_capture_sessions", lambda *a, **k: [])
+
+    folded = asyncio.run(pp._fold_late_into_existing_delivery("job-unavail", existing))
+
+    assert qc_calls == ["job-unavail"]
+    assert folded is True
+    urls = md_tbl.update.call_args[0][0]["delivery_urls"]
+    # Both rejected still and video pruned from delivery_urls
+    assert not any(u.get("upload_id") == "u-still" for u in urls)
+    assert not any(u.get("upload_id") == "u-vid" for u in urls)

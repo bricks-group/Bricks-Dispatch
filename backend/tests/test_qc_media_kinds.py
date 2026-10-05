@@ -586,3 +586,173 @@ def test_job_qc_rechecks_legacy_non_image_visit_and_video(monkeypatch):
     assert writes["video-legacy"]["qc_status"] == "rejected"
     assert "still image" in writes["video-legacy"]["qc_notes"].lower()
     assert summary["rejected"] >= 2
+
+
+def test_legacy_unavailable_skip_pass_predicate():
+    """Only fetch-miss skip-passes with the exact unavailable notes are eligible."""
+    f = qmk.is_legacy_unavailable_skip_pass
+    assert f({
+        "filename": "living.jpg",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (image unavailable)",
+    })
+    assert f({
+        "filename": "scan.splat",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (Visit unavailable)",
+        "provider": "visit",
+    })
+    assert f({
+        "filename": "reel.mp4",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (video unavailable)",
+    })
+    assert f({
+        "filename": "floorplan.pdf",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (floor plan unavailable)",
+    })
+    # Honest container / photo passes — must not recheck
+    assert not f({
+        "filename": "living.jpg",
+        "qc_status": "passed",
+        "qc_notes": "OpenCV pre-pass: passed",
+    })
+    assert not f({
+        "filename": "scan.splat",
+        "qc_status": "passed",
+        "qc_notes": "Visit container OK (splat).",
+        "provider": "visit",
+    })
+    assert not f({
+        "filename": "reel.mp4",
+        "qc_status": "passed",
+        "qc_notes": "Video container OK (MP4/MOV).",
+    })
+    # New image_unavailable hold is rejected, not this path
+    assert not f({
+        "filename": "living.jpg",
+        "qc_status": "rejected",
+        "qc_notes": "image_unavailable — could not fetch listing still for QC review",
+    })
+    # Provider / error skips — different honesty hole, leave alone
+    assert not f({
+        "filename": "living.jpg",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (no provider configured)",
+    })
+    assert not f({
+        "filename": "living.jpg",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (error: TimeoutError)",
+    })
+    # Wrong kind for the note
+    assert not f({
+        "filename": "living.jpg",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (video unavailable)",
+    })
+    assert not f({
+        "filename": "scan.splat",
+        "qc_status": "passed",
+        "qc_notes": "QC skipped (image unavailable)",
+        "provider": "visit",
+    })
+    assert not f({
+        "filename": "living.jpg",
+        "qc_status": "passed",
+        "qc_notes": "",
+    })
+
+
+def test_job_qc_rechecks_legacy_unavailable_skip_pass(monkeypatch):
+    """Fetch-miss skip-pass still/Visit/video/plan are re-run; honest passes stay."""
+    rows = [
+        {
+            "id": "still-legacy",
+            "file_url": "out/dark.jpg",
+            "processed_url": "out/dark.jpg",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "QC skipped (image unavailable)",
+            "processing_status": "done",
+            "filename": "dark.jpg",
+            "provider": "bricks_inhouse",
+        },
+        {
+            "id": "visit-legacy",
+            "file_url": "raw/bad.splat",
+            "processed_url": "raw/bad.splat",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "QC skipped (Visit unavailable)",
+            "processing_status": "done",
+            "filename": "bad.splat",
+            "provider": "visit",
+        },
+        {
+            "id": "video-legacy",
+            "file_url": "raw/fake.mp4",
+            "processed_url": "raw/fake.mp4",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "QC skipped (video unavailable)",
+            "processing_status": "done",
+            "filename": "fake.mp4",
+            "provider": "as_is",
+        },
+        {
+            "id": "fp-legacy",
+            "file_url": "raw/blank-plan.png",
+            "processed_url": "raw/blank-plan.png",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "QC skipped (floor plan unavailable)",
+            "processing_status": "done",
+            "filename": "Floor Plan.png",
+            "provider": "floorplan",
+        },
+        {
+            "id": "still-ok",
+            "file_url": "out/living.jpg",
+            "processed_url": "out/living.jpg",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "OpenCV pre-pass: passed",
+            "processing_status": "done",
+            "filename": "living.jpg",
+            "provider": "bricks_inhouse",
+        },
+        {
+            "id": "visit-ok",
+            "file_url": "raw/good.ply",
+            "processed_url": "raw/good.ply",
+            "qc_variant_url": None,
+            "qc_status": "passed",
+            "qc_notes": "Visit container OK (PLY).",
+            "processing_status": "done",
+            "filename": "good.ply",
+            "provider": "visit",
+        },
+    ]
+    fetched = {
+        "dark.jpg": _png(Image.new("RGB", (800, 600), (40, 40, 40))),
+        "bad.splat": b"<!DOCTYPE html><html>NoSuchKey</html>",
+        "fake.mp4": b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 40,
+        "blank-plan.png": _png(Image.new("RGB", (800, 600), "white")),
+        "living.jpg": _png(Image.new("RGB", (800, 600), (180, 180, 180))),
+        "good.ply": PLY_HEAD,
+    }
+    qc_agent, writes, photo_reviewed = _install_job(monkeypatch, rows, fetched)
+    summary = _run(qc_agent.run_qc_for_job("job-unavail"))
+
+    assert "still-ok" not in writes
+    assert "visit-ok" not in writes
+    assert "still-legacy" in photo_reviewed
+    assert writes["visit-legacy"]["qc_status"] == "rejected"
+    assert "error page" in writes["visit-legacy"]["qc_notes"].lower()
+    assert writes["video-legacy"]["qc_status"] == "rejected"
+    assert "still image" in writes["video-legacy"]["qc_notes"].lower()
+    assert writes["fp-legacy"]["qc_status"] == "rejected"
+    assert "blank" in writes["fp-legacy"]["qc_notes"].lower()
+    assert summary["rejected"] >= 3
