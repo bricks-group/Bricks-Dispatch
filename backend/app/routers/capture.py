@@ -263,7 +263,14 @@ async def _actor_and_job(
             "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id, "
             "package_id, package_name, add_ons, client_instructions, property_details"
         ).eq("id", job_id).maybe_single().execute()
-        job = res.data or {}
+        # maybe_single().execute() returns None when PostgREST has no row
+        # (and .data can be null). None.data is AttributeError, which the
+        # global handler turns into HTTP 500 with no CORS headers — the
+        # browser reports net::ERR_FAILED. Treat null/missing data as no row
+        # so the existing empty-job path (PG fallback, then the route's
+        # empty session or job_not_found) runs instead.
+        data = getattr(res, "data", None) if res is not None else None
+        job = data if isinstance(data, dict) else {}
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
         if not _is_rest_quota_error(e):
