@@ -334,17 +334,42 @@ async def deliver_bracket_group_without_vendor(
         filenames.append(str(asset.get("filename") or ""))
         loaded.append(asset)
 
-    if not loaded:
-        return
-    if len(frames) == 1:
-        await deliver_asset_without_vendor(db, job_id, loaded[0])
-        return
+    async def _fold_siblings(primary_asset, primary_processed) -> None:
+        # Exposures that are not the primary share its result and never reach
+        # the listing. Includes frames whose download failed — left "pending"
+        # they block _finalize_job_if_complete (in_flight) until reconcile.
+        pid = primary_asset.get("id")
+        for asset in group:
+            uid = asset.get("id")
+            if not uid or uid == pid:
+                continue
+            await _safe_update_upload(db, uid, {
+                "processing_status": "done",
+                "processed_url": primary_processed or primary_asset.get("file_url"),
+                "provider": "bracket_sibling",
+                "processed_at": now,
+            })
 
-    # Pick primary: bias closest to 0, else middle of sorted group.
     def _bias_key(item):
         b = exposure_bias_from_name(str(item.get("filename") or ""))
         return (999.0 if b is None else abs(b), str(item.get("filename") or ""))
 
+    if not loaded:
+        # Every exposure download missed: single-frame path on the primary
+        # (retries download; holds the unedited original if it misses again).
+        candidates = [a for a in group if a.get("id") and a.get("file_url")]
+        if not candidates:
+            return
+        primary = sorted(candidates, key=_bias_key)[0]
+        primary_processed = await deliver_asset_without_vendor(db, job_id, primary)
+        await _fold_siblings(primary, primary_processed)
+        return
+    if len(frames) == 1:
+        primary_processed = await deliver_asset_without_vendor(db, job_id, loaded[0])
+        await _fold_siblings(loaded[0], primary_processed)
+        return
+
+    # Pick primary: bias closest to 0, else middle of sorted group.
     primary = sorted(loaded, key=_bias_key)[0]
     primary_id = primary.get("id")
 
@@ -418,16 +443,7 @@ async def deliver_bracket_group_without_vendor(
             f"{primary_id}; {len(loaded) - 1} sibling(s) folded"
         )
         primary_processed = await deliver_asset_without_vendor(db, job_id, primary)
-        for asset in loaded:
-            uid = asset.get("id")
-            if uid == primary_id:
-                continue
-            await _safe_update_upload(db, uid, {
-                "processing_status": "done",
-                "processed_url": primary_processed or primary.get("file_url"),
-                "provider": "bracket_sibling",
-                "processed_at": now,
-            })
+        await _fold_siblings(primary, primary_processed)
         return
 
     for asset in loaded:
@@ -449,6 +465,19 @@ async def deliver_bracket_group_without_vendor(
                 f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
             )[:500]
         await _safe_update_upload(db, uid, update)
+
+    # Exposures whose download missed fold into the merged primary too.
+    loaded_ids = {a.get("id") for a in loaded}
+    for asset in group:
+        uid = asset.get("id")
+        if not uid or uid in loaded_ids:
+            continue
+        await _safe_update_upload(db, uid, {
+            "processing_status": "done",
+            "processed_url": processed,
+            "provider": "bracket_sibling",
+            "processed_at": now,
+        })
 
 
 
@@ -704,6 +733,16 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
                 qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
                 provider = "bricks_inhouse"
+            else:
+                # Source bytes missing (Storage 402 + Blob miss) — nothing was
+                # auto-edited. Hold the unedited original; never deliver raw as_is.
+                logger.warning(
+                    f"Job {job_id}: twilight source download failed for {upload_id} "
+                    "— unedited original held"
+                )
+                processed = file_path
+                provider = "original"
+                enhance_meta = {}
         except Exception as e:
             logger.error(
                 f"Twilight enhance failed for {upload_id}: {e} — delivering original"
@@ -798,6 +837,17 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                         )
                 processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
                 qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
+            else:
+                # Source bytes missing (Storage 402 + Blob miss) — nothing was
+                # auto-edited. Used to fall through as provider=as_is with the raw
+                # path (no hold) so QC could pass an unedited still onto the listing.
+                logger.warning(
+                    f"Job {job_id}: source download failed for {upload_id} "
+                    "— unedited original held"
+                )
+                processed = file_path
+                provider = "original"
+                enhance_meta = {}
         except Exception as e:
             logger.error(f"In-house enhance failed for {upload_id}: {e} — delivering original")
             processed = file_path

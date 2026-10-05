@@ -156,3 +156,99 @@ def test_run_qc_preserves_unedited_original_hold(monkeypatch):
     summary = _run(qc_agent.run_qc_for_job("job-q"))
     assert summary["rejected"] == 1
     assert writes and writes[0][1]["qc_status"] == "rejected"
+
+
+# --- Source download miss (Storage 402 + Blob miss) ---------------------------
+
+
+def _install_dl(monkeypatch, missing, *, bracket, single):
+    updates = _install(monkeypatch, bracket=bracket, single=single)
+
+    async def dl(path):
+        return None if path in missing else b"\xff\xd8fakejpg"
+
+    sys.modules["app.services.storage"].download_bytes = dl
+    return updates
+
+
+def _never(*_a, **_k):
+    raise AssertionError("enhance must not run without source bytes")
+
+
+def test_single_vendor_photo_download_miss_is_held_not_as_is(monkeypatch):
+    """No source bytes → nothing auto-edited → hold the raw, never provider=as_is."""
+    updates = _install_dl(monkeypatch, {"raw/s1.jpg"}, bracket=_never, single=_never)
+    out = _run(pp.deliver_asset_without_vendor(
+        MagicMock(storage=MagicMock()), "job-dl",
+        {"id": "s1", "file_url": "raw/s1.jpg", "filename": "kitchen.jpg"},
+    ))
+    (uid, upd), = updates
+    assert uid == "s1"
+    assert upd["provider"] == "original"
+    assert upd["qc_status"] == "rejected" and upd["qc_score"] == 0
+    assert upd["processing_status"] == "done"
+    assert out == "raw/s1.jpg"
+
+
+def test_twilight_download_miss_is_held_not_as_is(monkeypatch):
+    updates = _install_dl(monkeypatch, {"raw/dusk.jpg"}, bracket=_never, single=_never)
+    _run(pp.deliver_asset_without_vendor(
+        MagicMock(storage=MagicMock()), "job-dl",
+        {"id": "t1", "file_url": "raw/dusk.jpg", "filename": "dusk.jpg",
+         "media_type": "twilight"},
+    ))
+    (uid, upd), = updates
+    assert uid == "t1"
+    assert upd["provider"] == "original"
+    assert upd["qc_status"] == "rejected"
+
+
+def test_bracket_partial_download_miss_folds_missing_exposure(monkeypatch):
+    """Merged primary delivers; the exposure whose download missed is not left pending."""
+    updates = _install_dl(
+        monkeypatch, {"p3"},
+        bracket=lambda frames, *_a, **_k: (b"\xff\xd8merged", {}),
+        single=_never,
+    )
+    _run(pp.deliver_bracket_group_without_vendor(
+        MagicMock(storage=MagicMock()), "job-p", list(GROUP), apply_sky=True
+    ))
+    by_id = {uid: u for uid, u in updates}
+    assert set(by_id) == {"u1", "u2", "u3"}
+    assert by_id["u2"]["provider"] == "bricks_inhouse"
+    for sib in ("u1", "u3"):
+        assert by_id[sib]["provider"] == "bracket_sibling"
+        assert by_id[sib]["processing_status"] == "done"
+        assert by_id[sib]["processed_url"] == "processed/u2.jpg"
+
+
+def test_bracket_one_frame_loaded_folds_the_rest(monkeypatch):
+    updates = _install_dl(
+        monkeypatch, {"p1", "p3"},
+        bracket=_never,
+        single=lambda *_a, **_k: (b"\xff\xd8single", {}),
+    )
+    _run(pp.deliver_bracket_group_without_vendor(
+        MagicMock(storage=MagicMock()), "job-o", list(GROUP), apply_sky=True
+    ))
+    by_id = {uid: u for uid, u in updates}
+    assert set(by_id) == {"u1", "u2", "u3"}
+    assert by_id["u2"]["provider"] == "bricks_inhouse"
+    for sib in ("u1", "u3"):
+        assert by_id[sib]["provider"] == "bracket_sibling"
+        assert by_id[sib]["processed_url"] == "processed/u2.jpg"
+
+
+def test_bracket_all_downloads_miss_holds_primary_folds_siblings(monkeypatch):
+    """Used to return with every exposure still pending (finalize blocked)."""
+    updates = _install_dl(monkeypatch, {"p1", "p2", "p3"}, bracket=_never, single=_never)
+    _run(pp.deliver_bracket_group_without_vendor(
+        MagicMock(storage=MagicMock()), "job-a", list(GROUP), apply_sky=True
+    ))
+    by_id = {uid: u for uid, u in updates}
+    assert set(by_id) == {"u1", "u2", "u3"}
+    assert by_id["u2"]["provider"] == "original"
+    assert by_id["u2"]["qc_status"] == "rejected"
+    for sib in ("u1", "u3"):
+        assert by_id[sib]["provider"] == "bracket_sibling"
+        assert by_id[sib]["processing_status"] == "done"
