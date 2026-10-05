@@ -209,6 +209,91 @@ async def notify_owner_jev_hold(db, job: dict, yes_probability) -> None:
         logger.error("Jev hold email failed for job %s: %s", job_id, type(e).__name__)
 
 
+def vendor_application_sms_body(name: str, city: str, vendor_type: str, yes_probability) -> str:
+    """Owner text. Name, city, and Jev's yes-probability when there is one."""
+    who = (name or "").strip() or "Someone"
+    where = (city or "").strip() or "an unknown city"
+    kind = (vendor_type or "").strip() or "vendor"
+    body = f"New Bricks {kind} application: {who} in {where}."
+    if isinstance(yes_probability, float):
+        body += f" Jev yes-probability {yes_probability:.2f}."
+    body += " Pending your approval."
+    return body
+
+
+def vendor_application_email_subject(name: str) -> str:
+    who = (name or "").strip() or "Applicant"
+    return f"New vendor application pending your approval: {who}"
+
+
+def vendor_application_email_body(name: str, city: str, vendor_type: str, yes_probability) -> str:
+    who = (name or "").strip() or "Someone"
+    where = (city or "").strip() or "an unknown city"
+    kind = (vendor_type or "").strip() or "vendor"
+    lines = [
+        f"{who} in {where} applied as a {kind}.",
+        "Pending your approval.",
+    ]
+    if isinstance(yes_probability, float):
+        lines.append(f"Jev yes-probability: {yes_probability:.2f}")
+    return "\n".join(lines)
+
+
+async def notify_owner_vendor_application(
+    db,
+    *,
+    name: str,
+    city: str,
+    vendor_type: str,
+    yes_probability,
+) -> None:
+    """SMS the owner profile phone and email admin@brxs.ca. Never raises.
+
+    A failed lookup, SMS, or email leaves the application pending. This does
+    not approve or reject.
+    """
+    from ..shared.job_scope import KAM_MEMBER_ID
+
+    sms_body = vendor_application_sms_body(name, city, vendor_type, yes_probability)
+    phone = ""
+    try:
+        res = await db.table("vendor_members").select("phone").eq(
+            "id", KAM_MEMBER_ID
+        ).maybe_single().execute()
+        phone = ((res.data or {}).get("phone") or "").strip()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+
+        if _is_rest_quota_error(e):
+            try:
+                member = pg_select_vendor_member(KAM_MEMBER_ID) or {}
+                phone = (member.get("phone") or "").strip()
+            except Exception as pg_e:
+                logger.error("Owner phone pg fallback failed for vendor application: %s", type(pg_e).__name__)
+        if not phone:
+            logger.error("Owner phone lookup failed for vendor application: %s", type(e).__name__)
+
+    if phone:
+        try:
+            from ..notifications import send_dispatch_sms
+            send_dispatch_sms(phone, sms_body)
+        except Exception as e:
+            logger.error("Vendor application SMS failed: %s", type(e).__name__)
+
+    try:
+        from .notifications import _build_html_email, send_email_via_resend
+
+        subject = vendor_application_email_subject(name)
+        body = vendor_application_email_body(name, city, vendor_type, yes_probability)
+        await send_email_via_resend(
+            to=HOLD_ADMIN_EMAIL,
+            subject=subject,
+            html=_build_html_email(subject, body),
+        )
+    except Exception as e:
+        logger.error("Vendor application email failed: %s", type(e).__name__)
+
+
 async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: str = "") -> None:
     """Record escalation, mark dispatch_failed, email ops, SMS/notify owner."""
     err = error_message or f"No eligible vendor found after {attempt_count} attempt(s)"

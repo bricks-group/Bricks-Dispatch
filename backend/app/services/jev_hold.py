@@ -378,3 +378,79 @@ async def jev_hold_decision(job: dict) -> JevHoldDecision:
         hold,
     )
     return JevHoldDecision(hold=hold, yes_probability=probability)
+
+
+APPLICANT_QUESTION_KEY = "poor_fit"
+APPLICANT_INSTRUCTIONS = "Does this applicant look like a poor fit for Bricks photographer work?"
+
+
+def applicant_decision_state(applicant: dict) -> dict:
+    """Name, city, vendor type, equipment, portfolio, and drone already stored."""
+    applicant = applicant or {}
+    portfolio = applicant.get("portfolio") or {}
+    if not isinstance(portfolio, dict):
+        portfolio = {}
+    return {
+        "name": applicant.get("name") or "",
+        "city": applicant.get("city") or "",
+        "vendor_type": applicant.get("vendor_type") or "",
+        "equipment": applicant.get("equipment") or [],
+        "portfolio": {
+            "links": portfolio.get("links") or [],
+            "samples": portfolio.get("samples") or [],
+        },
+        "drone": bool(applicant.get("drone")),
+    }
+
+
+def _applicant_body(applicant: dict) -> dict:
+    return {
+        "model": JEV_MODEL,
+        "state": applicant_decision_state(applicant),
+        "questions": {
+            APPLICANT_QUESTION_KEY: {
+                "type": "noul",
+                "instructions": APPLICANT_INSTRUCTIONS,
+                "criteria": {
+                    "true": (
+                        "This applicant looks like a poor fit for Bricks photographer "
+                        "work given their name, city, vendor type, equipment, portfolio, "
+                        "and drone certification."
+                    ),
+                    "false": (
+                        "This applicant does not look like a poor fit for Bricks "
+                        "photographer work. A short field, a missing portfolio link, or "
+                        "drone certification being false is not a poor fit by itself."
+                    ),
+                },
+            }
+        },
+    }
+
+
+async def jev_applicant_poor_fit(applicant: dict) -> Optional[float]:
+    """Yes-probability that this applicant is a poor fit.
+
+    None on a missing key, timeout, HTTP error, or a body with no usable noul.
+    Never approves or rejects. The caller still notifies.
+    """
+    if not _openrouter_key():
+        logger.info("OPENROUTER_API_KEY unset — Jev applicant score skipped")
+        return None
+    try:
+        payload = await _post_decision(_applicant_body(applicant))
+    except Exception as exc:
+        logger.warning(
+            "Jev applicant score failed open (%s) — application still notifies",
+            type(exc).__name__,
+        )
+        return None
+    if payload is None:
+        logger.warning("Jev applicant score returned no decision — application still notifies")
+        return None
+    probability = yes_probability(payload, APPLICANT_QUESTION_KEY)
+    if probability is None:
+        logger.warning("Jev applicant score returned no noul — application still notifies")
+        return None
+    logger.info("Jev applicant score yes_probability=%.3f", probability)
+    return probability

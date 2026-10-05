@@ -755,7 +755,7 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
 def pg_update_vendor_member_fields(member_id: str, fields: dict) -> bool:
     """UPDATE public.vendor_members SET … via Postgres when PostgREST is Fair-Use 402.
 
-    Whitelist: decline_rate, on_time_rate, total_assignments, updated_at.
+    Whitelist: decline_rate, on_time_rate, total_assignments, internal_notes, updated_at.
     Returns True when at least one row was updated.
     """
     mid = str(member_id or "").strip()
@@ -765,6 +765,7 @@ def pg_update_vendor_member_fields(member_id: str, fields: dict) -> bool:
         "decline_rate",
         "on_time_rate",
         "total_assignments",
+        "internal_notes",
         "updated_at",
     }
     cols: list[tuple[str, Any]] = []
