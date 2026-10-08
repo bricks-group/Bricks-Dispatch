@@ -231,6 +231,21 @@ def _shape_session(
     }
 
 
+
+def _as_dict(res) -> dict:
+    """Safe row unwrap — maybe_single().execute() can return None on empty/error."""
+    if res is None:
+        return {}
+    data = getattr(res, "data", None)
+    return data if isinstance(data, dict) else {}
+
+
+def _as_list(res) -> list:
+    if res is None:
+        return []
+    data = getattr(res, "data", None)
+    return data if isinstance(data, list) else []
+
 async def _actor_and_job(
     authorization: Optional[str],
     x_user_id: Optional[str],
@@ -245,7 +260,7 @@ async def _actor_and_job(
         "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id, "
         "package_id, package_name, add_ons, client_instructions, property_details"
     ).eq("id", job_id).maybe_single().execute()
-    job = res.data or {}
+    job = _as_dict(res)
     if not job.get("id"):
         api_error(404, "Job not found", "job_not_found")
     if verify_internal_api_key(x_internal_api_key):
@@ -317,7 +332,7 @@ async def _latest_session(db, job_id: str, kind: str) -> Optional[dict]:
     res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
         "kind", kind
     ).order("created_at", desc=True).limit(1).execute()
-    rows = res.data or []
+    rows = _as_list(res)
     return rows[0] if rows else None
 
 
@@ -325,7 +340,7 @@ async def _in_progress_session(db, job_id: str, kind: str) -> Optional[dict]:
     res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
         "status", "in_progress"
     ).eq("kind", kind).order("created_at", desc=True).limit(1).execute()
-    rows = res.data or []
+    rows = _as_list(res)
     return rows[0] if rows else None
 
 
@@ -675,7 +690,7 @@ async def commit_frame(
         session_res = await db.table("capture_sessions").select("*").eq("id", session_id).eq(
             "job_id", job_id
         ).maybe_single().execute()
-        session = session_res.data or {}
+        session = _as_dict(session_res)
         if not session or session.get("status") != "in_progress":
             api_error(409, "No in-progress capture session", "session_not_found")
         kind = session.get("kind") or "splat"
@@ -712,7 +727,7 @@ async def commit_frame(
             room_res = await db.table("capture_rooms").select("id, frames").eq("id", room_id).eq(
                 "session_id", session_id
             ).maybe_single().execute()
-            room = room_res.data or {}
+            room = _as_dict(room_res)
             if room:
                 room_frames = int(room.get("frames") or 0) + 1
                 await db.table("capture_rooms").update({
@@ -997,7 +1012,8 @@ async def submit_session(
 
 async def _session_by_id(db, session_id: str) -> Optional[dict]:
     res = await db.table("capture_sessions").select("*").eq("id", session_id).maybe_single().execute()
-    return res.data or None
+    row = _as_dict(res)
+    return row or None
 
 
 async def _run_rebuild_tour(db, job: dict, session: dict) -> dict:
