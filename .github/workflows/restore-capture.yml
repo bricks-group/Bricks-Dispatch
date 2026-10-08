@@ -1,0 +1,32 @@
+name: restore-capture
+on:
+  push:
+    branches: [cursor/fix-capture-null-567c]
+    paths: [.agent-restore/**]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/fix-capture-null-567c
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assemble capture.py from b64 parts
+        run: |
+          set -euo pipefail
+          cat .agent-restore/p*.b64 | tr -d '\n' | base64 -d > backend/app/routers/capture.py
+          expected=69ccf3f46f64f816cf2c0f790cafde70733075d42db6aece9dcfcc6897ad532b
+          actual=$(sha256sum backend/app/routers/capture.py | awk '{print $1}')
+          echo "sha256=$actual"
+          test "$actual" = "$expected"
+          grep -q '_as_dict' backend/app/routers/capture.py
+          ! grep -qE 'PLACEHOLDER|\$file:' backend/app/routers/capture.py
+          rm -rf .agent-restore
+          git config user.name "restore-capture"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(capture): null-safe maybe_single unwraps for job/session lookups" || exit 0
+          git push
