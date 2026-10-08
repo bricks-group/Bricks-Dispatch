@@ -1,0 +1,74 @@
+apture_entitlements(job)
+    if not kind_purchased(job, "visit"):
+        api_error(403, capture_forbidden_message("visit", flags), "capture_kind_not_purchased")
+    if not polycam_url and not storage_path:
+        api_error(400, "Provide a Polycam URL or a storage_path from /visit/sign", "missing_visit_payload")
+    if polycam_url and storage_path:
+        api_error(400, "Send either a Polycam URL or a file path, not both", "ambiguous_visit_payload")
+    if storage_path:
+        if not storage_path.startswith(f"visits/{job_id}/"):
+            api_error(400, "storage_path must be under visits/{job_id}/", "bad_visit_path")
+        ext = storage_path.rsplit(".", 1)[-1].lower()
+        if ext not in ("splat", "ply", "spz"):
+            api_error(400, "Visit file must be .splat, .ply, or .spz", "bad_visit_file")
+
+    from ..services.client_comms import notify_capture_delivered, register_property_visit
+
+    if polycam_url:
+        ok = await register_property_visit(
+            job_id,
+            title=title,
+            embed_url=polycam_url,
+            visit_type="url",
+        )
+        # type=url is also used for hosted tours; title Virtual Visit keeps VisitViewer honest.
+        delivery_urls = [{"url": polycam_url, "filename": "Virtual Visit"}]
+        output = polycam_url
+    else:
+        ok = await register_property_visit(
+            job_id,
+            storage_path=storage_path,
+            title=title,
+            visit_type="file",
+        )
+        delivery_urls = []
+        try:
+            signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24)
+            if signed:
+                delivery_urls.append({"url": signed, "filename": "Virtual Visit"})
+        except Exception:
+            pass
+        output = storage_path
+
+    if not ok:
+        api_error(502, "Could not register Virtual Visit on the listing file", "visit_register_failed")
+
+    # Freshness for OS listing + agent email (best-effort).
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+    except Exception:
+        pass
+    try:
+        await notify_capture_delivered(
+            job_id,
+            products=["Virtual Visit"],
+            address=(job.get("address") or ""),
+            booking_id=(job.get("booking_id") or ""),
+            delivery_urls=delivery_urls,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            "Job %s: Virtual Visit delivery notification failed: %s", job_id, e
+        )
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "kind": "visit",
+        "title": title,
+        "output": output,
+        "mode": "url" if polycam_url else "file",
+    }
