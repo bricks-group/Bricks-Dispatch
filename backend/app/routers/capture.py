@@ -1,1 +1,1 @@
-@file:///tmp/ONLY_CONTENT.txt
+$file:/tmp/capture.py
