@@ -1,1 +1,1 @@
-$file:/tmp/capture.py
+PROBE_OK
