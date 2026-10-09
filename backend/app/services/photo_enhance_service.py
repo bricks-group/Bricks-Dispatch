@@ -127,11 +127,27 @@ def capabilities() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _EV_SUFFIX = re.compile(
-    r"(?P<stem>.+?)(?:[_-](?:ev)?(?P<ev>[+-]?\d+(?:\.\d+)?)|"
+    r"(?P<stem>.+?)(?:[_-](?P<evp>ev)?(?P<ev>[+-]?\d+(?:\.\d+)?)|"
     r"[_-](?P<sign>minus|plus)(?P<mp>\d+(?:\.\d+)?)(?:ev)?|"
     r"_m(?P<m>\d+)|_p(?P<p>\d+)|_und(?:er)?|_over|_ov|_normal)$",
     re.IGNORECASE,
 )
+
+
+def _is_sequence_number(m: "re.Match[str]") -> bool:
+    """Camera frame counters (IMG_4031, DSC_0012, shoot-4031) are not EV.
+
+    An unsigned numeric suffix with 2+ integer digits and no ``ev`` prefix is
+    a file counter. Treating it as +4031 EV collapsed a whole camera-named
+    shoot into one stem ("IMG") — one giant HDR merge in post-prod and a
+    confusing "same-side frames" Mark-complete reject.
+    """
+    ev = m.group("ev")
+    if ev is None or m.group("evp"):
+        return False
+    if ev[:1] in "+-":
+        return False
+    return len(ev.split(".", 1)[0]) >= 2
 
 
 def bracket_stem(filename: str) -> str:
@@ -139,6 +155,8 @@ def bracket_stem(filename: str) -> str:
     base = (filename or "").rsplit("/", 1)[-1]
     name = base.rsplit(".", 1)[0] if "." in base else base
     m = _EV_SUFFIX.match(name)
+    if m and _is_sequence_number(m):
+        return name
     if m:
         return m.group("stem").rstrip("_-")
     return re.sub(r"[_-]0$", "", name)
@@ -148,7 +166,7 @@ def exposure_bias_from_name(filename: str) -> Optional[float]:
     base = (filename or "").rsplit("/", 1)[-1]
     name = base.rsplit(".", 1)[0] if "." in base else base
     m = _EV_SUFFIX.match(name)
-    if not m:
+    if not m or _is_sequence_number(m):
         return None
     if m.group("ev") is not None:
         try:

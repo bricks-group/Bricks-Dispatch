@@ -234,4 +234,15 @@ assert.equal(
   null,
 );
 
+// Camera frame counters are not EV — IMG_4031..4035 must not collapse into one "IMG" stem.
+assert.equal(bracketStem('IMG_4031.JPG'), 'IMG_4031');
+assert.notEqual(bracketStem('IMG_4031.JPG'), bracketStem('IMG_4032.JPG'));
+assert.equal(exposureBiasFromName('IMG_4031.JPG'), null);
+assert.equal(exposureBiasFromName('DSC_0012.jpg'), null);
+assert.equal(bracketStem('untitled shoot-4031.CR3'), 'untitled shoot-4031');
+assert.equal(exposureBiasFromName('IMG_4031_-2.jpg'), -2);
+assert.equal(bracketStem('IMG_4031_-2.jpg'), 'IMG_4031');
+assert.equal(exposureBiasFromName('k_ev10.jpg'), 10);
+assert.equal(exposureBiasFromName('kitchen_2.jpg'), 2);
+
 console.log('bracket-require tests passed');

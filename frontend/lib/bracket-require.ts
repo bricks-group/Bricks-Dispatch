@@ -16,7 +16,7 @@ const MID_ABS = 0.5;
 
 /** Name patterns the backend clusters on (stem + ±EV / under / over). */
 const EV_SUFFIX =
-  /^(?<stem>.+?)(?:[_-](?:ev)?(?<ev>[+-]?\d+(?:\.\d+)?)|_m(?<m>\d+)|_p(?<p>\d+)|_und(?:er)?|_over|_ov|_normal)$/i;
+  /^(?<stem>.+?)(?:[_-](?<evp>ev)?(?<ev>[+-]?\d+(?:\.\d+)?)|_m(?<m>\d+)|_p(?<p>\d+)|_und(?:er)?|_over|_ov|_normal)$/i;
 
 export type BracketFileLike = { name: string };
 
@@ -32,11 +32,24 @@ export function basename(pathOrName: string): string {
   return base;
 }
 
+/**
+ * Camera frame counters (IMG_4031, DSC_0012, shoot-4031) are not EV.
+ * Unsigned numeric suffix with 2+ integer digits and no `ev` prefix is a
+ * file counter (parity with backend _is_sequence_number).
+ */
+function isSequenceNumber(m: RegExpMatchArray | null): boolean {
+  const ev = m?.groups?.ev;
+  if (ev == null || ev === '' || m?.groups?.evp) return false;
+  if (ev[0] === '+' || ev[0] === '-') return false;
+  return ev.split('.')[0].length >= 2;
+}
+
 /** Collapse +/-EV / under / over suffixes so siblings share one stem. */
 export function bracketStem(filename: string): string {
   const base = basename(filename);
   const name = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base;
   const m = name.match(EV_SUFFIX);
+  if (isSequenceNumber(m)) return name;
   if (m?.groups?.stem) return m.groups.stem.replace(/[_-]+$/, '');
   return name.replace(/[_-]0$/i, '');
 }
@@ -47,7 +60,7 @@ export function exposureBiasFromName(filename: string): number | null {
   const low = name.toLowerCase();
   if (low.endsWith('_normal') || low.endsWith('-normal')) return 0;
   const m = name.match(EV_SUFFIX);
-  if (!m?.groups) return null;
+  if (!m?.groups || isSequenceNumber(m)) return null;
   if (m.groups.ev != null && m.groups.ev !== '') {
     const n = Number(m.groups.ev);
     return Number.isFinite(n) ? n : null;
