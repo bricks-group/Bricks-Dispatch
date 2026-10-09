@@ -59,6 +59,49 @@ def _profile_is_srgb(profile) -> bool:
     return "srgb" in desc.replace(" ", "")
 
 
+def _flatten_alpha_and_depth(img: Image.Image) -> Image.Image:
+    """Composite transparency onto white and scale 16-bit greyscale to 8-bit.
+
+    Plain convert("RGB") drops alpha — transparent pixels are usually stored
+    as 0,0,0 so cutout / staging PNG margins became a black slab on the MLS
+    still (and QC scored the black variant). It also clips 16-bit greyscale
+    ("I;16" / "I") to pure white. Opaque / 8-bit images pass through as-is.
+    """
+    mode = img.mode
+    if mode.startswith("I;16") or mode == "I":
+        try:
+            import numpy as np
+
+            arr = np.asarray(img, dtype=np.float64)
+            scale = 257.0 if (mode.startswith("I;16") or float(arr.max(initial=0)) > 255.0) else 1.0
+            out = Image.fromarray(np.clip(np.round(arr / scale), 0, 255).astype("uint8"), "L")
+            out.info = dict(img.info or {})
+            return out
+        except Exception as e:
+            logger.warning("image_io: 16-bit scale failed (%s) — using raw convert", e)
+            return img
+    has_alpha = mode in ("RGBA", "LA", "PA", "RGBa", "La") or (
+        mode == "P" and "transparency" in (img.info or {})
+    ) or (mode in ("L", "RGB") and "transparency" in (img.info or {}))
+    if not has_alpha:
+        return img
+    try:
+        rgba = img.convert("RGBA")
+        if rgba.getextrema()[3][0] == 255:
+            flat = rgba.convert("RGB")
+        else:
+            page = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            page.alpha_composite(rgba)
+            flat = page.convert("RGB")
+        info = dict(img.info or {})
+        info.pop("transparency", None)
+        flat.info = info
+        return flat
+    except Exception as e:
+        logger.warning("image_io: alpha flatten failed (%s) — using raw convert", e)
+        return img
+
+
 def to_srgb_rgb(img: Image.Image) -> Image.Image:
     """Convert to 8-bit RGB with pixels in sRGB.
 
@@ -69,6 +112,7 @@ def to_srgb_rgb(img: Image.Image) -> Image.Image:
     through littlecms; any failure falls back to plain convert("RGB")
     (previous behaviour). Returned image carries no icc_profile.
     """
+    img = _flatten_alpha_and_depth(img)
     icc: Optional[bytes] = img.info.get("icc_profile") if img.info else None
     out: Optional[Image.Image] = None
     if icc and ImageCms is not None:
