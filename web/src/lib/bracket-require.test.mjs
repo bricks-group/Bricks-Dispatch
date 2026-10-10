@@ -38,6 +38,18 @@ assert.equal(exposureBiasFromName('kitchen_under.jpg'), -2);
 assert.equal(exposureBiasFromName('kitchen_over.jpg'), 2);
 assert.equal(exposureBiasFromName('kitchen_normal.jpg'), 0);
 assert.equal(exposureBiasFromName('plain.jpg'), null);
+// Room stems containing "und"/"over" must not flip the word tag.
+assert.equal(exposureBiasFromName('laundry_over.jpg'), 2);
+assert.equal(exposureBiasFromName('Sundeck_over.jpg'), 2);
+assert.equal(exposureBiasFromName('Grounds_ov.jpg'), 2);
+assert.equal(exposureBiasFromName('laundry_under.jpg'), -2);
+assert.equal(exposureBiasFromName('Overlook_under.jpg'), -2);
+assert.equal(exposureBiasFromName('laundry_normal.jpg'), 0);
+assert.equal(bracketHasUnderMidOver(['laundry_under.jpg', 'laundry_normal.jpg', 'laundry_over.jpg']), true);
+// minus/plus parity with backend
+assert.equal(exposureBiasFromName('kitchen-minus2.jpg'), -2);
+assert.equal(exposureBiasFromName('kitchen_plus1.5ev.jpg'), 1.5);
+assert.equal(bracketStem('kitchen-minus2.jpg'), bracketStem('kitchen_0.jpg'));
 
 assert.equal(inferMediaType('DJI_0123.jpg', 'image/jpeg'), 'drone');
 assert.equal(inferMediaType('clip.mp4', 'video/mp4'), 'reel');

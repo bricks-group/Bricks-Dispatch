@@ -184,12 +184,16 @@ def exposure_bias_from_name(filename: str) -> Optional[float]:
         return -float(m.group("m"))
     if m.group("p") is not None:
         return float(m.group("p"))
-    low = name.lower()
-    if low.endswith("_normal") or low.endswith("-normal"):
+    # Word tags: read only the matched suffix, never the room stem —
+    # "laundry_over" / "Sundeck_over" / "Grounds_ov" contain "und" and used
+    # to read as -2 EV, so a correctly named under/normal/over set failed
+    # Mark complete ("same-side frames") and enhance picked the wrong plate.
+    suffix = name[m.end("stem"):].lower()
+    if suffix in ("_normal", "-normal"):
         return 0.0
-    if "und" in low:
+    if suffix.startswith("_und"):
         return -2.0
-    if "over" in low or low.endswith("_ov"):
+    if suffix in ("_over", "_ov"):
         return 2.0
     return None
 

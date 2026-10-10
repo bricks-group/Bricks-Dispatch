@@ -16,7 +16,7 @@ const MID_ABS = 0.5;
 
 /** Name patterns the backend clusters on (stem + ±EV / under / over). */
 const EV_SUFFIX =
-  /^(?<stem>.+?)(?:[_-](?<evp>ev)?(?<ev>[+-]?\d+(?:\.\d+)?)|_m(?<m>\d+)|_p(?<p>\d+)|_und(?:er)?|_over|_ov|_normal)$/i;
+  /^(?<stem>.+?)(?:[_-](?<evp>ev)?(?<ev>[+-]?\d+(?:\.\d+)?)|[_-](?<sign>minus|plus)(?<mp>\d+(?:\.\d+)?)(?:ev)?|_m(?<m>\d+)|_p(?<p>\d+)|_und(?:er)?|_over|_ov|_normal)$/i;
 
 export type BracketFileLike = { name: string };
 
@@ -65,11 +65,19 @@ export function exposureBiasFromName(filename: string): number | null {
     const n = Number(m.groups.ev);
     return Number.isFinite(n) ? n : null;
   }
+  if (m.groups.mp != null && m.groups.mp !== '') {
+    const mag = Number(m.groups.mp);
+    if (!Number.isFinite(mag)) return null;
+    return (m.groups.sign || '').toLowerCase() === 'minus' ? -mag : mag;
+  }
   if (m.groups.m != null && m.groups.m !== '') return -Number(m.groups.m);
   if (m.groups.p != null && m.groups.p !== '') return Number(m.groups.p);
-  if (low.includes('und')) return -2;
-  if (low.includes('over') || low.endsWith('_ov')) return 2;
-  if (low.endsWith('_normal') || low.endsWith('-normal')) return 0;
+  // Word tags: read only the matched suffix, never the room stem —
+  // "laundry_over" / "Sundeck_over" contain "und" and used to read as −2
+  // (parity with backend exposure_bias_from_name).
+  const suffix = name.slice(m.groups.stem.length).toLowerCase();
+  if (suffix.startsWith('_und')) return -2;
+  if (suffix === '_over' || suffix === '_ov') return 2;
   return null;
 }
 
