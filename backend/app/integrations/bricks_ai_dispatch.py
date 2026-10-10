@@ -23,7 +23,7 @@ from typing import List, Optional
 import httpx
 from ..shared.schemas import Job, VendorMember
 from ..shared.geospatial import haversine_km as _haversine_km
-from ..services.vendor_profile import member_eligible_for_job, travel_within_cap
+from ..services.vendor_profile import member_eligible_for_job, specialty_matches_job, travel_within_cap
 from ..services.shoot_duration import previous_job_coords, vendor_slot_conflicts
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ def _score_vendor(
     When return_breakdown=True, returns (score, breakdown_dict) instead of score.
     """
     # Specialty match: binary
-    specialty = 1.0 if v.specialty == job.job_type else 0.0
+    specialty = 1.0 if specialty_matches_job(v, job) else 0.0
 
     # Tier preference match: binary (already gated on min_tier upstream)
     tier = 1.0 if v.tier == preferred_tier else 0.0
@@ -410,6 +410,26 @@ async def bricks_smart_assign(
             return_breakdown=True,
         )
         scored.append((score, v.id, v, breakdown))
+
+    # Jev fit scales the existing score. A missing key, timeout, HTTP error,
+    # or body with no noul returns nothing and leaves these scores unchanged.
+    try:
+        from ..services.jev_hold import apply_jev_fit, jev_candidate_poor_fits
+        job_state = job.model_dump() if hasattr(job, "model_dump") else job.dict()
+        poor_fits = await jev_candidate_poor_fits(job_state, candidates)
+    except Exception:
+        logger.warning("Jev score skipped for job %s — ranking unchanged", job.id)
+        poor_fits = {}
+    if poor_fits:
+        adjusted = []
+        for score, vendor_id, vendor, breakdown in scored:
+            poor_fit = poor_fits.get(vendor_id)
+            new_score = apply_jev_fit(score, poor_fit)
+            if poor_fit is not None:
+                breakdown = dict(breakdown)
+                breakdown["_jev_poor_fit"] = round(float(poor_fit), 3)
+            adjusted.append((new_score, vendor_id, vendor, breakdown))
+        scored = adjusted
 
     if not scored:
         return None

@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { login, loginWithGoogle, verifyOtp } from '../lib/api';
+import { isAuthRestricted, login, loginWithGoogle, loginWithPassword, verifyOtp } from '../lib/api';
 
 function BrickMark() {
   return (
@@ -23,13 +23,31 @@ function GoogleMark() {
   );
 }
 
+function authErrorMessage(err: unknown): string {
+  const msg = (err as Error)?.message || String(err || 'Login failed');
+  const low = msg.toLowerCase();
+  if (
+    low.includes('402')
+    || low.includes('exceed_storage')
+    || low.includes('fair-use')
+    || low.includes('fair use')
+    || low.includes('restricted')
+  ) {
+    return 'Sign-in is temporarily limited. Use email and password — magic links and Google may be unavailable.';
+  }
+  return msg;
+}
+
 export function LoginPage() {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [step, setStep] = useState<'login' | 'verify'>('login');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [authRestricted, setAuthRestricted] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -43,17 +61,44 @@ export function LoginPage() {
     }
   }, []);
 
-  const onLogin = async (event: FormEvent) => {
+  useEffect(() => {
+    let cancelled = false;
+    isAuthRestricted()
+      .then((restricted) => {
+        if (!cancelled) setAuthRestricted(restricted);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthRestricted(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onPasswordLogin = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
+    setError('');
+    try {
+      await loginWithPassword(email, password);
+      navigate('/', { replace: true });
+    } catch (e) {
+      setError(authErrorMessage(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onEmailCode = async () => {
+    setOtpLoading(true);
     setError('');
     try {
       await login(email);
       setStep('verify');
     } catch (e) {
-      setError((e as Error).message);
+      setError(authErrorMessage(e));
     } finally {
-      setSubmitting(false);
+      setOtpLoading(false);
     }
   };
 
@@ -65,7 +110,7 @@ export function LoginPage() {
       await verifyOtp(email, otp);
       navigate('/', { replace: true });
     } catch (e) {
-      setError((e as Error).message);
+      setError(authErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
@@ -76,19 +121,29 @@ export function LoginPage() {
     setGoogleLoading(true);
     try {
       await loginWithGoogle();
-      // Browser navigates to Google; if we return, OAuth failed to start.
+      // Browser navigates to Google; if we return without redirect, clear loading below.
     } catch (e) {
       const msg = (e as Error).message || 'Google sign-in is not available.';
       const low = msg.toLowerCase();
       if (
+        low.includes('402')
+        || low.includes('exceed_storage')
+        || low.includes('fair-use')
+        || low.includes('fair use')
+        || low.includes('restricted')
+      ) {
+        setError('Google sign-in is unavailable while Auth is restricted. Use email and password.');
+        setAuthRestricted(true);
+      } else if (
         low.includes('provider is not enabled')
         || low.includes('unsupported provider')
         || low.includes('validation_failed')
       ) {
-        setError('Google sign-in is not connected yet. Use email OTP, or ask an owner to enable Google in Supabase Auth.');
+        setError('Google sign-in is not connected yet. Use email and password, or ask an owner to enable Google in Supabase Auth.');
       } else {
         setError(msg);
       }
+    } finally {
       setGoogleLoading(false);
     }
   };
@@ -114,17 +169,50 @@ export function LoginPage() {
 
   return (
     <div className="login-wrap">
-      <form className="login-card" onSubmit={onLogin}>
+      <form className="login-card" onSubmit={onPasswordLogin}>
         <BrickMark />
         <h2>bricks</h2>
         <p className="muted" style={{ margin: 0 }}>Sign in to GO.</p>
+        {authRestricted && (
+          <p className="muted" style={{ margin: '8px 0 0' }} data-testid="auth-fair-use-banner">
+            Google and magic link are unavailable under Fair Use — use email and password.
+          </p>
+        )}
         <label className="login-field">
           Email
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="you@example.com" />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            placeholder="you@example.com"
+            autoComplete="username"
+          />
+        </label>
+        <label className="login-field">
+          Password
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            placeholder="••••••••"
+            autoComplete="current-password"
+          />
         </label>
         {error && <p className="error" style={{ padding: 0 }} data-testid="auth-error">{error}</p>}
-        <button type="submit" disabled={submitting || googleLoading}>
-          {submitting ? 'Sending code…' : 'Send magic link'}
+        <button type="submit" disabled={submitting || googleLoading || otpLoading}>
+          {submitting ? 'Signing in…' : 'Sign in'}
+        </button>
+
+        <button
+          type="button"
+          className="btn-link"
+          onClick={onEmailCode}
+          disabled={submitting || googleLoading || otpLoading || !email.trim() || authRestricted}
+          style={{ marginTop: 8 }}
+        >
+          {otpLoading ? 'Sending code…' : 'Email me a code'}
         </button>
 
         <div className="login-divider" aria-hidden>
@@ -136,10 +224,10 @@ export function LoginPage() {
           className="login-oauth"
           data-testid="login-google-btn"
           onClick={onGoogle}
-          disabled={submitting || googleLoading}
+          disabled={submitting || googleLoading || otpLoading || authRestricted}
         >
           <GoogleMark />
-          {googleLoading ? 'Redirecting…' : 'Continue with Google'}
+          {googleLoading ? 'Redirecting…' : authRestricted ? 'Google unavailable' : 'Continue with Google'}
         </button>
         {/* Apple stays OFF until Apple Developer / Supabase Apple is connected — same honesty as OS. */}
       </form>

@@ -6,6 +6,8 @@ export const STILLS_TYPES = [
   { id: 'drone', label: 'Drone' },
   { id: 'reel', label: 'Reel' },
   { id: 'twilight', label: 'Twilight' },
+  { id: 'staging', label: 'Staging' },
+  { id: 'floorplan', label: 'Floor plan' },
 ] as const;
 
 export type StillsType = (typeof STILLS_TYPES)[number]['id'];
@@ -25,7 +27,9 @@ async function authHeaders(): Promise<HeadersInit> {
   return headers;
 }
 
-/** Camera JPEG / drone / reel → Storage via signed PUT (not the 4MB Vercel POST). */
+/** Camera JPEG / drone / reel / twilight / staging / floorplan → Storage via signed PUT (not the 4MB Vercel POST).
+ * Always pass the camera filename (stem + ±EV) so backend group_brackets can cluster.
+ * Staging / Floor plan tag durable prefixes → leftover route as_is (no enhance). */
 export async function uploadStillFile(jobId: string, file: File, mediaType: StillsType) {
   const signRes = await fetch(`${API_BASE}/api/uploads/sign`, {
     method: 'POST',
@@ -38,9 +42,18 @@ export async function uploadStillFile(jobId: string, file: File, mediaType: Stil
       media_type: mediaType,
     }),
   });
-  const sign = (await signRes.json().catch(() => ({}))) as SignResp & { detail?: string; message?: string };
+  const sign = (await signRes.json().catch(() => ({}))) as SignResp & {
+    detail?: string | { message?: string; code?: string };
+    message?: string;
+  };
   if (!signRes.ok || !sign.signed_url) {
-    throw new Error(sign.detail || sign.message || 'Could not start stills upload');
+    const d = sign.detail;
+    const msg =
+      (typeof d === 'string' && d) ||
+      (d && typeof d === 'object' && typeof d.message === 'string' && d.message) ||
+      sign.message ||
+      'Could not start stills upload';
+    throw new Error(msg);
   }
   const put = await fetch(sign.signed_url, {
     method: 'PUT',

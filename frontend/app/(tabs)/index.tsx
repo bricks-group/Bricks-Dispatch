@@ -10,6 +10,7 @@ import { actorHeaders } from '../../lib/api';
 import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { formatShootWindow, minutesUntilShoot } from '../../lib/shoot-window';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { EnterFadeDown, PressScale } from '../../components/motion';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 const VENDOR_RATE = 0.62;
@@ -59,19 +60,19 @@ function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' 
     return (
       <View style={s.todayCaptureRow}>
         {flags.tour ? (
-          <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('splat')} activeOpacity={0.8}>
+          <PressScale style={s.todayCaptureBtn} onPress={() => onOpen('splat')}>
             <Text style={s.todayCaptureBtnText}>Start Capture · 3D tour</Text>
-          </TouchableOpacity>
+          </PressScale>
         ) : null}
         {flags.floorplan ? (
-          <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('floorplan')} activeOpacity={0.8}>
+          <PressScale style={s.todayCaptureBtn} onPress={() => onOpen('floorplan')}>
             <Text style={s.todayCaptureBtnText}>Start Capture · Floor plan</Text>
-          </TouchableOpacity>
+          </PressScale>
         ) : null}
         {flags.visit ? (
-          <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('visit')} activeOpacity={0.8}>
+          <PressScale style={s.todayCaptureBtn} onPress={() => onOpen('visit')}>
             <Text style={s.todayCaptureBtnText}>Deliver Visit</Text>
-          </TouchableOpacity>
+          </PressScale>
         ) : null}
       </View>
     );
@@ -79,9 +80,9 @@ function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' 
   if (flags.visit) {
     return (
       <View style={s.todayCaptureRow}>
-        <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen('visit')} activeOpacity={0.8}>
+        <PressScale style={s.todayCaptureBtn} onPress={() => onOpen('visit')}>
           <Text style={s.todayCaptureBtnText}>Deliver Visit</Text>
-        </TouchableOpacity>
+        </PressScale>
       </View>
     );
   }
@@ -89,9 +90,9 @@ function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' 
   const label = flags.tour ? 'Start Capture' : 'Start Capture · Floor plan';
   return (
     <View style={s.todayCaptureRow}>
-      <TouchableOpacity style={s.todayCaptureBtn} onPress={() => onOpen(kind)} activeOpacity={0.8}>
+      <PressScale style={s.todayCaptureBtn} onPress={() => onOpen(kind)}>
         <Text style={s.todayCaptureBtnText}>{label}</Text>
-      </TouchableOpacity>
+      </PressScale>
     </View>
   );
 }
@@ -163,6 +164,7 @@ export default function TodayScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={TOKENS.brick} />}
         contentContainerStyle={s.scroll}
       >
+        <EnterFadeDown distance={8} duration={240}>
         {/* Header */}
         <View style={s.header}>
           <View>
@@ -193,10 +195,9 @@ export default function TodayScreen() {
                 <Text style={s.sectionLabel}>
                   {minsUntil ? `NEXT UP · IN ${minsUntil} MIN` : 'NEXT UP · NOW'}
                 </Text>
-                <TouchableOpacity
+                <PressScale
                   style={s.nextCard}
                   onPress={() => router.push(`/job/${nextJob.id}`)}
-                  activeOpacity={0.85}
                 >
                   <Text style={s.nextAddress}>{nextJob.address.toLowerCase()}</Text>
                   <Text style={s.nextMeta}>
@@ -220,15 +221,15 @@ export default function TodayScreen() {
 
                   {/* CTAs */}
                   <View style={s.nextActions}>
-                    <TouchableOpacity style={s.accentBtn} onPress={() => openMaps(nextJob)} activeOpacity={0.8}>
+                    <PressScale style={s.accentBtn} onPress={() => openMaps(nextJob)} scaleTo={0.96}>
                       <Navigation size={13} color="#FFF" strokeWidth={2} />
                       <Text style={s.accentBtnText}>NAVIGATE</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={s.ghostBtn} activeOpacity={0.7}>
+                    </PressScale>
+                    <PressScale style={s.ghostBtn} scaleTo={0.96}>
                       <Phone size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
-                    </TouchableOpacity>
+                    </PressScale>
                   </View>
-                </TouchableOpacity>
+                </PressScale>
                 {['assigned', 'in_progress'].includes(nextJob.status || '') ? (
                   <View style={s.nextCaptureWrap}>
                     <TodayCaptureEntry
@@ -269,10 +270,10 @@ export default function TodayScreen() {
                     const active = ['assigned', 'in_progress'].includes(job.status || '');
                     return (
                       <View key={job.id} style={[i < laterJobs.length - 1 && s.laterRowBorder]}>
-                        <TouchableOpacity
+                        <PressScale
                           style={s.laterRow}
                           onPress={() => router.push(`/job/${job.id}`)}
-                          activeOpacity={0.7}
+                          scaleTo={0.98}
                         >
                           <Text style={s.laterTime} numberOfLines={2}>{formatShootWindow(job)}</Text>
                           <View style={s.laterDivider} />
@@ -281,7 +282,7 @@ export default function TodayScreen() {
                             <Text style={s.laterType}>{job.job_type.replace(/_/g, ' ')}</Text>
                           </View>
                           {payout && <Text style={s.laterPayout}>{fmtMoney(payout)}</Text>}
-                        </TouchableOpacity>
+                        </PressScale>
                         {active ? (
                           <View style={s.laterCaptureWrap}>
                             <TodayCaptureEntry job={job} onOpen={(kind) => openCapture(job, kind)} />
@@ -297,6 +298,7 @@ export default function TodayScreen() {
         )}
 
         <View style={{ height: 120 }} />
+        </EnterFadeDown>
       </ScrollView>
     </SafeAreaView>
   );

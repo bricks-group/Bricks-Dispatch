@@ -340,7 +340,21 @@ async def upsert_oauth_connection(
         "created_at": now,
     }
     stored = encrypt_connection_secrets(row)
-    await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
+    try:
+        await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
+    except Exception as e:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_upsert_vendor_calendar_connection,
+        )
+        if _is_rest_quota_error(e):
+            pg_row = pg_upsert_vendor_calendar_connection(stored)
+            if not pg_row:
+                raise RuntimeError(
+                    "Could not save calendar connection (Fair-Use Postgres fallback failed)"
+                ) from e
+            return stored
+        raise
     return stored
 
 
@@ -416,23 +430,48 @@ async def _load_connections(db, member_id: str, *, decrypt: bool = True) -> list
                 try:
                     stored = encrypt_connection_secrets(row)
                     stored["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    await db.table("vendor_calendar_connections").upsert(
-                        stored, on_conflict="member_id,provider"
-                    ).execute()
-                    rows[i] = stored
+                    try:
+                        await db.table("vendor_calendar_connections").upsert(
+                            stored, on_conflict="member_id,provider"
+                        ).execute()
+                        rows[i] = stored
+                    except Exception as e:
+                        from ..shared.pg_fallback import (
+                            _is_rest_quota_error,
+                            pg_upsert_vendor_calendar_connection,
+                        )
+                        if _is_rest_quota_error(e):
+                            if pg_upsert_vendor_calendar_connection(stored):
+                                rows[i] = stored
+                            else:
+                                logger.debug(
+                                    "calendar re-encrypt Fair-Use PG soft-fail: %s", e
+                                )
+                        else:
+                            logger.debug("calendar re-encrypt soft-fail: %s", e)
                 except Exception as e:
                     logger.debug("calendar re-encrypt soft-fail: %s", e)
         if decrypt:
             rows = [decrypt_connection_secrets(r) for r in rows]
     except Exception as e:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_vendor_calendar_connections,
+        )
+        if _is_rest_quota_error(e):
+            rows = list(pg_select_vendor_calendar_connections(member_id) or [])
+            if decrypt and rows:
+                rows = [decrypt_connection_secrets(r) for r in rows]
+            return rows
         logger.debug("vendor_calendar_connections read failed (soft): %s", e)
         # Fall back to columns on vendor_members if table missing
         try:
+            from ..shared.database import maybe_single_row
             m = await db.table("vendor_members").select(
                 "id, google_calendar_token, microsoft_calendar_token, apple_caldav_url, "
                 "apple_caldav_password, calendar_ics_url"
             ).eq("id", member_id).maybe_single().execute()
-            doc = m.data or {}
+            doc = maybe_single_row(m)
             if doc.get("google_calendar_token"):
                 rows.append({"provider": "google", "access_token": doc["google_calendar_token"], "member_id": member_id})
             if doc.get("microsoft_calendar_token"):

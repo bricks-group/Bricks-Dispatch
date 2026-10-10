@@ -2,9 +2,10 @@
 Compliance document validator for Bricks GO (Certificate of Insurance / WSIB).
 
 Reuses the extraction + outcome pattern already proven in rpas_validator.py:
-Gemini Vision (or PDF) reads the document, we check it against the IC
-agreement's requirements (Clause 6), and produce an outcome the onboarding
-flow can act on.
+Gemini Vision (or PDF) reads an optionally uploaded document and stores an
+outcome on that document. COI and WSIB are not required to apply, be
+approved, or be dispatched. This result must not suspend a vendor, reject
+an application, or hold a job.
 
 Outcome:
   "verified"       — required fields present, not expired, meets minimums

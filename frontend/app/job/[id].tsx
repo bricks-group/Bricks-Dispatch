@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { EnterFadeDown, PressScale, SheetEnter } from '../../components/motion';
 import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
@@ -13,6 +14,10 @@ import { getCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind } from '../../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { formatShootWindow } from '../../lib/shoot-window';
+import {
+  BRACKET_HINT,
+  validateHdrUploadsForComplete,
+} from '../../lib/bracket-require';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
@@ -306,29 +311,60 @@ export default function JobDetailScreen() {
 
   const markComplete = async () => {
     if (!job) return;
-    Alert.alert('Mark Complete', 'Confirm that this shoot is finished?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Mark Complete',
-        onPress: async () => {
-          setActioning(true);
-          try {
-            const headers = await actorHeaders({ 'Content-Type': 'application/json' });
-            const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/status`, {
-              method: 'PATCH',
-              headers,
-              body: JSON.stringify({ status: 'completed' }),
-            });
-            if (!res.ok) throw new Error(`${res.status}`);
-            setJob(prev => prev ? { ...prev, status: 'completed' } : prev);
-          } catch {
-            Alert.alert('Error', 'Could not update job status.');
-          } finally {
-            setActioning(false);
-          }
+    setActioning(true);
+    try {
+      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
+      // Client mirror of web validateHdrUploadsForComplete; API enforces the same gate.
+      let uploads: { filename?: string; media_type?: string | null }[] = [];
+      try {
+        const upRes = await fetch(`${API}/api/uploads?job_id=${encodeURIComponent(job.id)}`, { headers });
+        if (upRes.ok) {
+          const raw = await upRes.json();
+          uploads = Array.isArray(raw) ? raw : (raw.items || raw.data || []);
+        }
+      } catch {
+        // Fall through — API will still reject incomplete brackets.
+      }
+      const bracketBlock = validateHdrUploadsForComplete(uploads);
+      if (bracketBlock) {
+        Alert.alert('Incomplete brackets', bracketBlock.message || BRACKET_HINT);
+        return;
+      }
+      Alert.alert('Mark Complete', 'Confirm that this shoot is finished?', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark Complete',
+          onPress: async () => {
+            setActioning(true);
+            try {
+              const hdrs = await actorHeaders({ 'Content-Type': 'application/json' });
+              const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/status`, {
+                method: 'PUT',
+                headers: hdrs,
+                body: JSON.stringify({ status: 'completed' }),
+              });
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                const detail = err.detail;
+                const msg = (detail && typeof detail === 'object' && detail.message)
+                  || (typeof detail === 'string' ? detail : null)
+                  || `Could not update job status (${res.status}).`;
+                throw new Error(msg);
+              }
+              setJob(prev => prev ? { ...prev, status: 'completed' } : prev);
+            } catch (e: any) {
+              Alert.alert('Cannot complete', e?.message || 'Could not update job status.');
+            } finally {
+              setActioning(false);
+            }
+          },
         },
-      },
-    ]);
+      ]);
+    } catch (e: any) {
+      Alert.alert('Cannot complete', e?.message || 'Could not check uploads.');
+    } finally {
+      setActioning(false);
+    }
   };
 
   const openMaps = () => {
@@ -472,6 +508,7 @@ export default function JobDetailScreen() {
         </View>
       </View>
 
+      <EnterFadeDown distance={10} duration={260} style={{ flex: 1 }}>
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={s.heroRow}>
           <View style={s.heroIcon}>
@@ -726,30 +763,29 @@ export default function JobDetailScreen() {
         {['assigned', 'in_progress'].includes(job.status) && hasCaptureMode && ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1) ? (
           <View style={s.captureStartBlock}>
             {captureFlags.tour ? (
-              <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('splat')} activeOpacity={0.8}>
+              <PressScale style={s.captureStartChip} onPress={() => openCapture('splat')}>
                 <Text style={s.captureStartChipText}>Start Capture · 3D tour</Text>
-              </TouchableOpacity>
+              </PressScale>
             ) : null}
             {captureFlags.floorplan ? (
-              <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('floorplan')} activeOpacity={0.8}>
+              <PressScale style={s.captureStartChip} onPress={() => openCapture('floorplan')}>
                 <Text style={s.captureStartChipText}>Start Capture · Floor plan</Text>
-              </TouchableOpacity>
+              </PressScale>
             ) : null}
             {captureFlags.visit ? (
-              <TouchableOpacity style={s.captureStartChip} onPress={() => openCapture('visit')} activeOpacity={0.8}>
+              <PressScale style={s.captureStartChip} onPress={() => openCapture('visit')}>
                 <Text style={s.captureStartChipText}>Deliver Visit</Text>
-              </TouchableOpacity>
+              </PressScale>
             ) : null}
           </View>
         ) : null}
         {['in_progress', 'completed', 'processing'].includes(job.status) ? (
-          <TouchableOpacity
+          <PressScale
             style={s.captureStartChip}
             onPress={() => router.push('/(tabs)/uploads' as any)}
-            activeOpacity={0.8}
           >
-            <Text style={s.captureStartChipText}>Upload stills · drone · reel</Text>
-          </TouchableOpacity>
+            <Text style={s.captureStartChipText}>Upload stills · drone · reel · twilight · staging · floor plan</Text>
+          </PressScale>
         ) : null}
 
         {captureStatusRows.length > 0 ? (
@@ -776,21 +812,22 @@ export default function JobDetailScreen() {
         ) : null}
 
       </ScrollView>
+      </EnterFadeDown>
 
       <View style={s.footer}>
-        <TouchableOpacity style={s.secondaryBtn} onPress={openMaps}>
+        <PressScale style={s.secondaryBtn} onPress={openMaps} scaleTo={0.97}>
           <Navigation size={16} color={TOKENS.moon} strokeWidth={1.5} />
           <Text style={s.secondaryBtnText}>Navigate</Text>
-        </TouchableOpacity>
+        </PressScale>
         {job.agent_phone ? (
-          <TouchableOpacity style={s.secondaryBtn} onPress={callAgent}>
+          <PressScale style={s.secondaryBtn} onPress={callAgent} scaleTo={0.97}>
             <Phone size={16} color={TOKENS.moon} strokeWidth={1.5} />
             <Text style={s.secondaryBtnText}>Call Agent</Text>
-          </TouchableOpacity>
+          </PressScale>
         ) : null}
         {!isComplete ? (
           <>
-            <TouchableOpacity
+            <PressScale
               style={[s.primaryBtn, actioning && { opacity: 0.5 }]}
               onPress={markComplete}
               disabled={actioning}
@@ -799,9 +836,9 @@ export default function JobDetailScreen() {
                 ? <ActivityIndicator size="small" color={TOKENS.moon} />
                 : <Text style={s.primaryBtnText}>Mark Complete</Text>
               }
-            </TouchableOpacity>
+            </PressScale>
             {hasCaptureMode ? (
-              <TouchableOpacity
+              <PressScale
                 style={[s.captureBtn, actioning && { opacity: 0.5 }]}
                 onPress={startCapture}
                 disabled={actioning}
@@ -810,7 +847,7 @@ export default function JobDetailScreen() {
                   ? <ActivityIndicator size="small" color={TOKENS.moon} />
                   : <Text style={s.captureBtnText}>{captureStartLabel}</Text>
                 }
-              </TouchableOpacity>
+              </PressScale>
             ) : (
               <View style={s.captureNone}>
                 <Text style={s.captureNoneText}>{captureNeitherCopy(captureFlags)}</Text>
@@ -820,13 +857,13 @@ export default function JobDetailScreen() {
         ) : null}
       </View>
 
-      <Modal visible={noShowVisible} animationType="slide" transparent>
+      <Modal visible={noShowVisible} animationType="fade" transparent>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
           <View style={s.modalOverlay}>
-            <View style={s.modalSheet}>
+            <SheetEnter style={s.modalSheet}>
               <View style={s.modalHeader}>
                 <Text style={s.sectionEye}>REPORT NO-SHOW</Text>
-                <TouchableOpacity onPress={() => { setNoShowVisible(false); setNoShowNotes(''); }}>
+                <TouchableOpacity onPress={() => { setNoShowVisible(false); setNoShowNotes(''); }} hitSlop={12}>
                   <X size={18} color={TOKENS.moonMute} strokeWidth={1.5} />
                 </TouchableOpacity>
               </View>
@@ -843,18 +880,17 @@ export default function JobDetailScreen() {
                 onChangeText={setNoShowNotes}
                 maxLength={500}
               />
-              <TouchableOpacity
+              <PressScale
                 style={[s.submitBtn, submittingNoShow && { opacity: 0.5 }]}
                 onPress={submitNoShow}
                 disabled={submittingNoShow}
-                activeOpacity={0.8}
               >
                 {submittingNoShow
                   ? <ActivityIndicator size="small" color={TOKENS.moon} />
                   : <Text style={s.submitBtnText}>Confirm No-Show</Text>
                 }
-              </TouchableOpacity>
-            </View>
+              </PressScale>
+            </SheetEnter>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -985,7 +1021,7 @@ const s = StyleSheet.create({
   reportBtnText: { fontSize: 14, color: TOKENS.bad, fontWeight: '500' as const },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalSheet: {
-    backgroundColor: TOKENS.nightSoft, borderTopLeftRadius: 12, borderTopRightRadius: 12,
+    backgroundColor: TOKENS.nightSoft, borderTopLeftRadius: TOKENS.radius, borderTopRightRadius: TOKENS.radius,
     padding: 24, paddingBottom: 40,
     borderTopWidth: 1, borderColor: TOKENS.nightHairS,
   },

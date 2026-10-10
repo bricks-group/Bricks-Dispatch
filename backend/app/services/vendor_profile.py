@@ -6,7 +6,6 @@ is the fixed vendor_payout_rates card, NOT a % of rack. The platform owner
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from ..shared.geospatial import haversine_km
@@ -19,6 +18,57 @@ ORG_VENDOR_ID = "default_vendor"
 TIER_LABELS = {1: "C", 2: "B", 3: "A"}  # display only; pay is the rate card
 TOP_TIER = 3
 SKILL_KEYS = ("photo", "drone", "reel", "tour", "twilight")
+
+# Free-text specialty / job_type labels that map onto SKILL_KEYS (www / Companion /
+# media_intake portfolio lockstep). Used by assign scoring so specialty=reel still
+# boosts legacy job_type=video after vendor_skills drops the phantom "video" label.
+_SKILL_KEY_ALIASES = {
+    "video": "reel",
+    "cinematic": "reel",
+    "cinematic_reel": "reel",
+    "photography": "photo",
+    "photos": "photo",
+    "hdr": "photo",
+    # www / OS / Companion stamp job_type=floor_plan_only (stripe-webhook +
+    # book_checkout + PACKAGES). SKILL_KEYS has photo, not floor_plan* — without
+    # this alias hard-gate needed.issubset(have) demands a phantom skill no
+    # photo vendor has, so floor-plan-only books never auto-assign.
+    "floor_plan": "photo",
+    "floorplan": "photo",
+    "floor_plan_only": "photo",
+    "floorplans": "photo",
+    "2d_floor_plan": "photo",
+    "virtual": "tour",
+    "3d": "tour",
+    "polycam": "tour",
+}
+
+
+def normalize_skill_key(raw: Any) -> str:
+    """Map specialty/job_type free text onto SKILL_KEYS when an alias exists."""
+    key = str(raw or "").strip().lower()
+    return _SKILL_KEY_ALIASES.get(key, key)
+
+
+def specialty_matches_job(member: Any, job: Any) -> bool:
+    """Soft specialty boost for assign scoring — video/reel + floor_plan→photo lockstep.
+
+    Hard-gate uses job_required_skills ⊆ vendor_skills. Rule-based scoring used
+    ``specialty == job_type or job_type in have``; after video→reel / floor_plan→photo
+    skill aliases, have never contains the phantom labels, so specialty=reel|photo
+    (and skills=["reel"|"photo"]) lost the specialty boost on in-flight
+    job_type=video|floor_plan_only. Normalize both sides the same way
+    vendor_skills / job_required_skills do.
+    """
+    m = _as_dict(member)
+    j = _as_dict(job)
+    spec = normalize_skill_key(m.get("specialty"))
+    jt = normalize_skill_key(j.get("job_type") or "photo")
+    if spec and jt and spec == jt:
+        return True
+    have = vendor_skills(member)
+    return bool(jt and jt in have)
+
 VENDOR_TYPES = ("photographer", "stager", "cleaner")
 VENDOR_TYPE_ALIASES = {
     "photo": "photographer",
@@ -196,11 +246,22 @@ def vendor_skills(member: Any) -> set[str]:
             skills.add("photo")
         if key in ("virtual", "3d", "polycam"):
             skills.add("tour")
+        # www / Companion cinematic reel — never leave a non-SKILL_KEYS "video"
+        # label that hard-gates assign against reel-capable vendors.
+        if key in ("video", "cinematic", "cinematic_reel"):
+            skills.add("reel")
+        # Floor-plan-only books stamp floor_plan* — map onto photo (SKILL_KEYS).
+        if key in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
+            skills.add("photo")
     spec = str(m.get("specialty") or "").strip().lower()
     if spec in ("photo", "photography", "photos"):
         skills.add("photo")
+    elif spec in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
+        skills.add("photo")
     elif spec == "virtual":
         skills.add("tour")
+    elif spec in ("video", "cinematic", "cinematic_reel", "reel"):
+        skills.add("reel")
     elif spec:
         skills.add(spec)
     if m.get("drone_certified") or has_advanced_rpas(m):
@@ -248,8 +309,17 @@ def job_required_skills(job: Any) -> set[str]:
     skills: set[str] = set()
     if jt in ("photo", "photography", ""):
         skills.add("photo")
+    elif jt in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
+        # SKILL_KEYS has photo, not floor_plan*. www stripe-webhook / OS
+        # book_checkout / Companion PACKAGES stamp job_type=floor_plan_only —
+        # hard-gate must not demand a phantom skill photo vendors lack.
+        skills.add("photo")
     elif jt == "virtual":
         skills.add("tour")
+    elif jt in ("reel", "video", "cinematic", "cinematic_reel"):
+        # SKILL_KEYS has reel, not video. Pre-fa52afd Companion Story/Showcase/Suite
+        # stamped job_type=video and hard-gated assign against reel vendors.
+        skills.add("reel")
     elif jt in ("stager", "staging", "cleaner", "cleaning"):
         pass
     else:
@@ -258,7 +328,12 @@ def job_required_skills(job: Any) -> set[str]:
     blob = " ".join(keys) + " " + jt
     if jt == "drone" or "drone" in keys:
         skills.add("drone")
-    if "reel" in blob:
+    # Cinematic reel aliases (www / Companion / media_intake portfolio lockstep).
+    if (
+        "reel" in blob
+        or keys & {"reel", "video", "cinematic", "cinematic_reel"}
+        or jt in ("reel", "video", "cinematic", "cinematic_reel")
+    ):
         skills.add("reel")
     if "tour" in blob or "virtual" in blob:
         skills.add("tour")
@@ -444,30 +519,17 @@ def is_drone_job(job: Any) -> bool:
     return "drone" in _add_on_keys(j.get("add_ons") or [])
 
 
-def has_lapsed_insurance(member: Any) -> bool:
-    """True only when a verified COI or WSIB expiry date has actually passed.
-    Fail-open on missing/unverified dates (NULL) -- most currently-active
-    vendors predate this field and have never had one set; blocking on NULL
-    would suspend the entire existing roster, not just genuinely lapsed
-    coverage. Only a confirmed past date counts, matching the IC agreement's
-    "lapsed coverage is automatic suspension from dispatch" clause.
-    """
-    m = _as_dict(member)
-    today = datetime.now(timezone.utc).date().isoformat()
-    for field in ("coi_expires_on", "wsib_expires_on"):
-        value = m.get(field)
-        if value and str(value) < today:
-            return True
-    return False
-
-
 def member_eligible_for_job(member: Any, job: Any) -> bool:
+    """Approved, active, type/location/skill match. Insurance is not a gate.
+
+    COI and WSIB are optional records. Missing, expired, or unverified proof
+    must not exclude an otherwise approved vendor from assignment or dispatch.
+    coi_expires_on and wsib_expires_on are ignored here.
+    """
     m = _as_dict(member)
     if not m.get("is_active"):
         return False
     if is_aman_pending(m):
-        return False
-    if has_lapsed_insurance(m):
         return False
     needed_type = job_required_vendor_type(job)
     if member_vendor_type(m) != needed_type:

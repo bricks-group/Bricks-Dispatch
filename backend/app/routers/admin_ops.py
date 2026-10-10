@@ -6,6 +6,13 @@ from fastapi import APIRouter, Header, HTTPException
 
 from ..shared.auth import is_vendor_admin, get_vendor_member, resolve_vendor_actor_id, require_vendor_admin
 from ..shared.database import get_db
+
+
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row."""
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import VendorMemberUpdate, VendorLead
@@ -122,7 +129,7 @@ async def update_applicant_status(
         existing = await (await get_db()).table("vendor_members").select(
             "vendor_type,role,title"
         ).eq("id", member_id).maybe_single().execute()
-        row = (existing.data or {}) if existing else {}
+        row = _maybe_single_row(existing)
         from ..services.vendor_profile import (
             is_platform_owner,
             member_vendor_type,
@@ -177,7 +184,8 @@ async def _require_applicant_in_own_vendor(db, member_id: str, vendor_id: str):
     applicant documents by guessing/observing a member_id, not just their own
     vendor's. Fail closed if the applicant isn't in the caller's vendor org."""
     res = await db.table("vendor_members").select("vendor_id").eq("id", member_id).maybe_single().execute()
-    if not res.data or res.data.get("vendor_id") != vendor_id:
+    row = _maybe_single_row(res)
+    if not row or row.get("vendor_id") != vendor_id:
         api_error(404, "Applicant not found", "applicant_not_found")
 
 @router.get("/applicants/{member_id}/documents")
@@ -224,10 +232,9 @@ async def verify_document(
         api_error(404, "Document not found", "document_not_found")
 
     doc = res.data[0]
-    # Denormalize the expiry onto vendor_members so member_eligible_for_job()
-    # can gate dispatch on it without an extra query per candidate. Only coi
-    # and wsib are dispatch-blocking documents; other doc_types (hst_registry,
-    # id_verification, rpas_certificate, resume) don't have a lapse concept.
+    # Optional record only. Copy a verified COI/WSIB expiry onto the member
+    # for history. These dates do not suspend the vendor or block approval,
+    # assignment, or dispatch.
     if status == "verified" and doc.get("doc_type") in ("coi", "wsib") and doc.get("expiry_date"):
         column = "coi_expires_on" if doc["doc_type"] == "coi" else "wsib_expires_on"
         await db.table("vendor_members").update({
@@ -270,7 +277,7 @@ async def validate_rpas_batch(
         member_id = doc["member_id"]
         try:
             res_m = await db.table("vendor_members").select("name").eq("id", member_id).maybe_single().execute()
-            vendor_name = (res_m.data or {}).get("name", "")
+            vendor_name = _maybe_single_row(res_m).get("name", "")
 
             image_url = await get_signed_download_url(doc["file_url"])
             if not image_url:
@@ -377,10 +384,9 @@ async def review_noshow_claim(
     res_claim = await db.table("agent_noshow_trip_fees").select("*").eq(
         "id", claim_id
     ).maybe_single().execute()
-    if not res_claim.data:
+    claim = _maybe_single_row(res_claim)
+    if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
-
-    claim = res_claim.data
     if claim.get("status") != "pending_review":
         raise HTTPException(
             status_code=409,
@@ -485,8 +491,9 @@ async def reconcile_noshow_claims(
             res_bk = await db.table("bookings").select(
                 "id, status"
             ).eq("id", booking_id).maybe_single().execute()
+            bk_row = _maybe_single_row(res_bk)
 
-            if not res_bk.data:
+            if not bk_row:
                 mismatches.append({
                     "type": "booking_missing",
                     "fee_id": fee["id"],
@@ -495,7 +502,7 @@ async def reconcile_noshow_claims(
                 })
                 continue
 
-            bk_status = res_bk.data.get("status", "")
+            bk_status = bk_row.get("status", "")
             # pending_review fees are held for admin approval; the Booking retention webhook
             # fires only after approval — these are expected not to show retained yet.
             if fee.get("status") == "pending_review":
@@ -561,13 +568,10 @@ async def reconcile_noshow_claims(
 # ---------------------------------------------------------------------------
 # Vendor compliance expiry scan
 #
-# IC agreement Clause 6 requires current COI/WSIB before every dispatched job,
-# and vendor_os.py already enforces that gate at dispatch time (lapsed ->
-# automatic suspension). This scan is the proactive half: surface COI/WSIB
-# expiring soon so ops can chase renewals *before* a vendor gets suspended
-# mid-pipeline, mirroring the churn-scan / reconcile-noshow admin patterns
-# already established in this repo and Bricks-Companion. Homies AI has no
-# equivalent concept -- it has no independent-contractor network at all.
+# Informational only. COI and WSIB proof are not required to apply, be
+# approved, or be dispatched. This scan reports stored expiry dates so ops
+# can see them. It does not suspend a vendor, reject an application, or
+# hold a job.
 # ---------------------------------------------------------------------------
 
 @router.get("/compliance-expiry-scan")
@@ -578,7 +582,7 @@ async def compliance_expiry_scan(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    Scan active vendors' COI/WSIB documents for lapsed or soon-to-lapse coverage.
+    Report stored COI/WSIB expiry dates. Does not change vendor or job status.
 
     notify=false (default): report only, sends nothing.
     notify=true: sends one digest admin notification (Resend + in-app) if any
@@ -708,37 +712,62 @@ async def list_dispatch_failures(
 
     Newest first. Retry failed assign via POST .../reassign; release a Jev hold
     via POST .../release (clears hold + runs auto-assign).
+
+    Fair-Use: when Canada PostgREST returns 402, list jobs + escalations via Postgres
+    so Owner can still recover failed auto-assign / holds while Storage quota is locked.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
 
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_dispatch_failed_jobs,
+        pg_select_ops_escalations_for_jobs,
+    )
+
     db = await get_db()
-    res_jobs = await db.table("jobs").select(
-        _DISPATCH_QUEUE_SELECT
-    ).in_(
-        "status",
-        ["dispatch_failed", "held_for_review", "pending_assignment"],
-    ).order("updated_at", desc=True).range(0, 199).execute()
-    candidates = list(res_jobs.data or [])
-    kept = []
-    for row in candidates:
-        status = str(row.get("status") or "").strip()
-        if status in _DISPATCH_QUEUE_STATUSES:
-            kept.append(row)
-        elif _is_jev_hold_row(row) and not str(row.get("assignee_id") or "").strip():
-            kept.append(row)
-    jobs = _sort_queue_jobs(kept)[offset: offset + limit]
+    jobs: list = []
+    try:
+        # Pull failed + held + pending_assignment candidates (admin queue is small),
+        # then keep true queue rows in Python — covers legacy Jev holds that still
+        # sit on pending_assignment with the hold note and empty assignee.
+        res_jobs = await db.table("jobs").select(
+            _DISPATCH_QUEUE_SELECT
+        ).in_(
+            "status",
+            ["dispatch_failed", "held_for_review", "pending_assignment"],
+        ).order("updated_at", desc=True).range(0, 199).execute()
+        candidates = list(res_jobs.data or [])
+        kept = []
+        for row in candidates:
+            status = str(row.get("status") or "").strip()
+            if status in _DISPATCH_QUEUE_STATUSES:
+                kept.append(row)
+            elif _is_jev_hold_row(row) and not str(row.get("assignee_id") or "").strip():
+                kept.append(row)
+        jobs = _sort_queue_jobs(kept)[offset: offset + limit]
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        jobs = pg_select_dispatch_failed_jobs(limit=limit, offset=offset)
 
     if not jobs:
         return {"total": 0, "items": []}
 
     job_ids = [j["id"] for j in jobs if j.get("id")]
-    res_esc = await db.table("ops_escalations").select(
-        "job_id, attempt_count, error_message, status, created_at"
-    ).in_("job_id", job_ids).execute()
-    escalations = res_esc.data or []
+    escalations: list = []
+    try:
+        res_esc = await db.table("ops_escalations").select(
+            "job_id, attempt_count, error_message, status, created_at"
+        ).in_("job_id", job_ids).execute()
+        escalations = res_esc.data or []
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        escalations = pg_select_ops_escalations_for_jobs(job_ids)
+
     escalation_by_job = {e["job_id"]: e for e in escalations if e.get("job_id")}
 
     items = []
@@ -764,28 +793,61 @@ async def manual_reassign_dispatch_failure(
     Resets status to 'pending_assignment' before running assign_vendor_for_job.
     If assignment still fails, the job returns to dispatch_failed and a new
     ops_escalation record is written.
+
+    Fair-Use: job load/reset and open-escalation close fall back to Postgres on
+    PostgREST 402 so Owner can recover failed auto-assign under Fair Use.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
 
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_mark_ops_escalations_manual_retry,
+        pg_select_job_by_id,
+        pg_update_job,
+    )
+
     db = await get_db()
-    res = await db.table("jobs").select("id, status").eq("id", job_id).maybe_single().execute()
-    if not res.data:
+    job_row = None
+    try:
+        res = await db.table("jobs").select("id, status").eq("id", job_id).maybe_single().execute()
+        job_row = _maybe_single_row(res) or None
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        job_row = pg_select_job_by_id(job_id)
+
+    if not job_row:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if res.data["status"] != "dispatch_failed":
+    if job_row.get("status") != "dispatch_failed":
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Job is in status '{res.data['status']}' — only dispatch_failed "
+                f"Job is in status '{job_row.get('status')}' — only dispatch_failed "
                 "jobs can be manually reassigned (use /release for Jev holds)"
             ),
         )
 
-    await db.table("jobs").update({"status": "pending_assignment", "assignee_id": ""}).eq("id", job_id).execute()
-    await db.table("ops_escalations").update({"status": "manual_retry"}).eq("job_id", job_id).eq("status", "open").execute()
+    # Reset to pending_assignment so assign_vendor_for_job can proceed
+    reset_fields = {"status": "pending_assignment", "assignee_id": ""}
+    try:
+        await db.table("jobs").update(reset_fields).eq("id", job_id).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, reset_fields):
+            raise HTTPException(status_code=500, detail="Could not reset job for reassign (Fair-Use PG)")
+
+    # Close the previous escalation record
+    try:
+        await db.table("ops_escalations").update({"status": "manual_retry"}).eq("job_id", job_id).eq("status", "open").execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        pg_mark_ops_escalations_manual_retry(job_id)
 
     assigned_member_id = await assign_vendor_for_job(job_id)
 
@@ -815,36 +877,58 @@ async def release_held_dispatch_job(
 
     Clears the hold stamp, resets to pending_assignment, then runs
     assign_vendor_for_job. Does not touch dispatch_failed rows — use /reassign.
+    Fair-Use: job load/reset fall back to Postgres on PostgREST 402.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
 
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_job_by_id,
+        pg_update_job,
+    )
+
     db = await get_db()
-    res = await db.table("jobs").select(
-        "id, status, dispatch_explanation, assignee_id"
-    ).eq("id", job_id).maybe_single().execute()
-    if not res.data:
+    job_row = None
+    try:
+        res = await db.table("jobs").select(
+            "id, status, dispatch_explanation, assignee_id"
+        ).eq("id", job_id).maybe_single().execute()
+        job_row = _maybe_single_row(res) or None
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        job_row = pg_select_job_by_id(job_id)
+
+    if not job_row:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if not _is_jev_hold_row(res.data):
+    if not _is_jev_hold_row(job_row):
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Job is in status '{res.data.get('status')}' — only Jev-held jobs "
+                f"Job is in status '{job_row.get('status')}' — only Jev-held jobs "
                 "(held_for_review or pending_assignment with hold note) can be released "
                 "(use /reassign for dispatch_failed)"
             ),
         )
 
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({
+    reset_fields = {
         "status": "pending_assignment",
         "assignee_id": "",
         "dispatch_explanation": "Released from Jev hold for auto-assign.",
         "updated_at": now,
-    }).eq("id", job_id).execute()
+    }
+    try:
+        await db.table("jobs").update(reset_fields).eq("id", job_id).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, reset_fields):
+            raise HTTPException(status_code=500, detail="Could not release held job (Fair-Use PG)")
 
     assigned_member_id = await assign_vendor_for_job(job_id)
 

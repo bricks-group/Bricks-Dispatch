@@ -4,7 +4,7 @@ import os
 import re
 from datetime import date as _date
 from zoneinfo import ZoneInfo
-from ..shared.database import get_db
+from ..shared.database import get_db, maybe_single_row
 from ..shared.job_timezone import resolve_job_iana, tz_abbrev
 from ..shared.schemas import NotificationRecord
 
@@ -546,8 +546,12 @@ async def send_push_to_member(member_id: str, title: str, body: str, data: dict 
         res = await (await get_db()).table("push_tokens").select("*").eq("member_id", member_id).eq("active", True).limit(50).execute()
         tokens = res.data or []
     except Exception as exc:
-        logger.error("push_tokens lookup failed: %s", exc)
-        return False
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_push_tokens_for_member
+        if _is_rest_quota_error(exc):
+            tokens = list(pg_select_push_tokens_for_member(member_id) or [])
+        else:
+            logger.error("push_tokens lookup failed: %s", exc)
+            return False
     if not tokens:
         logger.info("No push tokens for member %s — skipping push", member_id)
         return False
@@ -593,16 +597,38 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
     db = await get_db()
     try:
         existing = await db.table("push_tokens").select("id").eq("token", token).maybe_single().execute()
-        if existing.data:
+        existing_row = maybe_single_row(existing)
+        if existing_row:
             await db.table("push_tokens").update({
                 "member_id": member_id,
                 "platform": platform,
                 "active": True,
                 "updated_at": now,
-            }).eq("id", existing.data["id"]).execute()
-            return {"registered": True, "id": existing.data["id"]}
+            }).eq("id", existing_row["id"]).execute()
+            return {"registered": True, "id": existing_row["id"]}
     except Exception as exc:
-        logger.error("push_tokens lookup failed: %s", exc)
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_push_token_by_token,
+            pg_upsert_push_token,
+        )
+        if _is_rest_quota_error(exc):
+            found = pg_select_push_token_by_token(token)
+            if found and found.get("id"):
+                updated = pg_upsert_push_token({
+                    "id": found["id"],
+                    "member_id": member_id,
+                    "token": token,
+                    "platform": platform,
+                    "active": True,
+                    "updated_at": now,
+                })
+                if updated and updated.get("id"):
+                    return {"registered": True, "id": updated["id"]}
+                raise
+            # no existing row — fall through to insert path below via PG
+        else:
+            logger.error("push_tokens lookup failed: %s", exc)
     row = {
         "id": str(uuid.uuid4()),
         "member_id": member_id,
@@ -616,6 +642,12 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
         await db.table("push_tokens").insert(row).execute()
         return {"registered": True, "id": row["id"]}
     except Exception as exc:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_upsert_push_token
+        if _is_rest_quota_error(exc):
+            saved = pg_upsert_push_token(dict(row))
+            if saved and saved.get("id"):
+                return {"registered": True, "id": saved["id"]}
+            raise
         logger.error("push_tokens insert failed: %s", exc)
         slim = {k: row[k] for k in ("id", "token", "active") if k in row}
         slim["member_id"] = member_id
@@ -623,6 +655,10 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
             await db.table("push_tokens").insert(slim).execute()
             return {"registered": True, "id": row["id"]}
         except Exception as exc2:
+            if _is_rest_quota_error(exc2):
+                saved = pg_upsert_push_token(dict(row))
+                if saved and saved.get("id"):
+                    return {"registered": True, "id": saved["id"]}
             logger.error("push_tokens insert retry failed: %s", exc2)
             raise
 
@@ -649,10 +685,25 @@ async def create_notification(
     try:
         await (await get_db()).table("notifications").insert(notif_dict).execute()
     except Exception as exc:
-        if member_id:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_notification
+        if _is_rest_quota_error(exc):
+            if not pg_insert_notification(dict(notif_dict)):
+                raise
+        elif member_id:
             logger.info("notifications insert with member_id failed (%s) — retrying without it", type(exc).__name__)
             notif_dict.pop("member_id", None)
-            await (await get_db()).table("notifications").insert(notif_dict).execute()
+            try:
+                await (await get_db()).table("notifications").insert(notif_dict).execute()
+            except Exception as exc2:
+                if _is_rest_quota_error(exc2):
+                    # Prefer original member-scoped row on Fair-Use retry
+                    retry_row = dict(notif_dict)
+                    if member_id:
+                        retry_row["member_id"] = member_id
+                    if not pg_insert_notification(retry_row):
+                        raise
+                else:
+                    raise
         else:
             raise
     if member_id and send_push:
@@ -675,7 +726,7 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
     member: dict = {}
     try:
         res = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-        member = res.data or {}
+        member = maybe_single_row(res)
     except Exception as exc:
         logger.error("Assignment notify: failed to load member %s: %s", member_id, exc)
 

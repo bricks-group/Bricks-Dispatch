@@ -54,14 +54,41 @@ async def stripe_connect_webhook(
     classified = classify_connect_account(acct)
     status = classified["connect_status"]
 
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_contractor_by_stripe_account_id,
+        pg_update_contractor,
+    )
+
     db = await get_db()
-    res = await db.table("contractors").select("id").eq("stripe_account_id", account_id).maybe_single().execute()
-    row = res.data or {}
+    try:
+        res = await db.table("contractors").select("id").eq(
+            "stripe_account_id", account_id
+        ).maybe_single().execute()
+        data = getattr(res, "data", None) if res is not None else None
+        row = data if isinstance(data, dict) else {}
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            row = pg_select_contractor_by_stripe_account_id(account_id) or {}
+        else:
+            raise
     if not row.get("id"):
         logger.info("account.updated for unknown stripe account %s", account_id)
         return {"received": True, "ok": False, "detail": "contractor not found"}
 
-    await db.table("contractors").update({"connect_status": status}).eq("id", row["id"]).execute()
+    try:
+        await db.table("contractors").update({"connect_status": status}).eq(
+            "id", row["id"]
+        ).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            if not pg_update_contractor(row["id"], {"connect_status": status}):
+                logger.warning(
+                    "connect webhook Fair-Use PG update failed contractor=%s",
+                    row["id"],
+                )
+        else:
+            raise
     return {
         "received": True,
         "ok": True,

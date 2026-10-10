@@ -10,16 +10,48 @@ import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 import BricksWordmark from '../../components/BricksWordmark';
+import { EnterFadeDown, PressScale } from '../../components/motion';
 
 WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const router = useRouter();
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  const isFairUseAuthError = (authError: any) => {
+    const msg = `${authError?.message || ''} ${authError?.status || ''}`.toLowerCase();
+    return (
+      msg.includes('402')
+      || msg.includes('exceed_storage')
+      || msg.includes('fair-use')
+      || msg.includes('fair use')
+      || msg.includes('restricted')
+      || authError?.status === 402
+    );
+  };
+
+  const applyFairUseSession = async (body: any, verb: string) => {
+    const access = body.access_token;
+    const refresh = body.refresh_token || access;
+    if (!access) throw new Error(`Fair-Use ${verb} returned no token`);
+    const { error: sessionError } = await supabase.auth.setSession({
+      access_token: access,
+      refresh_token: refresh,
+    });
+    if (sessionError) throw sessionError;
+  };
+
+  const fairUseDetail = (body: any, status: number, fallback: string) => {
+    const detail = body?.detail;
+    if (typeof detail === 'string') return detail;
+    return detail?.message || body?.message || `${fallback} (${status})`;
+  };
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -29,14 +61,87 @@ export default function LoginScreen() {
     setError('');
     setLoading(true);
     try {
+      const trimmed = email.trim().toLowerCase();
       const { error: authError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: trimmed,
         password,
       });
-      if (authError) throw authError;
+      if (authError) {
+        if (!isFairUseAuthError(authError)) throw authError;
+        const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+        const res = await fetch(`${API}/api/vendor-os/auth/fair-use-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: trimmed, password }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Login failed'));
+        await applyFairUseSession(body, 'login');
+      }
       router.replace('/(tabs)');
     } catch (e: any) {
       setError(e.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignup = async () => {
+    if (!email.trim() || !password) {
+      setError('Enter your email and password');
+      return;
+    }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      const trimmed = email.trim().toLowerCase();
+      const display = name.trim();
+      const { data, error: authError } = await supabase.auth.signUp({
+        email: trimmed,
+        password,
+        options: display ? { data: { full_name: display } } : undefined,
+      });
+      if (authError) {
+        if (!isFairUseAuthError(authError)) throw authError;
+        const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+        const res = await fetch(`${API}/api/vendor-os/auth/fair-use-signup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: trimmed, password, name: display }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Sign up failed'));
+        await applyFairUseSession(body, 'signup');
+      } else if (data?.session) {
+        // immediate session (email confirm off)
+      } else {
+        // No session yet — try password sign-in (or Fair-Use path)
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: trimmed,
+          password,
+        });
+        if (signInError) {
+          if (!isFairUseAuthError(signInError)) {
+            throw new Error('Account created — check your email to confirm, then sign in.');
+          }
+          const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+          const res = await fetch(`${API}/api/vendor-os/auth/fair-use-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: trimmed, password }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Sign in after signup failed'));
+          await applyFairUseSession(body, 'login');
+        }
+      }
+      router.replace('/(tabs)');
+    } catch (e: any) {
+      setError(e.message || 'Sign up failed');
     } finally {
       setLoading(false);
     }
@@ -79,18 +184,38 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          <EnterFadeDown>
           <View style={s.wordmarkWrap}>
             <BricksWordmark size={1.0} color={TOKENS.brick} pressable />
           </View>
 
           <Text style={s.eyebrow}>DISPATCH</Text>
-          <Text style={s.heading}>Sign in.</Text>
-          <Text style={s.sub}>Manage jobs, uploads, and payouts.</Text>
+          <Text style={s.heading}>{mode === 'signin' ? 'Sign in.' : 'Create account.'}</Text>
+          <Text style={s.sub}>
+            {mode === 'signin'
+              ? 'Manage jobs, uploads, and payouts.'
+              : 'Join Bricks GO — shoot, upload, get paid.'}
+          </Text>
 
           <View style={s.form}>
             {!!error && (
               <View style={s.errorBox}>
                 <Text style={s.errorText}>{error}</Text>
+              </View>
+            )}
+
+            {mode === 'signup' && (
+              <View style={s.fieldGroup}>
+                <Text style={s.label}>NAME</Text>
+                <TextInput
+                  style={s.input}
+                  value={name}
+                  onChangeText={setName}
+                  placeholder="Your name"
+                  placeholderTextColor={TOKENS.moonFaint}
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                />
               </View>
             )}
 
@@ -121,17 +246,16 @@ export default function LoginScreen() {
               />
             </View>
 
-            <TouchableOpacity
+            <PressScale
               style={[s.primaryBtn, loading && s.btnDisabled]}
-              onPress={handleLogin}
+              onPress={mode === 'signin' ? handleLogin : handleSignup}
               disabled={loading || googleLoading}
-              activeOpacity={0.85}
             >
               {loading
                 ? <ActivityIndicator color={TOKENS.night} />
-                : <Text style={s.primaryBtnText}>Sign in</Text>
+                : <Text style={s.primaryBtnText}>{mode === 'signin' ? 'Sign in' : 'Create account'}</Text>
               }
-            </TouchableOpacity>
+            </PressScale>
 
             <View style={s.divider}>
               <View style={s.dividerLine} />
@@ -139,26 +263,48 @@ export default function LoginScreen() {
               <View style={s.dividerLine} />
             </View>
 
-            <TouchableOpacity
+            <PressScale
               style={[s.ghostBtn, googleLoading && s.btnDisabled]}
               onPress={handleGoogle}
               disabled={loading || googleLoading}
-              activeOpacity={0.8}
+              scaleTo={0.98}
             >
               {googleLoading
                 ? <ActivityIndicator color={TOKENS.moon} size="small" />
                 : <Text style={s.ghostBtnText}>Continue with Google</Text>
               }
-            </TouchableOpacity>
+            </PressScale>
           </View>
 
           <View style={s.footer}>
-            <Text style={s.footerText}>New to Bricks GO?{'  '}</Text>
-            <TouchableOpacity onPress={() => router.push('/onboarding/slides')} activeOpacity={0.7}>
-              <Text style={s.footerLink}>Apply</Text>
-            </TouchableOpacity>
+            {mode === 'signin' ? (
+              <>
+                <Text style={s.footerText}>New to Bricks GO?{'  '}</Text>
+                <TouchableOpacity
+                  onPress={() => { setMode('signup'); setError(''); }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={s.footerLink}>Create account</Text>
+                </TouchableOpacity>
+                <Text style={s.footerText}>{'  ·  '}</Text>
+                <TouchableOpacity onPress={() => router.push('/onboarding/slides')} activeOpacity={0.7}>
+                  <Text style={s.footerLink}>Apply</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <Text style={s.footerText}>Already have an account?{'  '}</Text>
+                <TouchableOpacity
+                  onPress={() => { setMode('signin'); setError(''); }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={s.footerLink}>Sign in</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
 
+          </EnterFadeDown>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

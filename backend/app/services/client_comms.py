@@ -126,25 +126,52 @@ async def register_property_visit(
     if body["type"] == "url" and not embed_url:
         logger.warning("visit-ready skipped — type=url needs embed_url")
         return False
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{os_url}/api/internal/visit-ready",
-                headers={"X-Internal-Api-Key": api_key},
-                json=body,
-            )
-            resp.raise_for_status()
-            return True
-    except Exception as e:
-        logger.error(f"visit-ready call for property {property_id} failed: {e}")
-        return False
+    # One retry on transient network / 5xx — avoid hollow listing when OS blips.
+    last_err: Exception | None = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{os_url}/api/internal/visit-ready",
+                    headers={"X-Internal-Api-Key": api_key},
+                    json=body,
+                )
+                resp.raise_for_status()
+                return True
+        except Exception as e:
+            last_err = e
+            if attempt == 0:
+                logger.warning(
+                    "visit-ready retry for property %s after: %s", property_id, e
+                )
+                continue
+    logger.error(f"visit-ready call for property {property_id} failed: {last_err}")
+    return False
 
 
 async def _load_job(job_id: str, columns: str) -> dict:
+    """Load a job row for agent emails. REST first; Postgres on Fair-Use 402."""
     from ..shared.database import get_db
-    db = await get_db()
-    res = await db.table("jobs").select(columns).eq("id", job_id).maybe_single().execute()
-    return res.data or {}
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+
+    try:
+        db = await get_db()
+        from ..shared.database import maybe_single_row
+        res = await db.table("jobs").select(columns).eq("id", job_id).maybe_single().execute()
+        data = maybe_single_row(res)
+        if data:
+            return data
+        # Empty body can be a silent Fair-Use failure — try Postgres once.
+        row = pg_select_job_by_id(job_id)
+        return row or {}
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            row = pg_select_job_by_id(job_id)
+            if row:
+                logger.warning("client_comms _load_job PG fallback ok job=%s", job_id)
+            return row or {}
+        logger.warning("_load_job failed for %s: %s", job_id, e)
+        return {}
 
 
 def _photographer_name_from(member_row: dict | None, fallback: str = "your Bricks photographer") -> str:
@@ -155,12 +182,21 @@ def _photographer_name_from(member_row: dict | None, fallback: str = "your Brick
 async def _resolve_photographer_name(assignee_id: str | None, fallback: str) -> str:
     if not assignee_id:
         return fallback
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
     try:
         from ..shared.database import get_db
         db = await get_db()
+        from ..shared.database import maybe_single_row
         res = await db.table("vendor_members").select("name").eq("id", assignee_id).maybe_single().execute()
-        return _photographer_name_from(res.data, fallback)
+        row = maybe_single_row(res)
+        if row:
+            return _photographer_name_from(row, fallback)
+        member = pg_select_vendor_member(actor_id=assignee_id)
+        return _photographer_name_from(member, fallback)
     except Exception as exc:
+        if _is_rest_quota_error(exc):
+            member = pg_select_vendor_member(actor_id=assignee_id)
+            return _photographer_name_from(member, fallback)
         logger.warning("Photographer name lookup failed for %s: %s", assignee_id, exc)
         return fallback
 

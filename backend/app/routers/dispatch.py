@@ -57,6 +57,20 @@ async def create_dispatch_job(
     if not internal_keys or x_internal_api_key not in internal_keys:
         raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
 
+    # Soft-retire legacy Companion SKUs for NEW jobs only (estate/standard/premium/luxury).
+    # Historical rows keep those package_ids for vendor_payout_rates reads.
+    from ..services.payout_service import is_retired_for_new_jobs
+    _pkg = getattr(payload, "package_id", None)
+    if is_retired_for_new_jobs(_pkg):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Package '{_pkg}' is retired for new jobs. "
+                "Use photos_only / essentials / story / showcase / full (or suite). "
+                "Legacy package_ids remain readable for historical payouts only."
+            ),
+        )
+
     # Every job traces back to exactly one caller: Booking (booking_id) or
     # Bricks-OS's developer/REIT progress-capture flow (dev_capture_visit_id).
     # Without this gate a malformed payload would insert a job neither side
@@ -79,8 +93,15 @@ async def create_dispatch_job(
     # going forward, this is a defensive fallback, not the primary path).
     if "rack_price" not in job_data:
         job_data["rack_price"] = job_data.get("package_price")
-    if job_data.get("assignee_id") in (None, "", "default_user"):
+    # Assign-first checkout stamps assignee_id in Stripe metadata → OS/edge intake.
+    # Honor it so paid travel fee matches the photographer who was quoted.
+    preassigned = (job_data.get("assignee_id") or "").strip()
+    if preassigned in ("", "default_user"):
+        preassigned = ""
         job_data["assignee_id"] = ""
+    else:
+        job_data["assignee_id"] = preassigned
+        job_data["status"] = "assigned"
     if not job_data.get("vendor_id") or job_data.get("vendor_id") == job_data.get("assignee_id"):
         job_data["vendor_id"] = "default_vendor"
     # Booked clocks are property-local HH:MM — never raw ISO UTC.
@@ -131,33 +152,52 @@ async def create_dispatch_job(
         # serverless — FastAPI BackgroundTasks often never run after the
         # response, which left paid /book jobs stuck in pending_assignment
         # with empty assignee_id so they never landed on GO.
+        # Assign-first: when checkout already allocated a photographer, keep them
+        # (travel fee was billed from their base) and still fire confirm/assign mail.
         #
         # Booking intake only: ask Jev whether to hold for a person before
-        # that auto-assign. Progress-capture visits, manual assign, and admin
+        # auto-assign. Progress-capture visits, manual assign, and admin
         # reassign do not go through this gate. A Jev failure must still assign.
         assignee_id = None
         status = "pending_assignment"
         held = False
         hold_probability = None
-        if job_data.get("booking_id"):
+        if preassigned:
             try:
-                decision = await jev_hold_decision(job_data)
-                held = decision.hold
-                hold_probability = decision.yes_probability
-            except Exception:
-                logger.exception("Jev hold gate failed open for job %s", job_id)
-                held = False
-        if held:
-            # Note or notify failure must not assign.
-            status = "held_for_review"
-            await _note_jev_hold(db, job_id, hold_probability)
-        else:
-            try:
-                assignee_id = await assign_vendor_for_job(job_id)
-                status = "assigned" if assignee_id else "dispatch_failed"
+                from ..services.vendor_selection import _update_job_assignee
+                await _update_job_assignee(job_id, preassigned, job_doc=job_data)
+                assignee_id = preassigned
+                status = "assigned"
             except Exception:
                 logger.exception("Sync vendor assign failed for job %s", job_id)
-
+        else:
+            if job_data.get("booking_id"):
+                try:
+                    decision = await jev_hold_decision(job_data)
+                    held = decision.hold
+                    hold_probability = decision.yes_probability
+                except Exception:
+                    logger.exception("Jev hold gate failed open for job %s", job_id)
+                    held = False
+            if held:
+                # Note or notify failure must not assign.
+                status = "held_for_review"
+                await _note_jev_hold(db, job_id, hold_probability)
+                try:
+                    from ..services.vendor_selection import notify_owner_jev_hold
+                    await notify_owner_jev_hold(
+                        db,
+                        {**job_data, "id": job_id},
+                        hold_probability,
+                    )
+                except Exception:
+                    logger.exception("Jev hold notify failed for job %s", job_id)
+            else:
+                try:
+                    assignee_id = await assign_vendor_for_job(job_id)
+                    status = "assigned" if assignee_id else "dispatch_failed"
+                except Exception:
+                    logger.exception("Sync vendor assign failed for job %s", job_id)
         # Await notify — Vercel serverless drops FastAPI BackgroundTasks after response
         # (same class of bug as pending_assignment with empty assignee_id).
         try:
@@ -205,6 +245,83 @@ async def create_dispatch_job(
             "checklist": job_data.get("checklist") or [],
         }
     except Exception as e:
+        # Fair-Use / PostgREST 402: insert via Postgres already assigned to Owner
+        # so paid /book jobs still land on GO. Needs POSTGRES_URL on this project.
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_job_assigned_to_owner
+        from ..shared.job_scope import KAM_MEMBER_ID as _KAM
+
+        if _is_rest_quota_error(e):
+            # Prefer checkout/intake assignee when present; else Owner (Kam).
+            if preassigned:
+                job_data["assignee_id"] = preassigned
+                job_data["status"] = "assigned"
+            pg_id = pg_insert_job_assigned_to_owner(job_data)
+            fallback_assignee = (job_data.get("assignee_id") or "").strip() or _KAM
+            if pg_id:
+                logger.warning(
+                    "create_dispatch_job used pg fallback id=%s assignee=%s",
+                    pg_id,
+                    fallback_assignee,
+                )
+                try:
+                    from ..services.notifications import format_when_line, format_package_line
+                    when = format_when_line(job_data)
+                    address = (job_data.get("address") or "").strip() or "n/a"
+                    pkg_name = format_package_line(
+                        job_data.get("package_name"),
+                        job_data.get("package_id"),
+                    )
+                    pkg_price = job_data.get("package_price")
+                    package = f"{pkg_name} (${pkg_price})" if pkg_price is not None else pkg_name
+                    booking_ref = short_booking_ref(job_data.get("booking_id"))
+                    await create_notification(
+                        title="New paid booking",
+                        body=(
+                            "New job from Booking (pg fallback).\n"
+                            f"Address: {address}\n"
+                            f"Package: {package}\n"
+                            f"When: {when}\n"
+                            f"Assignee: {fallback_assignee}\n"
+                            f"Booking ref: {booking_ref}"
+                        ),
+                        ntype="new_booking",
+                        data={"job_id": pg_id, "assignee_id": fallback_assignee},
+                        email_to=ADMIN_NOTIFICATION_EMAIL,
+                        email_subject=paid_booking_admin_subject(job_data.get("address")),
+                        email_html=_paid_booking_admin_email_html(
+                            address=address,
+                            package=package,
+                            when=when,
+                            assignee=fallback_assignee,
+                            booking_ref=booking_ref,
+                        ),
+                    )
+                except Exception:
+                    logger.exception("Admin notify after pg fallback failed for %s", pg_id)
+                # Best-effort client/vendor notify for preassigned Fair-Use path
+                if preassigned:
+                    try:
+                        from ..services.client_comms import notify_booking_confirmed
+                        await notify_booking_confirmed(pg_id)
+                    except Exception:
+                        logger.exception("Booking confirmed notify after pg fallback failed for %s", pg_id)
+                    try:
+                        from ..services.notifications import notify_assignment
+                        await notify_assignment({**job_data, "id": pg_id}, preassigned)
+                    except Exception:
+                        logger.exception("Assignment notify after pg fallback failed for %s", pg_id)
+                return {
+                    "job_id": pg_id,
+                    "status": "assigned",
+                    "assignee_id": fallback_assignee,
+                    "created_at": now,
+                    "checklist": job_data.get("checklist") or [],
+                    "note": "pg_fallback_assigned_owner",
+                }
+            logger.error(
+                "create_dispatch_job Fair-Use + pg fallback failed (POSTGRES_URL set?): %s",
+                str(e)[:200],
+            )
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.put("/jobs/{job_id}/status", summary="Update job status and sync to Booking")
@@ -245,21 +362,39 @@ async def update_job_status(
         job_query = db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id)
 
     # Fetch job to get current status and booking_id
-    res_job = await job_query.maybe_single().execute()
-    if not res_job.data:
+    try:
+        res_job = await job_query.maybe_single().execute()
+        job = res_job.data if res_job else None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        job = pg_select_job_by_id(job_id)
+        if job and x_internal_api_key is None:
+            # Mirror vendor_id filter used on the REST query for non-internal callers.
+            if str(job.get("vendor_id") or "") != str(vendor_id):
+                job = None
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = res_job.data
+
     old_status = job.get("status")
     new_status = payload.status
     booking_id = job.get("booking_id")
     dev_capture_visit_id = job.get("dev_capture_visit_id")
-    
+
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({
-        "status": new_status,
-        "updated_at": now
-    }).eq("id", job_id).execute()
+    status_fields = {"status": new_status, "updated_at": now}
+    try:
+        await db.table("jobs").update(status_fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, status_fields):
+            raise HTTPException(
+                status_code=503,
+                detail="Job status update unavailable (Fair Use); try again shortly",
+            )
 
     # Auto-trigger payout when job is completed or delivered
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):

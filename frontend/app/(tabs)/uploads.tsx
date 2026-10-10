@@ -8,6 +8,13 @@ import * as ImagePicker from 'expo-image-picker';
 import { Upload, FileText } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import {
+  BRACKET_HINT,
+  cameraRawRejectionMessage,
+  isCameraRawName,
+  requiresBracketSet,
+  validateHdrBracketSelection,
+} from '../../lib/bracket-require';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
@@ -16,11 +23,13 @@ const STILLS_TYPES = [
   { id: 'drone', label: 'Drone' },
   { id: 'reel', label: 'Reel' },
   { id: 'twilight', label: 'Twilight' },
+  { id: 'staging', label: 'Staging' },
+  { id: 'floorplan', label: 'Floor plan' },
 ] as const;
 type StillsType = (typeof STILLS_TYPES)[number]['id'];
 
 async function putStill(jobId: string, asset: { uri: string; fileName?: string | null; mimeType?: string | null; fileSize?: number | null }, mediaType: StillsType, headers: Record<string, string>) {
-  const filename = asset.fileName || `upload_${Date.now()}.jpg`;
+  const filename = asset.fileName || `upload_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`;
   const mime = asset.mimeType || 'image/jpeg';
   const signRes = await fetch(`${API}/api/uploads/sign`, {
     method: 'POST',
@@ -65,7 +74,7 @@ async function putStill(jobId: string, asset: { uri: string; fileName?: string |
 
 type UploadRecord = {
   id: string; job_id: string; filename: string; file_size: number;
-  mime_type: string; created_at: string;
+  mime_type: string; created_at: string; media_type?: string;
 };
 
 type Job = {
@@ -150,10 +159,32 @@ export default function UploadsScreen() {
     });
     if (result.canceled || !result.assets?.length) return;
 
+    const assetNames = result.assets.map((a, i) => {
+      const fromName = a.fileName || '';
+      const fromUri = (a.uri || '').split(/[/\\]/).pop() || '';
+      return fromName || fromUri || `upload_${Date.now()}_${i}.jpg`;
+    });
+    if (assetNames.some((n) => isCameraRawName(n))) {
+      Alert.alert('Camera RAW not supported', cameraRawRejectionMessage);
+      return;
+    }
+
     setUploading(true);
     try {
+      if (requiresBracketSet(stillsType)) {
+        const existing = uploads
+          .filter((u) => u.job_id === targetJob.id)
+          .map((u) => u.filename);
+        const names = assetNames;
+        const issue = validateHdrBracketSelection(names, existing);
+        if (issue) {
+          Alert.alert('Brackets required', issue.message);
+          return;
+        }
+      }
       const headers = await actorHeaders();
       for (const asset of result.assets) {
+        // Preserve camera filename (±EV) for backend group_brackets.
         await putStill(targetJob.id, asset, stillsType, headers);
       }
       await fetchData();
@@ -185,7 +216,27 @@ export default function UploadsScreen() {
           contentContainerStyle={s.scroll}
         >
           <Text style={s.title}>Upload</Text>
-          <Text style={s.subtitle}>Camera JPEG, drone, reel, twilight — signed upload, no 4MB cap.</Text>
+          <Text style={s.subtitle}>JPEG/HEIC ±EV brackets (no camera RAW), drone, reel, twilight, staging, floor plan — signed upload, no 4MB cap. Tag Twilight for real dusk (no blue-sky / day-to-dusk). Tag Floor plan for CubiCasa/PDF/PNG exports (original to listing, no HDR enhance).</Text>
+          {requiresBracketSet(stillsType) ? (
+            <>
+              <Text style={{ fontSize: 12, color: TOKENS.brickSoft, marginBottom: stillsType === 'twilight' ? 6 : 14 }}>
+                {BRACKET_HINT} Minimum 3 exposures per angle. Single frames are rejected.
+              </Text>
+              {stillsType === 'twilight' ? (
+                <Text style={{ fontSize: 12, color: TOKENS.moonFaint, marginBottom: 14 }}>
+                  Real dusk only — enhance keeps the dusk sky (no blue-sky / day-to-dusk).
+                </Text>
+              ) : null}
+            </>
+          ) : stillsType === 'staging' ? (
+            <Text style={{ fontSize: 12, color: TOKENS.moonFaint, marginBottom: 14 }}>
+              Staging delivers the original to the listing (no enhance, no virtual staging).
+            </Text>
+          ) : stillsType === 'floorplan' ? (
+            <Text style={{ fontSize: 12, color: TOKENS.moonFaint, marginBottom: 14 }}>
+              Floor plan delivers the original to the listing (PNG/PDF — no HDR enhance).
+            </Text>
+          ) : null}
 
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
             {STILLS_TYPES.map((t) => (
@@ -224,7 +275,11 @@ export default function UploadsScreen() {
               <>
                 <Upload size={28} color={TOKENS.brick} strokeWidth={1.5} />
                 <Text style={s.dropTitle}>Tap to select files</Text>
-                <Text style={s.dropMeta}>JPEG / MP4 from the camera card · {stillsType.toUpperCase()}</Text>
+                <Text style={s.dropMeta}>
+                  {requiresBracketSet(stillsType)
+                    ? `Bracketed stills (− / 0 / +) · ${stillsType.toUpperCase()}`
+                    : `JPEG / MP4 from the camera card · ${stillsType.toUpperCase()}`}
+                </Text>
                 <View style={s.chooseBtn}>
                   <Text style={s.chooseBtnText}>CHOOSE FILES</Text>
                 </View>

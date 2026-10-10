@@ -15,7 +15,7 @@ from ..services.capture_entitlements import stamp_capture
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
-from ..shared.auth import ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
+from ..shared.auth import can_access_stripe_connect, ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.vendor_identity import is_owner_member, photographer_payout_cents, public_profile
 from ..shared.job_scope import (
     ORG_VENDOR_ID,
@@ -118,10 +118,21 @@ async def _listings_by_ids(db, ids) -> dict:
 
 
 
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row.
+
+    Reading .data on that None is AttributeError. The global handler turns it
+    into HTTP 500 with no CORS, so the browser shows net::ERR_FAILED instead
+    of the route's 404 or Postgres fallback.
+    """
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
+
 async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, *, admin_all: bool = False) -> dict:
     try:
         res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        job = res.data or {}
+        job = _maybe_single_row(res)
     except Exception as e:
         # Fair-Use: PostgREST job reads 402 — load via Postgres so confirm-arrive /
         # check-in / status can still authorize against the assigned row.
@@ -129,6 +140,10 @@ async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, 
         if not _is_rest_quota_error(e):
             raise
         job = pg_select_job_by_id(job_id) or {}
+    if not job.get("id"):
+        # Empty REST body can also mean Fair-Use silent failure (no exception).
+        from ..shared.pg_fallback import pg_select_job_by_id
+        job = pg_select_job_by_id(job_id) or job
     allow_all = admin_all and is_vendor_admin(actor_member)
     if not job_visible_to(job, actor_id, actor_member, assigned_only=not allow_all, admin_all=allow_all):
         api_error(404, "Job not found", "job_not_found")
@@ -552,7 +567,8 @@ async def get_vendor_os_job(
         job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
         listings = await _listings_by_ids(db, [job.get("transaction_id")])
         res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
-        job["assignee_name"] = (res_member.data or {}).get("name") if res_member.data else "Unassigned"
+        member_row = _maybe_single_row(res_member)
+        job["assignee_name"] = member_row.get("name") or "Unassigned"
         return _apply_listing(job, listings)
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
@@ -645,9 +661,12 @@ async def attach_job_listing(
         if office_id:
             tq = tq.eq("brokerage_id", office_id)
         t_res = await tq.maybe_single().execute()
-        if not t_res.data:
+        # maybe_single() is None when the listing/transaction row is missing —
+        # None.data was a CORS-less 500 instead of the 404 below.
+        txn_row = _maybe_single_row(t_res)
+        if not txn_row:
             api_error(404, "Listing not found", "listing_not_found")
-        listing = _listing_public(t_res.data)
+        listing = _listing_public(txn_row)
 
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({
@@ -683,6 +702,17 @@ async def create_job(
     from ..shared.auth import verify_internal_api_key
     if not verify_internal_api_key(x_internal_api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
+
+    from ..services.payout_service import is_retired_for_new_jobs
+    if is_retired_for_new_jobs(payload.package_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Package '{payload.package_id}' is retired for new jobs. "
+                "Use photos_only / essentials / story / showcase / full (or suite). "
+                "Legacy package_ids remain readable for historical payouts only."
+            ),
+        )
 
     job_id = payload.id or str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -759,7 +789,7 @@ async def assign_job_to_member(
     db = await get_db()
     try:
         res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        existing_job = res_job.data or {}
+        existing_job = _maybe_single_row(res_job)
     except Exception as e:
         # Fair-Use: PostgREST job reads 402 — load via Postgres so Owner assign still works.
         if not _is_rest_quota_error(e):
@@ -770,7 +800,7 @@ async def assign_job_to_member(
     if member_id and member_id.lower() not in ("auto", "unassign", "none", "null"):
         try:
             res_member = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-            target = res_member.data
+            target = _maybe_single_row(res_member) or None
         except Exception as e:
             if not _is_rest_quota_error(e):
                 raise
@@ -803,20 +833,18 @@ async def assign_job_to_member(
                 )
         new_assignee_id = patch.get("assignee_id")
         if new_assignee_id:
+            # Await on Vercel serverless — create_task / BackgroundTasks freeze after the
+            # HTTP response (same hollow-notify bug as paid /book assign + Mark complete).
             try:
                 from ..services.notifications import notify_assignment
-                task = asyncio.create_task(
-                    notify_assignment({**existing_job, **patch, "id": job_id}, new_assignee_id)
-                )
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
+                await notify_assignment({**existing_job, **patch, "id": job_id}, new_assignee_id)
             except Exception as _ne:
                 logger.error("Assignment notify failed for job %s: %s", job_id, _ne)
 
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if member_id == "auto" else "manual"})
     try:
         res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        final = res_final.data or {}
+        final = _maybe_single_row(res_final)
     except Exception as e:
         if not _is_rest_quota_error(e):
             raise
@@ -835,7 +863,7 @@ async def assign_job_to_member(
     if new_assignee_id:
         try:
             named = await db.table("vendor_members").select("id, name").eq("id", new_assignee_id).maybe_single().execute()
-            final["assignee_name"] = (named.data or {}).get("name") or "Unassigned"
+            final["assignee_name"] = _maybe_single_row(named).get("name") or "Unassigned"
         except Exception as e:
             if _is_rest_quota_error(e):
                 named_row = pg_select_vendor_member(new_assignee_id) or {}
@@ -873,14 +901,48 @@ async def get_vendor_availability(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_vendor_availability,
+        pg_upsert_vendor_availability,
+    )
+
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
-    res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
-    record = res.data
+    try:
+        res = await (
+            await get_db()
+        ).table("vendor_availability").select("*").eq(
+            "vendor_id", vendor_id
+        ).eq("member_id", actor_id).maybe_single().execute()
+        # maybe_single() is None when the member has no availability row yet
+        # (every new GO photographer). None.data was a CORS-less 500 before the
+        # default-create branch below could run.
+        record = _maybe_single_row(res)
+    except Exception as e:
+        # Fair-Use: PostgREST availability read 402 — load/create via Postgres.
+        if not _is_rest_quota_error(e):
+            raise
+        record = pg_select_vendor_availability(actor_id, vendor_id)
+        if not record:
+            default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
+            pg_upsert_vendor_availability(default)
+            return default
+        return record
     if not record:
+        # Empty REST body can also be a Fair-Use silent miss: do not insert a
+        # duplicate (vendor_id, member_id) over a row Postgres already has.
+        existing = pg_select_vendor_availability(actor_id, vendor_id)
+        if existing:
+            return existing
         default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
-        await (await get_db()).table("vendor_availability").insert(default).execute()
+        try:
+            await (await get_db()).table("vendor_availability").insert(default).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            pg_upsert_vendor_availability(default)
         return default
     return record
 
@@ -891,6 +953,12 @@ async def update_vendor_availability(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_vendor_availability,
+        pg_upsert_vendor_availability,
+    )
+
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
@@ -898,16 +966,56 @@ async def update_vendor_availability(
         api_error(400, "jobs_per_day must be non-negative", "invalid_capacity")
     update_data = payload.dict()
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    
-    await (await get_db()).table("vendor_availability").upsert({
-        "vendor_id": vendor_id, 
-        "member_id": actor_id, 
-        **update_data
-    }).execute()
-    
-    await write_audit_event(actor_id, "availability", actor_id, "update", vendor_id=vendor_id, details=update_data)
-    res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
-    return res.data
+    row = {
+        "vendor_id": vendor_id,
+        "member_id": actor_id,
+        **update_data,
+    }
+
+    try:
+        await (await get_db()).table("vendor_availability").upsert(row).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        upserted = pg_upsert_vendor_availability(row)
+        try:
+            await write_audit_event(
+                actor_id,
+                "availability",
+                actor_id,
+                "update",
+                vendor_id=vendor_id,
+                details=update_data,
+            )
+        except Exception:
+            pass
+        return upserted or pg_select_vendor_availability(actor_id, vendor_id)
+
+    try:
+        await write_audit_event(
+            actor_id,
+            "availability",
+            actor_id,
+            "update",
+            vendor_id=vendor_id,
+            details=update_data,
+        )
+    except Exception:
+        pass
+
+    try:
+        res = await (
+            await get_db()
+        ).table("vendor_availability").select("*").eq(
+            "vendor_id", vendor_id
+        ).eq("member_id", actor_id).maybe_single().execute()
+        saved = _maybe_single_row(res)
+        if saved:
+            return saved
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+    return pg_select_vendor_availability(actor_id, vendor_id) or row
 
 
 
@@ -1002,7 +1110,19 @@ async def connect_vendor_calendar(
             try:
                 await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
             except Exception as e:
-                logger.warning("calendar upsert soft-fail: %s", e)
+                from ..shared.pg_fallback import (
+                    _is_rest_quota_error,
+                    pg_upsert_vendor_calendar_connection,
+                )
+                if _is_rest_quota_error(e):
+                    if not pg_upsert_vendor_calendar_connection(stored):
+                        return {
+                            "connected": False,
+                            "status": "error",
+                            "detail": "Could not save calendar connection (Fair-Use).",
+                        }
+                else:
+                    logger.warning("calendar upsert soft-fail: %s", e)
             return connection_status(stored)
 
         via = google_connect_via()
@@ -1074,8 +1194,20 @@ async def connect_vendor_calendar(
         try:
             await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
         except Exception as e:
-            logger.warning("calendar upsert soft-fail: %s", e)
-            return {"connected": False, "status": "error", "detail": f"Could not save CalDAV connection: {e}"}
+            from ..shared.pg_fallback import (
+                _is_rest_quota_error,
+                pg_upsert_vendor_calendar_connection,
+            )
+            if _is_rest_quota_error(e):
+                if not pg_upsert_vendor_calendar_connection(stored):
+                    return {
+                        "connected": False,
+                        "status": "error",
+                        "detail": "Could not save calendar connection (Fair-Use).",
+                    }
+            else:
+                logger.warning("calendar upsert soft-fail: %s", e)
+                return {"connected": False, "status": "error", "detail": f"Could not save CalDAV connection: {e}"}
         return connection_status(stored)
 
     if provider == "ics":
@@ -1093,8 +1225,20 @@ async def connect_vendor_calendar(
         try:
             await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
         except Exception as e:
-            logger.warning("calendar upsert soft-fail: %s", e)
-            return {"connected": False, "status": "error", "detail": f"Could not save ICS URL: {e}"}
+            from ..shared.pg_fallback import (
+                _is_rest_quota_error,
+                pg_upsert_vendor_calendar_connection,
+            )
+            if _is_rest_quota_error(e):
+                if not pg_upsert_vendor_calendar_connection(row):
+                    return {
+                        "connected": False,
+                        "status": "error",
+                        "detail": "Could not save calendar connection (Fair-Use).",
+                    }
+            else:
+                logger.warning("calendar upsert soft-fail: %s", e)
+                return {"connected": False, "status": "error", "detail": f"Could not save ICS URL: {e}"}
         return connection_status(row)
 
     api_error(400, "Unsupported provider", "invalid_provider")
@@ -1226,10 +1370,12 @@ async def google_calendar_oauth_callback(
     vendor_id = "default_vendor"
     db = await get_db()
     try:
-        row = await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
-        if not (row and row.data):
+        row = _maybe_single_row(
+            await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
+        )
+        if not row:
             return _err("Unknown vendor member in OAuth state")
-        vendor_id = row.data.get("vendor_id") or vendor_id
+        vendor_id = row.get("vendor_id") or vendor_id
     except Exception as e:
         logger.warning("OAuth member lookup failed: %s", e)
         return _err("Could not resolve vendor member for OAuth state")
@@ -1292,10 +1438,12 @@ async def microsoft_calendar_oauth_callback(
     vendor_id = "default_vendor"
     db = await get_db()
     try:
-        row = await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
-        if not (row and row.data):
+        row = _maybe_single_row(
+            await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
+        )
+        if not row:
             return _err("Unknown vendor member in OAuth state")
-        vendor_id = row.data.get("vendor_id") or vendor_id
+        vendor_id = row.get("vendor_id") or vendor_id
     except Exception as e:
         logger.warning("OAuth member lookup failed: %s", e)
         return _err("Could not resolve vendor member for OAuth state")
@@ -1325,7 +1473,20 @@ async def disconnect_vendor_calendar(
     try:
         await db.table("vendor_calendar_connections").delete().eq("member_id", actor_id).eq("provider", provider).execute()
     except Exception as e:
-        logger.warning("calendar disconnect soft-fail: %s", e)
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_delete_vendor_calendar_connection,
+        )
+        if _is_rest_quota_error(e):
+            if not pg_delete_vendor_calendar_connection(actor_id, provider):
+                return {
+                    "connected": True,
+                    "provider": provider,
+                    "status": "error",
+                    "detail": "Could not disconnect calendar (Fair-Use).",
+                }
+        else:
+            logger.warning("calendar disconnect soft-fail: %s", e)
     return {"connected": False, "provider": provider, "status": "not_connected", "detail": "Disconnected"}
 
 
@@ -1363,7 +1524,7 @@ async def get_vendor_performance(
     # Recomputing from job.updated_at here is inaccurate for delivered jobs where updated_at
     # reflects delivery time (hours later), not completion time.
     res_member = await (await get_db()).table("vendor_members").select("on_time_rate").eq("id", actor_id).maybe_single().execute()
-    on_time_rate_pct = round(((res_member.data or {}).get("on_time_rate") or 0) * 100, 1)
+    on_time_rate_pct = round((_maybe_single_row(res_member).get("on_time_rate") or 0) * 100, 1)
     return {
         "completion_rate": round((len(completed) / len(week_jobs) * 100), 1) if week_jobs else 0.0,
         "on_time_rate": on_time_rate_pct,
@@ -1380,7 +1541,9 @@ async def get_vendor_settings(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
-    settings = res.data
+    # New vendors have no settings row yet — None.data was a CORS-less 500
+    # before the default-insert branch could run.
+    settings = _maybe_single_row(res)
     if not settings:
         default = VendorSettings(vendor_id=vendor_id).dict()
         await (await get_db()).table("vendor_settings").insert(default).execute()
@@ -1411,7 +1574,11 @@ async def update_vendor_settings(
     
     await write_audit_event(actor_id, "settings", vendor_id, "update", vendor_id=vendor_id, details=update_data)
     res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
-    return res.data
+    # Upsert already wrote; a null re-read must not 500 — return merged defaults.
+    row = _maybe_single_row(res)
+    if row:
+        return row
+    return {**VendorSettings(vendor_id=vendor_id).dict(), **update_data}
 
 
 # ---------------------------------------------------------------------------
@@ -1450,7 +1617,9 @@ async def start_stripe_connect_onboarding(
     since it's the only side that reliably knows its own deployed origin."""
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    if not is_vendor_admin(actor_member):
+    # Active Photographer (post-approval) + Manager/Owner/Admin may start Connect.
+    # Org still shares one contractors row per vendor_id (no multi-member redesign).
+    if not can_access_stripe_connect(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
@@ -1528,7 +1697,47 @@ async def get_audit_events(
     return paginated_response(items, total, page, page_size)
 
 
-@router.put("/jobs/{job_id}/status")
+async def _refresh_decline_rate(db, assignee_id: str, now: str, job_id: str) -> None:
+    """Recompute rolling 30-day decline_rate; REST→PG under Fair Use. Soft-fail."""
+    try:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_jobs_for_assignees,
+            pg_update_vendor_member_fields,
+        )
+        _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        recent_jobs: list = []
+        try:
+            res_recent = await db.table("jobs").select("id, status, created_at").eq(
+                "assignee_id", assignee_id
+            ).gte("created_at", _thirty_days_ago).execute()
+            recent_jobs = res_recent.data or []
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            jobs, _total = pg_select_jobs_for_assignees(
+                [assignee_id], status=None, limit=500, offset=0
+            )
+            recent_jobs = [
+                j for j in (jobs or [])
+                if str(j.get("created_at") or "") >= _thirty_days_ago
+            ]
+        recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
+        total_recent = len(recent_jobs)
+        new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
+        fields = {"decline_rate": new_rate, "updated_at": now}
+        try:
+            await db.table("vendor_members").update(fields).eq("id", assignee_id).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            if not pg_update_vendor_member_fields(assignee_id, fields):
+                logger.error("decline_rate PG update failed for job %s", job_id)
+    except Exception as e:
+        logger.error(f"decline_rate update failed for job {job_id}: {e}")
+
+
+@router.api_route("/jobs/{job_id}/status", methods=["PUT", "PATCH"])
 async def update_vendor_job_status(
     job_id: str,
     payload: JobStatusUpdate,
@@ -1568,6 +1777,37 @@ async def update_vendor_job_status(
             detail=f"Status '{new_status}' cannot be set via this endpoint — it is managed by the system",
         )
 
+
+    # Hard gate: HDR stills need full −/0/+ brackets before Mark complete.
+    # Mirrors web validateHdrUploadsForComplete; Visit/3D + drone/reel excluded.
+    if new_status == "completed" and old_status != "completed":
+        try:
+            from ..services.bracket_require import validate_hdr_uploads_for_complete
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+            uploads_rows: list = []
+            try:
+                res_up = await db.table("uploads").select(
+                    "id, filename, mime_type, provider, file_url"
+                ).eq("job_id", job_id).limit(500).execute()
+                uploads_rows = res_up.data or []
+            except Exception as e:
+                if not _is_rest_quota_error(e):
+                    raise
+                uploads_rows = pg_select_uploads_by_job_id(job_id) or []
+            bracket_issue = validate_hdr_uploads_for_complete(uploads_rows)
+            if bracket_issue:
+                api_error(400, bracket_issue["message"], "incomplete_hdr_brackets")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("HDR bracket gate failed for job %s: %s", job_id, e)
+            # Fail closed — do not mark complete when we cannot verify brackets.
+            api_error(
+                503,
+                "Could not verify HDR brackets; try again shortly",
+                "bracket_gate_unavailable",
+            )
+
     now = datetime.now(timezone.utc).isoformat()
     status_fields = {"status": new_status, "updated_at": now}
     try:
@@ -1582,59 +1822,55 @@ async def update_vendor_job_status(
                 detail="Job status update unavailable (Fair Use); try again shortly",
             )
 
-    # When vendor marks completed, start post-production only when uploads are
+    # When vendor marks completed, run post-production only when uploads are
     # either not expected (deliverables_count=0) or already fully received.
     # For jobs with a count, uploads.py fires post-production when the count is
     # reached — this path is a safe fallback due to the atomic gate in process_job_assets.
+    # AWAIT on Vercel serverless (same class of bug as assigned notify): create_task /
+    # BackgroundTasks are frozen when the HTTP response returns, which left Mark
+    # complete advancing status while enhance→listing never ran (hollow media_delivery).
     if new_status == "completed" and old_status != "completed":
         _deliverables = job.get("deliverables_count") or 0
         _uploaded = job.get("uploaded_count") or 0
         if _deliverables == 0 or _uploaded >= _deliverables:
             try:
                 from ..services.post_production import process_job_assets
-                _t = asyncio.create_task(process_job_assets(job_id))
-                _background_tasks.add(_t)
-                _t.add_done_callback(_background_tasks.discard)
+                await process_job_assets(job_id)
             except Exception as e:
                 logger.error(f"Post-production trigger failed for job {job_id}: {e}")
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
-        try:
-            assignee_id = job.get("assignee_id")
-            if assignee_id and assignee_id != "default_user":
-                # Rolling 30-day decline rate (per IC agreement §40% threshold).
-                # Denominator = ALL jobs offered to this vendor in the last 30 days,
-                # regardless of current status (includes in-progress, assigned, completed).
-                # Using only terminal states in the denominator overstates the rate —
-                # a single decline would show 100% when active jobs are excluded.
-                # Filter by created_at (when the offer was made), not updated_at.
-                _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-                res_recent = await db.table("jobs").select("id, status").eq(
-                    "assignee_id", assignee_id
-                ).gte("created_at", _thirty_days_ago).execute()
-                recent_jobs = res_recent.data or []
-                recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
-                total_recent = len(recent_jobs)
-                new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
-                await db.table("vendor_members").update({
-                    "decline_rate": new_rate,
-                    "updated_at": now,
-                }).eq("id", assignee_id).execute()
-        except Exception as e:
-            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+        # Rolling 30-day decline rate (per IC agreement §40% threshold).
+        # Denominator = ALL jobs offered to this vendor in the last 30 days.
+        # REST→PG under Fair Use; soft-fail — never block the status response.
+        assignee_id = job.get("assignee_id")
+        if assignee_id and assignee_id != "default_user":
+            await _refresh_decline_rate(db, assignee_id, now, job_id)
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         try:
+            from ..shared.pg_fallback import (
+                _is_rest_quota_error,
+                pg_select_vendor_member,
+                pg_update_vendor_member_fields,
+            )
             assignee_id = job.get("assignee_id")
             if assignee_id and assignee_id != "default_user":
                 time_end = job.get("time_window_end", "")
                 sched_date = job.get("scheduled_date", "")
-                res_m = await db.table("vendor_members").select(
-                    "total_assignments, on_time_rate"
-                ).eq("id", assignee_id).maybe_single().execute()
-                if res_m.data:
-                    prev_total = res_m.data.get("total_assignments") or 0
-                    prev_rate = res_m.data.get("on_time_rate") or 1.0
+                member_row = None
+                try:
+                    res_m = await db.table("vendor_members").select(
+                        "total_assignments, on_time_rate"
+                    ).eq("id", assignee_id).maybe_single().execute()
+                    member_row = _maybe_single_row(res_m) or None
+                except Exception as e:
+                    if not _is_rest_quota_error(e):
+                        raise
+                    member_row = pg_select_vendor_member(assignee_id) or None
+                if member_row:
+                    prev_total = member_row.get("total_assignments") or 0
+                    prev_rate = member_row.get("on_time_rate") or 1.0
                     new_total = prev_total + 1
                     update_fields: dict = {"total_assignments": new_total, "updated_at": now}
                     if sched_date and time_end:
@@ -1662,7 +1898,13 @@ async def update_vendor_job_status(
                         prev_on_time = round(prev_rate * prev_total)
                         new_on_time = prev_on_time + (1 if was_on_time else 0)
                         update_fields["on_time_rate"] = round(new_on_time / new_total, 4)
-                    await db.table("vendor_members").update(update_fields).eq("id", assignee_id).execute()
+                    try:
+                        await db.table("vendor_members").update(update_fields).eq("id", assignee_id).execute()
+                    except Exception as e:
+                        if not _is_rest_quota_error(e):
+                            raise
+                        if not pg_update_vendor_member_fields(assignee_id, update_fields):
+                            logger.error("on_time_rate PG update failed for job %s", job_id)
         except Exception as e:
             logger.error(f"on_time_rate update failed for job {job_id}: {e}")
 
@@ -1709,20 +1951,16 @@ async def watch_job_action(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """Called by the watchOS app to accept, decline, mark on-way, or mark arrived."""
+    """Called by the watchOS / GO app to accept, decline, mark on-way, or mark arrived."""
     if body.action not in _WATCH_ACTION_STATUS_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown action '{body.action}'")
 
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
 
     db = await get_db()
-    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = res_job.data
+    # Fair-Use: load via _load_visible_job (REST→PG) instead of raw PostgREST.
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
     assignee_id = job.get("assignee_id")
     if assignee_id != actor_id:
         raise HTTPException(status_code=403, detail="You are not the assigned photographer for this job")
@@ -1737,7 +1975,18 @@ async def watch_job_action(
         return {"status": "no_change", "job_id": job_id, "current_status": old_status}
 
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
+    status_fields = {"status": new_status, "updated_at": now}
+    try:
+        await db.table("jobs").update(status_fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, status_fields):
+            raise HTTPException(
+                status_code=503,
+                detail="Job status update unavailable (Fair Use); try again shortly",
+            )
 
     if new_status == "in_progress" and old_status != "in_progress":
         try:
@@ -1747,16 +1996,7 @@ async def watch_job_action(
             logger.error(f"En-route notification failed for job {job_id}: {e}")
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
-        try:
-            _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-            res_recent = await db.table("jobs").select("id, status").eq("assignee_id", actor_id).gte("created_at", _thirty_days_ago).execute()
-            recent_jobs = res_recent.data or []
-            recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
-            total_recent = len(recent_jobs)
-            new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
-            await db.table("vendor_members").update({"decline_rate": new_rate, "updated_at": now}).eq("id", actor_id).execute()
-        except Exception as e:
-            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+        await _refresh_decline_rate(db, actor_id, now, job_id)
 
     booking_id = job.get("booking_id")
     if booking_id:
@@ -1816,7 +2056,7 @@ async def _validate_noshow_claim(
     existing = await db.table("agent_noshow_trip_fees").select("id, status").eq(
         "job_id", job_id
     ).maybe_single().execute()
-    if existing.data:
+    if _maybe_single_row(existing):
         return {"ok": False, "reason": "A no-show claim already exists for this job"}
 
     # Gate 4: time window — claim must be filed within T-15 to T+90 of shoot start.
@@ -1929,9 +2169,10 @@ async def _validate_noshow_claim(
             res_b = await db.table("bookings").select("status, cancelled_at").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            if res_b.data:
-                bk_status = res_b.data.get("status", "")
-                cancelled_at = res_b.data.get("cancelled_at")
+            bk_row = _maybe_single_row(res_b)
+            if bk_row:
+                bk_status = bk_row.get("status", "")
+                cancelled_at = bk_row.get("cancelled_at")
                 if bk_status == "cancelled" and cancelled_at:
                     try:
                         cancel_dt = datetime.fromisoformat(cancelled_at.replace("Z", "+00:00"))
@@ -1977,7 +2218,7 @@ async def _validate_noshow_claim(
             res_this_bk = await db.table("bookings").select("user_id").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            agent_user_id = (res_this_bk.data or {}).get("user_id") if res_this_bk.data else None
+            agent_user_id = _maybe_single_row(res_this_bk).get("user_id")
             if agent_user_id:
                 res_agent_bks = await db.table("bookings").select("id").eq(
                     "user_id", agent_user_id
@@ -2032,9 +2273,9 @@ async def escalate_absent_agent(
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    job = res_job.data
 
     if job.get("assignee_id") != actor_id:
         raise HTTPException(status_code=403, detail="Not assigned to this job")
@@ -2069,14 +2310,15 @@ async def escalate_absent_agent(
             res_bk = await db.table("bookings").select("user_id").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            if res_bk.data:
-                user_id = res_bk.data.get("user_id")
+            bk_row = _maybe_single_row(res_bk)
+            if bk_row:
+                user_id = bk_row.get("user_id")
                 if user_id:
                     res_user = await db.table("users").select("phone").eq(
                         "id", user_id
                     ).maybe_single().execute()
-                    if res_user.data:
-                        agent_phone = res_user.data.get("phone")
+                    # Missing user row: skip SMS notify, do not 500.
+                    agent_phone = _maybe_single_row(res_user).get("phone")
         except Exception as e:
             logger.warning(f"Could not fetch agent phone for escalation (job {job_id}): {e}")
 
@@ -2146,10 +2388,10 @@ async def report_agent_no_show(
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = res_job.data
     vendor_id = job.get("vendor_id", "default_vendor")
     assignee_id = job.get("assignee_id")
     booking_id = job.get("booking_id")
@@ -2251,10 +2493,10 @@ async def report_contractor_no_show(
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = res_job.data
     assignee_id = job.get("assignee_id")
     now = datetime.now(timezone.utc).isoformat()
 
@@ -2263,10 +2505,12 @@ async def report_contractor_no_show(
             res_m = await db.table("vendor_members").select(
                 "total_assignments, cancel_rate, on_time_rate"
             ).eq("id", assignee_id).maybe_single().execute()
-            if res_m.data:
-                prev_total = res_m.data.get("total_assignments") or 0
+            # Missing member row: skip cancel_rate update, do not 500.
+            m_row = _maybe_single_row(res_m)
+            if m_row:
+                prev_total = m_row.get("total_assignments") or 0
                 total = prev_total + 1
-                prev_cancel = res_m.data.get("cancel_rate") or 0.0
+                prev_cancel = m_row.get("cancel_rate") or 0.0
                 prev_cancels = round(prev_cancel * prev_total)
                 new_cancel_rate = round((prev_cancels + 1) / total, 4)
                 # on_time_rate is NOT updated here — contractor no-shows are cancellations,

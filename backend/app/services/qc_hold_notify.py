@@ -48,12 +48,9 @@ def held_rows(uploads, only_ids: Optional[Iterable[str]] = None) -> list[dict]:
 
 def photos_only(rows) -> bool:
     """True when every held row is a listing photo (not a video / floor plan)."""
-    from .media_intake import is_photo_file
+    from .qc_media_kinds import qc_kind_for_upload
 
-    return all(
-        is_photo_file(u.get("filename"), u.get("mime_type"), u.get("media_type"))
-        for u in (rows or [])
-    )
+    return all(qc_kind_for_upload(u) == "still" for u in rows or [])
 
 
 def _noun(held_count: int, photos: bool) -> str:
@@ -109,6 +106,14 @@ async def _owner_phone(db) -> str:
         ).maybe_single().execute()
         return ((getattr(res, "data", None) or {}).get("phone") or "").strip()
     except Exception as e:
+        try:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+
+            if _is_rest_quota_error(e):
+                member = pg_select_vendor_member(KAM_MEMBER_ID) or {}
+                return (member.get("phone") or "").strip()
+        except Exception as pg_e:
+            logger.error("QC hold owner phone pg fallback failed: %s", type(pg_e).__name__)
         logger.error("QC hold owner phone lookup failed: %s", type(e).__name__)
         return ""
 
@@ -120,6 +125,13 @@ async def _job_row(db, job_id: str) -> dict:
         ).eq("id", job_id).maybe_single().execute()
         return getattr(res, "data", None) or {}
     except Exception as e:
+        try:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+
+            if _is_rest_quota_error(e):
+                return pg_select_job_by_id(job_id) or {}
+        except Exception:
+            pass
         logger.error("QC hold job lookup failed for %s: %s", job_id, type(e).__name__)
         return {}
 
@@ -131,6 +143,13 @@ async def _uploads(db, job_id: str) -> list[dict]:
         ).eq("job_id", job_id).execute()
         return getattr(res, "data", None) or []
     except Exception as e:
+        try:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+
+            if _is_rest_quota_error(e):
+                return pg_select_uploads_by_job_id(job_id) or []
+        except Exception:
+            pass
         logger.error("QC hold uploads lookup failed for %s: %s", job_id, type(e).__name__)
         return []
 

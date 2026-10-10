@@ -52,16 +52,27 @@ async def _actor_member(authorization: Optional[str], x_user_id: Optional[str]) 
     return member
 
 
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row.
+
+    Reading .data on that None is AttributeError. The global handler turns it
+    into HTTP 500 with no CORS, so the browser shows net::ERR_FAILED instead
+    of the profile fallback (member status / empty row).
+    """
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
+
 async def _persist_safe(db, member_id: str, patch: dict) -> dict:
     """Write fields that exist; drop unknown columns if PostgREST errors."""
     if not patch:
         res = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-        return res.data or {}
+        return _maybe_single_row(res)
     patch = {k: v for k, v in patch.items() if v is not None}
     patch["updated_at"] = datetime.now(timezone.utc).isoformat()
     try:
         res = await db.table("vendor_members").update(patch).eq("id", member_id).execute()
-        if res.data:
+        if res is not None and res.data:
             return res.data[0]
     except Exception:
         optional = {
@@ -71,25 +82,30 @@ async def _persist_safe(db, member_id: str, patch: dict) -> dict:
         slim = {k: v for k, v in patch.items() if k not in optional}
         if slim:
             res = await db.table("vendor_members").update(slim).eq("id", member_id).execute()
-            if res.data:
+            if res is not None and res.data:
                 return res.data[0]
     res = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    return res.data or {}
+    return _maybe_single_row(res)
 
 
 async def _seed_owner(db, member: dict) -> dict:
     patch = owner_seed_fields(member)
     if not patch:
         return member
-    return await _persist_safe(db, member["id"], patch)
+    # Empty re-read must not drop the authenticated member (KeyError on "id").
+    return (await _persist_safe(db, member["id"], patch)) or {**member, **patch}
 
 
 async def _availability_flag(db, member: dict) -> bool:
+    # maybe_single() is None when the member has no vendor_availability row yet
+    # (every new GO photographer). None.data was a CORS-less 500 on every
+    # GET /api/vendor-os/profile before the member-status fallback could run.
     res = await db.table("vendor_availability").select("available").eq(
         "member_id", member["id"]
     ).maybe_single().execute()
-    if res.data and "available" in res.data:
-        return bool(res.data.get("available"))
+    row = _maybe_single_row(res)
+    if "available" in row:
+        return bool(row.get("available"))
     return (member.get("status") or "") == "available"
 
 
@@ -183,7 +199,7 @@ async def update_profile_impl(
         patch["role"] = "Owner"
         patch["tier"] = 3
         patch["payout_mode"] = "owner_full"
-    updated = await _persist_safe(db, member["id"], patch)
+    updated = (await _persist_safe(db, member["id"], patch)) or {**member, **patch}
     return await build_profile(updated)
 
 
@@ -226,7 +242,7 @@ async def upload_rpas_impl(
     }
     if (certificate_number or "").strip():
         rpas_patch["rpas_certificate_number"] = certificate_number.strip()
-    updated = await _persist_safe(db, member["id"], rpas_patch)
+    updated = (await _persist_safe(db, member["id"], rpas_patch)) or {**member, **rpas_patch}
     profile = await build_profile(updated)
     profile["rpas_document_id"] = doc_id
     profile["rpas_certificate_url"] = file_key
@@ -340,7 +356,7 @@ async def upload_photo_impl(
     from ..services.storage import upload_file
     file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], filename, mime)
     db = await get_db()
-    updated = await _persist_safe(db, member["id"], {"avatar_url": file_key})
+    updated = (await _persist_safe(db, member["id"], {"avatar_url": file_key})) or {**member, "avatar_url": file_key}
     profile = await build_profile(updated)
     profile["avatar_url"] = file_key
     return profile

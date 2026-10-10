@@ -162,6 +162,16 @@ async def load_availability_by_member(db, member_ids: list[str]) -> dict[str, di
             if mid:
                 out[str(mid)] = row
     except Exception as e:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_vendor_availability_by_member_ids,
+        )
+        if _is_rest_quota_error(e):
+            pg_map = pg_select_vendor_availability_by_member_ids(ids[:80])
+            for mid, row in (pg_map or {}).items():
+                if mid:
+                    out[str(mid)] = row
+            return out
         logger.warning("load_availability_by_member failed (soft): %s", e)
     return out
 

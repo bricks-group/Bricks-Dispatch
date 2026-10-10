@@ -41,3 +41,4 @@ twilio/
 urllib3/
 yarl/
 typing_extensions.py
+.env*

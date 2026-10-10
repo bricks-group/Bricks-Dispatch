@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowRight } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BricksWordmark from '../../components/BricksWordmark';
+import { EnterFadeDown, PressScale } from '../../components/motion';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 
 const SLIDES = [
@@ -56,7 +57,7 @@ export default function OnboardingSlides() {
         </TouchableOpacity>
       </View>
 
-      <View style={s.body}>
+      <EnterFadeDown key={current} distance={10} duration={260} style={s.body}>
         {/* Image placeholder */}
         <View style={s.imgPlaceholder}>
           <Text style={s.imgLabel}>{slide.img}</Text>
@@ -79,12 +80,12 @@ export default function OnboardingSlides() {
               />
             ))}
           </View>
-          <TouchableOpacity style={s.btn} onPress={next} activeOpacity={0.85}>
+          <PressScale style={s.btn} onPress={next}>
             <Text style={s.btnText}>{current === SLIDES.length - 1 ? 'GET STARTED' : 'NEXT'}</Text>
             <ArrowRight size={16} color="#FFF" strokeWidth={2} />
-          </TouchableOpacity>
+          </PressScale>
         </View>
-      </View>
+      </EnterFadeDown>
     </SafeAreaView>
   );
 }

@@ -13,7 +13,7 @@ import re
 
 from ..services.storage import upload_file
 from ..services.notifications import create_notification
-from ..shared.database import get_db
+from ..shared.database import get_db, maybe_single_row
 from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, VendorMember, VendorDocument
 from ..shared.portfolio import (
     PORTFOLIO_MEDIA_TYPES,
@@ -225,6 +225,68 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         raise HTTPException(status_code=400, detail=" ".join(errs))
 
 
+
+
+def _application_portfolio_links(application: "VendorApplicationCreate") -> list:
+    """Links already on the application. Uploaded files are included when the URL is public."""
+    links = []
+    for raw in application.portfolio_links or []:
+        links.append(str(raw or "").strip())
+    for sample in application.portfolio_samples or []:
+        row = sample.dict() if hasattr(sample, "dict") else (sample or {})
+        if not isinstance(row, dict):
+            continue
+        for key in ("link", "url", "thumb_url"):
+            links.append(str(row.get(key) or "").strip())
+    return [link for link in links if link]
+
+def _applicant_jev_fields(application: "VendorApplicationCreate") -> dict:
+    """Fields already stored on the application. No token, email, or phone."""
+    samples = []
+    for sample in application.portfolio_samples or []:
+        row = sample.dict() if hasattr(sample, "dict") else (sample or {})
+        if not isinstance(row, dict):
+            continue
+        samples.append({
+            "media_type": row.get("media_type") or "",
+            "link": row.get("link") or "",
+        })
+    links = [str(link).strip() for link in (application.portfolio_links or []) if link and str(link).strip()]
+    return {
+        "name": application.name,
+        "city": application.city,
+        "vendor_type": getattr(application, "vendor_type", None) or "photographer",
+        "equipment": [item for item in (application.equipment_list or []) if item],
+        "portfolio": {"links": links, "samples": samples},
+        "drone": bool(application.drone_certified),
+    }
+
+
+async def _store_applicant_jev_probability(member_id: str, existing_notes: str, probability: float) -> None:
+    """Append Jev's yes-probability to internal_notes. Never writes onboarding status."""
+    line = f"Jev poor-fit yes-probability {probability:.2f}"
+    notes = (existing_notes or "").strip()
+    updated = f"{notes}; {line}" if notes else line
+    payload = {
+        "internal_notes": updated,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await (await get_db()).table("vendor_members").update(payload).eq("id", member_id).execute()
+    except Exception as exc:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_vendor_member_fields
+
+        if _is_rest_quota_error(exc):
+            if not pg_update_vendor_member_fields(member_id, payload):
+                logger.warning("applicant jev note not stored member=%s", member_id)
+        else:
+            logger.warning(
+                "applicant jev note not stored member=%s (%s)",
+                member_id,
+                type(exc).__name__,
+            )
+
+
 @router.post("/apply")
 async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
@@ -240,38 +302,88 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     await _validate_application(application)
 
     try:
-
         result = await _apply_to_bricks_inner(application)
-        from ..services.vendor_profile import normalize_vendor_type
-        vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
-        type_label = {"photographer": "photographer", "stager": "stager", "cleaner": "cleaner"}.get(vtype, "vendor")
-        background_tasks.add_task(
-            create_notification,
-            title=f"New {type_label} application",
-            body=(
-                f"{application.name} applied ({vtype}).\n"
-                f"Email: {application.email}\n"
-                f"Phone: {application.phone}\n"
-                f"City: {application.city}\n"
-                f"Specialties: {', '.join(application.specialties) if application.specialties else 'n/a'}\n"
-                f"Drone certified: {application.drone_certified}"
-            ),
-            ntype="vendor_application",
-            data={"member_id": result["member_id"], "vendor_type": vtype},
-            email_to=ADMIN_NOTIFICATION_EMAIL,
-            email_subject=f"New {type_label} application: {application.name}",
-        )
-        return result
     except HTTPException:
         raise
     except Exception:
         logger.error("apply_to_bricks_failed:\n" + traceback.format_exc())
         raise HTTPException(status_code=500, detail="Could not process application. Please try again.")
 
+    existing_notes = result.pop("_internal_notes", "")
+    from ..services.vendor_profile import normalize_vendor_type
+    vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
+    type_label = {"photographer": "photographer", "stager": "stager", "cleaner": "cleaner"}.get(vtype, "vendor")
+
+    poor_fit = None
+    reasons = ()
+    try:
+        from ..services.jev_hold import jev_applicant_poor_fit
+        decision = await jev_applicant_poor_fit(_applicant_jev_fields(application))
+        poor_fit = getattr(decision, "yes_probability", None)
+        reasons = tuple(getattr(decision, "reasons", ()) or ())
+    except Exception as exc:
+        logger.warning("Jev applicant score failed open (%s)", type(exc).__name__)
+        poor_fit = None
+        reasons = ()
+
+    if isinstance(poor_fit, float):
+        await _store_applicant_jev_probability(result["member_id"], existing_notes, poor_fit)
+
+    try:
+        from ..services.vendor_selection import notify_owner_vendor_application
+        await notify_owner_vendor_application(
+            await get_db(),
+            name=application.name,
+            city=application.city,
+            vendor_type=vtype,
+            yes_probability=poor_fit,
+            reasons=reasons,
+            portfolio_links=_application_portfolio_links(application),
+        )
+    except Exception as exc:
+        logger.error("Vendor application owner notify failed (%s)", type(exc).__name__)
+
+    # In-app record only. Kam's text and admin@brxs.ca email are the notify above.
+    # Do not email ADMIN_NOTIFICATION_EMAIL — that env is unset, and this path
+    # must not fall through to a personal mailbox.
+    background_tasks.add_task(
+        create_notification,
+        title=f"New {type_label} application",
+        body=(
+            f"{application.name} applied ({vtype}).\n"
+            f"Email: {application.email}\n"
+            f"Phone: {application.phone}\n"
+            f"City: {application.city}\n"
+            f"Specialties: {', '.join(application.specialties) if application.specialties else 'n/a'}\n"
+            f"Drone certified: {application.drone_certified}"
+        ),
+        ntype="vendor_application",
+        data={"member_id": result["member_id"], "vendor_type": vtype},
+    )
+    return result
+
 
 async def _apply_to_bricks_inner(application: VendorApplicationCreate):
-    res_existing = await (await get_db()).table("vendor_members").select("*").eq("email", application.email.lower().strip()).maybe_single().execute()
-    if res_existing and res_existing.data:
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_insert_vendor_application,
+        pg_select_vendor_member,
+        pg_upsert_vendor_availability,
+    )
+
+    email_l = application.email.lower().strip()
+    existing = None
+    try:
+        res_existing = await (await get_db()).table("vendor_members").select("*").eq(
+            "email", email_l
+        ).maybe_single().execute()
+        existing = maybe_single_row(res_existing) or None
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            existing = pg_select_vendor_member(email=email_l)
+        else:
+            raise
+    if existing:
         raise HTTPException(status_code=400, detail="An application with this email already exists.")
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -296,7 +408,7 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         id=str(uuid.uuid4()),
         application_token=application_token,
         name=application.name,
-        email=application.email.lower().strip(),
+        email=email_l,
         phone=application.phone,
         role="Applicant",
         vendor_type=vtype,
@@ -327,30 +439,86 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         member_dict["portfolio_samples"] = [
             s.dict() if hasattr(s, "dict") else s for s in member_dict["portfolio_samples"]
         ]
+    if "operation_polygon" in member_dict and member_dict["operation_polygon"] is not None:
+        member_dict["operation_polygon"] = [
+            c.dict() if hasattr(c, "dict") else c for c in member_dict["operation_polygon"]
+        ]
+
     db = await get_db()
+    inserted_via_pg = False
     try:
         await db.table("vendor_members").insert(member_dict).execute()
-    except Exception:
-        # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
-        member_dict.pop("portfolio_samples", None)
-        try:
-            await db.table("vendor_members").insert(member_dict).execute()
-        except Exception:
-            member_dict.pop("vendor_type", None)
-            await db.table("vendor_members").insert(member_dict).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            # Canada Fair Use REST often 402 — same PG fallback as payouts/Connect.
+            pg_row = pg_insert_vendor_application(member_dict)
+            if not pg_row:
+                logger.error("apply_to_bricks Fair-Use PG insert failed for %s", email_l)
+                raise HTTPException(
+                    status_code=503,
+                    detail="Could not process application right now. Please try again shortly.",
+                )
+            inserted_via_pg = True
+        else:
+            # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
+            member_dict.pop("portfolio_samples", None)
+            try:
+                await db.table("vendor_members").insert(member_dict).execute()
+            except Exception as e2:
+                if _is_rest_quota_error(e2):
+                    pg_row = pg_insert_vendor_application(member_dict)
+                    if not pg_row:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Could not process application right now. Please try again shortly.",
+                        )
+                    inserted_via_pg = True
+                else:
+                    member_dict.pop("vendor_type", None)
+                    try:
+                        await db.table("vendor_members").insert(member_dict).execute()
+                    except Exception as e3:
+                        if _is_rest_quota_error(e3):
+                            pg_row = pg_insert_vendor_application(member_dict)
+                            if not pg_row:
+                                raise HTTPException(
+                                    status_code=503,
+                                    detail="Could not process application right now. Please try again shortly.",
+                                )
+                            inserted_via_pg = True
+                        else:
+                            raise
 
     availability = AvailabilitySettings(
         member_id=member.id,
         vendor_id=member.vendor_id,
         available=True
     )
-    await (await get_db()).table("vendor_availability").insert(availability.dict()).execute()
+    avail_dict = availability.dict()
+    try:
+        await (await get_db()).table("vendor_availability").insert(avail_dict).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e) or inserted_via_pg:
+            if not pg_upsert_vendor_availability(avail_dict):
+                logger.warning(
+                    "apply_to_bricks: availability PG upsert failed member=%s (non-fatal)",
+                    member.id,
+                )
+        else:
+            # Non-quota insert failure: try PG anyway if REST flaked; else log.
+            if not pg_upsert_vendor_availability(avail_dict):
+                logger.warning(
+                    "apply_to_bricks: availability insert failed member=%s: %s",
+                    member.id,
+                    type(e).__name__,
+                )
 
     return {
         "success": True,
         "message": "Welcome to Bricks! Our team will review your portfolio. You'll hear from us soon.",
         "member_id": member.id,
         "application_token": application_token,
+        "_internal_notes": member.internal_notes,
     }
 
 
@@ -370,9 +538,10 @@ async def validate_rpas_certificate(member_id: str, request: Request):
     db = await get_db()
 
     res_m = await db.table("vendor_members").select("name, drone_certified").eq("id", member_id).maybe_single().execute()
-    if not res_m.data:
+    member_row = maybe_single_row(res_m)
+    if not member_row:
         raise HTTPException(status_code=404, detail="Member not found")
-    vendor_name = res_m.data.get("name", "")
+    vendor_name = member_row.get("name", "")
 
     # Find most recent rpas_certificate document for this member
     res_d = await db.table("vendor_documents").select("id, file_url, status").eq(
@@ -449,7 +618,7 @@ async def get_application_status(member_id: str, token: Optional[str] = None):
     Check the status of an onboarding application.
     """
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Application not found.")
     _check_application_token(member, token)
@@ -476,15 +645,17 @@ async def upload_compliance_document(
     file_data: str = Form(...),
     expiry_date: Optional[str] = Form(None),
     token: Optional[str] = Form(None),
+    application_token: Optional[str] = Form(None),
 ):
     """
     Upload Ontario compliance documents (COI, WSIB, etc) or a resume.
+    Client must send member_id + application_token (or token) from /apply.
     """
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
-    _check_application_token(member, token)
+    _check_application_token(member, token or application_token)
 
     portfolio_docs = [portfolio_doc_type(t) for t in PORTFOLIO_MEDIA_TYPES]
     valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume", *portfolio_docs]
@@ -592,7 +763,7 @@ async def validate_compliance(member_id: str, doc_type: str, request: Request):
     db = await get_db()
 
     res_m = await db.table("vendor_members").select("name").eq("id", member_id).maybe_single().execute()
-    if not res_m.data:
+    if not maybe_single_row(res_m):
         raise HTTPException(status_code=404, detail="Member not found")
 
     res_d = await db.table("vendor_documents").select("id, file_url, status").eq(
@@ -655,7 +826,7 @@ async def upload_portfolio_sample(
         )
 
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
     _check_application_token(member, token)
