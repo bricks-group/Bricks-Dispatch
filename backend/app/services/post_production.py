@@ -104,6 +104,40 @@ def unedited_original_hold() -> dict:
     }
 
 
+EQUIRECT_360_QC_NOTE = (
+    "360° equirectangular panorama — held uncropped, not a listing still. "
+    "Listing export would crop it to a warped 4:3 slice; deliver it through "
+    "Visit / tour instead."
+)
+
+
+def equirect_360_hold() -> dict:
+    """QC hold for a 360° sphere uploaded as a listing still (kept uncropped)."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": EQUIRECT_360_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: source is a 360 sphere — hold, no crop.
+_EQUIRECT_360 = "__equirect_360__"
+
+
+async def _hold_equirect_360(db, job_id: str, upload_id: str, file_path: str, now: str) -> None:
+    await _safe_update_upload(db, upload_id, {
+        "processing_status": "done",
+        "processed_url": file_path,
+        "provider": "as_is",
+        "processed_at": now,
+        **equirect_360_hold(),
+    })
+    logger.warning(
+        f"Job {job_id}: upload {upload_id} is a 360° equirect panorama — held "
+        "uncropped (not a listing still; route via Visit/tour)"
+    )
+
+
 def prefer_autoenhance_stills() -> bool:
     """True only when env explicitly selects Autoenhance for leftover stills."""
     return stills_provider_preference() == "autoenhance"
@@ -595,9 +629,13 @@ async def _listing_export_as_is_url(db, job_id: str, upload_id: str, asset: dict
         from .photo_enhance_service import apply_listing_export, upload_enhanced
         from .storage import download_bytes
 
+        from .image_io import is_equirect_360
+
         original = await download_bytes(file_path)
         if not original:
             return None
+        if is_equirect_360(original):
+            return _EQUIRECT_360
         exported, export_meta = apply_listing_export(original)
         if not exported:
             return None
@@ -655,6 +693,9 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         listing_url = await _listing_export_as_is_url(
             db, job_id, upload_id, asset, processed_url
         )
+        if listing_url == _EQUIRECT_360:
+            await _hold_equirect_360(db, job_id, upload_id, file_path, now)
+            return
         if listing_url:
             processed_url = listing_url
         await _safe_update_upload(db, upload_id, {
@@ -714,6 +755,9 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 listing_url = await _listing_export_as_is_url(
                     db, job_id, upload_id, asset, processed_url
                 )
+                if listing_url == _EQUIRECT_360:
+                    await _hold_equirect_360(db, job_id, upload_id, file_path, now)
+                    return
                 if listing_url:
                     processed_url = listing_url
         await _safe_update_upload(db, upload_id, {
@@ -743,7 +787,12 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 upload_enhanced,
                 upload_qc_variant,
             )
+            from .image_io import is_equirect_360
+
             original = await download_bytes(file_path)
+            if original and is_equirect_360(original):
+                await _hold_equirect_360(db, job_id, upload_id, file_path, now)
+                return file_path
             if original:
                 enhanced, enhance_meta = enhance_bracket(
                     [original], apply_sky=False, return_meta=True
@@ -815,8 +864,13 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 upload_enhanced,
                 upload_qc_variant,
             )
+            from .image_io import is_equirect_360
+
             original = await download_bytes(file_path)
             enhance_meta = {}
+            if original and is_equirect_360(original):
+                await _hold_equirect_360(db, job_id, upload_id, file_path, now)
+                return file_path
             if original:
                 enhanced = None
                 filename = str(asset.get("filename") or "still.jpg")

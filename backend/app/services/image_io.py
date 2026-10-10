@@ -153,3 +153,44 @@ def open_rgb(image_bytes: bytes) -> Image.Image:
     except Exception:
         logger.warning("image_io: EXIF transpose failed — using raw pixels")
     return to_srgb_rgb(img)
+
+
+# 360° equirectangular panoramas (DJI sphere, Insta360, Ricoh Theta, phone
+# photo-sphere) are 2:1 full-sphere projections. The listing export crops every
+# still to a 4:3 landscape and in-house enhance may replace sky — on a sphere
+# that produces a warped centre slice that is neither a listing still nor a
+# usable 360. These belong in Visit / tour, never the listing gallery.
+_GPANO_EQUIRECT_MARKERS = (
+    b'GPano:ProjectionType="equirectangular"',
+    b"GPano:ProjectionType='equirectangular'",
+    b"<GPano:ProjectionType>equirectangular</GPano:ProjectionType>",
+)
+EQUIRECT_ASPECT = 2.0
+EQUIRECT_ASPECT_TOL = 0.01  # ±0.5% of 2:1
+EQUIRECT_MIN_WIDTH = 4000  # spherical cameras export ≥4K wide; avoids small 2:1 crops
+
+
+def is_equirect_360(image_bytes: Optional[bytes]) -> bool:
+    """True when upload bytes are a 360° equirectangular panorama.
+
+    Primary signal: XMP GPano ProjectionType=equirectangular (written by DJI,
+    Insta360, Theta, Google/Android photo sphere). Fallback: exact 2:1 frame at
+    ≥4000 px wide (sphere cameras that strip XMP). Header-only read — no decode.
+    Cylindrical / partial phone panoramas (GPano cylindrical, 3:1+) stay False.
+    """
+    if not image_bytes:
+        return False
+    head = bytes(image_bytes[:262144])
+    if any(m in head for m in _GPANO_EQUIRECT_MARKERS):
+        return True
+    if b"GPano:ProjectionType" in head:
+        # Explicit non-equirect projection (cylindrical / rectilinear) — trust it.
+        return False
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            w, h = img.size
+    except Exception:
+        return False
+    if h <= 0 or w < EQUIRECT_MIN_WIDTH:
+        return False
+    return abs((w / float(h)) - EQUIRECT_ASPECT) <= EQUIRECT_ASPECT_TOL
