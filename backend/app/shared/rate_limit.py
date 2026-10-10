@@ -58,9 +58,11 @@ def _get_tier(path: str) -> tuple[str, int, int]:
 
 
 def _rate_limit_key(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # X-Forwarded-For's first hop is client-controlled (spoofable). Vercel sets
+    # x-real-ip to the connecting client, so key on that, then the socket peer.
+    real_ip = (request.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip
     return request.client.host if request.client else "127.0.0.1"
 
 

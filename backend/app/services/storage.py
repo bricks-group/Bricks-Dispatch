@@ -179,7 +179,10 @@ def _hmac_secret() -> bytes:
         or os.environ.get("SUPABASE_JWT_SECRET")
         or (_blob_token()[:32] if _blob_token() else "")
     )
-    return (raw or "bricks-capture-dev-secret").encode("utf-8")
+    if not raw:
+        # Fail closed: never sign/verify capture URLs with a guessable default.
+        raise RuntimeError("CAPTURE_PUT_SECRET is not configured")
+    return raw.encode("utf-8")
 
 
 def _normalize_storage_path(storage_path: str) -> str:
@@ -215,7 +218,10 @@ def verify_capture_hmac(method: str, path: str, exp: Union[int, str], sig: str) 
         return False
     if not sig or not isinstance(sig, str):
         return False
-    expected = mint_capture_hmac(method, path, exp_i)
+    try:
+        expected = mint_capture_hmac(method, path, exp_i)
+    except RuntimeError:
+        return False
     return hmac.compare_digest(expected, sig.strip().lower())
 
 

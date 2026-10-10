@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Body, Header
 from ..shared.audit import write_audit_event
 from ..shared.auth import (
@@ -102,13 +104,25 @@ async def vendor_os_logout(authorization: str | None = Header(default=None, alia
 # For now, I'll keep them as stubs or remove if they are redundant.
 
 
+def fair_use_auth_enabled() -> bool:
+    """Fair-Use PG auth is an emergency path; OFF unless FAIR_USE_AUTH_ENABLED is literally "true"."""
+    return os.environ.get("FAIR_USE_AUTH_ENABLED") == "true"
+
+
+def _require_fair_use_auth_enabled() -> None:
+    if not fair_use_auth_enabled():
+        api_error(404, "Not found", "not_found")
+
+
 @router.post("/vendor-os/auth/fair-use-login")
 async def vendor_os_fair_use_login(payload: dict = Body(default={})):
     """Email+password login via direct Postgres when Supabase Auth is Fair-Use 402.
 
     Verifies crypt() against auth.users, resolves vendor_members, mints a
     Supabase-compatible HS256 JWT with SUPABASE_JWT_SECRET.
+    Disabled (404) unless FAIR_USE_AUTH_ENABLED == "true".
     """
+    _require_fair_use_auth_enabled()
     raw = payload if isinstance(payload, dict) else {}
     email = (raw.get("email") or "").strip().lower()
     password = raw.get("password")
@@ -135,7 +149,8 @@ async def vendor_os_fair_use_login(payload: dict = Body(default={})):
     if not user:
         api_error(401, "Invalid email or password", "invalid_credentials")
 
-    member = pg_select_vendor_member(user["id"], user.get("email") or email)
+    # Resolve by auth user id / member id only — never adopt a row by email.
+    member = pg_select_vendor_member(user["id"], "")
     if not member:
         api_error(403, "Vendor member not found", "vendor_member_not_found")
 
@@ -175,7 +190,11 @@ async def vendor_os_fair_use_login(payload: dict = Body(default={})):
 
 @router.post("/vendor-os/auth/fair-use-signup")
 async def vendor_os_fair_use_signup(payload: dict = Body(default={})):
-    """Create photographer account via Postgres when Supabase Auth is Fair-Use 402."""
+    """Create photographer account via Postgres when Supabase Auth is Fair-Use 402.
+
+    Disabled (404) unless FAIR_USE_AUTH_ENABLED == "true".
+    """
+    _require_fair_use_auth_enabled()
     raw = payload if isinstance(payload, dict) else {}
     email = (raw.get("email") or "").strip().lower()
     password = "" if raw.get("password") is None else str(raw.get("password"))

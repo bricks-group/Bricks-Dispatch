@@ -16,6 +16,8 @@ from app.shared.job_scope import KAM_MEMBER_ID
 def _jwt_env(monkeypatch):
     monkeypatch.setenv("SUPABASE_JWT_SECRET", "unit-test-fair-use-jwt-secret")
     monkeypatch.setenv("SUPABASE_URL", "https://rbywjnnctjglhcdemnnj.supabase.co")
+    # Fair-use auth is off by default; these tests exercise the enabled path.
+    monkeypatch.setenv("FAIR_USE_AUTH_ENABLED", "true")
 
 
 def test_mint_supabase_access_token_shape():

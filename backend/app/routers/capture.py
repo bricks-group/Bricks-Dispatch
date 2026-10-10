@@ -1909,4 +1909,11 @@ async def blob_get_proxy(
         ctype = "image/svg+xml"
     else:
         ctype = "application/octet-stream"
-    return Response(content=data, media_type=ctype)
+    headers = {"X-Content-Type-Options": "nosniff"}
+    # Active content (html/svg/xml) must never render inline on the API origin.
+    if lower.endswith((".html", ".htm", ".svg", ".xml", ".xhtml")) or any(
+        t in ctype for t in ("html", "svg", "xml")
+    ):
+        fname = (path.rsplit("/", 1)[-1] or "download").replace('"', "")
+        headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+    return Response(content=data, media_type=ctype, headers=headers)

@@ -1448,13 +1448,13 @@ def pg_create_auth_user(
                 """
                 INSERT INTO auth.users (
                   instance_id, id, aud, role, email, encrypted_password,
-                  email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+                  raw_app_meta_data, raw_user_meta_data,
                   created_at, updated_at, confirmation_token, recovery_token,
                   email_change_token_new, email_change, is_sso_user, is_anonymous
                 ) VALUES (
                   '00000000-0000-0000-0000-000000000000'::uuid,
                   %s::uuid, 'authenticated', 'authenticated', %s,
-                  crypt(%s, gen_salt('bf')), now(), %s::jsonb, %s::jsonb,
+                  crypt(%s, gen_salt('bf')), %s::jsonb, %s::jsonb,
                   now(), now(), '', '', '', '', false, false
                 )
                 RETURNING id::text AS id, email::text AS email
@@ -1462,13 +1462,13 @@ def pg_create_auth_user(
                 """
                 INSERT INTO auth.users (
                   instance_id, id, aud, role, email, encrypted_password,
-                  email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+                  raw_app_meta_data, raw_user_meta_data,
                   created_at, updated_at, confirmation_token, recovery_token,
                   email_change_token_new, email_change
                 ) VALUES (
                   '00000000-0000-0000-0000-000000000000'::uuid,
                   %s::uuid, 'authenticated', 'authenticated', %s,
-                  crypt(%s, gen_salt('bf')), now(), %s::jsonb, %s::jsonb,
+                  crypt(%s, gen_salt('bf')), %s::jsonb, %s::jsonb,
                   now(), now(), '', '', '', ''
                 )
                 RETURNING id::text AS id, email::text AS email
@@ -1506,7 +1506,8 @@ def pg_create_auth_user(
             identity_data = {
                 "sub": verified["id"],
                 "email": email_l,
-                "email_verified": True,
+                # Fair-use path never pre-confirms the email.
+                "email_verified": False,
                 "phone_verified": False,
             }
             if name:
@@ -1558,7 +1559,9 @@ def pg_upsert_vendor_member(
     display = (name or "").strip() or (email_l.split("@")[0] if email_l else "")
     if not uid or not email_l:
         return None
-    existing = pg_select_vendor_member(uid, email_l)
+    # Adopt an existing row only by id / auth_user_id — never by email, or a
+    # signup for someone else's address would claim their vendor member.
+    existing = pg_select_vendor_member(uid, "")
     if existing:
         return existing
     conn = _pg_connect()
@@ -1626,7 +1629,7 @@ def pg_upsert_vendor_member(
                     continue
             if last_err:
                 logger.error("pg_upsert_vendor_member failed: %s", str(last_err)[:400])
-            return pg_select_vendor_member(uid, email_l)
+            return pg_select_vendor_member(uid, "")
     except Exception as e:
         logger.error("pg_upsert_vendor_member failed: %s", str(e)[:400])
         return None
