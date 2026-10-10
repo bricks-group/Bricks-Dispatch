@@ -1,0 +1,6 @@
+# Deps for the cgi_render.py worker ONLY — never install these into the
+# Vercel serverless API deployment (requirements.txt), which doesn't run
+# this worker and doesn't have (or need) a display. See cgi_render.Dockerfile.
+-r requirements.txt
+pyautogui>=0.9.54
+python-xlib>=0.33

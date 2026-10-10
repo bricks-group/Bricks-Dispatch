@@ -41,7 +41,6 @@ async def _note_jev_hold(db, job_id: str, yes_probability: float | None) -> None
     except Exception:
         logger.exception("Jev hold note failed for job %s", job_id)
 
-
 @router.get("/", summary="Dispatch service root")
 async def dispatch_root():
     return {"message": "Welcome to the Dispatch Service"}
@@ -71,6 +70,13 @@ async def create_dispatch_job(
                 "Legacy package_ids remain readable for historical payouts only."
             ),
         )
+
+    # Every job traces back to exactly one caller: Booking (booking_id) or
+    # Bricks-OS's developer/REIT progress-capture flow (dev_capture_visit_id).
+    # Without this gate a malformed payload would insert a job neither side
+    # can ever look up or report status back against.
+    if not payload.booking_id and not payload.dev_capture_visit_id:
+        raise HTTPException(status_code=400, detail="Either booking_id or dev_capture_visit_id is required")
 
     db = await get_db()
     job_id = str(uuid.uuid4())
@@ -192,7 +198,6 @@ async def create_dispatch_job(
                     status = "assigned" if assignee_id else "dispatch_failed"
                 except Exception:
                     logger.exception("Sync vendor assign failed for job %s", job_id)
-
         # Await notify — Vercel serverless drops FastAPI BackgroundTasks after response
         # (same class of bug as pending_assignment with empty assignee_id).
         try:
@@ -375,6 +380,7 @@ async def update_job_status(
     old_status = job.get("status")
     new_status = payload.status
     booking_id = job.get("booking_id")
+    dev_capture_visit_id = job.get("dev_capture_visit_id")
 
     now = datetime.now(timezone.utc).isoformat()
     status_fields = {"status": new_status, "updated_at": now}
@@ -400,7 +406,8 @@ async def update_job_status(
         except Exception as e:
             logger.error(f"Payout trigger failed for job {job_id}: {e}")
 
-    # Trigger sync to Booking if booking_id exists
+    # Trigger sync to whichever service originated the job — exactly one of
+    # these is ever set (create_dispatch_job requires it).
     if booking_id:
         await send_dispatch_status_update_webhook(
             booking_id=booking_id,
@@ -410,5 +417,12 @@ async def update_job_status(
             actor_id=actor_id,
             actor_type="vendor_member"
         )
-    
+    elif dev_capture_visit_id:
+        from ..services.webhooks import send_dev_capture_status_update_webhook
+        await send_dev_capture_status_update_webhook(
+            dev_capture_visit_id=dev_capture_visit_id,
+            job_id=job_id,
+            new_status=new_status,
+        )
+
     return {"status": "updated", "job_id": job_id, "new_status": new_status}
