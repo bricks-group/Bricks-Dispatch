@@ -142,7 +142,27 @@ def wide_pano_hold() -> dict:
 
 # Sentinel from _listing_export_as_is_url: wide stitched pano — hold, no crop.
 _WIDE_PANO = "__wide_pano__"
-_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO)
+
+
+LOW_RES_QC_NOTE = (
+    "Low resolution (long edge under 1024 px) — held for review, not delivered. "
+    "Likely a thumbnail, screenshot or messaging-app copy; ask the vendor for "
+    "the original camera file."
+)
+
+
+def low_res_hold() -> dict:
+    """QC hold for a listing still too small to be a camera original."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": LOW_RES_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: source is a thumbnail — hold, no edit.
+_LOW_RES = "__low_res__"
+_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _LOW_RES)
 
 
 def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
@@ -155,13 +175,22 @@ def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
         return _EQUIRECT_360
     if is_wide_panorama(original):
         return _WIDE_PANO
+    from .image_io import is_low_resolution_still
+
+    if is_low_resolution_still(original):
+        return _LOW_RES
     return None
 
 
 async def _hold_equirect_360(
     db, job_id: str, upload_id: str, file_path: str, now: str, kind: str = _EQUIRECT_360
 ) -> None:
-    hold = wide_pano_hold() if kind == _WIDE_PANO else equirect_360_hold()
+    if kind == _LOW_RES:
+        hold = low_res_hold()
+    elif kind == _WIDE_PANO:
+        hold = wide_pano_hold()
+    else:
+        hold = equirect_360_hold()
     await _safe_update_upload(db, upload_id, {
         "processing_status": "done",
         "processed_url": file_path,
@@ -170,7 +199,9 @@ async def _hold_equirect_360(
         **hold,
     })
     what = (
-        "a wide panorama — held uncropped (4:3 crop would discard most of the frame)"
+        "low resolution (long edge < 1024 px) — held, not edited or delivered"
+        if kind == _LOW_RES
+        else "a wide panorama — held uncropped (4:3 crop would discard most of the frame)"
         if kind == _WIDE_PANO
         else "a 360° equirect panorama — held uncropped (not a listing still; route via Visit/tour)"
     )

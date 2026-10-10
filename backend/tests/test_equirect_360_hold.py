@@ -118,7 +118,7 @@ def test_twilight_sphere_held(monkeypatch):
 
 
 def test_ordinary_still_still_auto_edited(monkeypatch):
-    updates, calls = _install(monkeypatch, _jpeg(800, 600))
+    updates, calls = _install(monkeypatch, _jpeg(1600, 1200))
     _deliver({"id": "u4", "file_url": "raw/IMG_1.jpg", "filename": "IMG_1.jpg", "mime_type": "image/jpeg"})
     (_uid, upd), = updates
     assert upd["provider"] == "bricks_inhouse"
