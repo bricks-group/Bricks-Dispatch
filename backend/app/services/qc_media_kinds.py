@@ -148,6 +148,34 @@ def is_legacy_unavailable_skip_pass(upload: Optional[dict]) -> bool:
     return False
 
 
+# Exact note post_production writes when enhance/listing_export detects faces
+# and pre-stamps qc_status=flagged before QC ever runs (bracket primary,
+# twilight, vendor_photo single-frame). QC's own people note is appended to
+# its verdict text and never carries "; qc_face_count=".
+ENHANCE_PEOPLE_PRESTAMP_PREFIX = (
+    "proptx 5.01(d) persons/faces — mls_quarantine soft-fail; qc_face_count="
+)
+
+
+def is_enhance_people_prestamp(upload: Optional[dict]) -> bool:
+    """True when a listing still's only verdict is the enhance-time people flag.
+
+    post_production stamps qc_status=flagged when faces are detected during
+    auto-edit. run_qc_for_job / late-fold read that as an existing verdict
+    (has_qc_verdict), so crooked / dark / blurry checks never ran on the
+    delivered edit and "flagged" still reached the client. QC re-detects
+    people itself (merge_people_into_qc / _qc_payload), so re-reviewing keeps
+    the quarantine flag and adds the real quality verdict.
+    """
+    row = upload if isinstance(upload, dict) else {}
+    if str(row.get("qc_status") or "").strip().lower() != "flagged":
+        return False
+    notes = str(row.get("qc_notes") or "").strip().lower()
+    if not notes.startswith(ENHANCE_PEOPLE_PRESTAMP_PREFIX):
+        return False
+    return qc_kind_for_upload(row) == "still"
+
+
 def _verdict(status: str, score: int, notes: str, source: str) -> dict:
     return {
         "qc_status": status,

@@ -311,6 +311,7 @@ async def run_qc_for_job(job_id: str) -> dict:
     from .qc_media_kinds import (
         has_qc_verdict,
         is_legacy_non_image_asset_pass,
+        is_enhance_people_prestamp,
         is_legacy_unavailable_skip_pass,
         is_legacy_unreadable_floorplan_hold,
         qc_kind_for_upload,
@@ -335,10 +336,14 @@ async def run_qc_for_job(job_id: str) -> dict:
             recheck_legacy_plan = kind == "floorplan" and is_legacy_unreadable_floorplan_hold(u)
             recheck_legacy_non_image = kind in ("visit", "video") and is_legacy_non_image_asset_pass(u)
             recheck_legacy_unavailable = is_legacy_unavailable_skip_pass(u)
+            # Enhance-time people pre-stamp (flagged) is not a QC review —
+            # score the delivered edit for crooked/dark/blur too.
+            recheck_people_prestamp = is_enhance_people_prestamp(u)
             if (
                 not recheck_legacy_plan
                 and not recheck_legacy_non_image
                 and not recheck_legacy_unavailable
+                and not recheck_people_prestamp
                 and not (is_original and is_listing_still_delivery_row(u))
             ):
                 st = existing_qc.lower()

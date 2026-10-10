@@ -36,6 +36,7 @@ from ..services.qc_agent import run_qc_for_job
 from ..services.qc_media_kinds import (
     has_qc_verdict,
     is_legacy_non_image_asset_pass,
+    is_enhance_people_prestamp,
     is_legacy_unavailable_skip_pass,
     is_legacy_unreadable_floorplan_hold,
 )
@@ -604,9 +605,28 @@ async def _fold_late_into_existing_delivery(
             return False
         return is_legacy_unavailable_skip_pass(u)
 
+    def _ready_people_prestamp_recheck(u: dict) -> bool:
+        """Listing still whose only verdict is the enhance-time people flag.
+
+        Enhance pre-stamps flagged when faces are seen; that skipped the real
+        crooked/dark/blur QC and flagged stills were delivered unreviewed.
+        """
+        if not isinstance(u, dict):
+            return False
+        if u.get("processing_status") == "failed":
+            return False
+        if u.get("processing_status") in ("processing", "pending"):
+            return False
+        if not is_listing_still_delivery_row(u):
+            return False
+        if not (u.get("processed_url") or u.get("file_url")):
+            return False
+        return is_enhance_people_prestamp(u)
+
     need_qc = [
         u for u in (uploads or [])
         if _ready_still_missing_qc(u)
+        or _ready_people_prestamp_recheck(u)
         or _ready_legacy_floorplan_unreadable_recheck(u)
         or _ready_visit_file_missing_qc(u)
         or _ready_legacy_non_image_recheck(u)
