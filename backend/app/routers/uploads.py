@@ -155,6 +155,61 @@ async def _bump_uploaded_count(db, job_id: str, job: dict) -> int:
     return new_uploaded
 
 
+def find_duplicate_upload(rows: list | None, *, upload_id: str, filename: str, file_size: int) -> dict:
+    """Return the existing uploads row this /complete call duplicates, else {}.
+
+    Two cases (GO web retry / re-selecting the same files):
+      1. Same upload_id already registered (client retried /complete after a
+         network blip) — the PK insert would 500 although the file is on the job.
+      2. Same durable filename AND same non-zero byte size already on the job and
+         not rejected/failed — the vendor re-picked a file they had already
+         uploaded. Registering it again delivered the same still twice on the
+         listing and doubled a bracket frame (same-EV pair → "same-side frames"
+         on Mark complete / skewed HDR merge).
+    Exact byte size + name is the match — different camera files sharing a name
+    almost never share a byte count; rejected/failed rows can be re-uploaded.
+    """
+    uid = str(upload_id or "").strip()
+    name = str(filename or "").strip().lower()
+    size = int(file_size or 0)
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if uid and str(row.get("id") or "") == uid:
+            return row
+    if not name or size <= 0:
+        return {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("filename") or "").strip().lower() != name:
+            continue
+        try:
+            if int(row.get("file_size") or 0) != size:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if row.get("qc_status") == "rejected" or row.get("processing_status") == "failed":
+            continue
+        return row
+    return {}
+
+
+async def _job_upload_rows(db, job_id: str) -> list:
+    """Uploads on a job for duplicate checks (Fair-Use PG fallback; best-effort)."""
+    try:
+        res = await db.table("uploads").select(
+            "id, job_id, filename, file_size, mime_type, file_url, processing_status, qc_status"
+        ).eq("job_id", job_id).limit(500).execute()
+        return res.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+        if _is_rest_quota_error(e):
+            return pg_select_uploads_by_job_id(job_id) or []
+        logger.warning("duplicate-check uploads select failed job=%s: %s", job_id, str(e)[:200])
+        return []
+
+
 @router.post("/sign")
 async def sign_stills_upload(
     payload: dict = Body(default={}),
@@ -220,6 +275,22 @@ async def complete_stills_upload(
     if not storage_path.startswith(prefix):
         api_error(400, "storage_path must be the signed stills path for this job", "bad_stills_path")
     db, _, _, job = await _actor_job(authorization, x_user_id, job_id)
+
+    dup = find_duplicate_upload(
+        await _job_upload_rows(db, job_id),
+        upload_id=upload_id,
+        filename=filename,
+        file_size=file_size,
+    )
+    if dup:
+        logger.info(
+            "complete stills duplicate job=%s upload=%s -> existing=%s (%s)",
+            job_id, upload_id, dup.get("id"), filename,
+        )
+        out = dict(dup)
+        out.setdefault("media_type", media_type)
+        out["duplicate"] = True
+        return out
 
     record = UploadRecord(
         id=upload_id,
