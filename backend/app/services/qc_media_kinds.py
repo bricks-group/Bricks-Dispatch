@@ -205,6 +205,16 @@ def check_floorplan_bytes(data: Optional[bytes], filename: str = "", mime_type: 
 
     # PDF header must appear within the first 1024 bytes (PDF spec).
     if b"%PDF-" in data[:1024]:
+        # A complete PDF ends with the %%EOF marker (ISO 32000 7.5.5); readers
+        # look for it in the last 1024 bytes. Missing = upload/write cut off
+        # mid-file — the client would get a plan that will not open.
+        if b"%%EOF" not in data[-1024:]:
+            return _verdict(
+                "rejected",
+                0,
+                "Floor plan PDF is truncated (no %%EOF end marker) — re-upload the full file.",
+                "floorplan_check",
+            )
         return _verdict("passed", 100, "Floor plan PDF opens.", "floorplan_check")
     named_pdf = is_pdf_file(filename, mime_type)
 

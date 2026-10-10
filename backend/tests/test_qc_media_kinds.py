@@ -53,7 +53,7 @@ def test_kind_routing():
 
 def test_clean_floor_plans_pass_including_transparent_export_and_pdf():
     for data, name in ((_cad_plan(), "Floor Plan.png"), (_cad_plan("RGBA"), "plan.png"),
-                       (b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj", "floorplan.pdf")):
+                       (b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\nendobj\ntrailer\n%%EOF\n", "floorplan.pdf")):
         v = qmk.check_floorplan_bytes(data, name)
         assert v["qc_status"] == "passed", (name, v)
     # The listing-photo check used to hold every PDF plan as unreadable.
@@ -305,7 +305,7 @@ def test_job_qc_holds_broken_video_and_blank_plan_passes_pdf_plan(monkeypatch):
         _row("vv3", "mesh.bin", "raw/mesh.bin", "visit"),  # link-ish — skipped
     ]
     fetched = {
-        "floorplan.pdf": b"%PDF-1.6\n...",
+        "floorplan.pdf": b"%PDF-1.6\n...\n%%EOF\n",
         "blank.png": _png(Image.new("RGB", (800, 600), "white")),
         "DJI_0001.MP4": MP4_HEAD,
         "reel_tour.mp4": b"<html><body>NoSuchKey</body></html>",
@@ -436,7 +436,7 @@ def test_job_qc_rechecks_legacy_unreadable_floorplan_preserves_photo_hold(monkey
         },
     ]
     fetched = {
-        "floorplan.pdf": b"%PDF-1.6\n...",
+        "floorplan.pdf": b"%PDF-1.6\n...\n%%EOF\n",
         "blank-plan.png": _png(Image.new("RGB", (800, 600), "white")),
     }
     qc_agent, writes, photo_reviewed = _install_job(monkeypatch, rows, fetched)
