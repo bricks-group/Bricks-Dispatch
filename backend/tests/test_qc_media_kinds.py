@@ -756,3 +756,60 @@ def test_job_qc_rechecks_legacy_unavailable_skip_pass(monkeypatch):
     assert writes["fp-legacy"]["qc_status"] == "rejected"
     assert "blank" in writes["fp-legacy"]["qc_notes"].lower()
     assert summary["rejected"] >= 3
+
+
+def _box(typ: bytes, payload_len: int, *, size_override=None, large=False) -> bytes:
+    """Top-level ISO box header (+ zero payload up to 64 bytes, rest implied)."""
+    if large:
+        hdr = (1).to_bytes(4, "big") + typ + (16 + payload_len).to_bytes(8, "big")
+    else:
+        size = 8 + payload_len if size_override is None else size_override
+        hdr = size.to_bytes(4, "big") + typ
+    return hdr + b"\x00" * min(payload_len, 64)
+
+
+_FTYP = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomavc1"  # 24 bytes
+
+
+def test_mp4_without_moov_is_held():
+    """Camera power loss / cut-off upload: ftyp + mdat to EOF, no moov index."""
+    mdat_len = 5_000_000
+    head = _FTYP + _box(b"mdat", mdat_len)
+    total = len(_FTYP) + 8 + mdat_len
+    v = qmk.check_video_head(head, total)
+    assert v["qc_status"] == "rejected"
+    assert "moov" in v["qc_notes"]
+    # size-0 mdat (extends to EOF) with no moov before it — no total needed
+    v0 = qmk.check_video_head(_FTYP + _box(b"mdat", 64, size_override=0))
+    assert v0["qc_status"] == "rejected"
+
+
+def test_mp4_mdat_running_past_eof_is_held():
+    head = _FTYP + _box(b"moov", 40) + _box(b"mdat", 9_000_000)
+    total = 24 + 48 + 8 + 4_000_000  # upload stopped halfway through mdat
+    v = qmk.check_video_head(head, total)
+    assert v["qc_status"] == "rejected"
+    assert "truncated" in v["qc_notes"]
+    # 64-bit largesize mdat overrunning too
+    head64 = _FTYP + _box(b"mdat", 9_000_000, large=True)
+    assert qmk.check_video_head(head64, 24 + 1_000_000)["qc_status"] == "rejected"
+
+
+def test_complete_mp4_layouts_still_pass():
+    # faststart: moov before mdat, mdat ends exactly at EOF
+    head = _FTYP + _box(b"moov", 40) + _box(b"mdat", 9_000_000)
+    total = 24 + 48 + 8 + 9_000_000
+    assert qmk.check_video_head(head, total)["qc_status"] == "passed"
+    # camera layout: mdat then moov beyond the fetched head — unknown, pass
+    head2 = _FTYP + _box(b"mdat", 9_000_000)
+    assert qmk.check_video_head(head2, 24 + 8 + 9_000_000 + 5_000)["qc_status"] == "passed"
+    # no total size known — cannot judge EOF, pass
+    assert qmk.check_video_head(head2)["qc_status"] == "passed"
+    # moov then size-0 mdat to EOF
+    head3 = _FTYP + _box(b"moov", 40) + _box(b"mdat", 64, size_override=0)
+    assert qmk.check_video_head(head3)["qc_status"] == "passed"
+    # QuickTime wide + mdat + moov wholly inside head (small clip)
+    small = _FTYP + _box(b"wide", 0) + _box(b"mdat", 32) + _box(b"moov", 40)
+    assert qmk.check_video_head(small, len(small))["qc_status"] == "passed"
+    # existing fixture (ftyp + zero padding) unchanged
+    assert qmk.check_video_head(MP4_HEAD, 9_000_000)["qc_status"] == "passed"

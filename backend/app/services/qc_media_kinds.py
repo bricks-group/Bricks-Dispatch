@@ -257,6 +257,61 @@ def check_floorplan_bytes(data: Optional[bytes], filename: str = "", mime_type: 
     return _verdict("passed", 100, f"Floor plan opens with linework (ink {ink:.3f}).", "floorplan_check")
 
 
+def _iso_truncation_reason(head: bytes, total_size: Optional[int]) -> Optional[str]:
+    """Why an MP4/MOV cannot play, judged from top-level box headers only.
+
+    An MP4/MOV needs a ``moov`` box (the index) to open. A camera that lost
+    power mid-record, or an upload/Blob write cut off, leaves ``ftyp`` +
+    ``mdat`` with no ``moov`` — or an ``mdat`` whose declared size runs past
+    the end of the file. Both passed the old magic-bytes check and reached
+    the client as a reel/drone video that will not play.
+
+    Walks the top-level box chain while each header is inside ``head``
+    (ISO/IEC 14496-12 §4.2: 32-bit size, 1 = 64-bit largesize, 0 = to EOF).
+    Only says broken when the chain provably reaches the end of the file
+    without a ``moov`` or overruns it. A ``moov`` after ``mdat`` whose
+    header lies beyond the fetched head is unknown → None (pass, as before).
+    Unknown/non-printable box types stop the walk (None). Needs total_size
+    for the end-of-file rules; without it only a size-0 box can decide.
+    """
+    off = 0
+    seen_moov = False
+    n = len(head)
+    while off + 8 <= n:
+        size = int.from_bytes(head[off:off + 4], "big")
+        typ = head[off + 4:off + 8]
+        if not all(0x20 <= b <= 0x7E for b in typ):
+            return None
+        hdr = 8
+        if size == 1:
+            if off + 16 > n:
+                return None
+            size = int.from_bytes(head[off + 8:off + 16], "big")
+            hdr = 16
+        elif size == 0:
+            # Box extends to end of file: nothing can follow it.
+            if typ == b"moov" or seen_moov:
+                return None
+            return "is incomplete (no moov index — recording or upload cut off; it will not play) — re-upload the full file."
+        if size < hdr:
+            return None
+        if typ == b"moov":
+            seen_moov = True
+        end = off + size
+        if total_size is not None:
+            if end > total_size:
+                return (
+                    f"is truncated ({typ.decode('ascii', 'replace')} box runs past the end of the file "
+                    "— upload cut off; it will not play) — re-upload the full file."
+                )
+            if end == total_size:
+                if seen_moov:
+                    return None
+                return "is incomplete (no moov index — recording or upload cut off; it will not play) — re-upload the full file."
+        off = end
+    return None
+
+
 def check_video_head(head: Optional[bytes], total_size: Optional[int] = None) -> dict:
     """Hold a video that is empty or is not a video container. Never judges
     content (no auto-edit claim); just that the delivered file is a video."""
@@ -265,6 +320,9 @@ def check_video_head(head: Optional[bytes], total_size: Optional[int] = None) ->
     if len(head) < 12:
         return _verdict("rejected", 0, "Video file is truncated (too small to be a video).", "video_check")
     if head[4:8] in _ISO_BOX_TYPES:
+        broken = _iso_truncation_reason(head, total_size)
+        if broken:
+            return _verdict("rejected", 0, f"Video file {broken}", "video_check")
         return _verdict("passed", 100, "Video container OK (MP4/MOV).", "video_check")
     if head[:4] == b"\x1a\x45\xdf\xa3":
         return _verdict("passed", 100, "Video container OK (WebM/MKV).", "video_check")
