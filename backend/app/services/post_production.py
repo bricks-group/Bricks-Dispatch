@@ -26,6 +26,34 @@ async def _safe_update_upload(db, upload_id: str, update: dict) -> None:
             raise
 
 
+def _qc_variant_fields(provider: str, qc_path, asset: dict) -> dict:
+    """qc_variant_url for an auto-edited still — QC must review the delivered edit.
+
+    Intake stores a QC variant of the vendor's raw upload. When post-prod made a
+    new edit but its own variant upload failed (upload_qc_variant → None), the
+    stale raw variant stayed and QC (which prefers qc_variant_url) scored the
+    unedited source instead of the still the client receives. Clear it so QC
+    falls back to processed_url. Held originals keep their raw variant.
+    """
+    if qc_path:
+        return {"qc_variant_url": qc_path}
+    if str(provider or "").lower() in ("original", "as_is"):
+        return {}
+    if asset.get("qc_variant_url"):
+        return {"qc_variant_url": None}
+    return {}
+
+
+def _as_is_qc_variant_fields(processed_url, file_path, asset: dict) -> dict:
+    """as_is HEIC→JPEG / PropTx 4:3 export delivers new bytes — drop raw variant.
+
+    The intake variant is the uncropped raw; QC would judge a composition the
+    listing never shows. Without a fresh variant QC reviews processed_url.
+    """
+    if processed_url and processed_url != file_path and asset.get("qc_variant_url"):
+        return {"qc_variant_url": None}
+    return {}
+
 
 # --- Config ---
 # BoxBrownie / third-party virtual staging is intentionally disabled (Kam 2026-09-12).
@@ -455,8 +483,11 @@ async def deliver_bracket_group_without_vendor(
             "provider": provider if is_primary else "bracket_sibling",
             "processed_at": now,
         }
-        if is_primary and qc_path:
-            update["qc_variant_url"] = qc_path
+        if is_primary:
+            # QC must score the delivered merge. A failed variant upload clears
+            # the intake variant (downsized 0 EV raw) so QC falls back to
+            # processed_url instead of passing/failing the unedited exposure.
+            update["qc_variant_url"] = qc_path or None
         # PropTx people soft-fail: flag primary for GO/MLS quarantine (not hard-fail)
         if is_primary and enhance_meta.get("mls_quarantine"):
             update["qc_status"] = "flagged"
@@ -631,6 +662,7 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             "processed_url": processed_url,
             "provider": "as_is",
             "processed_at": now,
+            **_as_is_qc_variant_fields(processed_url, file_path, asset),
         })
         logger.info(
             f"Job {job_id}: staging upload {upload_id} delivered as_is "
@@ -689,6 +721,7 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             "processed_url": processed_url,
             "provider": "as_is",
             "processed_at": now,
+            **_as_is_qc_variant_fields(processed_url, file_path, asset),
         })
         logger.info(
             f"Job {job_id}: {label} upload {upload_id} delivered as_is "
@@ -757,8 +790,7 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             "provider": provider,
             "processed_at": now,
         }
-        if qc_path:
-            update["qc_variant_url"] = qc_path
+        update.update(_qc_variant_fields(provider, qc_path, asset))
         if enhance_meta.get("mls_quarantine"):
             update["qc_status"] = "flagged"
             update["qc_notes"] = (
@@ -860,8 +892,7 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         "provider": provider,
         "processed_at": now,
     }
-    if qc_path:
-        update["qc_variant_url"] = qc_path
+    update.update(_qc_variant_fields(provider, qc_path, asset))
     if enhance_meta.get("mls_quarantine"):
         update["qc_status"] = "flagged"
         update["qc_notes"] = (
