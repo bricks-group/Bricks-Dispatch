@@ -124,18 +124,57 @@ def equirect_360_hold() -> dict:
 _EQUIRECT_360 = "__equirect_360__"
 
 
-async def _hold_equirect_360(db, job_id: str, upload_id: str, file_path: str, now: str) -> None:
+WIDE_PANO_QC_NOTE = (
+    "Wide panorama (2.5:1 or wider) — held uncropped for review. Listing export "
+    "would centre-crop it to 4:3 and discard most of the frame; deliver a "
+    "framed still or the full panorama by hand."
+)
+
+
+def wide_pano_hold() -> dict:
+    """QC hold for a wide stitched panorama uploaded as a listing still."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": WIDE_PANO_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: wide stitched pano — hold, no crop.
+_WIDE_PANO = "__wide_pano__"
+_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO)
+
+
+def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
+    """Sentinel for a panorama the 4:3 listing export must not crop, else None."""
+    if not original:
+        return None
+    from .image_io import is_equirect_360, is_wide_panorama
+
+    if is_equirect_360(original):
+        return _EQUIRECT_360
+    if is_wide_panorama(original):
+        return _WIDE_PANO
+    return None
+
+
+async def _hold_equirect_360(
+    db, job_id: str, upload_id: str, file_path: str, now: str, kind: str = _EQUIRECT_360
+) -> None:
+    hold = wide_pano_hold() if kind == _WIDE_PANO else equirect_360_hold()
     await _safe_update_upload(db, upload_id, {
         "processing_status": "done",
         "processed_url": file_path,
         "provider": "as_is",
         "processed_at": now,
-        **equirect_360_hold(),
+        **hold,
     })
-    logger.warning(
-        f"Job {job_id}: upload {upload_id} is a 360° equirect panorama — held "
-        "uncropped (not a listing still; route via Visit/tour)"
+    what = (
+        "a wide panorama — held uncropped (4:3 crop would discard most of the frame)"
+        if kind == _WIDE_PANO
+        else "a 360° equirect panorama — held uncropped (not a listing still; route via Visit/tour)"
     )
+    logger.warning(f"Job {job_id}: upload {upload_id} is {what}")
 
 
 def prefer_autoenhance_stills() -> bool:
@@ -629,13 +668,12 @@ async def _listing_export_as_is_url(db, job_id: str, upload_id: str, asset: dict
         from .photo_enhance_service import apply_listing_export, upload_enhanced
         from .storage import download_bytes
 
-        from .image_io import is_equirect_360
-
         original = await download_bytes(file_path)
         if not original:
             return None
-        if is_equirect_360(original):
-            return _EQUIRECT_360
+        pano = _pano_hold_kind(original)
+        if pano:
+            return pano
         exported, export_meta = apply_listing_export(original)
         if not exported:
             return None
@@ -693,8 +731,8 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         listing_url = await _listing_export_as_is_url(
             db, job_id, upload_id, asset, processed_url
         )
-        if listing_url == _EQUIRECT_360:
-            await _hold_equirect_360(db, job_id, upload_id, file_path, now)
+        if listing_url in _PANO_SENTINELS:
+            await _hold_equirect_360(db, job_id, upload_id, file_path, now, listing_url)
             return
         if listing_url:
             processed_url = listing_url
@@ -755,8 +793,8 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 listing_url = await _listing_export_as_is_url(
                     db, job_id, upload_id, asset, processed_url
                 )
-                if listing_url == _EQUIRECT_360:
-                    await _hold_equirect_360(db, job_id, upload_id, file_path, now)
+                if listing_url in _PANO_SENTINELS:
+                    await _hold_equirect_360(db, job_id, upload_id, file_path, now, listing_url)
                     return
                 if listing_url:
                     processed_url = listing_url
@@ -787,11 +825,10 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 upload_enhanced,
                 upload_qc_variant,
             )
-            from .image_io import is_equirect_360
-
             original = await download_bytes(file_path)
-            if original and is_equirect_360(original):
-                await _hold_equirect_360(db, job_id, upload_id, file_path, now)
+            pano = _pano_hold_kind(original)
+            if pano:
+                await _hold_equirect_360(db, job_id, upload_id, file_path, now, pano)
                 return file_path
             if original:
                 enhanced, enhance_meta = enhance_bracket(
@@ -864,12 +901,11 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 upload_enhanced,
                 upload_qc_variant,
             )
-            from .image_io import is_equirect_360
-
             original = await download_bytes(file_path)
             enhance_meta = {}
-            if original and is_equirect_360(original):
-                await _hold_equirect_360(db, job_id, upload_id, file_path, now)
+            pano = _pano_hold_kind(original)
+            if pano:
+                await _hold_equirect_360(db, job_id, upload_id, file_path, now, pano)
                 return file_path
             if original:
                 enhanced = None

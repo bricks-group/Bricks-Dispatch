@@ -194,3 +194,39 @@ def is_equirect_360(image_bytes: Optional[bytes]) -> bool:
     if h <= 0 or w < EQUIRECT_MIN_WIDTH:
         return False
     return abs((w / float(h)) - EQUIRECT_ASPECT) <= EQUIRECT_ASPECT_TOL
+
+
+# Wide stitched panoramas (phone "Pano" mode, cylindrical stitches, drone
+# horizontal panos) are 2.5:1 and wider. The listing export centre-crops every
+# still to 4:3 landscape — on a 3:1 pano that discards over half the frame and
+# on a 6:1 pano nearly four fifths, so the client gets a slice the photographer
+# never framed. Hold uncropped for review instead of auto-delivering the slice.
+WIDE_PANO_MIN_ASPECT = 2.5  # 4:3 crop keeps ≤53% of the width at this ratio
+_EXIF_ORIENTATION_TAG = 0x0112
+_EXIF_ROTATED_90 = (5, 6, 7, 8)
+
+
+def is_wide_panorama(image_bytes: Optional[bytes]) -> bool:
+    """True when upload bytes are a wide (≥2.5:1, as displayed) stitched panorama.
+
+    Uses the displayed orientation (EXIF 5–8 swap width/height). 360°
+    equirect spheres are classified by ``is_equirect_360`` first; 16:9, 2:1
+    and 21:9 frames stay False (their 4:3 crop keeps most of the shot).
+    Header-only read — no decode.
+    """
+    if not image_bytes:
+        return False
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            w, h = img.size
+            try:
+                orientation = int(img.getexif().get(_EXIF_ORIENTATION_TAG) or 1)
+            except Exception:
+                orientation = 1
+    except Exception:
+        return False
+    if orientation in _EXIF_ROTATED_90:
+        w, h = h, w
+    if w <= 0 or h <= 0:
+        return False
+    return (w / float(h)) >= WIDE_PANO_MIN_ASPECT
