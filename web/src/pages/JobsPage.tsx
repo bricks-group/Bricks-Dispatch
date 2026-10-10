@@ -13,7 +13,9 @@ import {
   requiresBracketSet,
   validateHdrBracketSelection,
   validateHdrUploadsForComplete,
+  exposureBiasFromName,
 } from '../lib/bracket-require';
+import { autoNameAebFiles } from '../lib/aeb-exif';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -272,7 +274,8 @@ function JobListingPanel({
   };
 
   const onUpload = async (event: FormEvent<HTMLInputElement>) => {
-    const files = Array.from(event.currentTarget.files || []);
+    const input = event.currentTarget;
+    let files = Array.from(input.files || []);
     if (!files.length) return;
     setUploading(true);
     setErr('');
@@ -282,6 +285,10 @@ function JobListingPanel({
         return;
       }
       if (requiresBracketSet(stillsType)) {
+        // Camera AEB bursts (IMG_4031…4035) carry ±EV only in EXIF — name them
+        // <firstFrame>_±EV so the gate + post-prod merge see one bracketed angle.
+        // Unprovable frames keep the vendor's filename.
+        ({ files } = await autoNameAebFiles(files, (n) => exposureBiasFromName(n) == null));
         const issue = validateHdrBracketSelection(
           files.map((f) => f.name),
           uploads.map((u) => u.filename),
@@ -302,7 +309,7 @@ function JobListingPanel({
       setErr((e as Error).message);
     } finally {
       setUploading(false);
-      event.currentTarget.value = '';
+      input.value = '';
     }
   };
 
