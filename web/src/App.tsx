@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
-import { logout, me, isRateLimited, retryAfterSeconds } from './lib/api';
+import { logout, me, isRateLimited, retryAfterSeconds, isVendorMemberMissing, needsEmailFirst, isPhoneUser } from './lib/api';
 import { supabase } from './lib/supabase';
 import { AvailabilityPage } from './pages/AvailabilityPage';
 import { EarningsPage } from './pages/EarningsPage';
@@ -19,6 +19,7 @@ import { VisitCapturePage } from './pages/VisitCapturePage';
 import { GoogleCalendarCallbackPage } from './pages/GoogleCalendarCallbackPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { UnderReviewPage } from './pages/UnderReviewPage';
+import { AddEmailPage, NotOnTeamPage } from './pages/AddEmailPage';
 import { hasAppAccess, AuthMember } from './lib/api';
 
 function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
@@ -55,10 +56,15 @@ function ProtectedLayout() {
   const [name, setName] = useState('');
   const [rateLimited, setRateLimited] = useState(false);
   const [retryAfter, setRetryAfter] = useState<number | undefined>(undefined);
+  // Phone-OTP: confirm an email first; then a phone user with no member sees NotOnTeam.
+  const [needsEmail, setNeedsEmail] = useState(false);
+  const [notOnTeam, setNotOnTeam] = useState(false);
   const navigate = useNavigate();
 
   const refreshSession = () => {
     setLoading(true);
+    setNeedsEmail(false);
+    setNotOnTeam(false);
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) {
         setLoading(false);
@@ -73,7 +79,19 @@ function ProtectedLayout() {
           setName(m.name);
           setRateLimited(false);
         })
-        .catch((err) => {
+        .catch(async (err) => {
+          if (isVendorMemberMissing(err)) {
+            if (await needsEmailFirst()) {
+              setIsAuthed(true);
+              setNeedsEmail(true);
+              return;
+            }
+            if (await isPhoneUser()) {
+              setIsAuthed(true);
+              setNotOnTeam(true);
+              return;
+            }
+          }
           // 429 is backpressure, not an expired session. Do not send the user to /login.
           if (isRateLimited(err)) {
             setIsAuthed(true);
@@ -100,6 +118,8 @@ function ProtectedLayout() {
   if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
   if (rateLimited) return <RateLimitedNotice retryAfter={retryAfter} onRetry={refreshSession} />;
   if (!isAuthed) return <Navigate to="/login" replace />;
+  if (needsEmail) return <AddEmailPage onConfirmed={refreshSession} onLogout={onLogout} />;
+  if (notOnTeam) return <NotOnTeamPage onLogout={onLogout} />;
 
   // Pending / inactive / Applicant — block Today/Jobs/Capture until Hiring approval.
   if (!hasAppAccess(member)) {
@@ -132,6 +152,7 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [ok, setOk] = useState(false);
   const [allowed, setAllowed] = useState(false);
+  const [needsEmail, setNeedsEmail] = useState(false);
   const [rateLimited, setRateLimited] = useState(false);
   const [retryAfter, setRetryAfter] = useState<number | undefined>(undefined);
 
@@ -157,6 +178,7 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
         }
         setRateLimited(false);
         setAllowed(false);
+        setNeedsEmail(isVendorMemberMissing(err) && await needsEmailFirst());
       } finally {
         setLoading(false);
       }
@@ -169,6 +191,7 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
   if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
   if (!ok) return <Navigate to="/login" replace />;
   if (rateLimited) return <RateLimitedNotice retryAfter={retryAfter} onRetry={refreshSession} />;
+  if (needsEmail) return <AddEmailPage onConfirmed={refreshSession} />;
   if (!allowed) return <UnderReviewPage />;
   return <>{children}</>;
 }

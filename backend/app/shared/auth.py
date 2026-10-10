@@ -119,6 +119,15 @@ def ensure_assigned_to_actor(job: dict, actor_id: str, member: Optional[dict] = 
     if assignee_id not in photographer_assignee_ids(actor_id, member):
         api_error(403, "You are not assigned to this job", "job_not_assigned_to_actor")
 
+def _is_uuid(value: object) -> bool:
+    import uuid as _uuid
+    try:
+        _uuid.UUID(str(value or ""))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 async def lookup_vendor_member(actor_id: str, email: Optional[str] = None) -> Optional[dict]:
     """Map auth user → vendor_members row. Prefer Kam Owner 0c3fa7c2 over a duplicate IC."""
     from .job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
@@ -144,6 +153,19 @@ async def lookup_vendor_member(actor_id: str, email: Optional[str] = None) -> Op
         # email match below could find them.
         by_id = await db.table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
         add(getattr(by_id, "data", None))
+        # Linked Auth identity (phone-OTP users, owner-linked members): match
+        # vendor_members.auth_user_id = JWT sub. Same as the PG fallback.
+        if _is_uuid(actor_id):
+            try:
+                by_auth = await db.table("vendor_members").select("*").eq(
+                    "auth_user_id", str(actor_id)
+                ).limit(5).execute()
+                for row in getattr(by_auth, "data", None) or []:
+                    if isinstance(row, dict) and str(row.get("auth_user_id") or "") == str(actor_id):
+                        add(row)
+            except Exception as e:
+                if _pg_quota(e) or _is_rest_quota_error(e):
+                    raise
         if str(actor_id or "").lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
             kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
             add(getattr(kam, "data", None))

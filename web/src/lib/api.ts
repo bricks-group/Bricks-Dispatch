@@ -326,6 +326,35 @@ export async function loginWithGoogle(): Promise<void> {
   window.location.assign(data.url);
 }
 
+/** /vendor-os/auth/me found no vendor_members row for this Auth user (403 or masked 401). */
+export function isVendorMemberMissing(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null;
+  if (!e) return false;
+  if (e.code === 'vendor_member_not_found') return true;
+  return `${e.message || ''}`.toLowerCase().includes('vendor member not found');
+}
+
+/** Phone-OTP Auth user with no confirmed email yet (Supabase getUser, not the cached JWT). */
+export async function needsEmailFirst(): Promise<boolean> {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const u = data?.user;
+    return !!u && !u.email && !!u.phone;
+  } catch {
+    return false;
+  }
+}
+
+/** Phone-OTP Auth user (email may or may not be confirmed). */
+export async function isPhoneUser(): Promise<boolean> {
+  try {
+    const { data } = await supabase.auth.getUser();
+    return !!data?.user?.phone;
+  } catch {
+    return false;
+  }
+}
+
 export async function me(): Promise<AuthMember> {
   return api.get<AuthMember>('/api/vendor-os/auth/me');
 }
