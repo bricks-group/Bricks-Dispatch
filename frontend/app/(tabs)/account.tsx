@@ -7,6 +7,7 @@ import { actorHeaders } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { VendorProfile, mediaUrl } from '../../lib/vendor';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import DeleteAccountRow from '../../components/DeleteAccountRow';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
@@ -98,6 +99,9 @@ export default function AccountScreen() {
           <TouchableOpacity onPress={fetchProfile} style={s.retryRow} activeOpacity={0.7}>
             <Text style={s.retryText}>Retry</Text>
           </TouchableOpacity>
+          <View style={s.section}>
+            <DeleteAccountRow />
+          </View>
         </ScrollView>
       </SafeAreaView>
     );
@@ -208,7 +212,7 @@ export default function AccountScreen() {
               </View>
               <View style={s.menuText}>
                 <Text style={s.menuLabel}>Google Calendar</Text>
-                <Text style={s.menuSub}>Sync your schedule</Text>
+                <Text style={s.menuSub}>Open Google Calendar</Text>
               </View>
               <ChevronRight size={14} color={TOKENS.moonFaint} strokeWidth={1.5} />
             </TouchableOpacity>
@@ -218,7 +222,7 @@ export default function AccountScreen() {
               </View>
               <View style={s.menuText}>
                 <Text style={s.menuLabel}>Apple Calendar</Text>
-                <Text style={s.menuSub}>Sync your schedule</Text>
+                <Text style={s.menuSub}>Open the Calendar app</Text>
               </View>
               <ChevronRight size={14} color={TOKENS.moonFaint} strokeWidth={1.5} />
             </TouchableOpacity>
@@ -231,17 +235,15 @@ export default function AccountScreen() {
           <TouchableOpacity
             style={s.menuCard}
             activeOpacity={0.7}
-            onPress={async () => {
-              await Share.share({ message: `Bricks earnings export for ${profile.name}` });
-            }}
+            onPress={() => router.push('/(tabs)/payouts' as any)}
           >
             <View style={s.menuRow}>
               <View style={s.menuIconWrap}>
                 <Download size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
               </View>
               <View style={s.menuText}>
-                <Text style={s.menuLabel}>Export earnings</Text>
-                <Text style={s.menuSub}>Full payout history as CSV</Text>
+                <Text style={s.menuLabel}>Earnings</Text>
+                <Text style={s.menuSub}>Payouts and a shareable summary</Text>
               </View>
               <ChevronRight size={14} color={TOKENS.moonFaint} strokeWidth={1.5} />
             </View>
@@ -263,6 +265,10 @@ export default function AccountScreen() {
             <LogOut size={15} color={TOKENS.bad} strokeWidth={1.5} />
             <Text style={s.signOutLabel}>Sign out</Text>
           </TouchableOpacity>
+        </View>
+
+        <View style={s.section}>
+          <DeleteAccountRow />
         </View>
 
         <View style={{ height: 120 }} />

@@ -11,57 +11,37 @@ import { TOKENS } from '../constants/Theme';
 import { actorHeaders } from '../lib/api';
 import { hasAppAccess, needsRegister, isUnderReview } from '../lib/vendor';
 import { supabase } from '../lib/supabase';
+import { configureNotificationHandler, ensureAndroidChannel, registerForPush, routeForNotification } from '../lib/push';
+import { clearOfflineCache } from '../lib/offline';
+import OfflineBanner from '../components/OfflineBanner';
 import type { Session } from '@supabase/supabase-js';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 SplashScreen.preventAutoHideAsync();
 
-function useInitPushNotifications() {
+function useInitPushNotifications(signedIn: boolean) {
+  const router = useRouter();
+  // Handler, Android channel, and tap routing are set up once on launch.
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    (async () => {
-      try {
-        const Notifications = require('expo-notifications');
-        const Device = require('expo-device');
-        const Constants = require('expo-constants');
-
-        Notifications.setNotificationHandler({
-          handleNotification: async () => ({
-            shouldPlaySound: true,
-            shouldSetBadge: true,
-            shouldShowBanner: true,
-            shouldShowList: true,
-          }),
-        });
-
-        if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync('default', {
-            name: 'Bricks GO',
-            importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: TOKENS.brick,
-          });
-        }
-
-        if (!Device.isDevice) return;
-        const { status: existing } = await Notifications.getPermissionsAsync();
-        let finalStatus = existing;
-        if (existing !== 'granted') {
-          const { status } = await Notifications.requestPermissionsAsync();
-          finalStatus = status;
-        }
-        if (finalStatus !== 'granted') return;
-
-        const tokenData = await Notifications.getExpoPushTokenAsync();
-        await fetch(`${API}/api/push-tokens`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: tokenData.data, platform: Platform.OS }),
-        }).catch(() => {});
-      } catch (e) {}
-    })();
+    configureNotificationHandler();
+    ensureAndroidChannel(TOKENS.brick).catch(() => {});
+    const Notifications = require('expo-notifications');
+    const open = (resp: any) => {
+      const route = routeForNotification(resp?.notification?.request?.content?.data);
+      if (route) router.push(route as any);
+    };
+    Notifications.getLastNotificationResponseAsync?.().then((r: any) => r && open(r)).catch(() => {});
+    const sub = Notifications.addNotificationResponseReceivedListener(open);
+    return () => sub.remove();
   }, []);
+  // Permission prompt + token registration only after the vendor signs in,
+  // so the token is stored against their account (POST /api/push-tokens is auth-only).
+  useEffect(() => {
+    if (Platform.OS === 'web' || !signedIn) return;
+    registerForPush().catch(() => {});
+  }, [signedIn]);
 }
 
 function ThemedStatusBar() {
@@ -91,7 +71,10 @@ export default function RootLayout() {
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
-      if (event === 'SIGNED_OUT') setOnboardingChecked(false);
+      if (event === 'SIGNED_OUT') {
+        setOnboardingChecked(false);
+        clearOfflineCache();
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -112,7 +95,7 @@ export default function RootLayout() {
     }
   }, [session, authChecked, fontsLoaded, segments]);
 
-  useInitPushNotifications();
+  useInitPushNotifications(!!session);
 
   useEffect(() => {
     if (!fontsLoaded || !authChecked || !session) {
@@ -215,6 +198,7 @@ export default function RootLayout() {
         <Stack.Screen name="profile-edit" options={{ headerShown: false, presentation: 'card' }} />
         <Stack.Screen name="settings" options={{ headerShown: false, presentation: 'card' }} />
       </Stack>
+      <OfflineBanner />
     </ThemeProvider>
   );
 }

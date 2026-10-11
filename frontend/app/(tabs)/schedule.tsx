@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
+import { cachedJson } from '../../lib/offline';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 import { formatShootWindow } from '../../lib/shoot-window';
 
@@ -65,9 +66,8 @@ export default function ScheduleScreen() {
   const fetchJobs = useCallback(async () => {
     try {
       const headers = await actorHeaders();
-      const res = await fetch(`${API}/api/jobs`, { headers });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setAllJobs(await res.json());
+      const { data } = await cachedJson<Job[]>('jobs', `${API}/api/jobs`, { headers });
+      setAllJobs(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error('Schedule fetch error', e);
     } finally {

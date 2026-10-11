@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
@@ -11,6 +11,7 @@ import { supabase } from '../../lib/supabase';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 import BricksWordmark from '../../components/BricksWordmark';
 import { EnterFadeDown, PressScale } from '../../components/motion';
+import { APPLE_SIGN_IN_ENABLED, AppleAuthentication, appleSignInAvailable, signInWithApple } from '../../lib/apple-auth';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -23,6 +24,21 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleReady, setAppleReady] = useState(false);
+  // App Store 4.8: on iOS, Google sign-in is only offered alongside Sign in with Apple.
+  const showGoogle = Platform.OS !== 'ios' || APPLE_SIGN_IN_ENABLED;
+
+  useEffect(() => { appleSignInAvailable().then(setAppleReady); }, []);
+
+  const handleApple = async () => {
+    setError('');
+    try {
+      const ok = await signInWithApple();
+      if (ok) router.replace('/(tabs)');
+    } catch (e: any) {
+      setError(e?.message || 'Apple sign-in failed');
+    }
+  };
 
   const isFairUseAuthError = (authError: any) => {
     const msg = `${authError?.message || ''} ${authError?.status || ''}`.toLowerCase();
@@ -257,23 +273,37 @@ export default function LoginScreen() {
               }
             </PressScale>
 
-            <View style={s.divider}>
-              <View style={s.dividerLine} />
-              <Text style={s.dividerLabel}>OR</Text>
-              <View style={s.dividerLine} />
-            </View>
+            {(appleReady || showGoogle) ? (
+              <View style={s.divider}>
+                <View style={s.dividerLine} />
+                <Text style={s.dividerLabel}>OR</Text>
+                <View style={s.dividerLine} />
+              </View>
+            ) : null}
 
-            <PressScale
-              style={[s.ghostBtn, googleLoading && s.btnDisabled]}
-              onPress={handleGoogle}
-              disabled={loading || googleLoading}
-              scaleTo={0.98}
-            >
-              {googleLoading
-                ? <ActivityIndicator color={TOKENS.moon} size="small" />
-                : <Text style={s.ghostBtnText}>Continue with Google</Text>
-              }
-            </PressScale>
+            {appleReady ? (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+                cornerRadius={2}
+                style={{ height: 48, marginBottom: 12 }}
+                onPress={handleApple}
+              />
+            ) : null}
+
+            {showGoogle ? (
+              <PressScale
+                style={[s.ghostBtn, googleLoading && s.btnDisabled]}
+                onPress={handleGoogle}
+                disabled={loading || googleLoading}
+                scaleTo={0.98}
+              >
+                {googleLoading
+                  ? <ActivityIndicator color={TOKENS.moon} size="small" />
+                  : <Text style={s.ghostBtnText}>Continue with Google</Text>
+                }
+              </PressScale>
+            ) : null}
           </View>
 
           <View style={s.footer}>

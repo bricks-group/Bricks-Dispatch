@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, Navigation, Phone, Check } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
+import { cachedJson } from '../../lib/offline';
 import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { formatShootWindow, minutesUntilShoot } from '../../lib/shoot-window';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
@@ -103,20 +104,23 @@ export default function TodayScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [unread, setUnread] = useState(0);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const today = todayISO();
 
   const fetchData = useCallback(async () => {
     try {
       const headers = await actorHeaders();
-      const [jobsRes, notifRes] = await Promise.all([
-        fetch(`${API}/api/vendor-os/jobs`, { headers }),
-        fetch(`${API}/api/notifications/unread-count`, { headers }),
+      // Jobs are network-first with an on-device fallback so the day's addresses and
+      // access notes stay readable without signal. Unread count is best-effort.
+      const [jobsResult, notifData] = await Promise.all([
+        cachedJson<any>('vendor-os-jobs', `${API}/api/vendor-os/jobs`, { headers }),
+        fetch(`${API}/api/notifications/unread-count`, { headers })
+          .then(r => (r.ok ? r.json() : { count: 0 }))
+          .catch(() => ({ count: 0 })),
       ]);
-      if (!jobsRes.ok) throw new Error(`Jobs API error: ${jobsRes.status}`);
-      if (!notifRes.ok) throw new Error(`Notifications API error: ${notifRes.status}`);
-      const payload = await jobsRes.json();
-      const allJobs: Job[] = Array.isArray(payload) ? payload : (payload.items || []);
-      const notifData = await notifRes.json();
+      const payload = jobsResult.data;
+      setSavedAt(jobsResult.fromCache ? jobsResult.savedAt : null);
+      const allJobs: Job[] = Array.isArray(payload) ? payload : (payload?.items || []);
       const todayJobs = allJobs
         .filter(j => (j.scheduled_date || '').slice(0, 10) === today)
         .sort((a, b) => a.time_window_start.localeCompare(b.time_window_start));
@@ -169,6 +173,11 @@ export default function TodayScreen() {
         <View style={s.header}>
           <View>
             <Text style={s.dateLabel}>{dateLabel.toUpperCase()}</Text>
+            {savedAt ? (
+              <Text style={s.dateLabel}>
+                OFFLINE · SAVED {new Date(savedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toUpperCase()}
+              </Text>
+            ) : null}
             <Text style={s.title}>
               {loading ? '—' : jobs.length > 0 ? `${jobs.length} shoot${jobs.length !== 1 ? 's' : ''}.` : 'Clear day.'}
             </Text>
@@ -305,6 +314,7 @@ export default function TodayScreen() {
 }
 
 const s = StyleSheet.create({
+  nextCaptureWrap: {},
   container: { flex: 1, backgroundColor: TOKENS.night },
   scroll: { paddingHorizontal: 24, paddingTop: 16 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
