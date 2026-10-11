@@ -15,7 +15,7 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Bricks GO uses the camera to take listing photos, 360° tour stations, and floor plan scans on the jobs you are assigned.",
         "NSPhotoLibraryUsageDescription": "Bricks GO opens your photo library so you can pick listing photos, floor plans, and a profile photo to upload for a job.",
-        "NSLocationWhenInUseUsageDescription": "Bricks GO uses your location while the app is open to confirm you are at the property when you check in to a job, and reads the compass so 360° tour stations line up.",
+        "NSLocationWhenInUseUsageDescription": "Bricks GO uses your location while the app is open to show how far you are from the job, to record that you were on site if you report an agent no-show, and to read the compass so 360° tour stations line up.",
         "ITSAppUsesNonExemptEncryption": false
       },
       "buildNumber": "1",
@@ -163,7 +163,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Bricks GO uses your location while the app is open to confirm you are at the property when you check in to a job, and reads the compass so 360° tour stations line up.",
+          "locationWhenInUsePermission": "Bricks GO uses your location while the app is open to show how far you are from the job, to record that you were on site if you report an agent no-show, and to read the compass so 360° tour stations line up.",
           "isIosBackgroundLocationEnabled": false,
           "isAndroidBackgroundLocationEnabled": false,
           "locationAlwaysAndWhenInUsePermission": false,
