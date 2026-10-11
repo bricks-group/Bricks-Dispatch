@@ -202,7 +202,27 @@ def truncated_still_hold() -> dict:
 
 # Sentinel from _listing_export_as_is_url: file cut off — hold, no edit.
 _TRUNCATED = "__truncated_still__"
-_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _TALL_PANO, _LOW_RES, _TRUNCATED)
+
+
+ANIMATED_QC_NOTE = (
+    "Animated image (GIF / APNG / animated WebP) — held, not edited or "
+    "delivered. Editing and listing export keep only the first frame; ask the "
+    "vendor for the camera still, or deliver the clip as video."
+)
+
+
+def animated_still_hold() -> dict:
+    """QC hold for an animated image uploaded as a listing still."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": ANIMATED_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: animated clip — hold, no edit.
+_ANIMATED = "__animated_still__"
+_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _TALL_PANO, _LOW_RES, _TRUNCATED, _ANIMATED)
 
 
 def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
@@ -225,13 +245,19 @@ def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
 
     if is_truncated_still(original):
         return _TRUNCATED
+    from .image_io import is_animated_still
+
+    if is_animated_still(original):
+        return _ANIMATED
     return None
 
 
 async def _hold_equirect_360(
     db, job_id: str, upload_id: str, file_path: str, now: str, kind: str = _EQUIRECT_360
 ) -> None:
-    if kind == _TRUNCATED:
+    if kind == _ANIMATED:
+        hold = animated_still_hold()
+    elif kind == _TRUNCATED:
         hold = truncated_still_hold()
     elif kind == _LOW_RES:
         hold = low_res_hold()
@@ -249,7 +275,9 @@ async def _hold_equirect_360(
         **hold,
     })
     what = (
-        "a truncated image file (pixel data cut off) — held, not edited or delivered"
+        "an animated image (GIF/APNG/WebP) — held, not edited or delivered"
+        if kind == _ANIMATED
+        else "a truncated image file (pixel data cut off) — held, not edited or delivered"
         if kind == _TRUNCATED
         else "low resolution (long edge < 1024 px) — held, not edited or delivered"
         if kind == _LOW_RES

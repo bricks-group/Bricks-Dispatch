@@ -315,3 +315,31 @@ def is_truncated_still(image_bytes: Optional[bytes]) -> bool:
         return False
     finally:
         ImageFile.LOAD_TRUNCATED_IMAGES = prev
+
+
+# Animated formats a vendor may upload as a "still": GIF, APNG, animated WebP.
+# Every edit/export path decodes frame 0 only, so the client would get one
+# arbitrary frame of a clip (often a blank/fade-in frame) on the listing.
+# JPEG/MPO (phone gain maps, MPF previews), HEIC and TIFF are deliberately
+# excluded — their extra frames are auxiliary images, not animation.
+_ANIMATED_STILL_FORMATS = ("GIF", "PNG", "WEBP")
+
+
+def is_animated_still(image_bytes: Optional[bytes]) -> bool:
+    """True when upload bytes are an animated GIF / APNG / animated WebP.
+
+    Header-level read (Pillow ``is_animated`` / ``n_frames``). Single-frame
+    GIF/PNG/WebP and all JPEG/MPO/HEIC/TIFF return False. Unreadable bytes
+    return False (other holds own those).
+    """
+    if not image_bytes:
+        return False
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            if (img.format or "").upper() not in _ANIMATED_STILL_FORMATS:
+                return False
+            if getattr(img, "is_animated", False):
+                return True
+            return int(getattr(img, "n_frames", 1) or 1) > 1
+    except Exception:
+        return False
