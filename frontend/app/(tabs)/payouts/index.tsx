@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
@@ -44,6 +45,7 @@ function fmtDate(iso: string) {
 }
 
 export default function PayoutsScreen() {
+  const router = useRouter();
   const [data, setData] = useState<PayoutSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -139,25 +141,20 @@ export default function PayoutsScreen() {
           <View style={s.section}>
             <Text style={s.sectionLabel}>PAYOUT</Text>
             <View style={s.menuCard}>
-              {[
-                { Icon: CreditCard, label: 'Payout method', sub: '···· 9012' },
-                { Icon: FileText,   label: 'Tax documents',  sub: null },
-              ].map(({ Icon, label, sub }, i) => (
-                <TouchableOpacity
-                  key={label}
-                  style={[s.menuRow, s.rowBorder]}
-                  activeOpacity={0.7}
-                >
-                  <View style={s.menuIconWrap}>
-                    <Icon size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
-                  </View>
-                  <View style={s.menuText}>
-                    <Text style={s.menuLabel}>{label}</Text>
-                    {sub && <Text style={s.menuSub}>{sub}</Text>}
-                  </View>
-                  <ChevronRight size={14} color={TOKENS.moonFaint} strokeWidth={1.5} />
-                </TouchableOpacity>
-              ))}
+              <TouchableOpacity
+                style={[s.menuRow, s.rowBorder]}
+                activeOpacity={0.7}
+                onPress={() => router.push('/settings' as any)}
+              >
+                <View style={s.menuIconWrap}>
+                  <CreditCard size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
+                </View>
+                <View style={s.menuText}>
+                  <Text style={s.menuLabel}>Payout account</Text>
+                  <Text style={s.menuSub}>Stripe Connect setup and status</Text>
+                </View>
+                <ChevronRight size={14} color={TOKENS.moonFaint} strokeWidth={1.5} />
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -165,7 +162,7 @@ export default function PayoutsScreen() {
           <View style={s.section}>
             <TouchableOpacity style={s.exportRow} onPress={handleExport} activeOpacity={0.7}>
               <FileText size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
-              <Text style={s.exportLabel}>Export earnings history</Text>
+              <Text style={s.exportLabel}>Share earnings summary</Text>
             </TouchableOpacity>
           </View>
 
