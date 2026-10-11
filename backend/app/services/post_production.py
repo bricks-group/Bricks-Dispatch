@@ -182,7 +182,27 @@ def tall_pano_hold() -> dict:
 
 # Sentinel from _listing_export_as_is_url: tall vertical pano — hold, no crop.
 _TALL_PANO = "__tall_pano__"
-_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _TALL_PANO, _LOW_RES)
+
+
+TRUNCATED_QC_NOTE = (
+    "Truncated image file (pixel data cut off mid-file) — held, not edited or "
+    "delivered. The upload stopped before the end of the photo; ask the vendor "
+    "to re-upload the original."
+)
+
+
+def truncated_still_hold() -> dict:
+    """QC hold for a listing still whose file was cut off mid-upload."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": TRUNCATED_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: file cut off — hold, no edit.
+_TRUNCATED = "__truncated_still__"
+_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _TALL_PANO, _LOW_RES, _TRUNCATED)
 
 
 def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
@@ -201,13 +221,19 @@ def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
 
     if is_low_resolution_still(original):
         return _LOW_RES
+    from .image_io import is_truncated_still
+
+    if is_truncated_still(original):
+        return _TRUNCATED
     return None
 
 
 async def _hold_equirect_360(
     db, job_id: str, upload_id: str, file_path: str, now: str, kind: str = _EQUIRECT_360
 ) -> None:
-    if kind == _LOW_RES:
+    if kind == _TRUNCATED:
+        hold = truncated_still_hold()
+    elif kind == _LOW_RES:
         hold = low_res_hold()
     elif kind == _WIDE_PANO:
         hold = wide_pano_hold()
@@ -223,7 +249,9 @@ async def _hold_equirect_360(
         **hold,
     })
     what = (
-        "low resolution (long edge < 1024 px) — held, not edited or delivered"
+        "a truncated image file (pixel data cut off) — held, not edited or delivered"
+        if kind == _TRUNCATED
+        else "low resolution (long edge < 1024 px) — held, not edited or delivered"
         if kind == _LOW_RES
         else "a wide panorama — held uncropped (4:3 crop would discard most of the frame)"
         if kind == _WIDE_PANO

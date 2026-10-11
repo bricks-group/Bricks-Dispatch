@@ -280,3 +280,38 @@ def is_low_resolution_still(image_bytes: Optional[bytes]) -> bool:
     if w <= 0 or h <= 0:
         return False
     return max(w, h) < LOW_RES_MIN_LONG_EDGE
+
+
+def is_truncated_still(image_bytes: Optional[bytes]) -> bool:
+    """True when upload bytes open as an image but the pixel data is cut off.
+
+    A GO upload or Storage/Blob write that stops mid-file still has a valid
+    header, so size/aspect checks pass; libjpeg-based tools (Autoenhance,
+    OpenCV QC) then fill the missing rows with grey and carry on. Full decode
+    with Pillow's truncation guard forced on catches it. Trailing data after
+    the image (Samsung/Pixel motion-photo MP4, MPF) decodes fine and is not
+    flagged. Unreadable / non-image bytes return False (other holds own those).
+    """
+    if not image_bytes:
+        return False
+    from PIL import ImageFile
+
+    prev = ImageFile.LOAD_TRUNCATED_IMAGES
+    ImageFile.LOAD_TRUNCATED_IMAGES = False
+    try:
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+        except Exception:
+            return False
+        try:
+            img.load()
+        except (OSError, SyntaxError) as e:
+            msg = str(e).lower()
+            return "truncated" in msg or "broken data stream" in msg
+        except Exception:
+            return False
+        finally:
+            img.close()
+        return False
+    finally:
+        ImageFile.LOAD_TRUNCATED_IMAGES = prev
