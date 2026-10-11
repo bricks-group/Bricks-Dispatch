@@ -52,6 +52,18 @@ def ssh_base(ip, port):
     return ["ssh", "-i", a.key, "-p", str(port), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ServerAliveInterval=30", "-o", "ConnectTimeout=15", "-o", "LogLevel=ERROR", f"root@{ip}"]
 
+def push(ip, port, src_dir, names, remote_dir, excludes=()):
+    """tar-over-ssh (the stock image may not have rsync)."""
+    ex = " ".join(f"--exclude={e}" for e in excludes)
+    cmd = f"tar -C {src_dir} {ex} -cf - {' '.join(names)} | " + " ".join(ssh_base(ip, port)) + f" 'mkdir -p {remote_dir} && tar -C {remote_dir} -xf -'"
+    subprocess.run(["bash", "-o", "pipefail", "-c", cmd], check=True)
+
+def pull(ip, port, remote_dir, local_dir, excludes=()):
+    ex = " ".join(f"--exclude={e}" for e in excludes)
+    Path(local_dir).mkdir(parents=True, exist_ok=True)
+    cmd = " ".join(ssh_base(ip, port)) + f" 'tar -C {remote_dir} {ex} -cf - .' | tar -C {local_dir} -xf -"
+    return subprocess.run(["bash", "-o", "pipefail", "-c", cmd]).returncode
+
 def sh(ip, port, cmd, check=True, **kw):
     return subprocess.run(ssh_base(ip, port) + [cmd], check=check, **kw)
 
@@ -81,14 +93,13 @@ try:
         raise RuntimeError("ssh never came up")
     ev("ssh_ready", secs_from_create=round(time.time() - t_create, 1))
     sh(ip, port, "mkdir -p /root/vw /root/scenes /root/out && nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader")
-    subprocess.run(["rsync", "-a", "-e", " ".join(ssh_base(ip, port)[:-1]), f"{HERE}/requirements-train.txt", f"{HERE}/worker/",
-                    f"root@{ip}:/root/vw/"], check=True)
+    push(ip, port, str(HERE), ["requirements-train.txt"], "/root/vw")
+    push(ip, port, str(HERE / "worker"), ["."], "/root/vw")
     boot = subprocess.Popen(ssh_base(ip, port) + ["bash /root/vw/bootstrap.sh"], stdout=open(out / "bootstrap.log", "w"),
                             stderr=subprocess.STDOUT)
     t_up = time.time()
     for s in a.scenes:  # upload while bootstrap installs
-        subprocess.run(["rsync", "-a", "-e", " ".join(ssh_base(ip, port)[:-1]), "--exclude", "sfm_work",
-                        f"{a.scene_root}/{s}", f"root@{ip}:/root/scenes/"], check=True)
+        push(ip, port, a.scene_root, [s], "/root/scenes", excludes=("sfm_work",))
     ev("upload_done", secs=round(time.time() - t_up, 1))
     if boot.wait() != 0:
         raise RuntimeError("bootstrap failed, see bootstrap.log")
@@ -103,8 +114,7 @@ try:
                capture_output=True, text=True)
         dt = time.time() - t0
         (out / s).mkdir(exist_ok=True)
-        subprocess.run(["rsync", "-a", "-e", " ".join(ssh_base(ip, port)[:-1]), "--exclude", "ckpts", "--exclude", "tb",
-                        f"root@{ip}:/root/out/{s}/", str(out / s) + "/"], check=False)
+        pull(ip, port, f"/root/out/{s}", str(out / s), excludes=("./ckpts", "./tb"))
         log["scenes"][s] = {"train_ssh_wall_s": round(dt, 1), "rc": r.returncode, "stdout_tail": r.stdout[-1500:],
                             "stderr_tail": r.stderr[-1500:]}
         ev("train_done", scene=s, secs=round(dt, 1), rc=r.returncode)
