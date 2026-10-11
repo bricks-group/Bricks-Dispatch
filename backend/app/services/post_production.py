@@ -615,6 +615,41 @@ async def deliver_bracket_group_without_vendor(
     primary = sorted(loaded, key=_bias_key)[0]
     primary_id = primary.get("id")
 
+    # Same still holds as the single-frame path. AEB shooters fire 3–5 frames
+    # per press, so a lens-cap / 360 / pano / thumbnail-export accident lands
+    # here as a bracket — and used to be HDR-merged, 4:3-cropped and delivered.
+    # The primary (closest to 0 EV) decides for the whole angle.
+    primary_bytes = frames[loaded.index(primary)]
+    hold_kind = _pano_hold_kind(primary_bytes)
+    if hold_kind:
+        primary_raw = primary.get("file_url")
+        await _hold_equirect_360(db, job_id, primary_id, primary_raw, now, hold_kind)
+        await _fold_siblings(primary, primary_raw)
+        return
+
+    # A sibling exposure cut off mid-upload fails the whole merge (decode raises)
+    # and the angle fell back to a single-frame edit with no HDR. Drop it from
+    # the merge; it still folds into the primary below like a download miss.
+    from .image_io import is_truncated_still
+
+    kept = [
+        (asset, raw, name)
+        for asset, raw, name in zip(loaded, frames, filenames)
+        if asset is primary or not is_truncated_still(raw)
+    ]
+    if len(kept) < len(loaded):
+        logger.warning(
+            f"Job {job_id}: {len(loaded) - len(kept)} truncated bracket exposure(s) "
+            f"dropped from the {primary_id} merge"
+        )
+        loaded = [k[0] for k in kept]
+        frames = [k[1] for k in kept]
+        filenames = [k[2] for k in kept]
+    if len(frames) == 1:
+        primary_processed = await deliver_asset_without_vendor(db, job_id, primary)
+        await _fold_siblings(primary, primary_processed)
+        return
+
     enhanced = None
     enhance_meta = {}
     provider = "bricks_inhouse"
