@@ -222,7 +222,27 @@ def animated_still_hold() -> dict:
 
 # Sentinel from _listing_export_as_is_url: animated clip — hold, no edit.
 _ANIMATED = "__animated_still__"
-_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _TALL_PANO, _LOW_RES, _TRUNCATED, _ANIMATED)
+
+
+BLANK_QC_NOTE = (
+    "Blank frame (one flat tone — lens cap / closed shutter black, blown-out "
+    "white, or placeholder) — held, not edited or delivered. Ask the vendor "
+    "to re-upload the real still."
+)
+
+
+def blank_still_hold() -> dict:
+    """QC hold for a listing still that is a blank (single flat tone) frame."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": BLANK_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: blank frame — hold, no edit.
+_BLANK = "__blank_still__"
+_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _TALL_PANO, _LOW_RES, _TRUNCATED, _ANIMATED, _BLANK)
 
 
 def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
@@ -249,13 +269,19 @@ def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
 
     if is_animated_still(original):
         return _ANIMATED
+    from .image_io import is_blank_still
+
+    if is_blank_still(original):
+        return _BLANK
     return None
 
 
 async def _hold_equirect_360(
     db, job_id: str, upload_id: str, file_path: str, now: str, kind: str = _EQUIRECT_360
 ) -> None:
-    if kind == _ANIMATED:
+    if kind == _BLANK:
+        hold = blank_still_hold()
+    elif kind == _ANIMATED:
         hold = animated_still_hold()
     elif kind == _TRUNCATED:
         hold = truncated_still_hold()
@@ -275,7 +301,9 @@ async def _hold_equirect_360(
         **hold,
     })
     what = (
-        "an animated image (GIF/APNG/WebP) — held, not edited or delivered"
+        "a blank frame (one flat tone) — held, not edited or delivered"
+        if kind == _BLANK
+        else "an animated image (GIF/APNG/WebP) — held, not edited or delivered"
         if kind == _ANIMATED
         else "a truncated image file (pixel data cut off) — held, not edited or delivered"
         if kind == _TRUNCATED

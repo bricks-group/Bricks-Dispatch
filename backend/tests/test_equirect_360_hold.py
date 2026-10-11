@@ -15,7 +15,8 @@ from app.services import post_production as pp
 
 def _jpeg(w, h, xmp: bytes = b"") -> bytes:
     buf = io.BytesIO()
-    Image.new("RGB", (w, h), (120, 130, 140)).save(buf, format="JPEG", quality=70)
+    # Gradient, not a flat fill — a single flat tone is held as a blank frame.
+    Image.linear_gradient("L").resize((w, h)).convert("RGB").save(buf, format="JPEG", quality=70)
     data = buf.getvalue()
     if xmp:
         # Splice an APP1 XMP segment after SOI (header-level, like real cameras).

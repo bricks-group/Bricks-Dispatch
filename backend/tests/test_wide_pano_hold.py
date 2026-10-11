@@ -12,7 +12,7 @@ from tests.test_equirect_360_hold import _deliver, _install, _jpeg
 
 def _jpeg_oriented(w, h, orientation: int) -> bytes:
     buf = io.BytesIO()
-    img = Image.new("RGB", (w, h), (120, 130, 140))
+    img = Image.linear_gradient("L").resize((w, h)).convert("RGB")  # not flat (blank hold)
     exif = Image.Exif()
     exif[0x0112] = orientation
     img.save(buf, format="JPEG", quality=70, exif=exif.tobytes())

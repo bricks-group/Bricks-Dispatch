@@ -343,3 +343,35 @@ def is_animated_still(image_bytes: Optional[bytes]) -> bool:
             return int(getattr(img, "n_frames", 1) or 1) > 1
     except Exception:
         return False
+
+
+# A listing still whose whole frame is one flat tone: lens-cap / shutter-closed
+# black, blown-out white, or a grey placeholder. Measured on a 256 px luma
+# thumbnail (downsizing averages sensor noise away); real interiors, exteriors,
+# twilights and even a white-wall detail sit far above this spread.
+BLANK_STILL_MAX_SPREAD = 6
+
+
+def is_blank_still(image_bytes: Optional[bytes]) -> bool:
+    """True when the decoded still is effectively one flat tone (blank frame).
+
+    Spread = 99th minus 1st percentile of 8-bit luma on a <=256 px thumbnail,
+    so a few hot pixels or a timestamp do not rescue a lens-cap frame.
+    Unreadable / truncated bytes return False (other holds own those).
+    """
+    if not image_bytes:
+        return False
+    try:
+        import numpy as np
+
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img.draft("L", (256, 256))
+            thumb = img.convert("L")
+            thumb.thumbnail((256, 256))
+            arr = np.asarray(thumb, dtype=np.float64)
+    except Exception:
+        return False
+    if arr.size < 16:
+        return False
+    lo, hi = np.percentile(arr, [1, 99])
+    return float(hi - lo) <= BLANK_STILL_MAX_SPREAD
