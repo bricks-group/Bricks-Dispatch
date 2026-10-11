@@ -232,6 +232,32 @@ def is_wide_panorama(image_bytes: Optional[bytes]) -> bool:
     return (w / float(h)) >= WIDE_PANO_MIN_ASPECT
 
 
+def is_tall_panorama(image_bytes: Optional[bytes]) -> bool:
+    """True when upload bytes are a tall (≥1:2.5, as displayed) vertical panorama.
+
+    Vertical phone pano / vertical drone pano (stairwell, tower, façade). The
+    listing export forces landscape 4:3, so a 1:3 source would keep ~25% of its
+    height. Ordinary portrait (3:4, 2:3, 9:16) stays False. Uses the displayed
+    orientation (EXIF 5–8 swap). Header-only read — no decode.
+    """
+    if not image_bytes:
+        return False
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            w, h = img.size
+            try:
+                orientation = int(img.getexif().get(_EXIF_ORIENTATION_TAG) or 1)
+            except Exception:
+                orientation = 1
+    except Exception:
+        return False
+    if orientation in _EXIF_ROTATED_90:
+        w, h = h, w
+    if w <= 0 or h <= 0:
+        return False
+    return (h / float(w)) >= WIDE_PANO_MIN_ASPECT
+
+
 # Below this long edge (px) an upload is a thumbnail / screenshot / messaging-app
 # copy, not a listing-grade original. Internal conservative floor (not an MLS
 # rule): every camera, drone and phone Bricks vendors shoot on exceeds it by far.

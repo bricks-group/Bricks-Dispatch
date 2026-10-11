@@ -162,19 +162,41 @@ def low_res_hold() -> dict:
 
 # Sentinel from _listing_export_as_is_url: source is a thumbnail — hold, no edit.
 _LOW_RES = "__low_res__"
-_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _LOW_RES)
+
+
+TALL_PANO_QC_NOTE = (
+    "Tall vertical panorama (1:2.5 or taller) — held uncropped for review. "
+    "Listing export forces landscape 4:3 and would keep only a thin band of "
+    "the frame; deliver a framed still or the full panorama by hand."
+)
+
+
+def tall_pano_hold() -> dict:
+    """QC hold for a tall vertical panorama uploaded as a listing still."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": TALL_PANO_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: tall vertical pano — hold, no crop.
+_TALL_PANO = "__tall_pano__"
+_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _TALL_PANO, _LOW_RES)
 
 
 def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
     """Sentinel for a panorama the 4:3 listing export must not crop, else None."""
     if not original:
         return None
-    from .image_io import is_equirect_360, is_wide_panorama
+    from .image_io import is_equirect_360, is_tall_panorama, is_wide_panorama
 
     if is_equirect_360(original):
         return _EQUIRECT_360
     if is_wide_panorama(original):
         return _WIDE_PANO
+    if is_tall_panorama(original):
+        return _TALL_PANO
     from .image_io import is_low_resolution_still
 
     if is_low_resolution_still(original):
@@ -189,6 +211,8 @@ async def _hold_equirect_360(
         hold = low_res_hold()
     elif kind == _WIDE_PANO:
         hold = wide_pano_hold()
+    elif kind == _TALL_PANO:
+        hold = tall_pano_hold()
     else:
         hold = equirect_360_hold()
     await _safe_update_upload(db, upload_id, {
@@ -203,6 +227,8 @@ async def _hold_equirect_360(
         if kind == _LOW_RES
         else "a wide panorama — held uncropped (4:3 crop would discard most of the frame)"
         if kind == _WIDE_PANO
+        else "a tall vertical panorama — held uncropped (landscape 4:3 crop would keep a thin band)"
+        if kind == _TALL_PANO
         else "a 360° equirect panorama — held uncropped (not a listing still; route via Visit/tour)"
     )
     logger.warning(f"Job {job_id}: upload {upload_id} is {what}")
