@@ -276,12 +276,10 @@ async def test_progress_capture_does_not_ask_jev(monkeypatch):
     async def post(self, url, json=None, headers=None):
         raise AssertionError("progress-capture intake is not the booking auto-assign path")
 
-    # Live JobIntakeRequest.booking_id is a required str (progress-capture
-    # visits are not this endpoint). A saved job with no booking_id must
-    # still skip Jev and auto-assign.
-    data = _payload().model_dump()
-    data["booking_id"] = None
-    payload = JobIntakeRequest.model_construct(**data)
+    # Progress-capture visits omit booking_id and carry dev_capture_visit_id.
+    # They must skip Jev and auto-assign. A payload with neither id is rejected
+    # before assign (create_dispatch_job requires exactly one).
+    payload = _payload(booking_id=None, dev_capture_visit_id="visit_1")
     result, assign, _, _ = await _intake(monkeypatch, payload, _client(post))
 
     assert result["status"] == "assigned"
