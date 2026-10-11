@@ -3,6 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
+import { color, radius, layout } from '../../theme';
+import { ChevronLeft } from 'lucide-react-native';
 import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer, submitCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
 import { captureStatusCopy } from '../../lib/capture-modes';
@@ -135,7 +137,7 @@ export default function ReviewScreen() {
         <ScrollView>
           <View style={styles.hero}>
             <TouchableOpacity style={styles.backChip} onPress={goBackToJob}>
-              <Text style={styles.backChipText}>‹</Text>
+              <ChevronLeft size={22} color={color.text} strokeWidth={layout.iconStroke} />
             </TouchableOpacity>
             <Text style={styles.heroAddress}>{address}</Text>
             <Text style={styles.heroMeta}>
@@ -206,7 +208,7 @@ export default function ReviewScreen() {
       <ScrollView>
         <View style={styles.hero}>
           <TouchableOpacity style={styles.backChip} onPress={() => router.back()}>
-            <Text style={styles.backChipText}>‹</Text>
+            <ChevronLeft size={22} color={color.text} strokeWidth={layout.iconStroke} />
           </TouchableOpacity>
           <Text style={styles.heroAddress}>{address}</Text>
           <Text style={styles.heroMeta}>
@@ -312,47 +314,47 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   loadingText: { fontFamily: FONTS.mono, fontSize: 12, color: COLORS.ink, marginTop: 12, letterSpacing: 1 },
-  hero: { height: 200, backgroundColor: '#0C0B09', justifyContent: 'flex-end', padding: 18 },
-  backChip: { position: 'absolute', top: 14, left: 18, width: 32, height: 32, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
-  backChipText: { color: '#F4F1EB', fontSize: 18 },
-  heroAddress: { fontFamily: FONTS.bodySemibold, fontSize: 19, color: '#F4F1EB' },
-  heroMeta: { fontFamily: FONTS.mono, fontSize: 11, color: '#F4F1EBBB', marginTop: 2, letterSpacing: 0.5 },
+  hero: { height: 200, backgroundColor: color.surface, justifyContent: 'flex-end', padding: 18 },
+  backChip: { position: 'absolute', top: 14, left: 18, width: layout.tap, height: layout.tap, borderRadius: radius.sm, borderWidth: 1, borderColor: color.hairStrong, alignItems: 'center', justifyContent: 'center' },
+  backChipText: { color: color.text, fontSize: 18 },
+  heroAddress: { fontFamily: FONTS.bodySemibold, fontSize: 19, color: color.text },
+  heroMeta: { fontFamily: FONTS.mono, fontSize: 12, color: color.textBody, marginTop: 2, letterSpacing: 0.5 },
   body: { padding: 22 },
   sectionHead: { flexDirection: 'row', justifyContent: 'space-between' },
-  sectionLabel: { fontFamily: FONTS.mono, fontSize: 10, letterSpacing: 2, textTransform: 'uppercase', color: COLORS.ink3 },
-  sectionNote: { fontFamily: FONTS.mono, fontSize: 11, color: COLORS.ink3 },
-  roomGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12, borderWidth: 1, borderColor: COLORS.hair, borderRadius: 2 },
+  sectionLabel: { fontFamily: FONTS.mono, fontSize: 12, letterSpacing: 1.4, textTransform: 'uppercase', color: COLORS.ink3 },
+  sectionNote: { fontFamily: FONTS.mono, fontSize: 12, color: COLORS.ink3 },
+  roomGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12, borderWidth: 1, borderColor: COLORS.hair, borderRadius: radius.sm },
   roomCell: { width: '25%', paddingVertical: 12, alignItems: 'center', borderWidth: 0.5, borderColor: COLORS.hair },
   dot: { width: 8, height: 8, borderRadius: 4, marginBottom: 7 },
-  roomName: { fontFamily: FONTS.bodySemibold, fontSize: 11.5, textAlign: 'center' },
-  roomCount: { fontFamily: FONTS.mono, fontSize: 10, color: COLORS.ink3, marginTop: 3 },
+  roomName: { fontFamily: FONTS.bodySemibold, fontSize: 13, textAlign: 'center' },
+  roomCount: { fontFamily: FONTS.mono, fontSize: 12, color: COLORS.ink3, marginTop: 3 },
   emptyText: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.ink3, width: '100%', textAlign: 'center', paddingVertical: 20 },
-  warnBanner: { marginTop: 10, flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#8C2F2418', borderRadius: 2 },
-  warnText: { fontFamily: FONTS.body, fontSize: 11.5, color: COLORS.ink2, flex: 1 },
+  warnBanner: { marginTop: 10, flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: color.warnTint, borderRadius: radius.sm },
+  warnText: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.ink2, flex: 1 },
   pipeRow: { flexDirection: 'row', paddingBottom: 16 },
   pipeDot: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: COLORS.ink3 },
   pipeLine: { width: 1.5, flex: 1, minHeight: 22, backgroundColor: COLORS.ink3, marginTop: 2 },
   pipeTitle: { fontFamily: FONTS.bodySemibold, fontSize: 14, color: COLORS.ink },
-  pipeDetail: { fontFamily: FONTS.body, fontSize: 11.5, color: COLORS.ink3, marginTop: 2 },
-  runningBadge: { fontFamily: FONTS.mono, fontSize: 9.5, color: COLORS.brick, alignSelf: 'flex-start' },
+  pipeDetail: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.ink3, marginTop: 2 },
+  runningBadge: { fontFamily: FONTS.mono, fontSize: 10.5, color: COLORS.brick, alignSelf: 'flex-start' },
   submitBar: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 18, borderTopWidth: 1, borderTopColor: COLORS.hair, backgroundColor: COLORS.paper },
-  submitLabel: { fontFamily: FONTS.mono, fontSize: 9.5, letterSpacing: 1.5, textTransform: 'uppercase', color: COLORS.ink3 },
+  submitLabel: { fontFamily: FONTS.mono, fontSize: 10.5, letterSpacing: 1.4, textTransform: 'uppercase', color: COLORS.ink3 },
   submitEta: { fontFamily: FONTS.mono, fontSize: 17, color: COLORS.ink, marginTop: 2 },
-  submitBtn: { marginLeft: 'auto', backgroundColor: COLORS.brick, borderRadius: 2, paddingHorizontal: 20, paddingVertical: 13 },
-  submitBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 14, color: '#fff' },
-  errorBar: { position: 'absolute', bottom: 100, left: 20, right: 20, backgroundColor: COLORS.bad, padding: 12, borderRadius: 2 },
-  errorText: { fontFamily: FONTS.body, fontSize: 12, color: '#fff', textAlign: 'center' },
-  resultCard: { borderWidth: 1, borderRadius: 2, padding: 18, gap: 10 },
-  resultCompiling: { borderColor: 'rgba(210, 84, 43, 0.55)', backgroundColor: 'rgba(210, 84, 43, 0.08)' },
-  resultReady: { borderColor: 'rgba(47, 107, 79, 0.55)', backgroundColor: 'rgba(47, 107, 79, 0.08)' },
-  resultFailed: { borderColor: 'rgba(139, 46, 31, 0.7)', backgroundColor: 'rgba(139, 46, 31, 0.08)' },
+  submitBtn: { marginLeft: 'auto', backgroundColor: COLORS.brick, borderRadius: radius.sm, paddingHorizontal: 20, paddingVertical: 13 },
+  submitBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 14, color: color.textOnAccent },
+  errorBar: { position: 'absolute', bottom: 100, left: 20, right: 20, backgroundColor: COLORS.bad, padding: 12, borderRadius: radius.sm },
+  errorText: { fontFamily: FONTS.body, fontSize: 12, color: color.textOnAccent, textAlign: 'center' },
+  resultCard: { borderWidth: 1, borderRadius: radius.sm, padding: 18, gap: 10 },
+  resultCompiling: { borderColor: color.accentSoft, backgroundColor: color.accentTint },
+  resultReady: { borderColor: color.ok, backgroundColor: color.okTint },
+  resultFailed: { borderColor: color.bad, backgroundColor: color.badTint },
   resultTitle: { fontFamily: FONTS.bodySemibold, fontSize: 18, color: COLORS.ink },
   resultBody: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.ink2, lineHeight: 18 },
   resultActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  resultBtn: { borderWidth: 1, borderColor: COLORS.hair, borderRadius: 2, paddingHorizontal: 14, paddingVertical: 10 },
+  resultBtn: { borderWidth: 1, borderColor: COLORS.hair, borderRadius: radius.sm, paddingHorizontal: 14, paddingVertical: 10 },
   resultBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: COLORS.ink },
-  resultBtnPrimary: { backgroundColor: COLORS.brick, borderRadius: 2, paddingHorizontal: 14, paddingVertical: 10 },
-  resultBtnPrimaryText: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#fff' },
+  resultBtnPrimary: { backgroundColor: COLORS.brick, borderRadius: radius.sm, paddingHorizontal: 14, paddingVertical: 10 },
+  resultBtnPrimaryText: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: color.textOnAccent },
   resultLink: { paddingHorizontal: 8, paddingVertical: 10 },
   resultLinkText: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.brick },
   rebuildMsg: { fontFamily: FONTS.body, fontSize: 12, lineHeight: 17 },

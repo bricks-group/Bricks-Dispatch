@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Alert, Linking, Text, TouchableOpacity, View, StyleSheet, ActivityIndicator } from 'react-native';
+import { Alert, Linking } from 'react-native';
 import { Trash2 } from 'lucide-react-native';
 import { requestAccountDeletion, DELETION_INFO_URL } from '../lib/account-deletion';
 import { clearOfflineCache } from '../lib/offline';
 import { supabase } from '../lib/supabase';
-import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
+import { Row } from './ui';
 
 /** "Delete account" row for the Me tab (App Store 5.1.1(v) / Google Play account deletion). */
 export default function DeleteAccountRow() {
@@ -41,22 +41,15 @@ export default function DeleteAccountRow() {
       ],
     );
 
+  // Bare row: place inside a <Group> so it shares the list's hairlines.
   return (
-    <TouchableOpacity style={s.row} activeOpacity={0.7} onPress={confirm} disabled={busy}>
-      {busy ? <ActivityIndicator size="small" color={TOKENS.bad} /> : <Trash2 size={15} color={TOKENS.bad} strokeWidth={1.5} />}
-      <View style={{ flex: 1 }}>
-        <Text style={s.label}>Delete account</Text>
-        <Text style={s.sub}>Permanently remove your account and data</Text>
-      </View>
-    </TouchableOpacity>
+    <Row
+      icon={Trash2}
+      title="Delete account"
+      subtitle="Permanently remove your account and data"
+      tone="bad"
+      onPress={confirm}
+      loading={busy}
+    />
   );
 }
-
-const s = StyleSheet.create({
-  row: {
-    flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 14,
-    borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, backgroundColor: TOKENS.nightSoft,
-  },
-  label: { fontFamily: TYPOGRAPHY.body, fontSize: 14, color: TOKENS.bad },
-  sub: { fontFamily: TYPOGRAPHY.body, fontSize: 11, color: TOKENS.moonFaint, marginTop: 2 },
-});

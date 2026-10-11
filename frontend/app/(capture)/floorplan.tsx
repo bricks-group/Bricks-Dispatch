@@ -6,6 +6,8 @@ import * as Location from 'expo-location';
 import Svg, { Rect, Line } from 'react-native-svg';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
+import { color, radius, layout } from '../../theme';
+import { X } from 'lucide-react-native';
 import { addCaptureRoom, ensureCaptureSession, openCaptureStation, uploadCaptureFrame } from '../../lib/capture-api';
 import type { CaptureSession } from '../../lib/capture-api';
 
@@ -23,15 +25,15 @@ function CornerBox({ captured, total }: { captured: number; total: number }) {
   const on = (i: number) => i < Math.min(captured, total);
   return (
     <Svg width={160} height={110} viewBox="0 0 160 110">
-      <Rect x={18} y={12} width={124} height={86} fill="none" stroke="#F4F1EB22" strokeWidth={1.5} />
-      <Line x1={18} y1={12} x2={36} y2={12} stroke={on(0) ? COLORS.brick : '#F4F1EB40'} strokeWidth={on(0) ? 4 : 2} />
-      <Line x1={18} y1={12} x2={18} y2={30} stroke={on(0) ? COLORS.brick : '#F4F1EB40'} strokeWidth={on(0) ? 4 : 2} />
-      <Line x1={142} y1={12} x2={124} y2={12} stroke={on(1) ? COLORS.brick : '#F4F1EB40'} strokeWidth={on(1) ? 4 : 2} />
-      <Line x1={142} y1={12} x2={142} y2={30} stroke={on(1) ? COLORS.brick : '#F4F1EB40'} strokeWidth={on(1) ? 4 : 2} />
-      <Line x1={142} y1={98} x2={124} y2={98} stroke={on(2) ? COLORS.brick : '#F4F1EB40'} strokeWidth={on(2) ? 4 : 2} />
-      <Line x1={142} y1={98} x2={142} y2={80} stroke={on(2) ? COLORS.brick : '#F4F1EB40'} strokeWidth={on(2) ? 4 : 2} />
-      <Line x1={18} y1={98} x2={36} y2={98} stroke={on(3) ? COLORS.brick : '#F4F1EB40'} strokeWidth={on(3) ? 4 : 2} />
-      <Line x1={18} y1={98} x2={18} y2={80} stroke={on(3) ? COLORS.brick : '#F4F1EB40'} strokeWidth={on(3) ? 4 : 2} />
+      <Rect x={18} y={12} width={124} height={86} fill="none" stroke={color.hairStrong} strokeWidth={1.5} />
+      <Line x1={18} y1={12} x2={36} y2={12} stroke={on(0) ? COLORS.brick : color.hairStrong} strokeWidth={on(0) ? 4 : 2} />
+      <Line x1={18} y1={12} x2={18} y2={30} stroke={on(0) ? COLORS.brick : color.hairStrong} strokeWidth={on(0) ? 4 : 2} />
+      <Line x1={142} y1={12} x2={124} y2={12} stroke={on(1) ? COLORS.brick : color.hairStrong} strokeWidth={on(1) ? 4 : 2} />
+      <Line x1={142} y1={12} x2={142} y2={30} stroke={on(1) ? COLORS.brick : color.hairStrong} strokeWidth={on(1) ? 4 : 2} />
+      <Line x1={142} y1={98} x2={124} y2={98} stroke={on(2) ? COLORS.brick : color.hairStrong} strokeWidth={on(2) ? 4 : 2} />
+      <Line x1={142} y1={98} x2={142} y2={80} stroke={on(2) ? COLORS.brick : color.hairStrong} strokeWidth={on(2) ? 4 : 2} />
+      <Line x1={18} y1={98} x2={36} y2={98} stroke={on(3) ? COLORS.brick : color.hairStrong} strokeWidth={on(3) ? 4 : 2} />
+      <Line x1={18} y1={98} x2={18} y2={80} stroke={on(3) ? COLORS.brick : color.hairStrong} strokeWidth={on(3) ? 4 : 2} />
     </Svg>
   );
 }
@@ -168,7 +170,7 @@ export default function FloorPlanCaptureScreen() {
       <SafeAreaView style={{ flex: 1 }}>
         <View style={styles.topBar}>
           <TouchableOpacity style={styles.chip} onPress={() => router.back()}>
-            <Text style={styles.chipText}>✕</Text>
+            <X size={20} color={color.text} strokeWidth={layout.iconStroke} />
           </TouchableOpacity>
           <View style={{ alignItems: 'center' }}>
             <Text style={styles.roomTitle}>{address}</Text>
@@ -195,7 +197,7 @@ export default function FloorPlanCaptureScreen() {
           <TextInput
             style={styles.addInput}
             placeholder="Kitchen, Bedroom…"
-            placeholderTextColor="#F4F1EB55"
+            placeholderTextColor={color.textFaint}
             value={newRoomName}
             onChangeText={setNewRoomName}
             returnKeyType="done"
@@ -245,39 +247,39 @@ export default function FloorPlanCaptureScreen() {
 }
 
 const styles = StyleSheet.create({
-  dark: { flex: 1, backgroundColor: '#0C0B09' },
+  dark: { flex: 1, backgroundColor: color.bg },
   scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(12,11,9,0.35)' },
   permWrap: { alignItems: 'center', justifyContent: 'center', padding: 32, gap: 20 },
-  permText: { fontFamily: FONTS.body, color: '#F4F1EB', textAlign: 'center', fontSize: 14 },
-  permBtn: { backgroundColor: COLORS.brick, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 2 },
-  permBtnText: { fontFamily: FONTS.bodySemibold, color: '#fff' },
+  permText: { fontFamily: FONTS.body, color: color.text, textAlign: 'center', fontSize: 14 },
+  permBtn: { backgroundColor: COLORS.brick, paddingHorizontal: 24, paddingVertical: 12, borderRadius: radius.sm },
+  permBtnText: { fontFamily: FONTS.bodySemibold, color: color.textOnAccent },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8 },
-  chip: { width: 34, height: 34, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
-  chipText: { color: '#F4F1EB', fontSize: 16 },
-  roomTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#F4F1EB' },
-  roomSub: { fontFamily: FONTS.mono, fontSize: 10, letterSpacing: 1.4, color: COLORS.brick, marginTop: 1 },
+  chip: { width: layout.tap, height: layout.tap, borderRadius: radius.sm, borderWidth: 1, borderColor: color.hairStrong, alignItems: 'center', justifyContent: 'center' },
+  chipText: { color: color.text, fontSize: 16 },
+  roomTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: color.text },
+  roomSub: { fontFamily: FONTS.mono, fontSize: 12, letterSpacing: 1.4, color: COLORS.brick, marginTop: 1 },
   roomRow: { paddingHorizontal: 16, paddingTop: 10, gap: 8, alignItems: 'center' },
-  roomChip: { borderWidth: 1, borderColor: '#F4F1EB30', borderRadius: 2, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8 },
-  roomChipOn: { borderColor: COLORS.brick, backgroundColor: '#8C2F2433' },
-  roomChipText: { fontFamily: FONTS.mono, fontSize: 10, color: '#F4F1EBAA' },
-  roomChipTextOn: { color: '#F4F1EB' },
+  roomChip: { borderWidth: 1, borderColor: color.hairStrong, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8 },
+  roomChipOn: { borderColor: COLORS.brick, backgroundColor: color.accentTint },
+  roomChipText: { fontFamily: FONTS.mono, fontSize: 12, color: color.textBody },
+  roomChipTextOn: { color: color.text },
   addRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginTop: 8 },
   addInput: {
-    flex: 1, height: 36, borderWidth: 1, borderColor: '#F4F1EB22', borderRadius: 2,
-    color: '#F4F1EB', paddingHorizontal: 10, fontFamily: FONTS.body, fontSize: 13, backgroundColor: '#14111099',
+    flex: 1, height: layout.tap, borderWidth: 1, borderColor: color.hairStrong, borderRadius: radius.sm,
+    color: color.text, paddingHorizontal: 10, fontFamily: FONTS.body, fontSize: 13, backgroundColor: 'rgba(20, 18, 16, 0.6)',
   },
-  addBtn: { height: 36, paddingHorizontal: 12, borderRadius: 2, backgroundColor: COLORS.brick, alignItems: 'center', justifyContent: 'center' },
-  addBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 12, color: '#fff' },
-  domePct: { fontFamily: FONTS.mono, fontSize: 22, color: '#F4F1EB', marginTop: 4 },
-  domeLabel: { fontFamily: FONTS.mono, fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: '#F4F1EBAA', marginTop: 2 },
-  guidance: { marginHorizontal: 20, backgroundColor: COLORS.brick, borderRadius: 2, padding: 12 },
-  guidanceTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#fff' },
-  guidanceBody: { fontFamily: FONTS.body, fontSize: 11, color: '#FFFFFFCC', marginTop: 2 },
-  pill: { fontFamily: FONTS.mono, fontSize: 10.5, color: '#F4F1EB', textAlign: 'center', marginTop: 8 },
-  errorText: { fontFamily: FONTS.body, fontSize: 11, color: '#F4F1EB', backgroundColor: COLORS.bad, marginHorizontal: 20, marginTop: 8, padding: 8, borderRadius: 2, textAlign: 'center' },
+  addBtn: { height: layout.tap, paddingHorizontal: 12, borderRadius: radius.sm, backgroundColor: COLORS.brick, alignItems: 'center', justifyContent: 'center' },
+  addBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 12, color: color.textOnAccent },
+  domePct: { fontFamily: FONTS.mono, fontSize: 22, color: color.text, marginTop: 4 },
+  domeLabel: { fontFamily: FONTS.mono, fontSize: 10.5, letterSpacing: 1.4, textTransform: 'uppercase', color: color.textBody, marginTop: 2 },
+  guidance: { marginHorizontal: 20, backgroundColor: COLORS.brick, borderRadius: radius.sm, padding: 12 },
+  guidanceTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: color.textOnAccent },
+  guidanceBody: { fontFamily: FONTS.body, fontSize: 12, color: color.textOnAccent, marginTop: 2 },
+  pill: { fontFamily: FONTS.mono, fontSize: 10.5, color: color.text, textAlign: 'center', marginTop: 8 },
+  errorText: { fontFamily: FONTS.body, fontSize: 12, color: color.text, backgroundColor: COLORS.bad, marginHorizontal: 20, marginTop: 8, padding: 8, borderRadius: radius.sm, textAlign: 'center' },
   shutterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 18 },
-  shutterOuter: { width: 74, height: 74, borderRadius: 37, borderWidth: 3, borderColor: '#F4F1EB', alignItems: 'center', justifyContent: 'center' },
+  shutterOuter: { width: 74, height: 74, borderRadius: 37, borderWidth: 3, borderColor: color.text, alignItems: 'center', justifyContent: 'center' },
   shutterPressed: { transform: [{ scale: 0.92 }] },
   shutterInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.brick },
-  doneBtn: { width: 44, height: 44, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
+  doneBtn: { width: 44, height: 44, borderRadius: radius.sm, borderWidth: 1, borderColor: color.hairStrong, alignItems: 'center', justifyContent: 'center' },
 });

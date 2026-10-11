@@ -1,16 +1,14 @@
 import { useEffect, useState } from 'react';
-import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
-} from 'react-native';
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
-import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { color, type as T, space, radius, layout } from '../../theme';
+import { Overline, Field, Button, Notice, Divider, TextLink } from '../../components/ui';
 import BricksWordmark from '../../components/BricksWordmark';
-import { EnterFadeDown, PressScale } from '../../components/motion';
+import { EnterFadeDown } from '../../components/motion';
 import { APPLE_SIGN_IN_ENABLED, AppleAuthentication, appleSignInAvailable, signInWithApple } from '../../lib/apple-auth';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -189,151 +187,106 @@ export default function LoginScreen() {
     }
   };
 
+  const busy = loading || googleLoading;
+
   return (
     <SafeAreaView style={s.safe}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={s.flex}
-      >
-        <ScrollView
-          contentContainerStyle={s.scroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <EnterFadeDown>
-          <View style={s.wordmarkWrap}>
-            <BricksWordmark size={1.0} color={TOKENS.brick} pressable />
-          </View>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.flex}>
+        <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <EnterFadeDown style={s.flex}>
+            <View style={s.wordmarkWrap}>
+              <BricksWordmark size={1.0} color={color.accent} pressable />
+            </View>
 
-          <Text style={s.eyebrow}>DISPATCH</Text>
-          <Text style={s.heading}>{mode === 'signin' ? 'Sign in.' : 'Create account.'}</Text>
-          <Text style={s.sub}>
-            {mode === 'signin'
-              ? 'Manage jobs, uploads, and payouts.'
-              : 'Join Bricks GO — shoot, upload, get paid.'}
-          </Text>
+            <Overline style={s.eyebrow}>Bricks GO</Overline>
+            <Text style={[T.display, { color: color.text }]} accessibilityRole="header">
+              {mode === 'signin' ? 'Sign in' : 'Create your account'}
+            </Text>
+            <Text style={[T.body, s.sub]}>
+              {mode === 'signin' ? 'Your jobs, uploads and payouts.' : 'Shoot, upload, get paid.'}
+            </Text>
 
-          <View style={s.form}>
-            {!!error && (
-              <View style={s.errorBox}>
-                <Text style={s.errorText}>{error}</Text>
-              </View>
-            )}
+            <View style={s.form}>
+              {!!error && <Notice tone="bad">{error}</Notice>}
 
-            {mode === 'signup' && (
-              <View style={s.fieldGroup}>
-                <Text style={s.label}>NAME</Text>
-                <TextInput
-                  style={s.input}
+              {mode === 'signup' && (
+                <Field
+                  label="Name"
                   value={name}
                   onChangeText={setName}
                   placeholder="Your name"
-                  placeholderTextColor={TOKENS.moonFaint}
                   autoCapitalize="words"
                   autoCorrect={false}
+                  textContentType="name"
                 />
-              </View>
-            )}
-
-            <View style={s.fieldGroup}>
-              <Text style={s.label}>EMAIL</Text>
-              <TextInput
-                style={s.input}
+              )}
+              <Field
+                label="Email"
                 value={email}
                 onChangeText={setEmail}
                 placeholder="you@example.com"
-                placeholderTextColor={TOKENS.moonFaint}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
+                textContentType="emailAddress"
               />
-            </View>
-
-            <View style={s.fieldGroup}>
-              <Text style={s.label}>PASSWORD</Text>
-              <TextInput
-                style={s.input}
+              <Field
+                label="Password"
                 value={password}
                 onChangeText={setPassword}
-                placeholder="Enter password"
-                placeholderTextColor={TOKENS.moonFaint}
+                placeholder={mode === 'signin' ? 'Your password' : 'At least 8 characters'}
                 secureTextEntry
                 autoCapitalize="none"
+                textContentType={mode === 'signin' ? 'password' : 'newPassword'}
               />
+
+              <Button
+                title={mode === 'signin' ? 'Sign in' : 'Create account'}
+                onPress={mode === 'signin' ? handleLogin : handleSignup}
+                loading={loading}
+                disabled={busy}
+                style={s.primary}
+              />
+
+              {(appleReady || showGoogle) ? (
+                <View style={s.divider}>
+                  <Divider style={s.flex} />
+                  <Text style={[T.caption, { color: color.textFaint }]}>or</Text>
+                  <Divider style={s.flex} />
+                </View>
+              ) : null}
+
+              {appleReady ? (
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+                  cornerRadius={radius.sm}
+                  style={s.apple}
+                  onPress={handleApple}
+                />
+              ) : null}
+
+              {showGoogle ? (
+                <Button variant="secondary" title="Continue with Google" onPress={handleGoogle} loading={googleLoading} disabled={busy} />
+              ) : null}
             </View>
 
-            <PressScale
-              style={[s.primaryBtn, loading && s.btnDisabled]}
-              onPress={mode === 'signin' ? handleLogin : handleSignup}
-              disabled={loading || googleLoading}
-            >
-              {loading
-                ? <ActivityIndicator color={TOKENS.night} />
-                : <Text style={s.primaryBtnText}>{mode === 'signin' ? 'Sign in' : 'Create account'}</Text>
-              }
-            </PressScale>
-
-            {(appleReady || showGoogle) ? (
-              <View style={s.divider}>
-                <View style={s.dividerLine} />
-                <Text style={s.dividerLabel}>OR</Text>
-                <View style={s.dividerLine} />
-              </View>
-            ) : null}
-
-            {appleReady ? (
-              <AppleAuthentication.AppleAuthenticationButton
-                buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
-                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
-                cornerRadius={2}
-                style={{ height: 48, marginBottom: 12 }}
-                onPress={handleApple}
-              />
-            ) : null}
-
-            {showGoogle ? (
-              <PressScale
-                style={[s.ghostBtn, googleLoading && s.btnDisabled]}
-                onPress={handleGoogle}
-                disabled={loading || googleLoading}
-                scaleTo={0.98}
-              >
-                {googleLoading
-                  ? <ActivityIndicator color={TOKENS.moon} size="small" />
-                  : <Text style={s.ghostBtnText}>Continue with Google</Text>
-                }
-              </PressScale>
-            ) : null}
-          </View>
-
-          <View style={s.footer}>
-            {mode === 'signin' ? (
-              <>
-                <Text style={s.footerText}>New to Bricks GO?{'  '}</Text>
-                <TouchableOpacity
-                  onPress={() => { setMode('signup'); setError(''); }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={s.footerLink}>Create account</Text>
-                </TouchableOpacity>
-                <Text style={s.footerText}>{'  ·  '}</Text>
-                <TouchableOpacity onPress={() => router.push('/onboarding/slides')} activeOpacity={0.7}>
-                  <Text style={s.footerLink}>Apply</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={s.footerText}>Already have an account?{'  '}</Text>
-                <TouchableOpacity
-                  onPress={() => { setMode('signin'); setError(''); }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={s.footerLink}>Sign in</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-
+            <View style={s.footer}>
+              {mode === 'signin' ? (
+                <>
+                  <View style={s.footerLine}>
+                    <Text style={[T.bodySm, { color: color.textMuted }]}>New to Bricks GO?</Text>
+                    <TextLink tone="accent" title="Create account" onPress={() => { setMode('signup'); setError(''); }} />
+                  </View>
+                  <TextLink title="Apply to shoot with Bricks" onPress={() => router.push('/onboarding/slides')} />
+                </>
+              ) : (
+                <View style={s.footerLine}>
+                  <Text style={[T.bodySm, { color: color.textMuted }]}>Already have an account?</Text>
+                  <TextLink tone="accent" title="Sign in" onPress={() => { setMode('signin'); setError(''); }} />
+                </View>
+              )}
+            </View>
           </EnterFadeDown>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -342,112 +295,16 @@ export default function LoginScreen() {
 }
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: TOKENS.night },
+  safe: { flex: 1, backgroundColor: color.bg },
   flex: { flex: 1 },
-  scroll: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 40 },
-
-  wordmarkWrap: { paddingTop: 28, paddingBottom: 32 },
-
-  eyebrow: {
-    fontFamily: TYPOGRAPHY.mono,
-    fontSize: 10,
-    color: TOKENS.moonFaint,
-    letterSpacing: 2,
-    marginBottom: 10,
-  },
-  heading: {
-    fontFamily: TYPOGRAPHY.heading,
-    fontSize: 34,
-    fontWeight: '500',
-    letterSpacing: -1,
-    color: TOKENS.moon,
-  },
-  sub: {
-    fontFamily: TYPOGRAPHY.body,
-    fontSize: 14,
-    color: TOKENS.moonMute,
-    marginTop: 6,
-    marginBottom: 36,
-  },
-
-  form: { gap: 14 },
-
-  errorBox: {
-    backgroundColor: '#2A1510',
-    borderRadius: TOKENS.radius,
-    padding: 12,
-  },
-  errorText: { color: '#F4A195', fontSize: 13, fontFamily: TYPOGRAPHY.body },
-
-  fieldGroup: { gap: 6 },
-  label: {
-    fontFamily: TYPOGRAPHY.mono,
-    fontSize: 10,
-    color: TOKENS.moonMute,
-    letterSpacing: 1.4,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: TOKENS.nightHairS,
-    borderRadius: TOKENS.radius,
-    padding: 14,
-    fontSize: 15,
-    color: TOKENS.moon,
-    backgroundColor: TOKENS.nightSoft,
-    fontFamily: TYPOGRAPHY.body,
-  },
-
-  primaryBtn: {
-    marginTop: 4,
-    backgroundColor: TOKENS.brick,
-    borderRadius: TOKENS.radius,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryBtnText: {
-    color: TOKENS.moon,
-    fontSize: 15,
-    fontWeight: '500',
-    fontFamily: TYPOGRAPHY.body,
-  },
-  btnDisabled: { opacity: 0.5 },
-
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginVertical: 2,
-  },
-  dividerLine: { flex: 1, height: 1, backgroundColor: TOKENS.nightHairS },
-  dividerLabel: {
-    fontFamily: TYPOGRAPHY.mono,
-    fontSize: 10,
-    color: TOKENS.moonFaint,
-    letterSpacing: 1.4,
-  },
-
-  ghostBtn: {
-    borderWidth: 1,
-    borderColor: TOKENS.nightHairS,
-    borderRadius: TOKENS.radius,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ghostBtnText: {
-    color: TOKENS.moonSoft,
-    fontSize: 14,
-    fontFamily: TYPOGRAPHY.body,
-  },
-
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 'auto',
-    paddingTop: 40,
-  },
-  footerText: { fontSize: 13, color: TOKENS.moonMute, fontFamily: TYPOGRAPHY.body },
-  footerLink: { fontSize: 13, color: TOKENS.brick, fontFamily: TYPOGRAPHY.body },
+  scroll: { flexGrow: 1, paddingHorizontal: layout.gutter, paddingBottom: space[24] },
+  wordmarkWrap: { paddingTop: space[24], paddingBottom: space[48] },
+  eyebrow: { marginBottom: space[10] },
+  sub: { color: color.textMuted, marginTop: space[8], marginBottom: space[32] },
+  form: { gap: space[16] },
+  primary: { marginTop: space[8] },
+  divider: { flexDirection: 'row', alignItems: 'center', gap: space[12] },
+  apple: { height: layout.control },
+  footer: { marginTop: 'auto', paddingTop: space[36], alignItems: 'center' },
+  footerLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' },
 });

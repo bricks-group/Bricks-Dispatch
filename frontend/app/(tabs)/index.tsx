@@ -1,16 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl, Linking,
-} from 'react-native';
+import { View, Text, StyleSheet, RefreshControl, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Bell, Navigation, Phone, Check } from 'lucide-react-native';
+import { Bell, Navigation, Phone, Check as CheckIcon, Sun, Box, LayoutGrid, Video } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { cachedJson } from '../../lib/offline';
 import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { formatShootWindow, minutesUntilShoot } from '../../lib/shoot-window';
-import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { color, type as T, space, radius, layout, hairline } from '../../theme';
+import { Screen, PageHeader, Section, Group, Row, Button, IconButton, StatGrid, Avatar, EmptyState, LoadingState } from '../../components/ui';
 import { EnterFadeDown, PressScale } from '../../components/motion';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
@@ -25,7 +22,7 @@ type Job = {
   preferred_window?: string | null;
   job_type: string; status: string;
   scheduled_date: string; package_name: string | null; package_price: number | null;
-  agent_name: string | null; client_instructions: string | null;
+  agent_name: string | null; agent_phone?: string | null; client_instructions: string | null;
   checklist: ChecklistItem[];
   package_id?: string | null;
   add_ons?: unknown;
@@ -41,61 +38,28 @@ function fmtMoney(amount: number) {
   return `$${amount.toLocaleString('en-US')}`;
 }
 
-function initials(name: string | null) {
-  if (!name) return '??';
-  return name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
-}
-
 function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' | 'floorplan' | 'visit' | 'mode') => void }) {
   const flags = jobCaptureModes(job);
   const hasMode = flags.tour || flags.floorplan || flags.visit;
   if (!hasMode) {
-    return (
-      <View style={s.todayCaptureNone}>
-        <Text style={s.todayCaptureNoneText}>{captureNeitherCopy(flags)}</Text>
-      </View>
-    );
+    return <Text style={[T.bodySm, s.captureNone]}>{captureNeitherCopy(flags)}</Text>;
   }
   const modes = [flags.tour, flags.floorplan, flags.visit].filter(Boolean).length;
   if (modes > 1) {
     return (
-      <View style={s.todayCaptureRow}>
-        {flags.tour ? (
-          <PressScale style={s.todayCaptureBtn} onPress={() => onOpen('splat')}>
-            <Text style={s.todayCaptureBtnText}>Start Capture · 3D tour</Text>
-          </PressScale>
-        ) : null}
-        {flags.floorplan ? (
-          <PressScale style={s.todayCaptureBtn} onPress={() => onOpen('floorplan')}>
-            <Text style={s.todayCaptureBtnText}>Start Capture · Floor plan</Text>
-          </PressScale>
-        ) : null}
-        {flags.visit ? (
-          <PressScale style={s.todayCaptureBtn} onPress={() => onOpen('visit')}>
-            <Text style={s.todayCaptureBtnText}>Deliver Visit</Text>
-          </PressScale>
-        ) : null}
-      </View>
+      <Group style={s.captureStack}>
+        {flags.tour ? <Row icon={Box} title="Start capture · 3D tour" chevron onPress={() => onOpen('splat')} /> : null}
+        {flags.floorplan ? <Row icon={LayoutGrid} title="Start capture · Floor plan" chevron onPress={() => onOpen('floorplan')} /> : null}
+        {flags.visit ? <Row icon={Video} title="Deliver visit" chevron onPress={() => onOpen('visit')} /> : null}
+      </Group>
     );
   }
   if (flags.visit) {
-    return (
-      <View style={s.todayCaptureRow}>
-        <PressScale style={s.todayCaptureBtn} onPress={() => onOpen('visit')}>
-          <Text style={s.todayCaptureBtnText}>Deliver Visit</Text>
-        </PressScale>
-      </View>
-    );
+    return <View style={s.captureStack}><Button variant="secondary" title="Deliver visit" onPress={() => onOpen('visit')} /></View>;
   }
   const kind = flags.tour ? 'splat' : 'floorplan';
-  const label = flags.tour ? 'Start Capture' : 'Start Capture · Floor plan';
-  return (
-    <View style={s.todayCaptureRow}>
-      <PressScale style={s.todayCaptureBtn} onPress={() => onOpen(kind)}>
-        <Text style={s.todayCaptureBtnText}>{label}</Text>
-      </PressScale>
-    </View>
-  );
+  const label = flags.tour ? 'Start capture' : 'Start capture · Floor plan';
+  return <View style={s.captureStack}><Button variant="secondary" title={label} onPress={() => onOpen(kind)} /></View>;
 }
 
 export default function TodayScreen() {
@@ -161,214 +125,148 @@ export default function TodayScreen() {
     router.push({ pathname, params: { jobId: job.id, kind } } as any);
   };
 
-  return (
-    <SafeAreaView style={s.container} edges={['top']}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={TOKENS.brick} />}
-        contentContainerStyle={s.scroll}
-      >
-        <EnterFadeDown distance={8} duration={240}>
-        {/* Header */}
-        <View style={s.header}>
-          <View>
-            <Text style={s.dateLabel}>{dateLabel.toUpperCase()}</Text>
-            {savedAt ? (
-              <Text style={s.dateLabel}>
-                OFFLINE · SAVED {new Date(savedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toUpperCase()}
-              </Text>
-            ) : null}
-            <Text style={s.title}>
-              {loading ? '—' : jobs.length > 0 ? `${jobs.length} shoot${jobs.length !== 1 ? 's' : ''}.` : 'Clear day.'}
-            </Text>
-          </View>
-          <TouchableOpacity style={s.bellWrap} onPress={() => router.push('/notifications')} activeOpacity={0.7}>
-            <Bell size={18} color={TOKENS.moonMute} strokeWidth={1.5} />
-            {unread > 0 && (
-              <View style={s.unreadBadge}>
-                <Text style={s.unreadText}>{unread > 9 ? '9+' : unread}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        </View>
+  const typeLabel = (t?: string) => (t ? t.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : '');
+  const savedLabel = savedAt
+    ? `Offline · saved ${new Date(savedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+    : undefined;
 
-        {!loading && jobs.length === 0 ? (
-          <View style={s.empty}>
-            <Text style={s.emptyText}>No jobs scheduled for today.</Text>
-          </View>
+  return (
+    <Screen
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={color.accent} />}
+    >
+      <EnterFadeDown>
+        <PageHeader
+          overline={dateLabel}
+          title={loading ? 'Today' : jobs.length > 0 ? `${jobs.length} shoot${jobs.length !== 1 ? 's' : ''} today` : 'Clear day'}
+          subtitle={savedLabel}
+          right={
+            <IconButton icon={Bell} label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'} badge={unread > 0} onPress={() => router.push('/notifications')} />
+          }
+        />
+
+        {loading && jobs.length === 0 ? (
+          <LoadingState />
+        ) : jobs.length === 0 ? (
+          <EmptyState icon={Sun} title="Nothing on the books" body="New jobs appear here the morning of the shoot. Pull down to refresh." />
         ) : (
           <>
-            {/* Next up card */}
             {nextJob && (
-              <View style={s.section}>
-                <Text style={s.sectionLabel}>
-                  {minsUntil ? `NEXT UP · IN ${minsUntil} MIN` : 'NEXT UP · NOW'}
-                </Text>
+              <Section first label={minsUntil ? `Next up · in ${minsUntil} min` : 'Next up · now'}>
                 <PressScale
                   style={s.nextCard}
+                  scaleTo={0.99}
                   onPress={() => router.push(`/job/${nextJob.id}`)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open job at ${nextJob.address}`}
                 >
-                  <Text style={s.nextAddress}>{nextJob.address.toLowerCase()}</Text>
-                  <Text style={s.nextMeta}>
-                    {[nextJob.city, nextJob.state].filter(Boolean).join(' · ').toUpperCase()}
-                    {nextJob.job_type ? ` · ${nextJob.job_type.replace(/_/g, ' ').toUpperCase()}` : ''}
+                  <Text style={[T.title, { color: color.text }]}>{nextJob.address}</Text>
+                  <Text style={[T.bodySm, s.nextMeta]}>
+                    {[[nextJob.city, nextJob.state].filter(Boolean).join(', '), typeLabel(nextJob.job_type)].filter(Boolean).join(' · ')}
                   </Text>
-
-                  {/* Info grid */}
-                  <View style={s.nextGrid}>
-                    {[
-                      ['TIME', formatShootWindow(nextJob)],
-                      ['AGENT', nextJob.agent_name ? initials(nextJob.agent_name) : '—'],
-                      ['PACKAGE', nextJob.package_name || '—'],
-                    ].map(([label, value], i) => (
-                      <View key={label} style={[s.nextGridCell, i > 0 && s.nextGridDivider]}>
-                        <Text style={s.nextGridLabel}>{label}</Text>
-                        <Text style={s.nextGridValue}>{value}</Text>
+                  <StatGrid
+                    items={[
+                      { label: 'Window', value: formatShootWindow(nextJob) },
+                      { label: 'Package', value: nextJob.package_name || '—' },
+                    ]}
+                  />
+                  {nextJob.agent_name ? (
+                    <View style={s.agentLine}>
+                      <Avatar name={nextJob.agent_name} size={32} />
+                      <View style={s.flex}>
+                        <Text style={[T.callout, { color: color.text }]}>{nextJob.agent_name}</Text>
+                        <Text style={[T.caption, { color: color.textMuted }]}>Listing agent</Text>
                       </View>
-                    ))}
-                  </View>
-
-                  {/* CTAs */}
-                  <View style={s.nextActions}>
-                    <PressScale style={s.accentBtn} onPress={() => openMaps(nextJob)} scaleTo={0.96}>
-                      <Navigation size={13} color="#FFF" strokeWidth={2} />
-                      <Text style={s.accentBtnText}>NAVIGATE</Text>
-                    </PressScale>
-                    <PressScale style={s.ghostBtn} scaleTo={0.96}>
-                      <Phone size={15} color={TOKENS.moonMute} strokeWidth={1.5} />
-                    </PressScale>
-                  </View>
+                      {nextJob.agent_phone ? (
+                        <IconButton icon={Phone} label={`Call ${nextJob.agent_name}`} outline onPress={() => Linking.openURL(`tel:${nextJob.agent_phone}`)} />
+                      ) : null}
+                    </View>
+                  ) : null}
+                  <Button icon={Navigation} title="Navigate" onPress={() => openMaps(nextJob)} style={s.navigate} />
                 </PressScale>
                 {['assigned', 'in_progress'].includes(nextJob.status || '') ? (
-                  <View style={s.nextCaptureWrap}>
-                    <TodayCaptureEntry
-                      job={nextJob}
-                      onOpen={(kind) => openCapture(nextJob, kind)}
-                    />
-                  </View>
+                  <TodayCaptureEntry job={nextJob} onOpen={(kind) => openCapture(nextJob, kind)} />
                 ) : null}
-              </View>
+              </Section>
             )}
 
-            {/* Pre-shoot checklist for next job */}
             {nextJob && (nextJob.checklist?.length ?? 0) > 0 && (
-              <View style={s.section}>
-                <Text style={s.sectionLabel}>SHOOT CHECKLIST · ONE VISIT</Text>
-                <View style={s.checkCard}>
-                  {(nextJob.checklist || []).slice(0, 12).map((item, i, arr) => (
-                    <View key={item.id} style={[s.checkRow, i < arr.length - 1 && s.checkRowBorder]}>
-                      <View style={item.completed ? s.chkFilled : s.chkEmpty}>
-                        {item.completed && <Check size={9} color="#FFF" strokeWidth={3} />}
+              <Section label="Shoot checklist">
+                <Group>
+                  {(nextJob.checklist || []).slice(0, 12).map((item) => (
+                    <View key={item.id} style={s.checkRow}>
+                      <View style={[s.check, item.completed && s.checkOn]}>
+                        {item.completed && <CheckIcon size={12} color={color.textOnAccent} strokeWidth={2.5} />}
                       </View>
-                      <Text style={item.completed ? s.checkLabelDone : s.checkLabel} numberOfLines={1}>
+                      <Text style={[T.body, s.flex, { color: item.completed ? color.textFaint : color.text }, item.completed && s.strike]}>
                         {item.label}
                       </Text>
                     </View>
                   ))}
-                </View>
-              </View>
+                </Group>
+              </Section>
             )}
 
-            {/* Later today */}
             {laterJobs.length > 0 && (
-              <View style={s.section}>
-                <Text style={s.sectionLabel}>LATER TODAY</Text>
-                <View style={s.laterList}>
-                  {laterJobs.map((job, i) => {
+              <Section label="Later today">
+                <Group>
+                  {laterJobs.map((job) => {
                     const payout = job.package_price ? Math.round(job.package_price * VENDOR_RATE) : null;
                     const active = ['assigned', 'in_progress'].includes(job.status || '');
                     return (
-                      <View key={job.id} style={[i < laterJobs.length - 1 && s.laterRowBorder]}>
+                      <View key={job.id}>
                         <PressScale
                           style={s.laterRow}
+                          scaleTo={0.99}
                           onPress={() => router.push(`/job/${job.id}`)}
-                          scaleTo={0.98}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open job at ${job.address}`}
                         >
-                          <Text style={s.laterTime} numberOfLines={2}>{formatShootWindow(job)}</Text>
-                          <View style={s.laterDivider} />
-                          <View style={s.laterInfo}>
-                            <Text style={s.laterAddress}>{job.address.toLowerCase()}</Text>
-                            <Text style={s.laterType}>{job.job_type.replace(/_/g, ' ')}</Text>
+                          <Text style={[T.dataSm, s.laterTime]}>{formatShootWindow(job)}</Text>
+                          <View style={s.flex}>
+                            <Text style={[T.bodyMedium, { color: color.text }]}>{job.address}</Text>
+                            <Text style={[T.caption, { color: color.textMuted }]}>{typeLabel(job.job_type)}</Text>
                           </View>
-                          {payout && <Text style={s.laterPayout}>{fmtMoney(payout)}</Text>}
+                          {payout ? <Text style={[T.data, { color: color.text }]}>{fmtMoney(payout)}</Text> : null}
                         </PressScale>
                         {active ? (
-                          <View style={s.laterCaptureWrap}>
+                          <View style={s.laterCapture}>
                             <TodayCaptureEntry job={job} onOpen={(kind) => openCapture(job, kind)} />
                           </View>
                         ) : null}
                       </View>
                     );
                   })}
-                </View>
-              </View>
+                </Group>
+              </Section>
             )}
           </>
         )}
-
-        <View style={{ height: 120 }} />
-        </EnterFadeDown>
-      </ScrollView>
-    </SafeAreaView>
+      </EnterFadeDown>
+    </Screen>
   );
 }
 
 const s = StyleSheet.create({
-  nextCaptureWrap: {},
-  container: { flex: 1, backgroundColor: TOKENS.night },
-  scroll: { paddingHorizontal: 24, paddingTop: 16 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  empty: { paddingTop: 60, alignItems: 'center' },
-  emptyText: { fontFamily: TYPOGRAPHY.body, color: TOKENS.moonFaint, fontSize: 13 },
-
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 },
-  dateLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 10, color: TOKENS.moonFaint, letterSpacing: 1.4, marginBottom: 4 },
-  title: { fontSize: 26, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, letterSpacing: -0.5 },
-  bellWrap: { position: 'relative', padding: 4, marginTop: 4 },
-  unreadBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: TOKENS.brick, borderRadius: 8, minWidth: 15, height: 15, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
-  unreadText: { color: '#FFF', fontSize: 8, fontFamily: TYPOGRAPHY.monoMedium },
-
-  section: { marginBottom: 28 },
-  sectionLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.brick, letterSpacing: 1.8, marginBottom: 10 },
-
-  nextCard: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: 2, padding: 18 },
-  nextAddress: { fontSize: 22, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, letterSpacing: -0.4, marginBottom: 4 },
-  nextMeta: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moonFaint, letterSpacing: 0.6, marginBottom: 16 },
-
-  nextGrid: { flexDirection: 'row', borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, marginBottom: 14, overflow: 'hidden' },
-  nextGridCell: { flex: 1, padding: 10 },
-  nextGridDivider: { borderLeftWidth: 1, borderLeftColor: TOKENS.nightHair },
-  nextGridLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 8, color: TOKENS.moonFaint, letterSpacing: 1.4, marginBottom: 5 },
-  nextGridValue: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moon, lineHeight: 15 },
-
-  nextActions: { flexDirection: 'row', gap: 8 },
-  accentBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: TOKENS.brick, paddingVertical: 12, borderRadius: 2 },
-  accentBtnText: { color: '#FFF', fontFamily: TYPOGRAPHY.monoMedium, fontSize: 11, letterSpacing: 1.2 },
-  ghostBtn: { width: 44, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
-
-  checkCard: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
-  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 11 },
-  checkRowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  chkFilled: { width: 17, height: 17, borderRadius: 2, backgroundColor: TOKENS.brick, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  chkEmpty: { width: 17, height: 17, borderRadius: 2, borderWidth: 1.5, borderColor: TOKENS.nightHairS, flexShrink: 0 },
-  checkLabel: { fontFamily: TYPOGRAPHY.body, flex: 1, fontSize: 13, color: TOKENS.moon },
-  checkLabelDone: { fontFamily: TYPOGRAPHY.body, flex: 1, fontSize: 13, color: TOKENS.moonFaint, textDecorationLine: 'line-through' },
-
-  laterList: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
-  laterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 14 },
-  laterRowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  laterTime: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moon, width: 92, lineHeight: 14 },
-  laterDivider: { width: 1, height: 28, backgroundColor: TOKENS.nightHair },
-  laterInfo: { flex: 1, paddingLeft: 4 },
-  laterAddress: { fontFamily: TYPOGRAPHY.heading, fontSize: 14, color: TOKENS.moon, marginBottom: 2 },
-  laterType: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moonFaint, textTransform: 'capitalize' },
-  laterPayout: { fontFamily: TYPOGRAPHY.mono, fontSize: 13, color: TOKENS.moon },
-  laterCaptureWrap: { paddingHorizontal: 14, paddingBottom: 12 },
-  todayCaptureRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
-  todayCaptureBtn: {
-    backgroundColor: TOKENS.moon, borderRadius: 2, paddingHorizontal: 12, paddingVertical: 10,
+  flex: { flex: 1 },
+  nextCard: {
+    backgroundColor: color.surface, borderWidth: hairline, borderColor: color.hairStrong,
+    borderRadius: radius.sm, padding: space[18], gap: space[16],
   },
-  todayCaptureBtnText: { color: TOKENS.ink, fontFamily: TYPOGRAPHY.monoMedium, fontSize: 11, letterSpacing: 0.4 },
-  todayCaptureNone: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: TOKENS.nightHair },
-  todayCaptureNoneText: { fontFamily: TYPOGRAPHY.body, fontSize: 12, color: TOKENS.moonMute, lineHeight: 17 },
+  nextMeta: { color: color.textMuted, marginTop: -space[10] },
+  agentLine: { flexDirection: 'row', alignItems: 'center', gap: space[12] },
+  navigate: { marginTop: space[4] },
+  captureStack: { gap: space[8], marginTop: space[10] },
+  captureNone: { color: color.textMuted, marginTop: space[12] },
+
+  checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space[12], paddingHorizontal: space[16], paddingVertical: space[14] },
+  check: {
+    width: 20, height: 20, marginTop: 1, borderRadius: radius.sm, borderWidth: 1.5, borderColor: color.hairStrong,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  checkOn: { backgroundColor: color.accent, borderColor: color.accent },
+  strike: { textDecorationLine: 'line-through' },
+
+  laterRow: { flexDirection: 'row', alignItems: 'center', gap: space[14], paddingHorizontal: space[16], paddingVertical: space[14], minHeight: layout.rowMin },
+  laterTime: { color: color.textBody, width: 88 },
+  laterCapture: { paddingHorizontal: space[16], paddingBottom: space[14] },
 });

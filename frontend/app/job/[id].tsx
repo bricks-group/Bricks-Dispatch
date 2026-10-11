@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, Linking, Modal, TextInput, KeyboardAvoidingView, Platform,
+  View, Text, StyleSheet, ScrollView, Alert, Linking, Modal, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { EnterFadeDown, PressScale, SheetEnter } from '../../components/motion';
-import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home } from 'lucide-react-native';
+import { EnterFadeDown, SheetEnter } from '../../components/motion';
+import {
+  NavBar, Footer, Section, Group, Row, Button, IconButton, TextLink, Field, Pill, Notice, StatGrid,
+  Overline, EmptyState, LoadingState, Check,
+} from '../../components/ui';
+import { User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home, Box, LayoutGrid, Video, Upload as UploadIcon } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
@@ -18,7 +21,7 @@ import {
   BRACKET_HINT,
   validateHdrUploadsForComplete,
 } from '../../lib/bracket-require';
-import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { color, type as T, space, radius, layout, hairline, type Tone } from '../../theme';
 
 const NOSHOW_GEOFENCE_METERS = 150;
 
@@ -70,13 +73,13 @@ function fmtJobType(t: string) {
   return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  pending: TOKENS.warn,
-  assigned: TOKENS.brick,
-  in_progress: TOKENS.brick,
-  completed: TOKENS.ok,
-  cancelled: TOKENS.bad,
-  agent_no_show: TOKENS.bad,
+const STATUS_TONE: Record<string, Tone> = {
+  pending: 'warn',
+  assigned: 'accent',
+  in_progress: 'accent',
+  completed: 'ok',
+  cancelled: 'bad',
+  agent_no_show: 'bad',
 };
 
 export default function JobDetailScreen() {
@@ -434,7 +437,8 @@ export default function JobDetailScreen() {
   if (loading) {
     return (
       <SafeAreaView style={s.safe}>
-        <ActivityIndicator size="large" color={TOKENS.brick} style={{ flex: 1 }} />
+        <NavBar title="Job" onBack={() => router.back()} border={false} />
+        <LoadingState />
       </SafeAreaView>
     );
   }
@@ -442,17 +446,13 @@ export default function JobDetailScreen() {
   if (!job) {
     return (
       <SafeAreaView style={s.safe}>
-        <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-          <ArrowLeft size={20} color={TOKENS.moon} strokeWidth={1.5} />
-        </TouchableOpacity>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Text style={s.emptyText}>Job not found.</Text>
-        </View>
+        <NavBar title="Job" onBack={() => router.back()} border={false} />
+        <EmptyState icon={AlertTriangle} title="Job not found" body="It may have been reassigned or cancelled." />
       </SafeAreaView>
     );
   }
 
-  const statusColor = STATUS_COLOR[job.status] || TOKENS.moonMute;
+  const statusTone: Tone = STATUS_TONE[job.status] || 'neutral';
   const isComplete = job.status === 'completed';
   const isActive = ['assigned', 'in_progress'].includes(job.status);
   const captureFlags = jobCaptureModes(job);
@@ -476,12 +476,12 @@ export default function JobDetailScreen() {
     if (captureFlags.visit) { openCapture('visit'); }
   };
   const captureStartLabel = ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1)
-    ? 'Start Capture'
+    ? 'Start capture'
     : captureFlags.visit && !captureFlags.tour && !captureFlags.floorplan
-      ? 'Deliver Visit'
+      ? 'Deliver visit'
       : captureFlags.tour
-        ? 'Start Capture'
-        : 'Start Capture · Floor plan';
+        ? 'Start capture'
+        : 'Start capture · Floor plan';
   const canReportNoShow = isActive && (() => {
     // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
     // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
@@ -496,400 +496,265 @@ export default function JobDetailScreen() {
     } catch { return false; }
   })();
 
+  const multiMode = [captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1;
+  const showArrive = ['assigned', 'in_progress', 'pending_assignment'].includes(job.status);
+  const fmtWait = `${String(Math.floor(escalationWaitSecs / 60)).padStart(2, '0')}:${String(escalationWaitSecs % 60).padStart(2, '0')}`;
+
   return (
-    <SafeAreaView style={s.safe}>
-      <View style={s.header}>
-        <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-          <ArrowLeft size={20} color={TOKENS.moon} strokeWidth={1.5} />
-        </TouchableOpacity>
-        <Text style={s.headerTitle}>JOB DETAIL</Text>
-        <View style={[s.statusBadge, { backgroundColor: statusColor + '22', borderColor: statusColor }]}>
-          <Text style={[s.statusText, { color: statusColor }]}>{job.status.toUpperCase()}</Text>
-        </View>
-      </View>
+    <SafeAreaView style={s.safe} edges={['top']}>
+      <NavBar
+        title="Job"
+        onBack={() => router.back()}
+        right={<View style={s.navPill}><Pill label={job.status.replace(/_/g, ' ')} tone={statusTone} /></View>}
+      />
 
-      <EnterFadeDown distance={10} duration={260} style={{ flex: 1 }}>
-      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
-        <View style={s.heroRow}>
-          <View style={s.heroIcon}>
-            <Camera size={22} color={TOKENS.brick} strokeWidth={1.5} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={s.jobType}>{fmtJobType(job.job_type)}</Text>
-            {job.package_name && <Text style={s.packageName}>{job.package_name}</Text>}
-          </View>
-          {job.vendor_payout != null && (
-            <Text style={s.payoutAmount}>${job.vendor_payout.toFixed(0)}</Text>
-          )}
-        </View>
-
-        <View style={s.card}>
-          <InfoRow icon={<MapPin size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="ADDRESS">
-            <Text style={s.infoValue}>{job.address}</Text>
-            <Text style={s.infoSub}>{job.city}, {job.state}</Text>
-          </InfoRow>
-          <View style={s.divider} />
-          <InfoRow icon={<Clock size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="SCHEDULED">
-            <Text style={s.infoValue}>{fmtDate(job.scheduled_date)}</Text>
-            <Text style={s.infoSub}>{formatShootWindow(job)}</Text>
-          </InfoRow>
-          {['assigned', 'in_progress', 'pending_assignment'].includes(job.status) ? (
-            <>
-              <View style={s.divider} />
-              <InfoRow icon={<Clock size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="CONFIRM ARRIVE">
-                <TextInput
-                  value={arriveAt}
-                  onChangeText={setArriveAt}
-                  placeholder="10:30"
-                  placeholderTextColor={TOKENS.moonMute}
-                  keyboardType="numbers-and-punctuation"
-                  style={{
-                    marginTop: 6,
-                    borderWidth: 1,
-                    borderColor: '#E5E0D8',
-                    borderRadius: 2,
-                    paddingHorizontal: 10,
-                    paddingVertical: 8,
-                    color: TOKENS.moon,
-                    fontSize: 16,
-                  }}
-                />
-                <TouchableOpacity
-                  onPress={confirmArrive}
-                  disabled={confirmingArrive}
-                  style={{
-                    marginTop: 8,
-                    backgroundColor: TOKENS.brick,
-                    borderRadius: 2,
-                    paddingVertical: 10,
-                    alignItems: 'center',
-                    opacity: confirmingArrive ? 0.6 : 1,
-                  }}
-                >
-                  {confirmingArrive ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={{ color: '#fff', fontWeight: '600' }}>
-                      {job.confirmed_arrive_at ? 'Update agent' : 'Tell agent'}
-                    </Text>
-                  )}
-                </TouchableOpacity>
-                <Text style={[s.infoSub, { marginTop: 6 }]}>
-                  Exact time inside the window — we email the agent.
-                </Text>
-              </InfoRow>
-            </>
-          ) : null}
-          {job.agent_name && (
-            <>
-              <View style={s.divider} />
-              <InfoRow icon={<User size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="AGENT">
-                <Text style={s.infoValue}>{job.agent_name}</Text>
-              </InfoRow>
-            </>
-          )}
-        </View>
-
-        <View style={s.card}>
-          <InfoRow icon={<User size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="ASSIGNED TO">
-            <Text style={s.infoValue}>{job.assignee_name || (job.assignee_id ? job.assignee_id : 'Unassigned')}</Text>
-          </InfoRow>
-          {isAdmin ? (
-            <>
-              <View style={s.divider} />
-              <Text style={s.assignHint}>Active photographers. Pending applicants are not listed.</Text>
-              <TouchableOpacity
-                style={[s.photogRow, !pick && s.photogRowOn]}
-                onPress={() => setPick('')}
-                activeOpacity={0.7}
-              >
-                <Text style={s.infoValue}>Unassigned</Text>
-              </TouchableOpacity>
-              {photographers.map((p) => (
-                <TouchableOpacity
-                  key={p.id}
-                  style={[s.photogRow, pick === p.id && s.photogRowOn]}
-                  onPress={() => setPick(p.id)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={s.infoValue}>{p.name}</Text>
-                  <Text style={s.infoSub}>{p.title || p.role || 'Photographer'}</Text>
-                </TouchableOpacity>
-              ))}
-              {assignError ? <Text style={s.listingErr}>{assignError}</Text> : null}
-              <View style={s.listingActions}>
-                <TouchableOpacity
-                  style={s.listingBtn}
-                  onPress={() => assignJob(pick)}
-                  disabled={assigning}
-                  activeOpacity={0.7}
-                >
-                  {assigning
-                    ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                    : <Text style={s.listingBtnText}>{job.assignee_id ? 'Reassign' : 'Assign'}</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={s.listingBtnGhost}
-                  onPress={() => assignJob('auto')}
-                  disabled={assigning}
-                  activeOpacity={0.7}
-                >
-                  <Text style={s.listingBtnGhostText}>Auto</Text>
-                </TouchableOpacity>
+      <ScrollView style={s.flex} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <EnterFadeDown>
+          {/* Hero */}
+          <View style={s.hero}>
+            <Overline>{[fmtJobType(job.job_type), job.package_name].filter(Boolean).join(' · ')}</Overline>
+            <View style={s.heroTitleRow}>
+              <View style={s.flex}>
+                <Text style={[T.display, { color: color.text }]} accessibilityRole="header">{job.address}</Text>
+                <Text style={[T.body, { color: color.textMuted }]}>{[job.city, job.state].filter(Boolean).join(', ')}</Text>
               </View>
-            </>
+              {job.vendor_payout != null ? (
+                <Text style={[T.dataLg, { color: color.text }]}>${job.vendor_payout.toFixed(0)}</Text>
+              ) : null}
+            </View>
+          </View>
+
+          <StatGrid items={[
+            { label: 'Date', value: fmtDate(job.scheduled_date) },
+            { label: 'Window', value: formatShootWindow(job) },
+          ]} />
+
+          {!isComplete && !hasCaptureMode ? (
+            <View style={s.blockGap}><Notice>{captureNeitherCopy(captureFlags)}</Notice></View>
           ) : null}
-        </View>
 
-        <View style={s.card}>
-          <InfoRow icon={<Home size={16} color={TOKENS.moonMute} strokeWidth={1.5} />} label="LISTING">
-            {job.listing_address ? (
-              <>
-                <Text style={s.infoValue}>{job.listing_address}</Text>
-                {job.listing?.city ? <Text style={s.infoSub}>{job.listing.city}</Text> : null}
-              </>
-            ) : (
-              <Text style={s.infoSub}>Not attached</Text>
-            )}
-          </InfoRow>
-          <View style={s.divider} />
-          <TextInput
-            style={s.listingInput}
-            placeholder="Search office listings or paste id"
-            placeholderTextColor={TOKENS.moonFaint}
-            value={listingQuery}
-            onChangeText={setListingQuery}
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="search"
-            onSubmitEditing={() => searchListings()}
-          />
-          <View style={s.listingActions}>
-            <TouchableOpacity
-              style={s.listingBtn}
-              onPress={() => searchListings()}
-              disabled={listingSearching || listingSaving}
-              activeOpacity={0.7}
-            >
-              {listingSearching
-                ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                : <Text style={s.listingBtnText}>Search</Text>}
-            </TouchableOpacity>
-            {job.transaction_id ? (
-              <TouchableOpacity
-                style={s.listingBtnGhost}
-                onPress={() => attachListing(null)}
-                disabled={listingSaving}
-                activeOpacity={0.7}
-              >
-                <Text style={s.listingBtnGhostText}>Detach</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          {listingError ? <Text style={s.listingErr}>{listingError}</Text> : null}
-          {listingHits.map((hit) => (
-            <TouchableOpacity
-              key={hit.id}
-              style={s.listingHit}
-              onPress={() => attachListing(hit.id)}
-              disabled={listingSaving}
-              activeOpacity={0.7}
-            >
-              <Text style={s.infoValue}>{hit.address || 'Listing'}</Text>
-              <Text style={s.infoSub}>{[hit.city, hit.deal_type].filter(Boolean).join(' · ') || 'Office listing'}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {job.client_instructions ? (
-          <View style={s.card}>
-            <Text style={s.sectionEye}>INSTRUCTIONS</Text>
-            <Text style={s.instructions}>{job.client_instructions}</Text>
-          </View>
-        ) : null}
-
-        {job.checklist?.length > 0 ? (
-          <View style={s.card}>
-            <Text style={s.sectionEye}>SHOOT CHECKLIST · ONE VISIT</Text>
-            {job.checklist.map((item) => (
-              <View key={item.id} style={s.checkRow}>
-                <CheckCircle
-                  size={16}
-                  color={item.completed ? TOKENS.ok : TOKENS.moonMute}
-                  strokeWidth={1.5}
+          {job.agent_name ? (
+            <Section label="Agent">
+              <Group>
+                <Row
+                  icon={User}
+                  title={job.agent_name}
+                  subtitle={job.agent_phone ? job.agent_phone : 'No phone on file'}
+                  right={job.agent_phone ? <IconButton icon={Phone} label={`Call ${job.agent_name}`} outline onPress={callAgent} /> : undefined}
                 />
-                <Text style={[s.checkLabel, item.completed && s.checkLabelDone]}>
-                  {item.label}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
+              </Group>
+            </Section>
+          ) : null}
 
-        {canReportNoShow && (
-          <View style={s.noShowCard}>
-            <Text style={s.sectionEye}>NO-SHOW PROCEDURE</Text>
-            {!escalationSentAt ? (
-              <>
-                <Text style={s.noShowDesc}>
-                  If the agent or client is not present, notify them by SMS first. You may file a claim 15 minutes after notification.
-                </Text>
-                <TouchableOpacity style={s.notifyBtn} onPress={notifyAgent} disabled={escalating} activeOpacity={0.7}>
-                  {escalating
-                    ? <ActivityIndicator size="small" color={TOKENS.warn} />
-                    : <><BellRing size={14} color={TOKENS.warn} strokeWidth={1.5} /><Text style={s.notifyBtnText}>Notify Agent</Text></>
-                  }
-                </TouchableOpacity>
-              </>
-            ) : escalationWaitSecs > 0 ? (
-              <>
-                <Text style={s.noShowDesc}>SMS sent to agent. File your claim in:</Text>
-                <Text style={s.countdown}>
-                  {String(Math.floor(escalationWaitSecs / 60)).padStart(2, '0')}:{String(escalationWaitSecs % 60).padStart(2, '0')}
-                </Text>
-              </>
-            ) : (
-              <>
-                <Text style={s.noShowDesc}>Wait complete. You may now file a no-show claim.</Text>
-                <TouchableOpacity style={s.reportBtn} onPress={() => setNoShowVisible(true)} activeOpacity={0.7}>
-                  <AlertTriangle size={14} color={TOKENS.bad} strokeWidth={1.5} />
-                  <Text style={s.reportBtnText}>Report No-Show</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
-
-        {['assigned', 'in_progress'].includes(job.status) && hasCaptureMode && ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1) ? (
-          <View style={s.captureStartBlock}>
-            {captureFlags.tour ? (
-              <PressScale style={s.captureStartChip} onPress={() => openCapture('splat')}>
-                <Text style={s.captureStartChipText}>Start Capture · 3D tour</Text>
-              </PressScale>
-            ) : null}
-            {captureFlags.floorplan ? (
-              <PressScale style={s.captureStartChip} onPress={() => openCapture('floorplan')}>
-                <Text style={s.captureStartChipText}>Start Capture · Floor plan</Text>
-              </PressScale>
-            ) : null}
-            {captureFlags.visit ? (
-              <PressScale style={s.captureStartChip} onPress={() => openCapture('visit')}>
-                <Text style={s.captureStartChipText}>Deliver Visit</Text>
-              </PressScale>
-            ) : null}
-          </View>
-        ) : null}
-        {['in_progress', 'completed', 'processing'].includes(job.status) ? (
-          <PressScale
-            style={s.captureStartChip}
-            onPress={() => router.push('/(tabs)/uploads' as any)}
-          >
-            <Text style={s.captureStartChipText}>Upload stills · drone · reel · twilight · staging · floor plan</Text>
-          </PressScale>
-        ) : null}
-
-        {captureStatusRows.length > 0 ? (
-          <View style={s.captureStatusBlock}>
-            <Text style={s.sectionEye}>CAPTURE STATUS</Text>
-            {captureStatusRows.map((r) => {
-              const failed = r.status === 'failed';
-              const ready = r.status === 'delivered';
-              const compiling = ['submitted', 'splatting', 'tracing'].includes(r.status);
-              const tone = failed ? s.captureStatusFailed : ready ? s.captureStatusReady : compiling ? s.captureStatusCompiling : s.captureStatusRow;
-              return (
-                <View key={r.kind} style={[s.captureStatusRow, tone]}>
-                  <Text style={s.captureStatusLine}>{r.line}</Text>
-                  <TouchableOpacity
-                    onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId: id, kind: r.kind } } as any)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={s.captureStatusLink}>{failed ? 'Review / retry' : 'Open review'}</Text>
-                  </TouchableOpacity>
+          {showArrive ? (
+            <Section label="Arrival">
+              <View style={s.arriveRow}>
+                <View style={s.flex}>
+                  <Field
+                    value={arriveAt}
+                    onChangeText={setArriveAt}
+                    placeholder="10:30"
+                    keyboardType="numbers-and-punctuation"
+                    accessibilityLabel="Exact arrival time"
+                  />
                 </View>
-              );
-            })}
-          </View>
-        ) : null}
-
-      </ScrollView>
-      </EnterFadeDown>
-
-      <View style={s.footer}>
-        <PressScale style={s.secondaryBtn} onPress={openMaps} scaleTo={0.97}>
-          <Navigation size={16} color={TOKENS.moon} strokeWidth={1.5} />
-          <Text style={s.secondaryBtnText}>Navigate</Text>
-        </PressScale>
-        {job.agent_phone ? (
-          <PressScale style={s.secondaryBtn} onPress={callAgent} scaleTo={0.97}>
-            <Phone size={16} color={TOKENS.moon} strokeWidth={1.5} />
-            <Text style={s.secondaryBtnText}>Call Agent</Text>
-          </PressScale>
-        ) : null}
-        {!isComplete ? (
-          <>
-            <PressScale
-              style={[s.primaryBtn, actioning && { opacity: 0.5 }]}
-              onPress={markComplete}
-              disabled={actioning}
-            >
-              {actioning
-                ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                : <Text style={s.primaryBtnText}>Mark Complete</Text>
-              }
-            </PressScale>
-            {hasCaptureMode ? (
-              <PressScale
-                style={[s.captureBtn, actioning && { opacity: 0.5 }]}
-                onPress={startCapture}
-                disabled={actioning}
-              >
-                {actioning
-                  ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                  : <Text style={s.captureBtnText}>{captureStartLabel}</Text>
-                }
-              </PressScale>
-            ) : (
-              <View style={s.captureNone}>
-                <Text style={s.captureNoneText}>{captureNeitherCopy(captureFlags)}</Text>
+                <Button
+                  variant="secondary"
+                  full={false}
+                  title={job.confirmed_arrive_at ? 'Update agent' : 'Tell agent'}
+                  onPress={confirmArrive}
+                  loading={confirmingArrive}
+                />
               </View>
-            )}
-          </>
-        ) : null}
-      </View>
+              <Text style={[T.caption, s.hint]}>Your exact time inside the window. We email the agent.</Text>
+            </Section>
+          ) : null}
 
-      <Modal visible={noShowVisible} animationType="fade" transparent>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          {job.client_instructions ? (
+            <Section label="Instructions">
+              <Text style={[T.body, { color: color.textBody }]}>{job.client_instructions}</Text>
+            </Section>
+          ) : null}
+
+          {job.checklist?.length > 0 ? (
+            <Section label="Shoot checklist">
+              <Group>
+                {job.checklist.map((item) => (
+                  <View key={item.id} style={s.checkRow}>
+                    <CheckCircle size={layout.icon} color={item.completed ? color.ok : color.textFaint} strokeWidth={layout.iconStroke} />
+                    <Text style={[T.body, s.flex, { color: item.completed ? color.textFaint : color.text }, item.completed && s.strike]}>
+                      {item.label}
+                    </Text>
+                  </View>
+                ))}
+              </Group>
+            </Section>
+          ) : null}
+
+          {(isActive && hasCaptureMode && multiMode) || ['in_progress', 'completed', 'processing'].includes(job.status) ? (
+            <Section label="Capture">
+              <Group>
+                {isActive && multiMode && captureFlags.tour ? <Row icon={Box} title="3D tour" subtitle="Walk the home with the 360° camera" chevron onPress={() => openCapture('splat')} /> : null}
+                {isActive && multiMode && captureFlags.floorplan ? <Row icon={LayoutGrid} title="Floor plan" subtitle="Scan each room" chevron onPress={() => openCapture('floorplan')} /> : null}
+                {isActive && multiMode && captureFlags.visit ? <Row icon={Video} title="Deliver visit" subtitle="Hand off the virtual visit" chevron onPress={() => openCapture('visit')} /> : null}
+                {['in_progress', 'completed', 'processing'].includes(job.status) ? (
+                  <Row icon={UploadIcon} title="Upload deliverables" subtitle="Stills, drone, reel, twilight, staging, floor plan" chevron onPress={() => router.push('/(tabs)/uploads' as any)} />
+                ) : null}
+              </Group>
+            </Section>
+          ) : null}
+
+          {captureStatusRows.length > 0 ? (
+            <Section label="Capture status">
+              <Group>
+                {captureStatusRows.map((r) => {
+                  const failed = r.status === 'failed';
+                  const ready = r.status === 'delivered';
+                  return (
+                    <Row
+                      key={r.kind}
+                      title={r.line}
+                      tone={failed ? 'bad' : 'default'}
+                      right={<Pill label={failed ? 'Failed' : ready ? 'Ready' : 'Processing'} tone={failed ? 'bad' : ready ? 'ok' : 'warn'} />}
+                      chevron
+                      accessibilityLabel={failed ? 'Review or retry capture' : 'Open capture review'}
+                      onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId: id, kind: r.kind } } as any)}
+                    />
+                  );
+                })}
+              </Group>
+            </Section>
+          ) : null}
+
+          {canReportNoShow && (
+            <Section label="No-show">
+              <Notice tone="warn">
+                {!escalationSentAt
+                  ? 'If the agent or client is not there, text them first. You can file a claim 15 minutes after.'
+                  : escalationWaitSecs > 0
+                    ? `Text sent to the agent. You can file a claim in ${fmtWait}.`
+                    : 'Wait complete. You can now file a no-show claim.'}
+              </Notice>
+              <View style={s.blockGapSm}>
+                {!escalationSentAt ? (
+                  <Button variant="secondary" icon={BellRing} title="Notify agent" onPress={notifyAgent} loading={escalating} />
+                ) : escalationWaitSecs > 0 ? null : (
+                  <Button variant="danger" icon={AlertTriangle} title="Report no-show" onPress={() => setNoShowVisible(true)} />
+                )}
+              </View>
+            </Section>
+          )}
+
+          <Section label="Assigned to">
+            <Group>
+              <Row icon={User} title={job.assignee_name || (job.assignee_id ? job.assignee_id : 'Unassigned')} />
+              {isAdmin ? (
+                <View style={s.pickBlock}>
+                  <Text style={[T.caption, { color: color.textMuted }]}>Active photographers. Pending applicants are not listed.</Text>
+                </View>
+              ) : null}
+              {isAdmin ? <Row title="Unassigned" right={<Check checked={!pick} />} onPress={() => setPick('')} /> : null}
+              {isAdmin ? photographers.map((p) => (
+                <Row key={p.id} title={p.name} subtitle={p.title || p.role || 'Photographer'} right={<Check checked={pick === p.id} />} onPress={() => setPick(p.id)} />
+              )) : null}
+            </Group>
+            {isAdmin ? (
+              <View style={s.buttonRow}>
+                {assignError ? <Text style={[T.caption, s.err]}>{assignError}</Text> : null}
+                <Button style={s.flex} title={job.assignee_id ? 'Reassign' : 'Assign'} onPress={() => assignJob(pick)} loading={assigning} />
+                <Button style={s.flex} variant="secondary" title="Auto-assign" onPress={() => assignJob('auto')} disabled={assigning} />
+              </View>
+            ) : null}
+          </Section>
+
+          <Section label="Listing">
+            <Group>
+              <Row
+                icon={Home}
+                title={job.listing_address || 'Not attached'}
+                subtitle={job.listing_address ? (job.listing?.city || undefined) : 'Link this job to an office listing'}
+              />
+            </Group>
+            <View style={s.listingSearch}>
+              <View style={s.flex}>
+                <Field
+                  placeholder="Search listings or paste an ID"
+                  value={listingQuery}
+                  onChangeText={setListingQuery}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                  onSubmitEditing={() => searchListings()}
+                  error={listingError || undefined}
+                />
+              </View>
+              <Button variant="secondary" full={false} title="Search" onPress={() => searchListings()} loading={listingSearching} disabled={listingSaving} />
+            </View>
+            {listingHits.length > 0 ? (
+              <Group style={s.blockGapSm}>
+                {listingHits.map((hit) => (
+                  <Row
+                    key={hit.id}
+                    title={hit.address || 'Listing'}
+                    subtitle={[hit.city, hit.deal_type].filter(Boolean).join(' · ') || 'Office listing'}
+                    chevron
+                    disabled={listingSaving}
+                    onPress={() => attachListing(hit.id)}
+                  />
+                ))}
+              </Group>
+            ) : null}
+            {job.transaction_id ? (
+              <TextLink title="Detach listing" onPress={() => attachListing(null)} />
+            ) : null}
+          </Section>
+
+          {!isComplete && hasCaptureMode ? (
+            <Section label="Wrap up">
+              <Button variant="secondary" icon={CheckCircle} title="Mark complete" onPress={markComplete} loading={actioning} />
+            </Section>
+          ) : null}
+        </EnterFadeDown>
+      </ScrollView>
+
+      <Footer>
+        <View style={s.buttonRowFooter}>
+          <Button style={s.flex} variant="secondary" icon={Navigation} title="Navigate" onPress={openMaps} />
+          {!isComplete ? (
+            hasCaptureMode ? (
+              <Button style={s.flex} title={captureStartLabel} onPress={startCapture} disabled={actioning} />
+            ) : (
+              <Button style={s.flex} icon={CheckCircle} title="Mark complete" onPress={markComplete} loading={actioning} />
+            )
+          ) : null}
+        </View>
+      </Footer>
+
+      <Modal visible={noShowVisible} animationType="fade" transparent onRequestClose={() => setNoShowVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.flex}>
           <View style={s.modalOverlay}>
             <SheetEnter style={s.modalSheet}>
-              <View style={s.modalHeader}>
-                <Text style={s.sectionEye}>REPORT NO-SHOW</Text>
-                <TouchableOpacity onPress={() => { setNoShowVisible(false); setNoShowNotes(''); }} hitSlop={12}>
-                  <X size={18} color={TOKENS.moonMute} strokeWidth={1.5} />
-                </TouchableOpacity>
-              </View>
-              <Text style={s.noShowDesc}>
-                GPS location will be recorded. A $60 trip fee will be added to your next payout cycle.
-              </Text>
-              <TextInput
-                style={s.notesInput}
-                placeholder="Optional: describe what happened..."
-                placeholderTextColor={TOKENS.moonFaint}
-                multiline
-                numberOfLines={4}
-                value={noShowNotes}
-                onChangeText={setNoShowNotes}
-                maxLength={500}
-              />
-              <PressScale
-                style={[s.submitBtn, submittingNoShow && { opacity: 0.5 }]}
-                onPress={submitNoShow}
-                disabled={submittingNoShow}
-              >
-                {submittingNoShow
-                  ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                  : <Text style={s.submitBtnText}>Confirm No-Show</Text>
-                }
-              </PressScale>
+              <SafeAreaView edges={['bottom']}>
+                <View style={s.modalHeader}>
+                  <Text style={[T.headline, s.flex, { color: color.text }]}>Report no-show</Text>
+                  <IconButton icon={X} label="Close" tint={color.textMuted} onPress={() => { setNoShowVisible(false); setNoShowNotes(''); }} />
+                </View>
+                <Text style={[T.bodySm, { color: color.textBody }]}>
+                  Your location is recorded. A $60 trip fee is added to your next payout.
+                </Text>
+                <View style={s.blockGapSm}>
+                  <Field
+                    placeholder="What happened? (optional)"
+                    multiline
+                    numberOfLines={4}
+                    value={noShowNotes}
+                    onChangeText={setNoShowNotes}
+                    maxLength={500}
+                    style={s.notes}
+                  />
+                </View>
+                <Button style={s.blockGapSm} variant="danger" title="Confirm no-show" onPress={submitNoShow} loading={submittingNoShow} />
+              </SafeAreaView>
             </SheetEnter>
           </View>
         </KeyboardAvoidingView>
@@ -898,201 +763,30 @@ export default function JobDetailScreen() {
   );
 }
 
-function InfoRow({ icon, label, children }: {
-  icon: React.ReactNode; label: string; children: React.ReactNode;
-}) {
-  return (
-    <View style={s.infoRow}>
-      <View style={s.infoIcon}>{icon}</View>
-      <View style={{ flex: 1 }}>
-        <Text style={s.infoLabel}>{label}</Text>
-        {children}
-      </View>
-    </View>
-  );
-}
-
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: TOKENS.night },
-
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 20, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair,
-  },
-  backBtn: { width: 36, height: 36, justifyContent: 'center', alignItems: 'flex-start' },
-  headerTitle: {
-    flex: 1, fontFamily: TYPOGRAPHY.mono, fontSize: 11,
-    color: TOKENS.moonMute, letterSpacing: 1.6,
-  },
-  statusBadge: {
-    borderWidth: 1, borderRadius: TOKENS.radius,
-    paddingHorizontal: 8, paddingVertical: 3,
-  },
-  statusText: { fontFamily: TYPOGRAPHY.mono, fontSize: 10, letterSpacing: 1 },
-
-  scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 120, gap: 12 },
-
-  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 4 },
-  heroIcon: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: TOKENS.nightSoft, justifyContent: 'center', alignItems: 'center',
-  },
-  jobType: { fontSize: 20, fontWeight: '500' as const, color: TOKENS.moon, letterSpacing: -0.4 },
-  packageName: { fontSize: 13, color: TOKENS.moonMute, marginTop: 2 },
-  payoutAmount: { fontFamily: TYPOGRAPHY.mono, fontSize: 22, color: TOKENS.moon },
-
-  card: {
-    backgroundColor: TOKENS.nightSoft, borderRadius: TOKENS.radius,
-    borderWidth: 1, borderColor: TOKENS.nightHair, padding: 16,
-  },
-  sectionEye: {
-    fontFamily: TYPOGRAPHY.mono, fontSize: 10, color: TOKENS.moonMute,
-    letterSpacing: 1.6, marginBottom: 12,
-  },
-
-  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 10 },
-  infoIcon: { width: 20, marginTop: 2 },
-  infoLabel: {
-    fontFamily: TYPOGRAPHY.mono, fontSize: 9, color: TOKENS.moonMute,
-    letterSpacing: 1.4, marginBottom: 4,
-  },
-  infoValue: { fontSize: 15, fontWeight: '500' as const, color: TOKENS.moon },
-  infoSub: { fontSize: 13, color: TOKENS.moonSoft, marginTop: 2 },
-  divider: { height: 1, backgroundColor: TOKENS.nightHair },
-
-  instructions: { fontSize: 14, color: TOKENS.moonSoft, lineHeight: 22 },
-
-  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7 },
-  checkLabel: { fontSize: 14, color: TOKENS.moonSoft, flex: 1 },
-  checkLabelDone: { color: TOKENS.moonFaint, textDecorationLine: 'line-through' },
-
-  emptyText: { fontSize: 15, color: TOKENS.moonMute },
-
-  footer: {
-    flexDirection: 'row', gap: 10,
-    paddingHorizontal: 20, paddingTop: 12, paddingBottom: 34,
-    borderTopWidth: 1, borderTopColor: TOKENS.nightHair,
-    backgroundColor: TOKENS.night,
-  },
-  secondaryBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, height: 48, borderRadius: TOKENS.radius,
-    borderWidth: 1, borderColor: TOKENS.nightHairS,
-  },
-  secondaryBtnText: { fontSize: 14, color: TOKENS.moon, fontWeight: '500' as const },
-  primaryBtn: {
-    flex: 1, height: 48, borderRadius: TOKENS.radius,
-    backgroundColor: TOKENS.brick, justifyContent: 'center', alignItems: 'center',
-  },
-  primaryBtnText: { fontSize: 15, color: TOKENS.moon, fontWeight: '600' as const },
-  noshowBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, height: 48, borderRadius: TOKENS.radius,
-    borderWidth: 1, borderColor: TOKENS.bad + '66',
-    backgroundColor: TOKENS.bad + '11',
-  },
-  noshowBtnText: { fontSize: 14, color: TOKENS.bad, fontWeight: '500' as const },
-
-  noShowCard: {
-    backgroundColor: TOKENS.nightSoft, borderRadius: TOKENS.radius,
-    borderWidth: 1, borderColor: TOKENS.nightHairS,
-    padding: 16, marginBottom: 8,
-  },
-  noShowDesc: { fontSize: 13, color: TOKENS.moonSoft, lineHeight: 20, marginBottom: 14 },
-  notifyBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    borderWidth: 1, borderColor: TOKENS.warn + '66',
-    backgroundColor: TOKENS.warn + '11', borderRadius: TOKENS.radius,
-    paddingVertical: 11, paddingHorizontal: 14,
-  },
-  notifyBtnText: { fontSize: 14, color: TOKENS.warn, fontWeight: '500' as const },
-  countdown: {
-    fontFamily: TYPOGRAPHY.mono, fontSize: 28, color: TOKENS.moon,
-    letterSpacing: 2, textAlign: 'center' as const, marginBottom: 4,
-  },
-  reportBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    borderWidth: 1, borderColor: TOKENS.bad + '66',
-    backgroundColor: TOKENS.bad + '11', borderRadius: TOKENS.radius,
-    paddingVertical: 11, paddingHorizontal: 14,
-  },
-  reportBtnText: { fontSize: 14, color: TOKENS.bad, fontWeight: '500' as const },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  flex: { flex: 1 },
+  safe: { flex: 1, backgroundColor: color.bg },
+  navPill: { paddingRight: space[12] },
+  scrollContent: { paddingHorizontal: layout.gutter, paddingBottom: space[48] },
+  hero: { paddingTop: space[20], paddingBottom: space[20], gap: space[10] },
+  heroTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space[16] },
+  blockGap: { marginTop: space[16] },
+  blockGapSm: { marginTop: space[12] },
+  arriveRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space[10] },
+  hint: { color: color.textFaint, marginTop: space[8] },
+  checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space[12], paddingHorizontal: space[16], paddingVertical: space[14] },
+  strike: { textDecorationLine: 'line-through' },
+  pickBlock: { paddingHorizontal: space[16], paddingVertical: space[10] },
+  buttonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space[10], marginTop: space[12] },
+  buttonRowFooter: { flexDirection: 'row', gap: space[10] },
+  err: { color: color.bad, width: '100%' },
+  listingSearch: { flexDirection: 'row', alignItems: 'flex-start', gap: space[10], marginTop: space[12] },
+  modalOverlay: { flex: 1, backgroundColor: color.scrim, justifyContent: 'flex-end' },
   modalSheet: {
-    backgroundColor: TOKENS.nightSoft, borderTopLeftRadius: TOKENS.radius, borderTopRightRadius: TOKENS.radius,
-    padding: 24, paddingBottom: 40,
-    borderTopWidth: 1, borderColor: TOKENS.nightHairS,
+    backgroundColor: color.surface, borderTopWidth: hairline, borderColor: color.hairStrong,
+    borderTopLeftRadius: radius.sm, borderTopRightRadius: radius.sm,
+    paddingHorizontal: layout.gutter, paddingTop: space[8], paddingBottom: space[16],
   },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  notesInput: {
-    borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: TOKENS.radius,
-    backgroundColor: TOKENS.night, color: TOKENS.moon,
-    padding: 12, fontSize: 14, lineHeight: 22,
-    minHeight: 100, textAlignVertical: 'top' as const, marginBottom: 16,
-  },
-  submitBtn: {
-    height: 48, borderRadius: TOKENS.radius, backgroundColor: TOKENS.bad,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  submitBtnText: { fontSize: 15, color: TOKENS.moon, fontWeight: '600' as const },
-
-
-  listingInput: {
-    borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: TOKENS.radius,
-    backgroundColor: TOKENS.night, color: TOKENS.moon,
-    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginTop: 8,
-  },
-  listingActions: { flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 4 },
-  listingBtn: {
-    height: 40, paddingHorizontal: 14, borderRadius: TOKENS.radius,
-    backgroundColor: TOKENS.brick, justifyContent: 'center', alignItems: 'center',
-  },
-  listingBtnText: { fontSize: 13, color: TOKENS.moon, fontWeight: '600' as const },
-  listingBtnGhost: {
-    height: 40, paddingHorizontal: 14, borderRadius: TOKENS.radius,
-    borderWidth: 1, borderColor: TOKENS.nightHairS, justifyContent: 'center',
-  },
-  listingBtnGhostText: { fontSize: 13, color: TOKENS.moonMute, fontWeight: '500' as const },
-  listingErr: { fontSize: 13, color: TOKENS.bad, marginTop: 8 },
-  listingHit: {
-    marginTop: 8, paddingVertical: 10, paddingHorizontal: 4,
-    borderTopWidth: 1, borderTopColor: TOKENS.nightHair,
-  },
-  photogRow: {
-    marginTop: 8, paddingVertical: 10, paddingHorizontal: 10,
-    borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: TOKENS.radius,
-  },
-  photogRowOn: { borderColor: TOKENS.brick, backgroundColor: TOKENS.brick + '14' },
-  assignHint: { fontSize: 12, color: TOKENS.moonFaint, marginTop: 10, marginBottom: 4 },
-  // Capture flow — Start Capture button shown on active jobs
-  captureBtn: {
-    flex: 1, height: 48, borderRadius: TOKENS.radius,
-    backgroundColor: TOKENS.moon, justifyContent: 'center', alignItems: 'center',
-    marginLeft: 10,
-  },
-  captureBtnText: { fontSize: 15, color: TOKENS.ink, fontWeight: '600' as const },
-  captureNone: {
-    flex: 1, minHeight: 48, justifyContent: 'center', marginLeft: 10,
-  },
-  captureNoneText: { fontSize: 12, color: TOKENS.moonMute, lineHeight: 16 },
-  captureStartBlock: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
-  captureStartChip: {
-    backgroundColor: TOKENS.moon, borderRadius: TOKENS.radius, paddingHorizontal: 12, paddingVertical: 10,
-  },
-  captureStartChipText: { fontSize: 12, color: TOKENS.ink, fontWeight: '600' as const },
-  captureStatusBlock: {
-    marginTop: 8, marginBottom: 8, padding: 14,
-    backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: TOKENS.radius,
-  },
-  captureStatusRow: {
-    marginTop: 8, padding: 12, borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: TOKENS.radius,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-  },
-  captureStatusCompiling: { borderColor: 'rgba(210, 84, 43, 0.55)' },
-  captureStatusReady: { borderColor: 'rgba(47, 107, 79, 0.55)' },
-  captureStatusFailed: { borderColor: 'rgba(139, 46, 31, 0.7)', backgroundColor: 'rgba(139, 46, 31, 0.08)' },
-  captureStatusLine: { flex: 1, fontSize: 13, color: TOKENS.moon, lineHeight: 18 },
-  captureStatusLink: { fontSize: 12, color: TOKENS.brick, fontWeight: '600' as const },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: space[8], marginRight: -space[12] },
+  notes: { minHeight: 96, textAlignVertical: 'top' },
 });

@@ -11,7 +11,6 @@ import {
   type ViewStyle,
 } from 'react-native';
 import Animated, {
-  Easing,
   FadeIn,
   FadeInDown,
   SlideInDown,
@@ -21,19 +20,21 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-export const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
+import { motion } from '../theme';
+
+export const EASE_OUT = motion.easeOut;
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 /** Screen / form enter: opacity + slight translateY. */
-export function enterFadeDown(duration = 280, distance = 12) {
+export function enterFadeDown(duration = 240, distance = 8) {
   return FadeInDown.duration(duration).easing(EASE_OUT).withInitialValues({
     opacity: 0,
     transform: [{ translateY: distance }],
   });
 }
 
-export function enterFade(duration = 200) {
+export function enterFade(duration: number = motion.slow) {
   return FadeIn.duration(duration).easing(EASE_OUT);
 }
 
@@ -52,8 +53,8 @@ type EnterFadeDownProps = {
 export function EnterFadeDown({
   children,
   style,
-  duration = 280,
-  distance = 12,
+  duration = 240,
+  distance = 8,
 }: EnterFadeDownProps) {
   const reduced = useReducedMotion();
   const entering = reduced
@@ -95,7 +96,7 @@ type PressScaleProps = Omit<PressableProps, 'style'> & {
 export function PressScale({
   children,
   style,
-  scaleTo = 0.97,
+  scaleTo = motion.pressScale,
   disabled,
   onPressIn,
   onPressOut,
@@ -111,7 +112,7 @@ export function PressScale({
     (e: GestureResponderEvent) => {
       if (!disabled) {
         scale.value = withTiming(reduced ? 0.99 : scaleTo, {
-          duration: reduced ? 80 : 100,
+          duration: reduced ? 80 : motion.press,
           easing: EASE_OUT,
         });
       }
@@ -122,7 +123,7 @@ export function PressScale({
 
   const handleOut = useCallback(
     (e: GestureResponderEvent) => {
-      scale.value = withTiming(1, { duration: 140, easing: EASE_OUT });
+      scale.value = withTiming(1, { duration: motion.release, easing: EASE_OUT });
       onPressOut?.(e);
     },
     [scale, onPressOut],

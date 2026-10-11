@@ -1,26 +1,26 @@
-// Capture flow tokens — port from Bricks-Capture/mobile/src/constants/theme.ts,
-// mapped onto Dispatch's existing TOKENS so there's one source of truth.
-import { TOKENS } from './Theme';
+// Capture flow tokens. GO is dark always, so the capture screens map onto the
+// same semantic dark palette as the rest of the app (../theme). The old names are
+// kept so the capture pipeline screens don't need logic changes.
+import { color, font } from '../theme';
 
 export const COLORS = {
-  brick: TOKENS.brick,
-  brickDeep: TOKENS.brickDeep,
-  ink: TOKENS.ink,
-  ink2: TOKENS.inkSoft,
-  ink3: TOKENS.inkMute,
-  paper: TOKENS.paper,
-  paperSoft: TOKENS.paperSoft,
-  paperDeep: TOKENS.paperDeep,
-  hair: 'rgba(244, 241, 235, 0.08)',
-  bad: TOKENS.bad,
-  ok: TOKENS.ok,
-  warn: TOKENS.warn,
+  brick: color.accent,
+  brickDeep: color.accentPressed,
+  ink: color.text,            // primary text
+  ink2: color.textBody,       // body text
+  ink3: color.textMuted,      // labels / meta
+  paper: color.bg,            // page
+  paperSoft: color.surface,   // raised / input well
+  paperDeep: color.surfaceDeep,
+  hair: color.hair,
+  bad: color.bad,
+  ok: color.ok,
+  warn: color.warn,
 };
 
 export const FONTS = {
-  body: 'GeneralSans-Medium',
-  // Dispatch doesn't ship Semibold — map to Medium (visual diff is minor for these labels)
-  bodySemibold: 'GeneralSans-Medium',
-  mono: 'IoskeleyMono-Regular',
-  monoMedium: 'IoskeleyMono-Medium',
+  body: font.regular,
+  bodySemibold: font.medium,
+  mono: font.mono,
+  monoMedium: font.monoMedium,
 };

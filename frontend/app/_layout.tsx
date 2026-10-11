@@ -6,8 +6,8 @@ import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ThemeProvider, useTheme } from '../context/ThemeContext';
-import { TOKENS } from '../constants/Theme';
+import { ThemeProvider } from '../context/ThemeContext';
+import { color, fontAssets } from '../theme';
 import { actorHeaders } from '../lib/api';
 import { hasAppAccess, needsRegister, isUnderReview } from '../lib/vendor';
 import { supabase } from '../lib/supabase';
@@ -26,7 +26,7 @@ function useInitPushNotifications(signedIn: boolean) {
   useEffect(() => {
     if (Platform.OS === 'web') return;
     configureNotificationHandler();
-    ensureAndroidChannel(TOKENS.brick).catch(() => {});
+    ensureAndroidChannel(color.accent).catch(() => {});
     const Notifications = require('expo-notifications');
     const open = (resp: any) => {
       const route = routeForNotification(resp?.notification?.request?.content?.data);
@@ -45,8 +45,8 @@ function useInitPushNotifications(signedIn: boolean) {
 }
 
 function ThemedStatusBar() {
-  const { isDark } = useTheme();
-  return <StatusBar style={isDark ? 'light' : 'dark'} />;
+  // GO is dark always (design system): light status-bar content everywhere.
+  return <StatusBar style="light" />;
 }
 
 export default function RootLayout() {
@@ -54,12 +54,7 @@ export default function RootLayout() {
   const segments = useSegments();
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [fontsLoaded] = useFonts({
-    'GeneralSans-Medium':   require('../assets/fonts/GeneralSans-Medium.otf'),
-    'GeneralSans-Regular':  require('../assets/fonts/GeneralSans-Regular.otf'),
-    'IoskeleyMono-Regular': require('../assets/fonts/IoskeleyMono-Regular.ttf'),
-    'IoskeleyMono-Medium':  require('../assets/fonts/IoskeleyMono-Medium.ttf'),
-  });
+  const [fontsLoaded] = useFonts(fontAssets);
 
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
@@ -164,7 +159,7 @@ export default function RootLayout() {
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: TOKENS.night },
+          contentStyle: { backgroundColor: color.bg },
           animation: 'none',
         }}
       >
@@ -206,7 +201,7 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   loadingContainer: {
     flex: 1,
-    backgroundColor: TOKENS.night,
+    backgroundColor: color.bg,
     alignItems: 'center',
     justifyContent: 'center',
   },

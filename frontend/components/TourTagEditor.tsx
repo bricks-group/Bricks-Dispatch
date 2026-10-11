@@ -8,6 +8,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { COLORS, FONTS } from '../constants/CaptureTheme';
+import { color, radius, layout } from '../theme';
 import { AMENITY_PRESETS } from '../constants/amenityPresets';
 import { addTourTag, deleteTourTag } from '../lib/capture-api';
 import type { CaptureSession, CaptureStation, TourTag } from '../lib/capture-api';
@@ -254,7 +255,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     borderWidth: 1,
     borderColor: COLORS.hair,
-    borderRadius: 2,
+    borderRadius: radius.sm,
     padding: 16,
     gap: 8,
     backgroundColor: COLORS.paper,
@@ -273,8 +274,8 @@ const styles = StyleSheet.create({
   },
   fieldLabel: {
     fontFamily: FONTS.mono,
-    fontSize: 10,
-    letterSpacing: 1.5,
+    fontSize: 12,
+    letterSpacing: 1.4,
     textTransform: 'uppercase',
     color: COLORS.ink3,
     marginTop: 6,
@@ -282,7 +283,7 @@ const styles = StyleSheet.create({
 
   presetHint: {
     fontFamily: FONTS.body,
-    fontSize: 11,
+    fontSize: 12,
     color: COLORS.ink3,
     lineHeight: 15,
     marginTop: 2,
@@ -297,13 +298,13 @@ const styles = StyleSheet.create({
   presetChip: {
     borderWidth: 1,
     borderColor: COLORS.hair,
-    borderRadius: 2,
+    borderRadius: radius.sm,
     paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingVertical: 10,
   },
   presetChipOn: {
     borderColor: COLORS.brick,
-    backgroundColor: 'rgba(210, 84, 43, 0.12)',
+    backgroundColor: color.accentTint,
   },
   presetChipText: {
     fontFamily: FONTS.body,
@@ -318,14 +319,14 @@ const styles = StyleSheet.create({
   stationChip: {
     borderWidth: 1,
     borderColor: COLORS.hair,
-    borderRadius: 2,
+    borderRadius: radius.sm,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 10,
     marginRight: 8,
   },
   stationChipOn: {
     borderColor: COLORS.brick,
-    backgroundColor: 'rgba(210, 84, 43, 0.12)',
+    backgroundColor: color.accentTint,
   },
   stationChipText: {
     fontFamily: FONTS.body,
@@ -340,7 +341,7 @@ const styles = StyleSheet.create({
   input: {
     borderWidth: 1,
     borderColor: COLORS.hair,
-    borderRadius: 2,
+    borderRadius: radius.sm,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontFamily: FONTS.body,
@@ -353,14 +354,14 @@ const styles = StyleSheet.create({
     marginTop: 10,
     alignSelf: 'flex-start',
     backgroundColor: COLORS.brick,
-    borderRadius: 2,
+    borderRadius: radius.sm,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   addBtnText: {
     fontFamily: FONTS.bodySemibold,
     fontSize: 14,
-    color: '#fff',
+    color: color.textOnAccent,
   },
   msg: {
     fontFamily: FONTS.body,
@@ -371,7 +372,7 @@ const styles = StyleSheet.create({
   msgErr: { color: COLORS.bad },
   count: {
     fontFamily: FONTS.mono,
-    fontSize: 11,
+    fontSize: 12,
     color: COLORS.ink3,
     marginTop: 10,
   },
@@ -390,16 +391,16 @@ const styles = StyleSheet.create({
   },
   tagMeta: {
     fontFamily: FONTS.mono,
-    fontSize: 11,
+    fontSize: 12,
     color: COLORS.ink3,
     marginTop: 2,
   },
   removeBtn: {
     borderWidth: 1,
     borderColor: COLORS.hair,
-    borderRadius: 2,
+    borderRadius: radius.sm,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 10,
   },
   removeBtnText: {
     fontFamily: FONTS.body,

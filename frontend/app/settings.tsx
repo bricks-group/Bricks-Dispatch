@@ -1,18 +1,15 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Linking } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, Alert, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Bell, CreditCard } from 'lucide-react-native';
-import { useTheme } from '../context/ThemeContext';
+import { Bell, CreditCard } from 'lucide-react-native';
 import { actorHeaders } from '../lib/api';
-import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
+import { color, type as T, space } from '../theme';
+import { Screen, NavBar, Section, Group, Row, Pill } from '../components/ui';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { theme } = useTheme();
-  const c = theme;
   const [stripe, setStripe] = useState<{ connected: boolean; connect_status: string } | null>(null);
   const [stripeVisible, setStripeVisible] = useState(false);
   const [stripeBusy, setStripeBusy] = useState(false);
@@ -63,86 +60,55 @@ export default function SettingsScreen() {
     }
   };
 
-  return (
-    <SafeAreaView style={[s.container, { backgroundColor: c.bg }]} edges={['top']}>
-      <View style={[s.header, { borderBottomColor: c.border }]}>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} style={s.back}>
-          <ArrowLeft size={18} color={c.text} strokeWidth={1.5} />
-        </TouchableOpacity>
-        <Text style={[s.title, { color: c.text }]}>Settings</Text>
-        <View style={{ width: 36 }} />
-      </View>
+  const stripeStatus = stripe == null
+    ? (stripeErr || 'Status unavailable')
+    : stripe.connected
+      ? 'Connected. Job payouts go to this account.'
+      : stripe.connect_status === 'pending'
+        ? 'Pending. Finish Stripe setup to enable payouts.'
+        : stripe.connect_status === 'restricted'
+          ? 'Restricted. Open Stripe to fix requirements.'
+          : 'Not connected. Owner payouts are the full package, no deduction.';
+  const stripeTone = stripe?.connected ? 'ok' : stripe?.connect_status === 'restricted' ? 'bad' : stripe?.connect_status === 'pending' ? 'warn' : 'neutral';
+  const stripeAction = stripe?.connected
+    ? 'Update Stripe account'
+    : stripe?.connect_status === 'pending' || stripe?.connect_status === 'restricted'
+      ? 'Finish Stripe setup'
+      : 'Connect Stripe';
 
-      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-        {stripeVisible ? (
-          <View style={s.section}>
-            <Text style={[s.sectionLabel, { color: c.textFaint }]}>PAYOUTS</Text>
-            <View style={[s.menuCard, { backgroundColor: c.surface, borderColor: c.border }]}>
-              <View style={[s.row, { borderBottomWidth: 1, borderBottomColor: c.border }]}>
-                <CreditCard size={15} color={c.textMuted} strokeWidth={1.5} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[s.rowLabel, { color: c.text }]}>Stripe Connect</Text>
-                  <Text style={s.rowSub}>
-                    {stripe == null
-                      ? (stripeErr || 'Status unavailable')
-                      : stripe.connected
-                        ? 'Connected = payout-ready. Job payouts go to this account.'
-                        : stripe.connect_status === 'pending'
-                          ? 'Pending — finish Stripe setup. Connected only after payouts are enabled.'
-                          : stripe.connect_status === 'restricted'
-                            ? 'Restricted — open Stripe to fix requirements before payouts.'
-                            : 'Not connected. Owner payouts are the full package with $0 deduction.'}
-                  </Text>
-                </View>
-              </View>
-              <TouchableOpacity
-                style={s.row}
-                onPress={startStripe}
-                disabled={stripeBusy}
-                activeOpacity={0.7}
-              >
-                {stripeBusy
-                  ? <ActivityIndicator size="small" color={TOKENS.brick} />
-                  : <Text style={[s.rowLabel, { color: TOKENS.brick }]}>
-                      {stripe?.connected
-                        ? 'Update Stripe account'
-                        : stripe?.connect_status === 'pending' || stripe?.connect_status === 'restricted'
-                          ? 'Finish Stripe setup'
-                          : 'Connect Stripe'}
-                    </Text>}
-              </TouchableOpacity>
-            </View>
-            {stripeErr ? <Text style={{ color: TOKENS.bad, fontSize: 12, marginTop: 8 }}>{stripeErr}</Text> : null}
-          </View>
-        ) : null}
-        <View style={s.section}>
-          <Text style={[s.sectionLabel, { color: c.textFaint }]}>NOTIFICATIONS</Text>
-          <View style={[s.menuCard, { backgroundColor: c.surface, borderColor: c.border }]}>
-            <TouchableOpacity style={s.row} activeOpacity={0.7} onPress={() => Linking.openSettings().catch(() => {})}>
-              <Bell size={15} color={c.textMuted} strokeWidth={1.5} />
-              <View style={{ flex: 1 }}>
-                <Text style={[s.rowLabel, { color: c.text }]}>Notification settings</Text>
-                <Text style={s.rowSub}>Job and payout alerts, sounds, and vibration are managed in your phone's Settings.</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+  return (
+    <Screen header={<NavBar title="Settings" onBack={() => router.back()} />}>
+      <View style={s.top} />
+      {stripeVisible ? (
+        <Section first label="Payouts">
+          <Group>
+            <Row
+              icon={CreditCard}
+              title="Stripe Connect"
+              subtitle={stripeStatus}
+              right={stripe && (stripe.connected || stripe.connect_status !== 'not_connected') ? <Pill label={stripe.connected ? 'Connected' : stripe.connect_status.replace(/_/g, ' ')} tone={stripeTone as any} /> : undefined}
+            />
+            <Row title={stripeAction} tone="accent" chevron onPress={startStripe} loading={stripeBusy} />
+          </Group>
+          {stripeErr && stripe ? <Text style={[T.caption, s.err]}>{stripeErr}</Text> : null}
+        </Section>
+      ) : null}
+      <Section first={!stripeVisible} label="Notifications">
+        <Group>
+          <Row
+            icon={Bell}
+            title="Notification settings"
+            subtitle="Job and payout alerts are managed in your phone’s Settings."
+            chevron
+            onPress={() => Linking.openSettings().catch(() => {})}
+          />
+        </Group>
+      </Section>
+    </Screen>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: TOKENS.night },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  back: { width: 36, height: 36, justifyContent: 'center' },
-  title: { flex: 1, fontSize: 16, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, textAlign: 'center' },
-  scroll: { padding: 24 },
-  section: { marginBottom: 24 },
-  sectionLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.8, marginBottom: 12 },
-  menuCard: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
-  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  rowLabel: { flex: 1, fontSize: 14, color: TOKENS.moon },
-  rowSub: { fontSize: 11, color: TOKENS.moonFaint, marginTop: 2 },
+  top: { height: space[24] },
+  err: { color: color.bad, marginTop: space[8] },
 });

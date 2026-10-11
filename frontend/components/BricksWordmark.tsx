@@ -11,7 +11,7 @@ import Animated, {
   Easing,
   SharedValue,
 } from 'react-native-reanimated';
-import { TOKENS } from '../constants/Theme';
+import { color as C, font } from '../theme';
 
 interface Props {
   size?: number;
@@ -42,7 +42,7 @@ function AnimatedLogoMark({ size, color, b1, b2, b3 }: {
   return (
     <View style={{ width: wBotL + cGap + wBotR, height: h + rGap + h, position: 'relative' }}>
       <Animated.View style={[
-        { position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color },
+        { position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color, opacity: 0.82 },
         style1,
       ]} />
       <Animated.View style={[
@@ -58,7 +58,7 @@ function AnimatedLogoMark({ size, color, b1, b2, b3 }: {
 }
 
 // Brick mark spinning on Y axis — used as loading indicator
-export function BrickLoader({ size = 2.5, color = TOKENS.brick }: { size?: number; color?: string }) {
+export function BrickLoader({ size = 2.5, color = C.accent }: { size?: number; color?: string }) {
   const rot = useSharedValue(0);
 
   useEffect(() => {
@@ -92,7 +92,7 @@ export function BrickLoader({ size = 2.5, color = TOKENS.brick }: { size?: numbe
   );
 }
 
-export default function BricksWordmark({ size = 1, color = TOKENS.brick, showWordmark = true, pressable = false }: Props) {
+export default function BricksWordmark({ size = 1, color = C.accent, showWordmark = true, pressable = false }: Props) {
   const fontSize = Math.round(17 * size);
 
   const b1 = useSharedValue(0);
@@ -118,7 +118,7 @@ export default function BricksWordmark({ size = 1, color = TOKENS.brick, showWor
       {showWordmark && (
         <Text style={[styles.text, {
           fontSize,
-          color: color === TOKENS.brick ? TOKENS.moon : color,
+          color: color === C.accent ? C.text : color,
           marginLeft: Math.round(fontSize * 0.4),
           letterSpacing: fontSize * -0.035,
         }]}>
@@ -137,7 +137,7 @@ export default function BricksWordmark({ size = 1, color = TOKENS.brick, showWor
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center' },
   text: {
-    fontFamily: 'GeneralSans-Medium',
+    fontFamily: font.medium,
     textTransform: 'lowercase',
   },
 });

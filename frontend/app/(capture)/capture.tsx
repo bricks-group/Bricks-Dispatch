@@ -6,6 +6,8 @@ import * as Location from 'expo-location';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { COLORS, FONTS } from '../../constants/CaptureTheme';
+import { color, radius, layout } from '../../theme';
+import { X } from 'lucide-react-native';
 import { ensureCaptureSession, openCaptureStation, uploadCaptureFrame } from '../../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
 
@@ -24,15 +26,15 @@ function CoverageDome({ captured, total, headingTick }: { captured: Set<number> 
     const x2 = cx + Math.cos(ang) * R, y2 = cy + Math.sin(ang) * R;
     return (
       <Line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-        stroke={aim ? '#F4F1EB' : on ? COLORS.brick : '#F4F1EB30'} strokeWidth={aim || on ? 3 : 2} strokeLinecap="round" />
+        stroke={aim ? color.text : on ? COLORS.brick : color.hairStrong} strokeWidth={aim || on ? 3 : 2} strokeLinecap="round" />
     );
   });
   return (
     <Svg width={220} height={220} viewBox="0 0 220 220">
-      <Circle cx={cx} cy={cy} r={R - 22} fill="none" stroke="#F4F1EB1A" strokeWidth={1} />
-      <Circle cx={cx} cy={cy} r={R + 6} fill="none" stroke="#F4F1EB12" strokeWidth={1} />
+      <Circle cx={cx} cy={cy} r={R - 22} fill="none" stroke={color.hair} strokeWidth={1} />
+      <Circle cx={cx} cy={cy} r={R + 6} fill="none" stroke={color.hair} strokeWidth={1} />
       {ticks}
-      <Path d={`M${cx - 10} ${cy}H${cx + 10}M${cx} ${cy - 10}V${cy + 10}`} stroke="#F4F1EB55" strokeWidth={1} />
+      <Path d={`M${cx - 10} ${cy}H${cx + 10}M${cx} ${cy - 10}V${cy + 10}`} stroke={color.textMuted} strokeWidth={1} />
     </Svg>
   );
 }
@@ -186,7 +188,7 @@ export default function CaptureScreen() {
       <SafeAreaView style={{ flex: 1 }}>
         <View style={styles.topBar}>
           <TouchableOpacity style={styles.chip} onPress={() => router.back()}>
-            <Text style={styles.chipText}>✕</Text>
+            <X size={20} color={color.text} strokeWidth={layout.iconStroke} />
           </TouchableOpacity>
           <View style={{ alignItems: 'center' }}>
             <Text style={styles.roomTitle}>{address}</Text>
@@ -252,29 +254,29 @@ function roomSubColor(label: string): { color?: string } {
 }
 
 const styles = StyleSheet.create({
-  dark: { flex: 1, backgroundColor: '#0C0B09' },
+  dark: { flex: 1, backgroundColor: color.bg },
   scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(12,11,9,0.35)' },
   permWrap: { alignItems: 'center', justifyContent: 'center', padding: 32, gap: 20 },
-  permText: { fontFamily: FONTS.body, color: '#F4F1EB', textAlign: 'center', fontSize: 14 },
-  permBtn: { backgroundColor: COLORS.brick, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 2 },
-  permBtnText: { fontFamily: FONTS.bodySemibold, color: '#fff' },
+  permText: { fontFamily: FONTS.body, color: color.text, textAlign: 'center', fontSize: 14 },
+  permBtn: { backgroundColor: COLORS.brick, paddingHorizontal: 24, paddingVertical: 12, borderRadius: radius.sm },
+  permBtnText: { fontFamily: FONTS.bodySemibold, color: color.textOnAccent },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8 },
-  chip: { width: 34, height: 34, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
-  chipText: { color: '#F4F1EB', fontSize: 16 },
-  roomTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#F4F1EB' },
-  roomSub: { fontFamily: FONTS.mono, fontSize: 10, letterSpacing: 1.4, color: COLORS.brick, marginTop: 1 },
+  chip: { width: layout.tap, height: layout.tap, borderRadius: radius.sm, borderWidth: 1, borderColor: color.hairStrong, alignItems: 'center', justifyContent: 'center' },
+  chipText: { color: color.text, fontSize: 16 },
+  roomTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: color.text },
+  roomSub: { fontFamily: FONTS.mono, fontSize: 12, letterSpacing: 1.4, color: COLORS.brick, marginTop: 1 },
   pillRow: { flexDirection: 'row', gap: 8, justifyContent: 'center', marginTop: 12 },
-  pill: { fontFamily: FONTS.mono, fontSize: 10.5, color: '#F4F1EB', backgroundColor: '#14111099', borderWidth: 1, borderColor: '#F4F1EB1A', borderRadius: 2, paddingHorizontal: 10, paddingVertical: 5 },
+  pill: { fontFamily: FONTS.mono, fontSize: 10.5, color: color.text, backgroundColor: 'rgba(20, 18, 16, 0.6)', borderWidth: 1, borderColor: color.hair, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 5 },
   domeCenter: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  domePct: { fontFamily: FONTS.mono, fontSize: 30, color: '#F4F1EB' },
-  domeLabel: { fontFamily: FONTS.mono, fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: '#F4F1EBAA', marginTop: 2 },
-  guidance: { marginHorizontal: 20, backgroundColor: COLORS.brick, borderRadius: 2, padding: 12 },
-  guidanceTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#fff' },
-  guidanceBody: { fontFamily: FONTS.body, fontSize: 11, color: '#FFFFFFCC', marginTop: 2 },
-  errorText: { fontFamily: FONTS.body, fontSize: 11, color: '#F4F1EB', backgroundColor: COLORS.bad, marginHorizontal: 20, marginTop: 8, padding: 8, borderRadius: 2, textAlign: 'center' },
+  domePct: { fontFamily: FONTS.mono, fontSize: 30, color: color.text },
+  domeLabel: { fontFamily: FONTS.mono, fontSize: 10.5, letterSpacing: 1.4, textTransform: 'uppercase', color: color.textBody, marginTop: 2 },
+  guidance: { marginHorizontal: 20, backgroundColor: COLORS.brick, borderRadius: radius.sm, padding: 12 },
+  guidanceTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: color.textOnAccent },
+  guidanceBody: { fontFamily: FONTS.body, fontSize: 12, color: color.textOnAccent, marginTop: 2 },
+  errorText: { fontFamily: FONTS.body, fontSize: 12, color: color.text, backgroundColor: COLORS.bad, marginHorizontal: 20, marginTop: 8, padding: 8, borderRadius: radius.sm, textAlign: 'center' },
   shutterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 18 },
-  shutterOuter: { width: 74, height: 74, borderRadius: 37, borderWidth: 3, borderColor: '#F4F1EB', alignItems: 'center', justifyContent: 'center' },
+  shutterOuter: { width: 74, height: 74, borderRadius: 37, borderWidth: 3, borderColor: color.text, alignItems: 'center', justifyContent: 'center' },
   shutterPressed: { transform: [{ scale: 0.92 }] },
   shutterInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.brick },
-  doneBtn: { width: 44, height: 44, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
+  doneBtn: { width: 44, height: 44, borderRadius: radius.sm, borderWidth: 1, borderColor: color.hairStrong, alignItems: 'center', justifyContent: 'center' },
 });

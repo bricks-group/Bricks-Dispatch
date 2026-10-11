@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
+import { Box, LayoutGrid, Video, Camera } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { COLORS, FONTS } from '../../constants/CaptureTheme';
+import { color, type as T, space, layout } from '../../theme';
+import { NavBar, Group, Row, EmptyState, LoadingState } from '../../components/ui';
 import { actorHeaders } from '../../lib/api';
 import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import type { CaptureFlags } from '../../lib/capture-modes';
@@ -62,90 +64,44 @@ export default function CaptureModeScreen() {
   if (!flags) {
     return (
       <SafeAreaView style={styles.safe}>
-        <ActivityIndicator size="large" color={COLORS.brick} style={{ flex: 1 }} />
+        <NavBar title="Capture" close onBack={() => router.back()} border={false} />
+        <LoadingState />
       </SafeAreaView>
     );
   }
 
-  if (!flags.tour && !flags.floorplan && !flags.visit) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.top}>
-          <TouchableOpacity style={styles.chip} onPress={() => router.back()}>
-            <Text style={styles.chipText}>✕</Text>
-          </TouchableOpacity>
-          <Text style={styles.kicker}>CAPTURE</Text>
-          <View style={styles.chip} />
-        </View>
-        <View style={styles.body}>
-          <Text style={styles.title}>Nothing to capture in GO</Text>
-          <Text style={styles.sub}>{captureNeitherCopy(flags)}</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const none = !flags.tour && !flags.floorplan && !flags.visit;
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.top}>
-        <TouchableOpacity style={styles.chip} onPress={() => router.back()}>
-          <Text style={styles.chipText}>✕</Text>
-        </TouchableOpacity>
-        <Text style={styles.kicker}>CAPTURE</Text>
-        <View style={styles.chip} />
-      </View>
-
+      <NavBar title="Capture" close onBack={() => router.back()} border={false} />
       <View style={styles.body}>
-        <Text style={styles.title}>What are you capturing?</Text>
-        <Text style={styles.sub}>
-          Pick what this job purchased. Professional HDR stills stay on the camera — not here.
-        </Text>
-
-        {flags.tour ? (
-        <TouchableOpacity style={styles.card} onPress={() => go('splat')} activeOpacity={0.85}>
-          <Text style={styles.cardKicker}>3D TOUR</Text>
-          <Text style={styles.cardTitle}>Path-confined walkthrough</Text>
-          <Text style={styles.cardBody}>
-            Pan slowly around each room. This is the virtual tour you stay on the path for — not a free-roam virtual visit.
-          </Text>
-        </TouchableOpacity>
-        ) : null}
-
-        {flags.floorplan ? (
-        <TouchableOpacity style={styles.card} onPress={() => go('floorplan')} activeOpacity={0.85}>
-          <Text style={styles.cardKicker}>FLOOR PLAN</Text>
-          <Text style={styles.cardTitle}>Room-by-room corners</Text>
-          <Text style={styles.cardBody}>
-            Walk each room. Photograph corners, walls, and openings for tracing. Not HDR stills. Not BoxBrownie.
-          </Text>
-        </TouchableOpacity>
-        ) : null}
-
-        {flags.visit ? (
-        <TouchableOpacity style={styles.card} onPress={() => go('visit')} activeOpacity={0.85}>
-          <Text style={styles.cardKicker}>VIRTUAL VISIT</Text>
-          <Text style={styles.cardTitle}>Free-roam splat</Text>
-          <Text style={styles.cardBody}>
-            Paste a Polycam share URL (or upload .ply/.splat on GO web). Not the path-confined tour.
-          </Text>
-        </TouchableOpacity>
-        ) : null}
+        {none ? (
+          <EmptyState icon={Camera} title="Nothing to capture in GO" body={captureNeitherCopy(flags)} />
+        ) : (
+          <>
+            <Text style={[T.display, { color: color.text }]} accessibilityRole="header">What are you capturing?</Text>
+            <Text style={[T.body, styles.sub]}>Pick what this job purchased. HDR stills stay on your camera.</Text>
+            <Group>
+              {flags.tour ? (
+                <Row icon={Box} title="3D tour" subtitle="Stay on a path and pan slowly around each room." chevron onPress={() => go('splat')} />
+              ) : null}
+              {flags.floorplan ? (
+                <Row icon={LayoutGrid} title="Floor plan" subtitle="Photograph each room's corners, walls and openings." chevron onPress={() => go('floorplan')} />
+              ) : null}
+              {flags.visit ? (
+                <Row icon={Video} title="Virtual visit" subtitle="Free-roam scan. Paste a Polycam share link." chevron onPress={() => go('visit')} />
+              ) : null}
+            </Group>
+          </>
+        )}
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#0C0B09' },
-  top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8 },
-  chip: { width: 34, height: 34, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
-  chipText: { color: '#F4F1EB', fontSize: 16 },
-  kicker: { fontFamily: FONTS.mono, fontSize: 11, letterSpacing: 2, color: COLORS.brick },
-  body: { padding: 22, paddingTop: 36, gap: 16 },
-  title: { fontFamily: FONTS.bodySemibold, fontSize: 24, color: '#F4F1EB' },
-  sub: { fontFamily: FONTS.body, fontSize: 13, color: '#F4F1EBAA', marginBottom: 8, lineHeight: 18 },
-  card: { borderWidth: 1, borderColor: '#F4F1EB22', borderRadius: 2, padding: 18, backgroundColor: '#141110' },
-  cardKicker: { fontFamily: FONTS.mono, fontSize: 10, letterSpacing: 1.8, color: COLORS.brick, marginBottom: 6 },
-  cardTitle: { fontFamily: FONTS.bodySemibold, fontSize: 17, color: '#F4F1EB' },
-  cardBody: { fontFamily: FONTS.body, fontSize: 12.5, color: '#F4F1EB99', marginTop: 6, lineHeight: 18 },
+  safe: { flex: 1, backgroundColor: color.bg },
+  body: { paddingHorizontal: layout.gutter, paddingTop: space[16] },
+  sub: { color: color.textMuted, marginTop: space[8], marginBottom: space[28] },
 });
