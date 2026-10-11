@@ -10,6 +10,7 @@ Handles:
 """
 import base64
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -155,6 +156,26 @@ async def _bump_uploaded_count(db, job_id: str, job: dict) -> int:
     return new_uploaded
 
 
+# OS / browser duplicate-copy suffixes on the stem: "IMG_4031 (1)", "IMG_4031(2)",
+# "IMG_4031 copy", "IMG_4031 copy 2", "IMG_4031 - Copy", "IMG_4031-copy", "IMG_4031_copy".
+_COPY_SUFFIX_RE = re.compile(
+    r"(?:\s*\(\d{1,3}\)|(?:\s+|\s*-\s*|_)copy(?:\s*\(?\d{1,3}\)?)?)$",
+    re.IGNORECASE,
+)
+
+
+def _copy_stripped_name(name: str) -> str:
+    """Lower-case filename with one trailing OS/browser copy suffix removed from the stem."""
+    n = str(name or "").strip().lower()
+    if "." in n:
+        stem, ext = n.rsplit(".", 1)
+        ext = "." + ext
+    else:
+        stem, ext = n, ""
+    stripped = _COPY_SUFFIX_RE.sub("", stem).rstrip()
+    return (stripped or stem) + ext
+
+
 def find_duplicate_upload(rows: list | None, *, upload_id: str, filename: str, file_size: int) -> dict:
     """Return the existing uploads row this /complete call duplicates, else {}.
 
@@ -166,6 +187,9 @@ def find_duplicate_upload(rows: list | None, *, upload_id: str, filename: str, f
          uploaded. Registering it again delivered the same still twice on the
          listing and doubled a bracket frame (same-EV pair → "same-side frames"
          on Mark complete / skewed HDR merge).
+    A browser/OS duplicate-copy name ("IMG_4031 (1).jpg", "IMG_4031 copy.jpg",
+    "IMG_4031 - Copy.jpg") of the same byte size is the same file re-picked from
+    Downloads/Finder and dedupes too.
     Exact byte size + name is the match — different camera files sharing a name
     almost never share a byte count; rejected/failed rows can be re-uploaded.
     """
@@ -182,7 +206,8 @@ def find_duplicate_upload(rows: list | None, *, upload_id: str, filename: str, f
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        if str(row.get("filename") or "").strip().lower() != name:
+        row_name = str(row.get("filename") or "").strip().lower()
+        if row_name != name and _copy_stripped_name(row_name) != _copy_stripped_name(name):
             continue
         try:
             if int(row.get("file_size") or 0) != size:

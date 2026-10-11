@@ -39,3 +39,28 @@ def test_rejected_or_failed_can_be_reuploaded():
 def test_empty_rows():
     assert find_duplicate_upload([], upload_id="x", filename="a.jpg", file_size=10) == {}
     assert find_duplicate_upload(None, upload_id="x", filename="a.jpg", file_size=10) == {}
+
+
+def test_browser_copy_suffix_same_size_is_duplicate():
+    # Re-picked from Downloads/Finder: "(1)", "copy", "- Copy" of the same bytes.
+    for name in ("IMG_4031_-2 (1).jpg", "IMG_4031_-2(2).JPG", "IMG_4031_-2 copy.jpg",
+                 "IMG_4031_-2 copy 2.jpg", "IMG_4031_-2 - Copy.jpg", "IMG_4031_-2_copy.jpg"):
+        dup = find_duplicate_upload(ROWS, upload_id="new", filename=name, file_size=5_120_000)
+        assert dup.get("id") == "u1", name
+
+
+def test_copy_suffix_on_existing_row_matches_original_name():
+    rows = [{"id": "c1", "filename": "living (1).jpg", "file_size": 777, "qc_status": None, "processing_status": "pending"}]
+    assert find_duplicate_upload(rows, upload_id="new", filename="living.jpg", file_size=777)["id"] == "c1"
+
+
+def test_copy_suffix_different_size_is_not_duplicate():
+    assert find_duplicate_upload(ROWS, upload_id="new", filename="IMG_4031_-2 (1).jpg", file_size=5_120_001) == {}
+
+
+def test_bracket_ev_and_counter_names_not_treated_as_copies():
+    # Different exposures / frames stay distinct even at an identical byte size.
+    assert find_duplicate_upload(ROWS, upload_id="new", filename="IMG_4031_-1.jpg", file_size=5_120_000) == {}
+    assert find_duplicate_upload(ROWS, upload_id="new", filename="IMG_4032_-2.jpg", file_size=5_120_000) == {}
+    rows = [{"id": "s1", "filename": "canopy.jpg", "file_size": 9, "qc_status": None, "processing_status": "pending"}]
+    assert find_duplicate_upload(rows, upload_id="new", filename="can.jpg", file_size=9) == {}
