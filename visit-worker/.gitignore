@@ -1,0 +1,6 @@
+__pycache__/
+*.ply
+*.sog
+*.spz
+runs/
+keys/
