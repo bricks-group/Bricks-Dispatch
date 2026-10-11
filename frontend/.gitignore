@@ -41,3 +41,7 @@ yarn-error.*
 
 app-example
 secrets/
+
+# Prebuild output (CNG)
+/android
+/ios
