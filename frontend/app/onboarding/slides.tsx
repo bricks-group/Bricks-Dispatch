@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ArrowRight } from 'lucide-react-native';
+import { ArrowRight, Camera, UploadCloud, Wallet, MapPin, Clock, ChevronUp } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BricksWordmark from '../../components/BricksWordmark';
 import { EnterFadeDown, PressScale } from '../../components/motion';
@@ -18,7 +18,7 @@ const SLIDES = [
   {
     eye: 'Auto-dispatch',
     head: 'Jobs come to you.',
-    body: 'No bidding, no DMs. Connect a calendar on Availability so auto-assign only offers slots that fit your real schedule.',
+    body: 'No bidding, no DMs. Keep your availability current so auto-assign only offers slots that fit your real schedule.',
     img: 'JOB OFFER CARD',
   },
   {
@@ -28,6 +28,45 @@ const SLIDES = [
     img: 'EARNINGS STRIPE CHART',
   },
 ];
+
+function SlideArt({ index }: { index: number }) {
+  if (index === 0) {
+    return (
+      <View style={s.artRow}>
+        {[
+          { Icon: Camera, label: 'SHOOT' },
+          { Icon: UploadCloud, label: 'UPLOAD' },
+          { Icon: Wallet, label: 'GET PAID' },
+        ].map(({ Icon, label }) => (
+          <View key={label} style={s.artTile}>
+            <Icon size={28} color={TOKENS.brick} strokeWidth={1.5} />
+            <Text style={s.artLabel}>{label}</Text>
+          </View>
+        ))}
+      </View>
+    );
+  }
+  if (index === 1) {
+    return (
+      <View style={s.artCard}>
+        <Text style={s.artEye}>EXAMPLE JOB OFFER</Text>
+        <Text style={s.artTitle}>Listing photos</Text>
+        <View style={s.artLine}><MapPin size={14} color={TOKENS.moonFaint} strokeWidth={1.5} /><Text style={s.artMeta}>Address shown once assigned</Text></View>
+        <View style={s.artLine}><Clock size={14} color={TOKENS.moonFaint} strokeWidth={1.5} /><Text style={s.artMeta}>Time window that fits your availability</Text></View>
+      </View>
+    );
+  }
+  return (
+    <View style={s.artLadder}>
+      {['TIER A', 'TIER B', 'TIER C'].map((t, i) => (
+        <View key={t} style={[s.artStep, { width: `${92 - i * 18}%` as any, opacity: 1 - i * 0.25 }]}>
+          {i === 0 ? <ChevronUp size={14} color="#FFF" strokeWidth={2} /> : null}
+          <Text style={s.artStepText}>{t}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
 
 export default function OnboardingSlides() {
   const [current, setCurrent] = useState(0);
@@ -58,9 +97,9 @@ export default function OnboardingSlides() {
       </View>
 
       <EnterFadeDown key={current} distance={10} duration={260} style={s.body}>
-        {/* Image placeholder */}
+        {/* Illustration (drawn in-app, no stock imagery) */}
         <View style={s.imgPlaceholder}>
-          <Text style={s.imgLabel}>{slide.img}</Text>
+          <SlideArt index={current} />
         </View>
 
         {/* Copy */}
@@ -108,6 +147,17 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 32,
   },
+  artRow: { flexDirection: 'row', gap: 12, paddingHorizontal: 16 },
+  artTile: { flex: 1, aspectRatio: 0.8, borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: 2, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  artLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.moonSoft, letterSpacing: 1.4 },
+  artCard: { width: '84%', padding: 18, borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: 2, backgroundColor: TOKENS.night, gap: 10 },
+  artEye: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.brick, letterSpacing: 1.6 },
+  artTitle: { fontFamily: TYPOGRAPHY.heading, fontSize: 18, color: TOKENS.moon },
+  artLine: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  artMeta: { fontFamily: TYPOGRAPHY.body, fontSize: 12, color: TOKENS.moonSoft },
+  artLadder: { width: '100%', alignItems: 'center', gap: 10 },
+  artStep: { height: 44, backgroundColor: TOKENS.brick, borderRadius: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  artStepText: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 11, color: '#FFF', letterSpacing: 1.4 },
   imgLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 10, color: TOKENS.moonFaint, letterSpacing: 1.4 },
 
   copy: { marginBottom: 32 },
