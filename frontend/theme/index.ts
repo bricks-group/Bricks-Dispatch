@@ -106,7 +106,7 @@ export const space = {
 } as const;
 
 /* ── Shape ── */
-export const radius = { sm: 2, pill: 999 } as const;   // 2px everywhere; pills only for chips/dots
+export const radius = { sm: 2, pill: 999 } as const;   // 2px everywhere. pill = tiny non-interactive status dots only
 export const hairline = 1;
 
 /* ── Layout ── */

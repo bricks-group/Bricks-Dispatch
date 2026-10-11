@@ -478,7 +478,7 @@ export default function JobDetailScreen() {
   const captureStartLabel = ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1)
     ? 'Start capture'
     : captureFlags.visit && !captureFlags.tour && !captureFlags.floorplan
-      ? 'Deliver visit'
+      ? 'Start capture · Virtual visit'
       : captureFlags.tour
         ? 'Start capture'
         : 'Start capture · Floor plan';
@@ -594,9 +594,9 @@ export default function JobDetailScreen() {
           {(isActive && hasCaptureMode && multiMode) || ['in_progress', 'completed', 'processing'].includes(job.status) ? (
             <Section label="Capture">
               <Group>
-                {isActive && multiMode && captureFlags.tour ? <Row icon={Box} title="3D tour" subtitle="Walk the home with the 360° camera" chevron onPress={() => openCapture('splat')} /> : null}
+                {isActive && multiMode && captureFlags.tour ? <Row icon={Box} title="360° tour" subtitle="Stand at stations and pan a full circle" chevron onPress={() => openCapture('splat')} /> : null}
                 {isActive && multiMode && captureFlags.floorplan ? <Row icon={LayoutGrid} title="Floor plan" subtitle="Scan each room" chevron onPress={() => openCapture('floorplan')} /> : null}
-                {isActive && multiMode && captureFlags.visit ? <Row icon={Video} title="Deliver visit" subtitle="Hand off the virtual visit" chevron onPress={() => openCapture('visit')} /> : null}
+                {isActive && multiMode && captureFlags.visit ? <Row icon={Video} title="Virtual visit" subtitle="Walk-through video, one per floor" chevron onPress={() => openCapture('visit')} /> : null}
                 {['in_progress', 'completed', 'processing'].includes(job.status) ? (
                   <Row icon={UploadIcon} title="Upload deliverables" subtitle="Stills, drone, reel, twilight, staging, floor plan" chevron onPress={() => router.push('/(tabs)/uploads' as any)} />
                 ) : null}

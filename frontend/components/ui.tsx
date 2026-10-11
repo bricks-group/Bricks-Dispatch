@@ -345,7 +345,7 @@ export function Segmented<V extends string>({ options, value, onChange }: {
   );
 }
 
-/** Selectable chip (DS mobile chip: pill radius, inverse fill when active). 44pt tall. */
+/** Selectable chip: 2px corners (never pill), inverse fill when active. 44pt tall. */
 export function Chip({ label, selected, onPress }: { label: string; selected?: boolean; onPress?: () => void }) {
   return (
     <Pressable
@@ -355,6 +355,25 @@ export function Chip({ label, selected, onPress }: { label: string; selected?: b
       style={({ pressed }) => [s.chip, selected && s.chipOn, pressed && !selected && s.rowPressed]}
     >
       <Text style={[T.callout, { color: selected ? color.textInverse : color.textBody }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** On/off control. Square track and knob (2px corners): no pill/round switches in Bricks. */
+export function Toggle({ value, onValueChange, disabled, accessibilityLabel }: {
+  value: boolean; onValueChange: (v: boolean) => void; disabled?: boolean; accessibilityLabel?: string;
+}) {
+  return (
+    <Pressable
+      onPress={() => !disabled && onValueChange(!value)}
+      disabled={disabled}
+      hitSlop={space[10]}
+      accessibilityRole="switch"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ checked: value, disabled: !!disabled }}
+      style={[s.toggle, value && s.toggleOn, disabled && s.toggleDisabled]}
+    >
+      <View style={[s.toggleKnob, value ? s.toggleKnobOn : null]} />
     </Pressable>
   );
 }
@@ -522,10 +541,18 @@ const s = StyleSheet.create({
 
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space[8] },
   chip: {
-    minHeight: layout.tap, paddingHorizontal: space[16], borderRadius: radius.pill,
+    minHeight: layout.tap, paddingHorizontal: space[16], borderRadius: radius.sm,
     borderWidth: hairline, borderColor: color.hair, backgroundColor: color.surface,
     alignItems: 'center', justifyContent: 'center',
   },
+  toggle: {
+    width: 44, height: 26, borderRadius: radius.sm, borderWidth: hairline, borderColor: color.hairStrong,
+    backgroundColor: color.surfaceDeep, padding: 3, justifyContent: 'center',
+  },
+  toggleOn: { backgroundColor: color.accent, borderColor: color.accent },
+  toggleDisabled: { opacity: 0.5 },
+  toggleKnob: { width: 18, height: 18, borderRadius: radius.sm, backgroundColor: color.textMuted },
+  toggleKnobOn: { alignSelf: 'flex-end', backgroundColor: color.textOnAccent },
   chipOn: { borderColor: color.inverse, backgroundColor: color.inverse },
 
   pill: {

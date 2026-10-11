@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, Switch, Alert, Linking, Image } from 'react-native';
+import { View, Text, StyleSheet, Alert, Linking, Image } from 'react-native';
 import { Calendar, Download, LogOut, Pencil, Settings } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { VendorProfile, mediaUrl } from '../../lib/vendor';
 import { color, type as T, space, radius } from '../../theme';
-import { Screen, PageHeader, Section, Group, Row, Button, Notice, StatGrid, Avatar, LoadingState } from '../../components/ui';
+import { Screen, PageHeader, Section, Group, Row, Button, Notice, StatGrid, Avatar, LoadingState, Toggle } from '../../components/ui';
 import DeleteAccountRow from '../../components/DeleteAccountRow';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
@@ -144,15 +144,8 @@ export default function AccountScreen() {
             title={availability ? 'Available for jobs' : 'Not available'}
             subtitle={availability ? 'Auto-dispatch can offer you slots' : 'You won’t get new offers'}
             right={
-              <Switch
-                value={availability}
-                onValueChange={toggleAvailability}
-                disabled={togglingAvail}
-                trackColor={{ false: color.surfaceDeep, true: color.ok }}
-                thumbColor={color.text}
-                ios_backgroundColor={color.surfaceDeep}
-                accessibilityLabel="Available for jobs"
-              />
+              <Toggle value={availability} onValueChange={toggleAvailability} disabled={togglingAvail}
+        accessibilityLabel="Available for jobs" />
             }
           />
         </Group>

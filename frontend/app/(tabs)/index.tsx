@@ -48,14 +48,14 @@ function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' 
   if (modes > 1) {
     return (
       <Group style={s.captureStack}>
-        {flags.tour ? <Row icon={Box} title="Start capture · 3D tour" chevron onPress={() => onOpen('splat')} /> : null}
+        {flags.tour ? <Row icon={Box} title="Start capture · 360° tour" chevron onPress={() => onOpen('splat')} /> : null}
         {flags.floorplan ? <Row icon={LayoutGrid} title="Start capture · Floor plan" chevron onPress={() => onOpen('floorplan')} /> : null}
-        {flags.visit ? <Row icon={Video} title="Deliver visit" chevron onPress={() => onOpen('visit')} /> : null}
+        {flags.visit ? <Row icon={Video} title="Virtual visit" chevron onPress={() => onOpen('visit')} /> : null}
       </Group>
     );
   }
   if (flags.visit) {
-    return <View style={s.captureStack}><Button variant="secondary" title="Deliver visit" onPress={() => onOpen('visit')} /></View>;
+    return <View style={s.captureStack}><Button variant="secondary" title="Virtual visit" onPress={() => onOpen('visit')} /></View>;
   }
   const kind = flags.tour ? 'splat' : 'floorplan';
   const label = flags.tour ? 'Start capture' : 'Start capture · Floor plan';

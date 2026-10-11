@@ -84,13 +84,13 @@ export default function CaptureModeScreen() {
             <Text style={[T.body, styles.sub]}>Pick what this job purchased. HDR stills stay on your camera.</Text>
             <Group>
               {flags.tour ? (
-                <Row icon={Box} title="3D tour" subtitle="Stay on a path and pan slowly around each room." chevron onPress={() => go('splat')} />
+                <Row icon={Box} title="360° tour" subtitle="Stand at stations and pan a full circle in each room." chevron onPress={() => go('splat')} />
               ) : null}
               {flags.floorplan ? (
                 <Row icon={LayoutGrid} title="Floor plan" subtitle="Photograph each room's corners, walls and openings." chevron onPress={() => go('floorplan')} />
               ) : null}
               {flags.visit ? (
-                <Row icon={Video} title="Virtual visit" subtitle="Free-roam scan. Paste a Polycam share link." chevron onPress={() => go('visit')} />
+                <Row icon={Video} title="Virtual visit" subtitle="Walk-through video, one per floor. Free-roam 3D." chevron onPress={() => go('visit')} />
               ) : null}
             </Group>
           </>

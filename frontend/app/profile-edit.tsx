@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert, Switch, Image } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Camera, FileCheck } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -7,7 +7,7 @@ import { actorHeaders } from '../lib/api';
 import { SKILLS, VendorProfile, mediaUrl } from '../lib/vendor';
 import { color, type as T, space, radius, layout } from '../theme';
 import {
-  Screen, NavBar, Section, Group, Row, Field, Chip, ChipRow, Segmented, StatGrid, Pill, Notice, TextLink, LoadingState,
+  Screen, NavBar, Section, Group, Row, Field, Chip, ChipRow, Segmented, StatGrid, Pill, Notice, TextLink, LoadingState, Toggle,
 } from '../components/ui';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
@@ -262,14 +262,7 @@ export default function ProfileEditScreen() {
                 title="Available for assignments"
                 subtitle="Connect a calendar on GO web so auto-assign only offers jobs that fit."
                 right={
-                  <Switch
-                    value={availability}
-                    onValueChange={setAvailability}
-                    trackColor={{ false: color.surfaceDeep, true: color.ok }}
-                    thumbColor={color.text}
-                    ios_backgroundColor={color.surfaceDeep}
-                    accessibilityLabel="Available for assignments"
-                  />
+                  <Toggle value={availability} onValueChange={setAvailability} accessibilityLabel="Available for assignments" />
                 }
               />
             </Group>

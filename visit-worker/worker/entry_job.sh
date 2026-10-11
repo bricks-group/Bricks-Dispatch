@@ -2,7 +2,9 @@
 # In-pod job entry (custom image, or stock image + bootstrap.sh). Runs once, uploads outputs to pre-signed PUT URLs,
 # writes result.json, then terminates its own pod. Env:
 #   JOB_ID, CAPTURE_URL (signed GET: .mp4/.mov video or .zip of images), JOB_SPEC (JSON: outputs{name:{put}}, result{put},
-#   rooms[] optional GO tap timestamps), ITERS (15000), CAP_MAX (1000000), MAX_RUNTIME_S (5400)
+#   rooms[] optional GO tap timestamps), CAPTURE_PARTS (optional, newline-separated signed GETs of a GO guided Visit
+#   recording's byte-range parts in order, from GET /api/capture/visit-video/sessions/{sid}/source; used instead of
+#   CAPTURE_URL), ITERS (15000), CAP_MAX (1000000), MAX_RUNTIME_S (5400)
 #   RUNPOD_POD_ID / RUNPOD_API_KEY are injected by Runpod into every pod (pod-scoped key) and used only to self-terminate.
 set -uo pipefail
 VW=${VW:-/opt/vw}; J=/root/job; mkdir -p $J/out
@@ -38,7 +40,12 @@ trap finish EXIT
 set -e
 [ -d /root/gsplat ] || bash $VW/bootstrap.sh
 stage download
-curl -sfL "$CAPTURE_URL" -o $J/capture.bin
+if [ -n "${CAPTURE_PARTS:-}" ]; then
+  : > $J/capture.bin   # GO resumable upload: concatenate parts in order (byte ranges of one .mp4/.mov)
+  while IFS= read -r u; do [ -n "$u" ] && curl -sfL --retry 3 "$u" >> $J/capture.bin; done <<< "$CAPTURE_PARTS"
+else
+  curl -sfL "$CAPTURE_URL" -o $J/capture.bin
+fi
 stage frames
 mkdir -p $J/raw
 if unzip -tq $J/capture.bin >/dev/null 2>&1; then unzip -q $J/capture.bin -d $J/raw; IMG=$(dirname "$(find $J/raw -iname '*.jp*g' | head -1)")

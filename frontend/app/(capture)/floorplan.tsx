@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, ScrollView } from 'react-native';
+import { View, Text, Pressable, StyleSheet, TextInput, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import Svg, { Rect, Line } from 'react-native-svg';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { COLORS, FONTS } from '../../constants/CaptureTheme';
-import { color, radius, layout } from '../../theme';
-import { X } from 'lucide-react-native';
+import { color, type as T, space, radius, layout, hairline } from '../../theme';
+import { Plus, Check } from 'lucide-react-native';
+import { hud, HudScrims, HudTopBar, HudIconButton, HudReadout, CoachCard, Shutter, HudControl, HudControls, CameraPermission, ScreenshotFeed } from '../../components/capture-hud';
 import { addCaptureRoom, ensureCaptureSession, openCaptureStation, uploadCaptureFrame } from '../../lib/capture-api';
 import type { CaptureSession } from '../../lib/capture-api';
 
@@ -15,10 +15,10 @@ const KIND = 'floorplan' as const;
 const CORNER_TOTAL = 4;
 
 const CUES = [
-  { title: 'Corner 1 of 4', body: 'Stand near the middle. Point at one corner of this room and fire. Essentials floor plans need four corners — not a 360 dome.' },
-  { title: 'Corner 2 of 4', body: 'Turn to the next corner. Keep the same spot on the floor so the server can pose the room.' },
-  { title: 'Corner 3 of 4', body: 'Third corner. Include the doorway edge if you see one so rooms connect on the plan.' },
-  { title: 'Corner 4 · next room', body: 'Last corner for this room. Add a room name, walk there, and shoot its four corners. Server compiles the plan.' },
+  { step: 'Corner 1 of 4', title: 'Aim at a corner', body: 'Stand near the middle of the room. Frame one corner, floor to ceiling.' },
+  { step: 'Corner 2 of 4', title: 'Turn to the next corner', body: 'Same spot on the floor, so the room lines up.' },
+  { step: 'Corner 3 of 4', title: 'Third corner', body: 'Keep a doorway edge in frame if you can see one.' },
+  { step: 'Corner 4 of 4', title: 'Last corner, then next room', body: 'Name the next room above and walk there.' },
 ];
 
 function CornerBox({ captured, total }: { captured: number; total: number }) {
@@ -26,14 +26,14 @@ function CornerBox({ captured, total }: { captured: number; total: number }) {
   return (
     <Svg width={160} height={110} viewBox="0 0 160 110">
       <Rect x={18} y={12} width={124} height={86} fill="none" stroke={color.hairStrong} strokeWidth={1.5} />
-      <Line x1={18} y1={12} x2={36} y2={12} stroke={on(0) ? COLORS.brick : color.hairStrong} strokeWidth={on(0) ? 4 : 2} />
-      <Line x1={18} y1={12} x2={18} y2={30} stroke={on(0) ? COLORS.brick : color.hairStrong} strokeWidth={on(0) ? 4 : 2} />
-      <Line x1={142} y1={12} x2={124} y2={12} stroke={on(1) ? COLORS.brick : color.hairStrong} strokeWidth={on(1) ? 4 : 2} />
-      <Line x1={142} y1={12} x2={142} y2={30} stroke={on(1) ? COLORS.brick : color.hairStrong} strokeWidth={on(1) ? 4 : 2} />
-      <Line x1={142} y1={98} x2={124} y2={98} stroke={on(2) ? COLORS.brick : color.hairStrong} strokeWidth={on(2) ? 4 : 2} />
-      <Line x1={142} y1={98} x2={142} y2={80} stroke={on(2) ? COLORS.brick : color.hairStrong} strokeWidth={on(2) ? 4 : 2} />
-      <Line x1={18} y1={98} x2={36} y2={98} stroke={on(3) ? COLORS.brick : color.hairStrong} strokeWidth={on(3) ? 4 : 2} />
-      <Line x1={18} y1={98} x2={18} y2={80} stroke={on(3) ? COLORS.brick : color.hairStrong} strokeWidth={on(3) ? 4 : 2} />
+      <Line x1={18} y1={12} x2={36} y2={12} stroke={on(0) ? color.accent : color.hairStrong} strokeWidth={on(0) ? 4 : 2} />
+      <Line x1={18} y1={12} x2={18} y2={30} stroke={on(0) ? color.accent : color.hairStrong} strokeWidth={on(0) ? 4 : 2} />
+      <Line x1={142} y1={12} x2={124} y2={12} stroke={on(1) ? color.accent : color.hairStrong} strokeWidth={on(1) ? 4 : 2} />
+      <Line x1={142} y1={12} x2={142} y2={30} stroke={on(1) ? color.accent : color.hairStrong} strokeWidth={on(1) ? 4 : 2} />
+      <Line x1={142} y1={98} x2={124} y2={98} stroke={on(2) ? color.accent : color.hairStrong} strokeWidth={on(2) ? 4 : 2} />
+      <Line x1={142} y1={98} x2={142} y2={80} stroke={on(2) ? color.accent : color.hairStrong} strokeWidth={on(2) ? 4 : 2} />
+      <Line x1={18} y1={98} x2={36} y2={98} stroke={on(3) ? color.accent : color.hairStrong} strokeWidth={on(3) ? 4 : 2} />
+      <Line x1={18} y1={98} x2={18} y2={80} stroke={on(3) ? color.accent : color.hairStrong} strokeWidth={on(3) ? 4 : 2} />
     </Svg>
   );
 }
@@ -95,18 +95,11 @@ export default function FloorPlanCaptureScreen() {
 
   if (!permission) return <View style={styles.dark} />;
   if (!permission.granted) {
-    return (
-      <SafeAreaView style={[styles.dark, styles.permWrap]}>
-        <Text style={styles.permText}>Bricks needs camera access to capture room corners for the floor plan.</Text>
-        <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
-          <Text style={styles.permBtnText}>Allow camera</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
-    );
+    return <CameraPermission onAllow={requestPermission} onClose={() => router.back()} body="GO uses the camera only while you photograph room corners for the floor plan." />;
   }
 
   const address = session?.address || 'Property';
-  const roomLabel = currentRoom?.name ? currentRoom.name.toUpperCase() : 'ROOM 1';
+  const roomLabel = currentRoom?.name || 'Room 1';
 
   const onShutter = async () => {
     if (shutterBusy.current || !jobId) return;
@@ -165,82 +158,66 @@ export default function FloorPlanCaptureScreen() {
   return (
     <View style={styles.dark}>
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
-      <View style={styles.scrim} pointerEvents="none" />
+      <ScreenshotFeed />
+      <HudScrims top={252} />
 
       <SafeAreaView style={{ flex: 1 }}>
-        <View style={styles.topBar}>
-          <TouchableOpacity style={styles.chip} onPress={() => router.back()}>
-            <X size={20} color={color.text} strokeWidth={layout.iconStroke} />
-          </TouchableOpacity>
-          <View style={{ alignItems: 'center' }}>
-            <Text style={styles.roomTitle}>{address}</Text>
-            <Text style={styles.roomSub}>FLOOR PLAN · {roomLabel}</Text>
-          </View>
-          <View style={styles.chip} />
-        </View>
+        <HudTopBar title={address} subtitle={`Floor plan · ${roomLabel}`} onClose={() => router.back()} />
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.roomRow}>
-          {(session?.rooms ?? []).map(r => (
-            <TouchableOpacity
-              key={r.id ?? r.name}
-              style={[styles.roomChip, r.id === selectedRoomId && styles.roomChipOn]}
-              onPress={() => setSelectedRoomId(r.id ?? null)}
-            >
-              <Text style={[styles.roomChipText, r.id === selectedRoomId && styles.roomChipTextOn]}>
-                {r.name} · {r.n}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {(session?.rooms ?? []).map(r => {
+            const on = r.id === selectedRoomId;
+            return (
+              <Pressable
+                key={r.id ?? r.name}
+                accessibilityRole="button"
+                accessibilityState={{ selected: on }}
+                style={[styles.roomChip, on && styles.roomChipOn]}
+                onPress={() => setSelectedRoomId(r.id ?? null)}
+              >
+                <Text style={[T.callout, { color: on ? color.textInverse : color.text }]}>{r.name}</Text>
+                <Text style={[T.dataSm, { color: on ? color.textInverse : color.textMuted }]}>{r.n}/{CORNER_TOTAL}</Text>
+              </Pressable>
+            );
+          })}
         </ScrollView>
 
         <View style={styles.addRow}>
           <TextInput
-            style={styles.addInput}
-            placeholder="Kitchen, Bedroom…"
+            style={[T.body, styles.addInput]}
+            placeholder="Next room: Kitchen, Bedroom…"
             placeholderTextColor={color.textFaint}
             value={newRoomName}
             onChangeText={setNewRoomName}
             returnKeyType="done"
             onSubmitEditing={onAddRoom}
+            accessibilityLabel="Room name"
           />
-          <TouchableOpacity style={styles.addBtn} onPress={onAddRoom} disabled={addingRoom}>
-            <Text style={styles.addBtnText}>{addingRoom ? '…' : '+ Room'}</Text>
-          </TouchableOpacity>
+          <HudIconButton icon={Plus} label="Add room" onPress={onAddRoom} active={newRoomName.trim().length > 0 && !addingRoom} />
         </View>
 
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <View style={styles.center}>
           <CornerBox captured={roomFrames} total={CORNER_TOTAL} />
-          <Text style={styles.domePct}>{roomFrames} / {CORNER_TOTAL}</Text>
-          <Text style={styles.domeLabel}>Corners this room</Text>
+          <HudReadout
+            style={styles.readout}
+            items={[
+              { label: 'Corners', value: `${Math.min(roomFrames, CORNER_TOTAL)}/${CORNER_TOTAL}`, tone: roomFrames >= CORNER_TOTAL ? 'ok' : undefined },
+              { label: 'Rooms', value: String(session?.rooms?.length ?? 0) },
+              { label: 'Frames', value: String(frameCount) },
+            ]}
+          />
         </View>
-
-        <View style={styles.guidance}>
-          <Text style={styles.guidanceTitle}>{cue.title}</Text>
-          <Text style={styles.guidanceBody}>{cue.body}</Text>
-        </View>
-
-        <Text style={styles.pill}>{frameCount} corner frames · compiled on server</Text>
 
         {captureError ? (
-          <Text style={styles.errorText}>{captureError}</Text>
-        ) : null}
+          <CoachCard tone="bad" title="Frame not saved" body={captureError} />
+        ) : (
+          <CoachCard step={cue.step} title={cue.title} body={cue.body} />
+        )}
 
-        <View style={styles.shutterRow}>
-          <View style={{ width: 56 }} />
-          <TouchableOpacity
-            style={[styles.shutterOuter, shutterPressed && styles.shutterPressed]}
-            onPress={onShutter}
-            activeOpacity={0.8}
-          >
-            <View style={styles.shutterInner} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.doneBtn}
-            onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId, kind: KIND } } as any)}
-          >
-            <Text style={styles.chipText}>✓</Text>
-          </TouchableOpacity>
-        </View>
+        <HudControls
+          center={<Shutter mode="photo" busy={shutterPressed} onPress={onShutter} label="Photograph corner" />}
+          right={<HudControl icon={Check} label="Review" onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId, kind: KIND } } as any)} />}
+        />
       </SafeAreaView>
     </View>
   );
@@ -248,38 +225,17 @@ export default function FloorPlanCaptureScreen() {
 
 const styles = StyleSheet.create({
   dark: { flex: 1, backgroundColor: color.bg },
-  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(12,11,9,0.35)' },
-  permWrap: { alignItems: 'center', justifyContent: 'center', padding: 32, gap: 20 },
-  permText: { fontFamily: FONTS.body, color: color.text, textAlign: 'center', fontSize: 14 },
-  permBtn: { backgroundColor: COLORS.brick, paddingHorizontal: 24, paddingVertical: 12, borderRadius: radius.sm },
-  permBtnText: { fontFamily: FONTS.bodySemibold, color: color.textOnAccent },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8 },
-  chip: { width: layout.tap, height: layout.tap, borderRadius: radius.sm, borderWidth: 1, borderColor: color.hairStrong, alignItems: 'center', justifyContent: 'center' },
-  chipText: { color: color.text, fontSize: 16 },
-  roomTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: color.text },
-  roomSub: { fontFamily: FONTS.mono, fontSize: 12, letterSpacing: 1.4, color: COLORS.brick, marginTop: 1 },
-  roomRow: { paddingHorizontal: 16, paddingTop: 10, gap: 8, alignItems: 'center' },
-  roomChip: { borderWidth: 1, borderColor: color.hairStrong, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8 },
-  roomChipOn: { borderColor: COLORS.brick, backgroundColor: color.accentTint },
-  roomChipText: { fontFamily: FONTS.mono, fontSize: 12, color: color.textBody },
-  roomChipTextOn: { color: color.text },
-  addRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginTop: 8 },
-  addInput: {
-    flex: 1, height: layout.tap, borderWidth: 1, borderColor: color.hairStrong, borderRadius: radius.sm,
-    color: color.text, paddingHorizontal: 10, fontFamily: FONTS.body, fontSize: 13, backgroundColor: 'rgba(20, 18, 16, 0.6)',
+  roomRow: { paddingHorizontal: layout.gutter, paddingTop: space[12], gap: space[8], alignItems: 'center' },
+  roomChip: {
+    minHeight: layout.tap, flexDirection: 'row', alignItems: 'center', gap: space[8], paddingHorizontal: space[12],
+    borderRadius: radius.sm, borderWidth: hairline, borderColor: color.hairStrong, backgroundColor: hud.panel,
   },
-  addBtn: { height: layout.tap, paddingHorizontal: 12, borderRadius: radius.sm, backgroundColor: COLORS.brick, alignItems: 'center', justifyContent: 'center' },
-  addBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 12, color: color.textOnAccent },
-  domePct: { fontFamily: FONTS.mono, fontSize: 22, color: color.text, marginTop: 4 },
-  domeLabel: { fontFamily: FONTS.mono, fontSize: 10.5, letterSpacing: 1.4, textTransform: 'uppercase', color: color.textBody, marginTop: 2 },
-  guidance: { marginHorizontal: 20, backgroundColor: COLORS.brick, borderRadius: radius.sm, padding: 12 },
-  guidanceTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: color.textOnAccent },
-  guidanceBody: { fontFamily: FONTS.body, fontSize: 12, color: color.textOnAccent, marginTop: 2 },
-  pill: { fontFamily: FONTS.mono, fontSize: 10.5, color: color.text, textAlign: 'center', marginTop: 8 },
-  errorText: { fontFamily: FONTS.body, fontSize: 12, color: color.text, backgroundColor: COLORS.bad, marginHorizontal: 20, marginTop: 8, padding: 8, borderRadius: radius.sm, textAlign: 'center' },
-  shutterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 18 },
-  shutterOuter: { width: 74, height: 74, borderRadius: 37, borderWidth: 3, borderColor: color.text, alignItems: 'center', justifyContent: 'center' },
-  shutterPressed: { transform: [{ scale: 0.92 }] },
-  shutterInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.brick },
-  doneBtn: { width: 44, height: 44, borderRadius: radius.sm, borderWidth: 1, borderColor: color.hairStrong, alignItems: 'center', justifyContent: 'center' },
+  roomChipOn: { backgroundColor: color.inverse, borderColor: color.inverse },
+  addRow: { flexDirection: 'row', gap: space[8], paddingHorizontal: layout.gutter, marginTop: space[8] },
+  addInput: {
+    flex: 1, height: layout.tap, borderWidth: hairline, borderColor: color.hairStrong, borderRadius: radius.sm,
+    color: color.text, paddingHorizontal: space[12], backgroundColor: hud.panel,
+  },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space[16] },
+  readout: {},
 });

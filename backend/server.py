@@ -75,6 +75,7 @@ from app.routers.vendor_profile import router as vendor_profile_router, os_route
 from app.routers.notifications import router as notifications_router
 from app.routers.jobs import router as jobs_router
 from app.routers.capture import router as capture_router
+from app.routers.capture_visit_video import router as capture_visit_video_router
 from app.shared.database import get_db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -190,6 +191,7 @@ app.include_router(vendor_profile_os_router)
 app.include_router(notifications_router)
 app.include_router(jobs_router)
 app.include_router(capture_router)
+app.include_router(capture_visit_video_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
 install_browser_middleware(app)

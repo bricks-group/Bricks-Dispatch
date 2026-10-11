@@ -1,14 +1,20 @@
 import { useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { color, type as T, space, layout } from '../../theme';
-import { NavBar, Field, Button, Notice } from '../../components/ui';
+import { Video } from 'lucide-react-native';
+import { color, type as T, space } from '../../theme';
+import { Screen, NavBar, Section, Group, Row, Field, Button, Notice } from '../../components/ui';
 import { actorHeaders } from '../../lib/api';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
-export default function VisitDeliverScreen() {
+/**
+ * Virtual Visit entry. Two ways in:
+ *  1. Record the walk-through in GO (guided video → owned splat pipeline).
+ *  2. Deliver an existing scan: Polycam share link (unchanged deliver path).
+ * Not the 360° tour (kind=splat, Capture → 360° tour).
+ */
+export default function VisitScreen() {
   const router = useRouter();
   const { jobId } = useLocalSearchParams<{ jobId: string }>();
   const [url, setUrl] = useState('');
@@ -43,37 +49,46 @@ export default function VisitDeliverScreen() {
   const canSubmit = !!jobId && !busy && url.trim().length > 8;
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <NavBar title="Virtual visit" close onBack={() => router.back()} border={false} />
-      <View style={styles.body}>
-        <Text style={[T.display, { color: color.text }]} accessibilityRole="header">Deliver the visit</Text>
-        <Text style={[T.body, styles.sub]}>
-          Paste the Polycam share link for the free-roam scan. It goes straight onto the listing.
-        </Text>
-
-        <Field
-          label="Share link"
-          value={url}
-          onChangeText={setUrl}
-          placeholder="https://poly.cam/…"
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          editable={!busy}
-          hint="File uploads (.sog, .spz, .ply, .splat) are on GO web for now."
-        />
-
-        {error ? <Notice tone="bad">{error}</Notice> : null}
-        {done ? <Notice tone="ok">{done}</Notice> : null}
-
-        <Button title="Deliver to listing" onPress={deliver} loading={busy} disabled={!canSubmit} />
+    <Screen header={<NavBar title="Virtual visit" close onBack={() => router.back()} border={false} />} contentStyle={styles.body}>
+      <View style={styles.head}>
+        <Text style={[T.display, { color: color.text }]} accessibilityRole="header">Virtual visit</Text>
+        <Text style={[T.body, { color: color.textMuted }]}>Free-roam 3D of the home, built from one walk-through video per floor.</Text>
       </View>
-    </SafeAreaView>
+
+      <Group>
+        <Row
+          icon={Video}
+          title="Record the walk-through"
+          subtitle="GO sets up the camera and coaches you while you walk."
+          chevron
+          onPress={() => router.push({ pathname: '/(capture)/visit-video', params: { jobId } } as any)}
+        />
+      </Group>
+
+      <Section first label="Already scanned elsewhere">
+        <View style={styles.deliver}>
+          <Field
+            label="Polycam share link"
+            value={url}
+            onChangeText={setUrl}
+            placeholder="https://poly.cam/…"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            editable={!busy}
+            hint="Files (.sog, .spz, .ply, .splat) upload on GO web."
+          />
+          {error ? <Notice tone="bad">{error}</Notice> : null}
+          {done ? <Notice tone="ok">{done}</Notice> : null}
+          <Button variant="secondary" title="Deliver link to listing" onPress={deliver} loading={busy} disabled={!canSubmit} />
+        </View>
+      </Section>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: color.bg },
-  body: { paddingHorizontal: layout.gutter, paddingTop: space[16], gap: space[20] },
-  sub: { color: color.textMuted, marginTop: -space[12] },
+  body: { paddingTop: space[16], gap: space[24] },
+  head: { gap: space[8] },
+  deliver: { gap: space[16] },
 });

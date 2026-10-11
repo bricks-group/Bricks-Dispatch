@@ -21,6 +21,10 @@ export default function CaptureLayout() {
       <Stack.Screen name="capture" />
       <Stack.Screen name="floorplan" />
       <Stack.Screen name="visit" />
+      <Stack.Screen name="visit-video" />
+      <Stack.Screen name="visit-prep" />
+      <Stack.Screen name="visit-record" options={{ gestureEnabled: false }} />
+      <Stack.Screen name="visit-review" />
       <Stack.Screen name="review" />
     </Stack>
   );
