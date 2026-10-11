@@ -236,7 +236,7 @@ body {
 .bar-track {
   width: 100%;
   height: 3px;
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--c-hair-s);
   overflow: hidden;
 }
@@ -511,9 +511,31 @@ label {
 }
 
 @media (max-width: 860px) {
-  .app-shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--c-hair); }
+  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .main { min-width: 0; }
+  /* Phone: sidebar collapses to brand row + one scrolling tab strip (was a 9-row list
+     pushing every page ~450px down). Active tab = 2px brick underline, no pills. */
+  .sidebar {
+    position: sticky; top: 0; z-index: 20; height: auto; padding: 10px 0 0;
+    border-right: 0; border-bottom: 1px solid var(--c-hair);
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; padding: 0 16px 8px; margin: 0; border-bottom: 0; }
+  .brand-sub { margin-top: 0; }
+  .nav {
+    flex-direction: row; gap: 0; overflow-x: auto; flex-wrap: nowrap;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; padding: 0 8px;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-link {
+    flex: 0 0 auto; padding: 10px 10px 9px; border-radius: 0; white-space: nowrap;
+    border-bottom: 2px solid transparent; font-size: 13px; min-height: 44px; box-sizing: border-box;
+  }
+  .nav-link:hover, .nav-link.active { background: transparent; }
+  .nav-link.active { color: var(--c-ink); border-bottom-color: var(--c-brick); }
+  .topbar { padding: 0 16px; }
   .page-grid { grid-template-columns: 1fr; }
+  /* Wide tables (Jobs, Earnings) scroll inside their card instead of clipping STATUS/actions. */
+  .card table, table.table { display: block; overflow-x: auto; max-width: 100%; }
 }
 
 .table tbody tr.row-click { cursor: pointer; }
@@ -713,7 +735,7 @@ input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
 .capture-shutter {
   width: 74px;
   height: 74px;
-  border-radius: 37px;
+  border-radius: 2px;
   border: 3px solid #F4F1EB;
   background: transparent;
   display: flex;
@@ -725,7 +747,7 @@ input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
 .capture-shutter span {
   width: 58px;
   height: 58px;
-  border-radius: 29px;
+  border-radius: 2px;
   background: var(--c-brick);
   display: block;
 }
@@ -753,3 +775,19 @@ input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
 .capture-status-row.is-failed { border-color: rgba(139, 46, 31, 0.7); background: rgba(139, 46, 31, 0.08); }
 .today-capture { margin-top: 6px; }
 .today-capture .btn-capture { padding: 8px 12px; font-size: 13px; }
+
+/* ── Offline + danger ── */
+.offline-bar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--c-brick);
+  color: var(--c-ink);
+  background: var(--c-bg-deep);
+  font-size: 12.5px;
+}
+button.btn-danger {
+  background: transparent;
+  color: #E0693F;
+  border: 1px solid #C04327;
+  border-radius: var(--radius);
+}
+button.btn-danger:hover { background: rgba(192, 67, 39, 0.12); color: #F4F1EB; }

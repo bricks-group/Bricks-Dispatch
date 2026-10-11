@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { fetchOAuthProviderEnabled, GOOGLE_UNAVAILABLE_MESSAGE } from './web-account';
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://dispatch-api.brxs.ca';
 const TOKEN_KEY = 'bricks_dispatch_token';
@@ -310,6 +311,14 @@ export async function loginWithGoogle(): Promise<void> {
       'Auth is restricted (Fair Use / 402). Google sign-in is unavailable until Auth unlocks.',
     );
   }
+  // A disabled provider makes Supabase answer /authorize with raw JSON (400
+  // "provider is not enabled"); check first so the vendor gets a real message.
+  const googleOn = await fetchOAuthProviderEnabled(
+    'google',
+    import.meta.env.VITE_SUPABASE_URL || '',
+    import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+  );
+  if (googleOn === false) throw new Error(GOOGLE_UNAVAILABLE_MESSAGE);
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {

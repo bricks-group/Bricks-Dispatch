@@ -22,6 +22,29 @@ import { UnderReviewPage } from './pages/UnderReviewPage';
 import { AddEmailPage, NotOnTeamPage } from './pages/AddEmailPage';
 import { hasAppAccess, AuthMember } from './lib/api';
 
+/** Native GO keeps working from cache offline; on web we at least say so plainly. */
+function useOnline(): boolean {
+  const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
+  }, []);
+  return online;
+}
+
+function OfflineBar() {
+  const online = useOnline();
+  if (online) return null;
+  return (
+    <div className="offline-bar" role="status" data-testid="offline-bar">
+      Offline. You can read what is already on screen; check-ins, uploads and status changes need a connection.
+    </div>
+  );
+}
+
 function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase();
@@ -131,6 +154,7 @@ function ProtectedLayout() {
       <Sidebar />
       <main className="main">
         <TopBar name={name} onLogout={onLogout} />
+        <OfflineBar />
         <Routes>
           <Route path="/"                element={<OverviewPage />} />
           <Route path="/jobs"           element={<JobsPage />} />
