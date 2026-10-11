@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, ActivityIndicator, Alert, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Bell, Vibrate, CreditCard } from 'lucide-react-native';
+import { ArrowLeft, Bell, CreditCard } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
 import { actorHeaders } from '../lib/api';
 import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
@@ -13,10 +13,6 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const c = theme;
-  const [jobAlerts, setJobAlerts] = useState(true);
-  const [chatNotifs, setChatNotifs] = useState(true);
-  const [payoutNotifs, setPayoutNotifs] = useState(true);
-  const [vibrate, setVibrate] = useState(true);
   const [stripe, setStripe] = useState<{ connected: boolean; connect_status: string } | null>(null);
   const [stripeVisible, setStripeVisible] = useState(false);
   const [stripeBusy, setStripeBusy] = useState(false);
@@ -122,34 +118,13 @@ export default function SettingsScreen() {
         <View style={s.section}>
           <Text style={[s.sectionLabel, { color: c.textFaint }]}>NOTIFICATIONS</Text>
           <View style={[s.menuCard, { backgroundColor: c.surface, borderColor: c.border }]}>
-            {[
-              { label: 'Job alerts', value: jobAlerts, set: setJobAlerts, Icon: Bell },
-              { label: 'Messages', value: chatNotifs, set: setChatNotifs, Icon: Bell },
-              { label: 'Payout updates', value: payoutNotifs, set: setPayoutNotifs, Icon: Bell },
-            ].map(({ label, value, set, Icon }, i, arr) => (
-              <View key={label} style={[s.row, i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: c.border }]}>
-                <Icon size={15} color={c.textMuted} strokeWidth={1.5} />
-                <Text style={[s.rowLabel, { color: c.text }]}>{label}</Text>
-                <Switch
-                  value={value}
-                  onValueChange={set}
-                  trackColor={{ false: c.surfaceDeep, true: '#4A6B3C66' }}
-                  thumbColor={value ? '#4A6B3C' : c.textFaint}
-                  ios_backgroundColor={c.surfaceDeep}
-                />
+            <TouchableOpacity style={s.row} activeOpacity={0.7} onPress={() => Linking.openSettings().catch(() => {})}>
+              <Bell size={15} color={c.textMuted} strokeWidth={1.5} />
+              <View style={{ flex: 1 }}>
+                <Text style={[s.rowLabel, { color: c.text }]}>Notification settings</Text>
+                <Text style={s.rowSub}>Job and payout alerts, sounds, and vibration are managed in your phone's Settings.</Text>
               </View>
-            ))}
-            <View style={s.row}>
-              <Vibrate size={15} color={c.textMuted} strokeWidth={1.5} />
-              <Text style={[s.rowLabel, { color: c.text }]}>Vibration</Text>
-              <Switch
-                value={vibrate}
-                onValueChange={setVibrate}
-                trackColor={{ false: c.surfaceDeep, true: '#4A6B3C66' }}
-                thumbColor={vibrate ? '#4A6B3C' : c.textFaint}
-                ios_backgroundColor={c.surfaceDeep}
-              />
-            </View>
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
