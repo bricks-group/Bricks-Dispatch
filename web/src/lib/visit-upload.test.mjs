@@ -14,6 +14,7 @@ const page = readFileSync(path.join(here, '../pages/VisitCapturePage.tsx'), 'utf
 assert.match(src, /\.ply/);
 assert.match(src, /\.splat/);
 assert.match(src, /\.spz/);
+assert.match(src, /'\.sog'/);
 assert.match(src, /\/api\/capture\/visit\/sign/);
 assert.match(src, /\/api\/capture\/visit\/deliver/);
 assert.match(src, /uploadToSignedUrl/);
@@ -28,4 +29,4 @@ assert.match(page, /deliverVisitUrl/);
 assert.match(page, /formatVisitFileLabel/);
 assert.match(page, /VISIT_EXTS/);
 
-console.log('visit-upload Polycam URL + .ply/.splat/.spz parity tests passed');
+console.log('visit-upload Polycam URL + .sog/.spz/.ply/.splat parity tests passed');

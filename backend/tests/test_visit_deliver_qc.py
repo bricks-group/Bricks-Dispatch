@@ -261,3 +261,79 @@ def test_visit_file_qc_fetch_failure_holds(monkeypatch):
     out = asyncio.run(cap._visit_file_qc("https://example.test/x", "visits/j/a.ply"))
     assert out["qc_status"] == "rejected"
     assert "image_unavailable" in (out.get("qc_notes") or "").lower()
+
+
+# ── Owned Visit pipeline (2026-10-11): .sog, SPZ v4 hold, multi-room ──
+
+def _zip_head(name: bytes) -> bytes:
+    hdr = b"PK\x03\x04" + b"\x14\x00" + b"\x00" * 20 + len(name).to_bytes(2, "little") + b"\x00\x00"
+    return hdr + name + b"RIFF" + b"\x00" * 40
+
+
+def test_visit_qc_sog_zip_passes():
+    from app.services.qc_media_kinds import check_visit_head
+
+    v = check_visit_head(_zip_head(b"means_l.webp"), 4_000_000, "visits/j/a.sog")
+    assert v["qc_status"] == "passed", v
+    v = check_visit_head(_zip_head(b"meta.json"), 4_000_000, "visits/j/a.sog")
+    assert v["qc_status"] == "passed", v
+
+
+def test_visit_qc_sog_rejects_non_sog_zip_and_junk():
+    from app.services.qc_media_kinds import check_visit_head
+
+    assert check_visit_head(_zip_head(b"photos/IMG_1.jpg"), 4_000_000, "visits/j/a.sog")["qc_status"] == "rejected"
+    assert check_visit_head(b"\x00" * 64, 64, "visits/j/a.sog")["qc_status"] == "rejected"
+
+
+def test_visit_qc_spz_v4_held_v2_passes():
+    from app.services.qc_media_kinds import check_visit_head
+
+    v4 = b"NGSP" + (4).to_bytes(4, "little") + b"\x00" * 56
+    v = check_visit_head(v4, 64, "visits/j/a.spz")
+    assert v["qc_status"] == "rejected" and ".sog" in v["qc_notes"]
+    gz = b"\x1f\x8b" + b"\x00" * 62
+    assert check_visit_head(gz, 64, "visits/j/a.spz")["qc_status"] == "passed"
+
+
+def test_visit_deliver_accepts_sog_rooms_and_pipeline_qc():
+    import pathlib
+
+    src = (pathlib.Path(__file__).resolve().parents[1] / "app" / "routers" / "capture.py").read_text()
+    assert 'VISIT_FILE_EXTS = ("sog", "spz", "ply", "splat")' in src
+    assert "visit_pipeline_qc_held" in src
+    assert "rooms=rooms or None" in src
+    assert "x_internal_api_key" in src.split("async def deliver_virtual_visit")[1][:600]
+
+
+def test_visit_sign_pipeline_worker_rooms_and_floor_plan(monkeypatch):
+    """Pipeline worker signs with X-Internal-Api-Key; floor plans get their own kind."""
+    from app.routers import capture as cap
+    from fastapi import HTTPException
+
+    job = {"id": "job-p"}
+    seen = {}
+
+    async def fake_actor(auth, uid, job_id, key=None):
+        seen["key"] = key
+        return ("pipeline", job)
+
+    async def fake_sign(path):
+        return {"signed_url": "https://storage.test/" + path, "token": "t"}
+
+    monkeypatch.setattr(cap, "_actor_and_job", fake_actor)
+    monkeypatch.setattr(cap, "job_capture_entitlements", lambda _j: {"visit": True})
+    monkeypatch.setattr(cap, "kind_purchased", lambda _j, _k: True)
+    monkeypatch.setattr(cap, "create_signed_upload_url", fake_sign)
+
+    room = asyncio.run(cap.sign_visit_upload({"job_id": "job-p", "filename": "room-0.sog"}, None, None, "k"))
+    assert seen["key"] == "k"
+    assert room["storage_path"].startswith("visits/job-p/") and room["storage_path"].endswith(".sog")
+    plan = asyncio.run(
+        cap.sign_visit_upload({"job_id": "job-p", "filename": "floor-0.svg", "kind": "floor_plan"}, None, None, "k")
+    )
+    assert plan["storage_path"].endswith("-floor.svg") and plan["content_type"] == "image/svg+xml"
+    with pytest.raises(HTTPException):
+        asyncio.run(cap.sign_visit_upload({"job_id": "job-p", "filename": "x.svg"}, None, None, "k"))
+    with pytest.raises(HTTPException):
+        asyncio.run(cap.sign_visit_upload({"job_id": "job-p", "filename": "x.exe", "kind": "floor_plan"}, None, None, "k"))

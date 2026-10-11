@@ -42,7 +42,7 @@ CAMERA_RAW_REJECT_MESSAGE = (
     "Camera RAW files (CR2/CR3/DNG/NEF/ARW/…) are not supported for listing stills. "
     "Export JPEG (or HEIC) ±EV brackets from your camera or Lightroom, then upload those."
 )
-VISIT_EXTS = (".splat", ".ply", ".spz")
+VISIT_EXTS = (".splat", ".ply", ".spz", ".sog")
 
 
 def _lower(value: Any) -> str:
@@ -320,8 +320,8 @@ def stills_storage_path(job_id: str, upload_id: str, filename: str) -> str:
     return f"bricks-go/jobs/{job_id}/{upload_id}/{safe}"
 
 
-# Prefer .splat (native gsplat), then .ply, then .spz when multiple visit assets exist.
-_VISIT_PICK_ORDER = (".splat", ".ply", ".spz")
+# Prefer .sog (compressed, streams per room), then .splat, .ply, .spz when multiple visit assets exist.
+_VISIT_PICK_ORDER = (".sog", ".splat", ".ply", ".spz")
 
 
 def _visit_pick_rank(filename: Any = None) -> int:

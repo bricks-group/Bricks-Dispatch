@@ -53,7 +53,7 @@ export default function VisitDeliverScreen() {
       <View style={styles.body}>
         <Text style={styles.title}>Deliver Virtual Visit</Text>
         <Text style={styles.sub}>
-          Free-roam splat — not the path-confined 3D tour. Paste a Polycam share URL. File upload (.ply / .splat) is on GO web for now; owned GPU cook from phone frames comes later.
+          Free-roam splat — not the path-confined 3D tour. Paste a Polycam share URL. File upload (.sog / .spz / .ply / .splat) is on GO web for now; owned phone-video Visit capture is next.
         </Text>
 
         <Text style={styles.label}>Polycam / share URL</Text>

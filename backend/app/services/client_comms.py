@@ -93,6 +93,9 @@ async def register_property_visit(
     title: str = "Virtual Visit",
     embed_url: str | None = None,
     visit_type: str | None = None,
+    rooms: list | None = None,
+    manifest: dict | None = None,
+    qc: dict | None = None,
 ) -> bool:
     """POST a finished capture to Bricks-OS property_visits via
     POST /api/internal/visit-ready.
@@ -100,6 +103,9 @@ async def register_property_visit(
     type=file + storage_path — Gaussian splat / .ply virtual visit (VisitViewer gsplat).
     type=url + embed_url — hosted 3D tour walkthrough (VisitViewer iframe). Do not
     send phone-tour HTML as type=file; that path is the splat viewer.
+
+    rooms/manifest/qc (owned Visit pipeline): multi-room streamed Visit —
+    OS stores rooms in property_visit_rooms (room-by-room streaming).
 
     Same INTERNAL_API_KEYS / X-Internal-Api-Key convention as _call_booking_comms.
     """
@@ -120,6 +126,12 @@ async def register_property_visit(
         body["type"] = visit_type
     if "type" not in body:
         body["type"] = "file"
+    if rooms:
+        body["rooms"] = rooms
+    if manifest:
+        body["manifest"] = manifest
+    if qc:
+        body["qc"] = qc
     if body["type"] == "file" and not storage_path:
         logger.warning("visit-ready skipped — type=file needs storage_path")
         return False

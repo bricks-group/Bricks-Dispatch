@@ -2,7 +2,7 @@ import { API_BASE } from './api';
 import { supabase } from './supabase';
 
 /** Virtual Visit bridge files (owned GPU cook later). */
-export const VISIT_EXTS = ['.ply', '.splat', '.spz'] as const;
+export const VISIT_EXTS = ['.sog', '.spz', '.ply', '.splat'] as const;
 
 const VISIT_BUCKET = 'brxs-deliverables';
 
@@ -72,7 +72,7 @@ export async function deliverVisitUrl(
 }
 
 /**
- * .ply / .splat / .spz → /visit/sign → Storage (token PUT or signed URL) → /visit/deliver.
+ * .sog / .spz / .ply / .splat → /visit/sign → Storage (token PUT or signed URL) → /visit/deliver.
  * Same finalize/media_delivery bridge as Polycam URL (visit_bridge + kind=visit).
  */
 export async function deliverVisitFile(
@@ -81,9 +81,9 @@ export async function deliverVisitFile(
   opts?: { title?: string; onPhase?: (phase: VisitUploadPhase) => void },
 ): Promise<VisitDeliverResult> {
   if (!jobId) throw new Error('Missing job');
-  if (!file) throw new Error('Choose a .ply, .splat, or .spz file');
+  if (!file) throw new Error('Choose a .sog, .spz, .ply, or .splat file');
   if (!isVisitFilename(file.name)) {
-    throw new Error('Only .ply, .splat, or .spz files are supported');
+    throw new Error('Only .sog, .spz, .ply, or .splat files are supported');
   }
 
   opts?.onPhase?.('signing');

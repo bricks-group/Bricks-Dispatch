@@ -1629,11 +1629,19 @@ def _normalize_visit_url(raw: str) -> str:
     return url
 
 
+# PlayCanvas SOG (.sog, zip of webp + meta.json) joins .spz/.ply/.splat
+# 2026-10-11: owned Visit pipeline outputs SOG per room; OS Spark viewer reads all four.
+VISIT_FILE_EXTS = ("sog", "spz", "ply", "splat")
+
+
+VISIT_FLOOR_PLAN_EXTS = ("svg", "png", "webp")
+
+
 def _visit_ext(filename: str) -> str:
     name = (filename or "").strip()
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    if ext not in ("splat", "ply", "spz"):
-        api_error(400, "Only .splat, .ply, or .spz files are supported", "bad_visit_file")
+    if ext not in VISIT_FILE_EXTS:
+        api_error(400, "Only .sog, .spz, .ply, or .splat files are supported", "bad_visit_file")
     return ext
 
 
@@ -1642,19 +1650,32 @@ async def sign_visit_upload(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
-    """Signed PUT for a .ply/.splat/.spz Virtual Visit file (bypasses 4.5MB Vercel body)."""
+    """Signed PUT for a .sog/.spz/.ply/.splat Virtual Visit file (bypasses 4.5MB Vercel body).
+
+    The owned Visit pipeline worker signs with X-Internal-Api-Key, one call per
+    room, plus ``kind: "floor_plan"`` for the generated floor plan image
+    (.svg/.png/.webp) that the manifest references.
+    """
     import uuid as _uuid
 
     job_id = (payload or {}).get("job_id") or ""
     filename = str((payload or {}).get("filename") or "visit.splat")
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    kind = str((payload or {}).get("kind") or "splat").strip().lower()
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     flags = job_capture_entitlements(job)
     if not kind_purchased(job, "visit"):
         api_error(403, capture_forbidden_message("visit", flags), "capture_kind_not_purchased")
-    ext = _visit_ext(filename)
     visit_id = str(_uuid.uuid4())
-    storage_path = f"visits/{job_id}/{visit_id}.{ext}"
+    if kind == "floor_plan":
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in VISIT_FLOOR_PLAN_EXTS:
+            api_error(400, "Floor plan must be .svg, .png or .webp", "bad_visit_file")
+        storage_path = f"visits/{job_id}/{visit_id}-floor.{ext}"
+    else:
+        ext = _visit_ext(filename)
+        storage_path = f"visits/{job_id}/{visit_id}.{ext}"
     signed = await create_signed_upload_url(storage_path)
     if not signed or not signed.get("signed_url"):
         api_error(502, "Could not mint visit upload URL", "visit_sign_failed")
@@ -1666,7 +1687,7 @@ async def sign_visit_upload(
         "token": signed.get("token"),
         "path": signed.get("path") or storage_path,
         "bucket": STORAGE_BUCKET,
-        "content_type": "application/octet-stream",
+        "content_type": {"svg": "image/svg+xml", "png": "image/png", "webp": "image/webp"}.get(ext, "application/octet-stream"),
     }
 
 
@@ -1723,19 +1744,50 @@ async def deliver_virtual_visit(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """Vendor delivers Virtual Visit from GO onto the listing file.
 
     Body: job_id + either polycam_url / embed_url OR storage_path from /visit/sign.
-    Bridge until owned GPU cook: Polycam share URL or uploaded .ply/.splat/.spz.
+    Files: .sog / .spz / .ply / .splat.
+
+    Owned Visit pipeline (2026-10-11): ``rooms`` = [{storage_path, name,
+    floor_index, transform, bbox, entry_pose, hotspot, format}] for a
+    multi-room streamed Visit, plus optional ``manifest`` (floor plan, base
+    splat, start room) and ``pipeline_qc`` ({passed, checks:[...]}) from the
+    GPU worker. Every room file gets the container check; a failed pipeline
+    QC or any rejected room holds the whole Visit (422) — nothing lands on
+    the listing. The worker authenticates with X-Internal-Api-Key.
     """
     job_id = (payload or {}).get("job_id") or ""
+    raw_rooms = (payload or {}).get("rooms") or []
+    rooms: list = []
+    if raw_rooms:
+        if not isinstance(raw_rooms, list) or len(raw_rooms) > 40:
+            api_error(400, "rooms must be a list of at most 40 rooms", "bad_visit_rooms")
+        for i, r in enumerate(raw_rooms):
+            sp = str((r or {}).get("storage_path") or "").strip() if isinstance(r, dict) else ""
+            if not sp:
+                api_error(400, f"Room {i + 1} needs a storage_path", "bad_visit_rooms")
+            rooms.append({**r, "storage_path": sp})
+        if not (payload or {}).get("storage_path"):
+            payload = {**payload, "storage_path": rooms[0]["storage_path"]}
+    pipeline_qc = (payload or {}).get("pipeline_qc")
+    if isinstance(pipeline_qc, dict) and pipeline_qc.get("passed") is False:
+        failed = [c.get("name") for c in (pipeline_qc.get("checks") or []) if isinstance(c, dict) and not c.get("passed")]
+        api_error(
+            422,
+            "Automatic Visit QC held this capture"
+            + (f" ({', '.join(str(f) for f in failed if f)})" if failed else "")
+            + ". Nothing was added to the listing — re-shoot or re-process.",
+            "visit_pipeline_qc_held",
+        )
     title = str((payload or {}).get("title") or "Virtual Visit").strip() or "Virtual Visit"
     polycam_url = _normalize_visit_url(
         str((payload or {}).get("polycam_url") or (payload or {}).get("embed_url") or "")
     )
     storage_path = str((payload or {}).get("storage_path") or "").strip()
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     flags = job_capture_entitlements(job)
     if not kind_purchased(job, "visit"):
         api_error(403, capture_forbidden_message("visit", flags), "capture_kind_not_purchased")
@@ -1747,8 +1799,14 @@ async def deliver_virtual_visit(
         if not storage_path.startswith(f"visits/{job_id}/"):
             api_error(400, "storage_path must be under visits/{job_id}/", "bad_visit_path")
         ext = storage_path.rsplit(".", 1)[-1].lower()
-        if ext not in ("splat", "ply", "spz"):
-            api_error(400, "Visit file must be .splat, .ply, or .spz", "bad_visit_file")
+        if ext not in VISIT_FILE_EXTS:
+            api_error(400, "Visit file must be .sog, .spz, .ply, or .splat", "bad_visit_file")
+    for i, r in enumerate(rooms):
+        sp = r["storage_path"]
+        if not sp.startswith(f"visits/{job_id}/") or ".." in sp:
+            api_error(400, f"Room {i + 1} storage_path must be under visits/{{job_id}}/", "bad_visit_path")
+        if sp.rsplit(".", 1)[-1].lower() not in VISIT_FILE_EXTS:
+            api_error(400, f"Room {i + 1} must be .sog, .spz, .ply, or .splat", "bad_visit_file")
 
     # Visit file bridge: sign the GET first so the container check runs BEFORE
     # anything lands on the listing (property_visits, media_delivery, client
@@ -1763,9 +1821,25 @@ async def deliver_virtual_visit(
                 422,
                 f"{qc.get('qc_notes') or 'Visit file is not a Visit asset.'} "
                 "Nothing was added to the listing — re-export the scan as "
-                ".ply, .splat, or .spz and upload it again.",
+                ".sog, .spz, .ply, or .splat and upload it again.",
                 "visit_file_rejected",
             )
+    # Multi-room: every room file passes the same container check.
+    room_qc: list = []
+    for i, r in enumerate(rooms):
+        if r["storage_path"] == storage_path:
+            room_qc.append({"room": r.get("name") or f"Room {i + 1}", "qc_status": "passed"})
+            continue
+        r_url = await _visit_file_get_url(r["storage_path"])
+        rq = await _visit_file_qc(r_url, r["storage_path"])
+        if str(rq.get("qc_status") or "") == "rejected":
+            api_error(
+                422,
+                f"Room {i + 1} ({r.get('name') or 'unnamed'}): "
+                f"{rq.get('qc_notes') or 'not a Visit asset.'} Nothing was added to the listing.",
+                "visit_file_rejected",
+            )
+        room_qc.append({"room": r.get("name") or f"Room {i + 1}", "qc_status": rq.get("qc_status")})
 
     from ..services.client_comms import notify_capture_delivered, register_property_visit
 
@@ -1780,11 +1854,17 @@ async def deliver_virtual_visit(
         delivery_urls = [{"url": polycam_url, "filename": "Virtual Visit", "kind": "visit"}]
         output = polycam_url
     else:
+        visit_qc = None
+        if rooms or isinstance(pipeline_qc, dict):
+            visit_qc = {"rooms": room_qc, "pipeline": pipeline_qc if isinstance(pipeline_qc, dict) else None}
         ok = await register_property_visit(
             job_id,
             storage_path=storage_path,
             title=title,
             visit_type="file",
+            rooms=rooms or None,
+            manifest=(payload or {}).get("manifest") if isinstance((payload or {}).get("manifest"), dict) else None,
+            qc=visit_qc,
         )
         # Parity with Polycam URL: always fold kind=visit into media_delivery.
         # Prefer long-lived GET (7d) so share/desk late-fold outlives a 24h signed URL.

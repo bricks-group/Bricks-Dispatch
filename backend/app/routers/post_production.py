@@ -1285,7 +1285,7 @@ async def reconcile_stuck_uploads(
             from ..services.storage import get_signed_download_url as _sign_url
 
             # Non-photo assets (Visit + video/archives) — keep .spz with .splat/.ply
-            _SPLAT_EXTS = (".mp4", ".mov", ".avi", ".zip", ".tar", ".ply", ".splat", ".spz")
+            _SPLAT_EXTS = (".mp4", ".mov", ".avi", ".zip", ".tar", ".ply", ".splat", ".spz", ".sog")
             _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
 
             for upload in stuck:

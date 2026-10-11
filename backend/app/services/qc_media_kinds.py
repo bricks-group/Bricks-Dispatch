@@ -343,7 +343,7 @@ def check_visit_head(
     total_size: Optional[int] = None,
     filename: str = "",
 ) -> dict:
-    """Hold a Visit/3D file that is empty or not a .ply/.splat/.spz container.
+    """Hold a Visit/3D file that is empty or not a .ply/.splat/.spz/.sog container.
 
     Never judges scan quality (no editor / no viewer); just that the delivered
     file is a Visit asset, not an error page or a still saved with a Visit
@@ -374,6 +374,22 @@ def check_visit_head(
             "rejected", 0, "Visit file is a PDF, not a Visit asset.", "visit_check"
         )
 
+    # SOG (PlayCanvas, .sog): ZIP archive of WebP textures + meta.json.
+    if name.endswith(".sog") or head[:4] == b"PK\x03\x04":
+        if head[:4] == b"PK\x03\x04" and len(head) >= 30:
+            n_len = int.from_bytes(head[26:28], "little")
+            entry = head[30:30 + n_len].lower()
+            if entry.endswith((b".webp", b"meta.json")):
+                return _verdict("passed", 100, "Visit container OK (SOG).", "visit_check")
+            if name.endswith(".sog"):
+                return _verdict(
+                    "rejected", 0, "Visit file is a ZIP but not a SOG bundle (no meta.json / webp).", "visit_check"
+                )
+        if name.endswith(".sog"):
+            return _verdict(
+                "rejected", 0, "Visit file is not a recognized SOG container.", "visit_check"
+            )
+
     # PLY: ASCII header starts with "ply" then whitespace/newline.
     if name.endswith(".ply") or head[:3].lower() == b"ply":
         if head[:3].lower() == b"ply" and (len(head) == 3 or head[3:4] in b" \t\r\n"):
@@ -384,6 +400,20 @@ def check_visit_head(
 
     # SPZ: Niantic v4 "NGSP" magic, or legacy gzip-wrapped v1–3.
     if name.endswith(".spz") or head[:4] == b"NGSP" or head[:2] == b"\x1f\x8b":
+        if head[:4] == b"NGSP" and len(head) >= 8:
+            ver = int.from_bytes(head[4:8], "little")
+            if ver >= 4:
+                # Uncompressed-header SPZ v4 (e.g. splat-transform ≥3.x). The
+                # Bricks web viewer (Spark 2.3.1) reads v1–v3 only; delivering
+                # it would show a broken Visit. Verified 2026-10-11 in Chromium.
+                return _verdict(
+                    "rejected",
+                    0,
+                    f"SPZ v{ver} isn't supported by the Bricks Visit viewer yet. "
+                    "Export as .sog (preferred) or SPZ v3 "
+                    "(splat-transform: --spz-version 3).",
+                    "visit_check",
+                )
         if head[:4] == b"NGSP" or head[:2] == b"\x1f\x8b":
             return _verdict("passed", 100, "Visit container OK (SPZ).", "visit_check")
         return _verdict(

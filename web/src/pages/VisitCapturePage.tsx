@@ -75,7 +75,7 @@ export function VisitCapturePage() {
       </div>
       <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>Deliver Virtual Visit</h1>
       <p className="muted" style={{ marginBottom: 18, lineHeight: 1.45 }}>
-        Free-roam splat of the space — not the path-confined 3D tour. Paste a Polycam share URL, or upload a .ply / .splat / .spz.
+        Free-roam splat of the space — not the path-confined 3D tour. Paste a Polycam share URL, or upload a .sog / .spz / .ply / .splat (Bricks-hosted, embeddable).
         Both paths land on the listing the same way (property_visits + media_delivery). Owned GPU cook from GO frames comes later.
       </p>
 
@@ -90,7 +90,7 @@ export function VisitCapturePage() {
 
       <p className="muted" style={{ margin: '8px 0' }}>or</p>
 
-      <label className="muted" style={{ display: 'block', marginBottom: 6 }}>.ply / .splat / .spz file</label>
+      <label className="muted" style={{ display: 'block', marginBottom: 6 }}>.sog / .spz / .ply / .splat file</label>
       <input
         type="file"
         accept={accept}
@@ -119,7 +119,7 @@ export function VisitCapturePage() {
         </div>
       ) : (
         <p className="muted" style={{ marginBottom: 18, fontSize: 12 }}>
-          Large .ply / .splat / .spz upload direct to storage (not through the 4.5MB API body). Same deliver finalize as Polycam URL.
+          Large .sog / .spz / .ply / .splat upload direct to storage (not through the 4.5MB API body). Same deliver finalize as Polycam URL.
         </p>
       )}
 
