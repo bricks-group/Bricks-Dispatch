@@ -496,6 +496,48 @@ async def download_bytes(storage_path: str) -> Optional[bytes]:
         return None
 
 
+async def delete_objects(storage_paths: list[str]) -> bool:
+    """Best-effort delete of objects in brxs-deliverables (and the Blob fallback copy).
+
+    Returns True when Supabase accepted the delete. Missing objects are not an
+    error (Storage returns only the rows it actually removed).
+    """
+    paths_set = set()
+    for p in storage_paths or []:
+        try:
+            if p:
+                paths_set.add(_normalize_storage_path(p))
+        except ValueError:
+            _logger.warning("storage delete: skipped invalid path %r", p)
+    paths = sorted(paths_set)
+    if not paths:
+        return True
+    ok = False
+    try:
+        db = await get_db()
+        bucket = db.storage.from_(STORAGE_BUCKET)
+        for i in range(0, len(paths), 1000):
+            await bucket.remove(paths[i:i + 1000])
+        ok = True
+    except Exception as e:
+        _logger.warning("storage delete failed for %d object(s): %s", len(paths), e)
+
+    if blob_fallback_enabled():
+        try:
+            import httpx
+
+            urls = [u for u in (_private_blob_object_url(p) for p in paths) if u]
+            if urls:
+                headers = _blob_api_headers(_blob_token())
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(f"{BLOB_API_URL.rstrip('/')}/delete", json={"urls": urls}, headers=headers)
+                if resp.status_code >= 400:
+                    _logger.warning("blob delete failed: %s %s", resp.status_code, resp.text[:300])
+        except Exception as e:
+            _logger.warning("blob delete error: %s", e)
+    return ok
+
+
 async def upload_bytes(
     storage_path: str,
     data: bytes,

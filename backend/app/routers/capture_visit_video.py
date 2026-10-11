@@ -42,6 +42,7 @@ from ..services.capture_entitlements import capture_forbidden_message, job_captu
 from ..services.storage import (
     STORAGE_BUCKET,
     create_signed_upload_url,
+    delete_objects,
     download_bytes,
     get_signed_download_url,
     upload_bytes,
@@ -283,6 +284,9 @@ class Blobs:
     async def sign_get(self, path: str) -> Optional[str]:
         return await get_signed_download_url(path, expiry=6 * 3600)
 
+    async def remove(self, paths: list[str]) -> bool:
+        return await delete_objects(paths)
+
 
 repo = Repo()
 blobs = Blobs()
@@ -371,6 +375,18 @@ def validate_recording(payload: dict) -> dict:
     }
 
 
+def recording_complete(row: Optional[dict], man: Optional[dict]) -> bool:
+    """The database row is the source of truth for "fully uploaded".
+
+    complete_recording() sets capture_rooms.tone = 'ok' after every part is
+    committed. The manifest.json copy in storage is rewritten at the same time,
+    but storage reads of an overwritten object can be served stale by the CDN
+    for 60-90 s, so a manifest that still says complete=false must not block a
+    submit (prod smoke 2026-10-11: complete then submit -> 409 for ~1 min).
+    """
+    return (row or {}).get("tone") == "ok" or bool((man or {}).get("complete"))
+
+
 def committed_numbers(parts: list[dict]) -> list[int]:
     return sorted({int(p.get("station_index") or 0) for p in parts if int(p.get("station_index") or 0) > 0})
 
@@ -396,7 +412,7 @@ async def _recording_view(session_id: str, row: dict) -> dict:
         "part_size": man.get("part_size") or PART_SIZE,
         "parts_total": total,
         "parts_committed": len(done),
-        "complete": bool(man.get("complete")),
+        "complete": recording_complete(row, man),
         "rooms": man.get("rooms") or [],
     }
 
@@ -531,7 +547,7 @@ async def recording_status(
     done = committed_numbers(await repo.parts(session["id"], recording_id))
     return {"ok": True, "session_id": session["id"], "recording_id": recording_id, "name": row.get("name"),
             "part_size": man.get("part_size") or PART_SIZE, "parts_total": man.get("parts_total") or 0,
-            "committed": done, "complete": bool(man.get("complete"))}
+            "committed": done, "complete": recording_complete(row, man)}
 
 
 @router.post("/recordings/{recording_id}/sign")
@@ -643,12 +659,32 @@ async def discard_recording(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """Re-record: drop the row and its part rows. Orphan part objects are swept by storage lifecycle."""
+    """Re-record: drop the row, its part rows, and its stored manifest + part objects."""
     await _job(authorization, x_user_id, job_id)
     session = await _open_session(job_id)
+    sid = session["id"]
     await _own_recording(session, recording_id)
-    await repo.delete_recording(session["id"], recording_id)
-    return {"ok": True, "recording_id": recording_id, "deleted": True}
+    # Collect every object this recording may own before the rows go: committed
+    # parts (from capture_frames), every part number the manifest planned (a part
+    # can be uploaded but never committed), and the manifest itself.
+    paths = {manifest_path(sid, recording_id)}
+    for p in await repo.parts(sid, recording_id):
+        if p.get("storage_path"):
+            paths.add(p["storage_path"])
+    man = await blobs.read_json(manifest_path(sid, recording_id)) or {}
+    try:
+        planned = int(man.get("parts_total") or 0)
+    except (TypeError, ValueError):
+        planned = 0
+    for n in range(1, min(planned, 10_000) + 1):
+        paths.add(part_path(sid, recording_id, n))
+    await repo.delete_recording(sid, recording_id)
+    removed = False
+    try:
+        removed = await blobs.remove(sorted(paths))
+    except Exception:
+        logger.exception("Visit recording %s: storage cleanup failed", recording_id)
+    return {"ok": True, "recording_id": recording_id, "deleted": True, "files_removed": bool(removed)}
 
 
 def build_job_spec(session: dict, job_id: str, recs: list[dict]) -> dict:
@@ -689,9 +725,12 @@ async def submit_visit(
     mans = []
     for r in rows:
         man = await blobs.read_json(manifest_path(sid, r["id"])) or {}
-        if not man.get("complete"):
+        if not recording_complete(r, man):
             api_error(409, f"{r.get('name') or 'A recording'} is still uploading", "visit_parts_missing")
-        mans.append({**man, "recording_id": r["id"], "name": r.get("name")})
+        if not man.get("parts_total"):
+            # Row says done but the manifest is unreadable: can't build the worker spec.
+            api_error(502, f"{r.get('name') or 'A recording'} manifest is missing", "manifest_missing")
+        mans.append({**man, "complete": True, "recording_id": r["id"], "name": r.get("name")})
     spec = build_job_spec(session, job_id, mans)
     if not await blobs.write_json(job_spec_path(sid), spec):
         api_error(502, "Could not queue the Visit for processing", "visit_queue_failed")

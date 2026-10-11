@@ -105,6 +105,29 @@ class FakeBlobs:
     async def sign_get(self, path):
         return f"https://sb.test/get/{path}?sig=y"
 
+    async def remove(self, paths):
+        self.removed = list(paths)
+        for p in paths:
+            self.files.pop(p, None)
+        return True
+
+
+class StaleBlobs(FakeBlobs):
+    """Storage behind a CDN: overwriting an object keeps serving the first copy for a while."""
+
+    def __init__(self):
+        super().__init__()
+        self.first: dict[str, bytes] = {}
+
+    async def write_json(self, path, data):
+        await super().write_json(path, data)
+        self.first.setdefault(path, self.files[path])
+        return True
+
+    async def read_json(self, path):
+        raw = self.first.get(path) if path in self.files else None
+        return json.loads(raw) if raw else None
+
 
 JOB = {"id": "job-1", "address": "12 Example Crescent"}
 
@@ -280,6 +303,67 @@ def test_discard_recording_for_retake(env):
     run(vv.commit_part(rid, {"job_id": "job-1", "part": 1, "size": 8 * MB}))
     run(vv.discard_recording(rid, job_id="job-1"))
     assert repo.rooms == [] and repo.frames == []
+
+
+def test_submit_right_after_complete_trusts_db_over_stale_manifest(env, monkeypatch):
+    repo, _ = env
+    stale = StaleBlobs()
+    monkeypatch.setattr(vv, "blobs", stale)
+    run(vv.ensure_visit_session({"job_id": "job-1"}))
+    out = run(vv.create_recording(_rec()))
+    rid, sid = out["recording_id"], out["session_id"]
+    _upload_all(rid, out["parts_total"], out["part_size"], 20 * MB + 123)
+    run(vv.complete_recording(rid, {"job_id": "job-1"}))
+    # The CDN still serves the pre-complete manifest...
+    assert run(stale.read_json(vv.manifest_path(sid, rid)))["complete"] is False
+    # ...but status, the session bundle and submit all go by capture_rooms.tone.
+    assert run(vv.recording_status(rid, job_id="job-1"))["complete"] is True
+    assert run(vv.get_visit_session("job-1"))["recordings"][0]["complete"] is True
+    b = run(vv.submit_visit({"job_id": "job-1"}))
+    assert b["status"] == "submitted"
+    spec = json.loads(stale.files[vv.job_spec_path(sid)])
+    assert len(spec["recordings"][0]["parts"]) == 3
+
+
+def test_submit_still_blocks_a_recording_the_db_says_is_unfinished(env):
+    repo, blobs = env
+    run(vv.ensure_visit_session({"job_id": "job-1"}))
+    out = run(vv.create_recording(_rec()))
+    run(vv.commit_part(out["recording_id"], {"job_id": "job-1", "part": 1, "size": 8 * MB}))
+    assert repo.rooms[0]["tone"] == "bad"
+    with pytest.raises(HTTPException) as e:
+        run(vv.submit_visit({"job_id": "job-1"}))
+    assert "visit_parts_missing" in str(e.value.detail)
+    assert run(vv.recording_status(out["recording_id"], job_id="job-1"))["complete"] is False
+
+
+def test_discard_removes_manifest_and_every_part_object(env):
+    repo, blobs = env
+    run(vv.ensure_visit_session({"job_id": "job-1"}))
+    keep = run(vv.create_recording({**_rec(), "name": "Upstairs"}))
+    out = run(vv.create_recording(_rec()))
+    rid, sid = out["recording_id"], out["session_id"]
+    run(vv.commit_part(rid, {"job_id": "job-1", "part": 1, "size": 8 * MB}))
+    res = run(vv.discard_recording(rid, job_id="job-1"))
+    assert res["deleted"] is True and res["files_removed"] is True
+    assert set(blobs.removed) == {vv.manifest_path(sid, rid)} | {vv.part_path(sid, rid, n) for n in (1, 2, 3)}
+    assert vv.manifest_path(sid, rid) not in blobs.files
+    # The other recording's manifest is untouched.
+    assert vv.manifest_path(sid, keep["recording_id"]) in blobs.files
+    assert all(p.startswith(f"capture/{sid}/visit/{rid}/") for p in blobs.removed)
+
+
+def test_discard_still_succeeds_when_storage_delete_fails(env, monkeypatch):
+    repo, blobs = env
+    run(vv.ensure_visit_session({"job_id": "job-1"}))
+    rid = run(vv.create_recording(_rec()))["recording_id"]
+
+    async def boom(_paths):
+        raise RuntimeError("storage down")
+
+    monkeypatch.setattr(blobs, "remove", boom)
+    res = run(vv.discard_recording(rid, job_id="job-1"))
+    assert res["deleted"] is True and res["files_removed"] is False and repo.rooms == []
 
 
 def test_worker_source_is_internal_only_and_ordered(env):
