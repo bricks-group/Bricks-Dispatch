@@ -182,7 +182,9 @@ async def _apply(monkeypatch, client_cls, api_key="test-not-a-real-key", channel
             patch("app.services.jev_hold.httpx.AsyncClient", client_cls), \
             patch("app.services.portfolio_check.check_portfolio",
                   AsyncMock(side_effect=portfolio or (lambda urls: _opened_check(urls)))):
-        result = await apply_to_bricks(_application(), BackgroundTasks())
+        bg = BackgroundTasks()
+        result = await apply_to_bricks(_application(), bg)
+    db.background = bg
     return result, db
 
 
@@ -203,166 +205,26 @@ def _assert_no_personal_mailbox(db):
 
 
 @pytest.mark.asyncio
-async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeypatch):
-    calls = []
+async def test_apply_schedules_evidence_review_and_stays_pending(monkeypatch):
+    """Apply no longer asks the text model; it stores the evidence and queues
+    the automatic review (which alone texts/emails Kam). Status stays pending."""
+    from tests.test_applicant_review import _application as evidence_application
 
-    async def post(self, url, json=None, headers=None):
-        calls.append({"url": url, "json": json, "headers": headers})
-        return _Resp(200, _noul(0.91, {
-            "equipment": 0.82,
-            "city": 0.2,
-            "portfolio": 0.66,
-            "drone": 0.1,
-        }))
+    async def must_not_post(self, url, json=None, headers=None):
+        raise AssertionError("apply must not call the old text guess")
 
-    result, db = await _apply(monkeypatch, _client(post))
-
+    import sys
+    monkeypatch.setattr(sys.modules[__name__], "_application", lambda: evidence_application())
+    result, db = await _apply(monkeypatch, _client(must_not_post))
+    row = db.inserts[0]
+    assert row["onboarding_status"] == "pending"
     assert result["success"] is True
-    assert "_internal_notes" not in result
-    assert "yes_probability" not in result
-    assert db.inserts[0]["onboarding_status"] == "pending"
-    assert db.inserts[0]["is_active"] is False
-    member = db.members[result["member_id"]]
-    assert member["onboarding_status"] == "pending"
-    assert member["is_active"] is False
-    assert len(db.updates) == 1
-    assert set(db.updates[0]) == {"internal_notes", "updated_at"}
-    assert "onboarding_status" not in db.updates[0]
-    assert "Jev poor-fit yes-probability 0.91" in db.updates[0]["internal_notes"]
-    assert member["onboarding_status"] == "pending"
-
-    assert len(calls) == 1
-    call = calls[0]
-    assert call["url"] == DECISIONS_URL
-    assert call["json"]["model"] == JEV_MODEL
-    assert set(call["json"]["questions"]) == {APPLICANT_QUESTION_KEY, "equipment"}
-    assert len(calls) == 1
-    question = call["json"]["questions"][APPLICANT_QUESTION_KEY]
-    assert question["type"] == "noul"
-    assert question["instructions"] == APPLICANT_INSTRUCTIONS
-    state = call["json"]["state"]
-    assert state["name"] == "Alex Rivera"
-    assert state["city"] == "Toronto"
-    assert state["vendor_type"] == "photographer"
-    assert "Sony A7IV, 16-35mm" in state["equipment"]
-    assert "https://portfolio.example.com/alex" in state["portfolio"]["links"]
-    assert state["drone"] is True
-    dumped = str(call["json"])
-    assert "alex.rivera.example@example.com" not in dumped
-    assert "416 555 0199" not in dumped
-    assert result["application_token"] not in dumped
-
-    assert db.sms.call_count == 1
-    sms_to, sms_body = db.sms.call_args.args
-    assert sms_to == "+14165550100"
-    assert sms_body == (
-        "New Bricks photographer application: Alex Rivera in Toronto. "
-        "This looks like a weak fit.\n"
-        "- Portfolio opened, work not reviewed (link: https://portfolio.example.com/alex).\n"
-        "- Self-reported city: Toronto (GTA).\n"
-        "- Says they have: Sony A7IV, 16-35mm.\n"
-        "- Says they are drone certified, not verified.\n"
-        "- Listed equipment may not suit this work.\n"
-        "https://portfolio.example.com/alex\n"
-        "Pending your approval."
-    )
-    assert db.email.await_count == 1
-    assert db.email.await_args.kwargs["subject"] == (
-        "New vendor application pending your approval: Alex Rivera"
-    )
-    html = db.email.await_args.kwargs["html"]
-    assert "Alex Rivera in Toronto applied as a photographer." in html
-    assert "Pending your approval." in html
-    assert "This looks like a weak fit." in html
-    assert "- Listed equipment may not suit this work." in html
-    assert "- Portfolio opened, work not reviewed" in html
-    assert "looks like a fit" not in html
-    assert "suitable" not in html
-    assert "Portfolio:" in html
-    assert "https://portfolio.example.com/alex" in html
-    assert "\nhttps://portfolio.example.com/alex\n" in sms_body
-    assert db.email.await_args.kwargs["to"] == "admin@brxs.ca"
-    assert "cc" not in db.email.await_args.kwargs
-    assert "bcc" not in db.email.await_args.kwargs
-    assert db.email.await_args.kwargs["to"] != "alex.rivera.example@example.com"
-    assert sms_to == "+14165550100"
-    _assert_plain_copy(sms_body)
-    _assert_plain_copy(html)
-    _assert_plain_copy(db.email.await_args.kwargs["subject"])
-    _assert_no_printed_score(sms_body)
-    _assert_no_printed_score(html)
-    _assert_no_personal_mailbox(db)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["timeout", "http", "no_noul", "no_key"])
-async def test_jev_failure_still_notifies_and_stays_pending(monkeypatch, mode):
-    async def post(self, url, json=None, headers=None):
-        if mode == "timeout":
-            raise TimeoutError("jev timed out")
-        if mode == "http":
-            return _Resp(503, {"error": "unavailable"})
-        if mode == "no_noul":
-            return _Resp(200, {"answers": {}})
-        raise AssertionError("Jev must not be called without OPENROUTER_API_KEY")
-
-    result, db = await _apply(
-        monkeypatch,
-        _client(post),
-        api_key=None if mode == "no_key" else "test-not-a-real-key",
-    )
-
-    assert result["success"] is True
-    member = db.members[result["member_id"]]
-    assert member["onboarding_status"] == "pending"
-    assert member["is_active"] is False
+    assert any(t.func.__name__ == "review_application" for t in db.background.tasks)
+    prof = row["application_profile"]
+    assert prof["location"] == {"city": "Toronto", "in_gta": True}
+    assert len(prof["samples"]) == 10 and prof["equipment"]["camera_body"] == "Sony A7 IV"
+    assert db.sms.call_count == 0 and db.email.await_count == 0  # sent by the queued review, not inline
     assert db.updates == []
-    assert "Jev poor-fit" not in (member.get("internal_notes") or "")
-    assert db.sms.call_count == 1
-    sms_body = db.sms.call_args.args[1]
-    # No score: no fit sentence, but the factual bullets still go out.
-    assert sms_body == (
-        "New Bricks photographer application: Alex Rivera in Toronto.\n"
-        "- Portfolio opened, work not reviewed (link: https://portfolio.example.com/alex).\n"
-        "- Self-reported city: Toronto (GTA).\n"
-        "- Says they have: Sony A7IV, 16-35mm.\n"
-        "- Says they are drone certified, not verified.\n"
-        "https://portfolio.example.com/alex\n"
-        "Pending your approval."
-    )
-    assert "weak fit" not in sms_body
-    assert "looks like a fit" not in sms_body
-    html = db.email.await_args.kwargs["html"]
-    assert "Pending your approval." in html
-    assert "https://portfolio.example.com/alex" in html
-    assert "cc" not in db.email.await_args.kwargs
-    assert "bcc" not in db.email.await_args.kwargs
-    assert db.email.await_args.kwargs["to"] == "admin@brxs.ca"
-    assert "weak fit" not in html
-    assert "looks like a fit" not in html
-    _assert_plain_copy(sms_body)
-    _assert_plain_copy(html)
-    _assert_no_printed_score(sms_body)
-    _assert_no_printed_score(html)
-    _assert_no_personal_mailbox(db)
-
-
-@pytest.mark.asyncio
-async def test_notify_failure_leaves_application_pending(monkeypatch):
-    async def post(self, url, json=None, headers=None):
-        return _Resp(200, _noul(0.91))
-
-    result, db = await _apply(monkeypatch, _client(post), channels_fail=True)
-
-    assert result["success"] is True
-    member = db.members[result["member_id"]]
-    assert member["onboarding_status"] == "pending"
-    assert member["is_active"] is False
-    assert db.sms.call_count == 1
-    assert db.email.await_count == 1
-    assert "approved" not in member["onboarding_status"]
-    assert "rejected" not in member["onboarding_status"]
-
 
 
 def test_fit_sentences_and_reason_bullets():

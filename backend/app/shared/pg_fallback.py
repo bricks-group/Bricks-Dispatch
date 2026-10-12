@@ -1660,6 +1660,7 @@ def pg_insert_vendor_application(row: dict) -> Optional[dict]:
         "service_areas",
         "operation_polygon",
         "skills",
+        "application_profile",
     }
     allowed = {
         "id",
@@ -1693,6 +1694,8 @@ def pg_insert_vendor_application(row: dict) -> Optional[dict]:
         "application_token",
         "source",
         "source_detail",
+        "application_profile",
+        "rpas_certificate_url",
         "created_at",
         "updated_at",
     }
@@ -1714,6 +1717,8 @@ def pg_insert_vendor_application(row: dict) -> Optional[dict]:
 
     # Soft-drop order when older DBs lack columns.
     optional_drop_order = (
+        "application_profile",
+        "rpas_certificate_url",
         "portfolio_samples",
         "vendor_type",
         "application_token",
@@ -1830,6 +1835,15 @@ _VENDOR_AVAILABILITY_COLUMNS = (
     "jobs_per_day",
     "blocked_windows",
     "updated_at",
+    # migration 0017: what the applicant said on apply (self-reported)
+    "days_of_week",
+    "time_windows",
+    "weekends",
+    "earliest_start_date",
+    "shoots_per_week",
+    "notice_hours",
+    "has_car",
+    "has_licence",
 )
 
 _NOTIFICATIONS_COLUMNS = (
@@ -1989,6 +2003,14 @@ def pg_upsert_vendor_availability(row: dict) -> Optional[dict]:
         "jobs_per_day",
         "blocked_windows",
         "updated_at",
+        "days_of_week",
+        "time_windows",
+        "weekends",
+        "earliest_start_date",
+        "shoots_per_week",
+        "notice_hours",
+        "has_car",
+        "has_licence",
     )
     set_parts = [f"{c} = EXCLUDED.{c}" for c in update_cols if c in cols]
     set_sql = ", ".join(set_parts) if set_parts else "updated_at = EXCLUDED.updated_at"
@@ -3422,6 +3444,83 @@ def pg_update_contractor(contractor_id: str, fields: dict) -> bool:
     except Exception as e:
         logger.error("pg_update_contractor failed id=%s: %s", cid, str(e)[:300])
         return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Applicant review tables (migration 0017). Insert/select helpers.
+# ---------------------------------------------------------------------------
+_APPLICANT_TABLES = {
+    "vendor_applicant_reviews": (
+        ("member_id", "verdict", "needs_samples", "result", "model", "cost_usd", "trigger"),
+        {"result"},
+    ),
+    "vendor_applicant_image_hashes": (
+        ("member_id", "source", "ref", "sha256", "dhash"),
+        set(),
+    ),
+}
+
+
+def pg_insert_applicant_rows(table: str, rows: list) -> int:
+    """INSERT rows into an applicant review table via Postgres. Returns count."""
+    spec = _APPLICANT_TABLES.get(table)
+    if not spec or not rows:
+        return 0
+    cols, json_cols = spec
+    conn = _pg_connect()
+    if not conn:
+        return 0
+    n = 0
+    try:
+        with conn.cursor() as cur:
+            for row in rows:
+                use = [c for c in cols if c in row]
+                vals = []
+                ph = []
+                for c in use:
+                    v = row[c]
+                    if c in json_cols:
+                        v = json.dumps(v)
+                        ph.append("%s::jsonb")
+                    else:
+                        ph.append("%s")
+                    vals.append(v)
+                cur.execute(
+                    f"INSERT INTO public.{table} ({', '.join(use)}) VALUES ({', '.join(ph)})",
+                    vals,
+                )
+                n += 1
+        return n
+    except Exception as e:
+        logger.error("pg_insert_applicant_rows %s failed: %s", table, str(e)[:300])
+        return n
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_applicant_hashes(limit: int = 5000) -> list:
+    conn = _pg_connect()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT member_id, sha256, dhash FROM public.vendor_applicant_image_hashes "
+                "ORDER BY created_at DESC LIMIT %s",
+                (int(limit),),
+            )
+            return _rows_from_cursor(cur)
+    except Exception as e:
+        logger.error("pg_select_applicant_hashes failed: %s", str(e)[:300])
+        return []
     finally:
         try:
             conn.close()

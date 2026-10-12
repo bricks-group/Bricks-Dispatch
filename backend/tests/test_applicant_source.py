@@ -87,14 +87,14 @@ async def test_validate_rejects_unknown_and_blank_other():
 @pytest.mark.asyncio
 async def test_apply_stores_source_and_emails_found_line(monkeypatch):
     import tests.test_vendor_application_jev as base
+    from tests.test_applicant_review import _application as evidence_application
+    from app.services.applicant_review_runner import render_all
 
     async def post(self, url, json=None, headers=None):
-        return _Resp(200, _noul(0.2))
-
-    orig = base._application
+        raise AssertionError("no text model on apply")
 
     def with_source():
-        a = orig()
+        a = evidence_application()
         a.source = "referral_photographer"
         a.source_detail = "Sam Lee"
         return a
@@ -104,18 +104,24 @@ async def test_apply_stores_source_and_emails_found_line(monkeypatch):
     row = db.inserts[0]
     assert row["source"] == "referral_photographer"
     assert row["source_detail"] == "Sam Lee"
-    html = db.email.await_args.kwargs["html"]
-    assert "Found us via: Referral from a photographer (Sam Lee)" in html
-    _assert_plain_copy(html)
-    _assert_no_printed_score(html)
+    review = {"verdict": "needs_review", "verdict_label": "Needs review", "colour": "grey", "score": 40,
+              "incomplete": True, "needs_samples": True, "parts": {}, "criteria": {}, "evidence": [],
+              "flags": [], "missing": [], "availability_summary": ""}
+    out = render_all(row, review, [])
+    assert "Found us via" in out["html"] and "Referral from a photographer (Sam Lee)" in out["html"]
+    assert "Found us via: Referral from a photographer (Sam Lee)" in out["text"]
+    _assert_plain_copy(out["html"])
 
 
 @pytest.mark.asyncio
 async def test_apply_without_source_keeps_null(monkeypatch):
-    async def post(self, url, json=None, headers=None):
-        return _Resp(200, _noul(0.2))
+    import tests.test_vendor_application_jev as base
+    from tests.test_applicant_review import _application as evidence_application
 
+    async def post(self, url, json=None, headers=None):
+        raise AssertionError("no text model on apply")
+
+    monkeypatch.setattr(base, "_application", lambda: evidence_application())
     result, db = await _apply(monkeypatch, _client(post))
     row = db.inserts[0]
     assert row["source"] is None and row["source_detail"] is None
-    assert "Found us via" not in db.email.await_args.kwargs["html"]

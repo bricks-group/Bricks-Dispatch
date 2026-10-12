@@ -1,5 +1,5 @@
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 from pydantic import BaseModel, Field
@@ -381,6 +381,8 @@ class VendorMember(BaseModel):
     # How the applicant heard about Bricks. Null for older applicants.
     source: Optional[str] = None
     source_detail: Optional[str] = None
+    # Structured application (migration 0017). Null for older applicants.
+    application_profile: Optional[Dict[str, Any]] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -419,6 +421,29 @@ class VendorApplicationCreate(BaseModel):
     # clients still apply; see app/shared/applicant_source.py.
     source: Optional[str] = None
     source_detail: Optional[str] = None
+    # Evidence (2026-10-12). Photographers upload 8-15 sample photos straight
+    # to storage via POST /api/onboarding/sample-uploads, then send the paths
+    # here with the signed session id. See app/services/applicant_evidence.py.
+    sample_upload_session: Optional[str] = None
+    sample_paths: List[str] = []
+    rpas_cert_path: Optional[str] = None
+    # {camera_body, lenses, drone_model, lighting, tripod}
+    equipment: Optional[Dict[str, Any]] = None
+    # {days_of_week, time_windows, weekends, earliest_start_date,
+    #  shoots_per_week, max_shoots_per_day, notice_hours, has_car, has_licence}
+    availability: Optional[Dict[str, Any]] = None
+
+
+class SampleUploadFile(BaseModel):
+    name: str = ""
+    type: str
+    size: int
+    kind: str = "sample"  # sample | rpas_cert
+
+
+class SampleUploadRequest(BaseModel):
+    files: List[SampleUploadFile]
+    session: Optional[str] = None
 
 
 class VendorDocument(BaseModel):

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Alert, Image } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Alert, Image, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ArrowRight, Check as CheckIcon, Camera } from 'lucide-react-native';
@@ -136,7 +136,20 @@ export default function OnboardingRegister() {
         hst_exempt: true,
       });
       if (!result.success) {
-        Alert.alert('Error', result.detail || 'Failed to submit application.');
+        const detail = String(result.detail || 'Failed to submit application.');
+        // Photographers now apply with 8-15 sample photos + availability on the web form.
+        if (/sample real estate photos|availability|camera body/i.test(detail)) {
+          Alert.alert(
+            'Finish on the web form',
+            'Photographer applications need 8-15 sample photos, your gear and your availability. Open the Bricks web form to finish.',
+            [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Open web form', onPress: () => Linking.openURL('https://www.brxs.ca/photographers#apply') },
+            ],
+          );
+          return;
+        }
+        Alert.alert('Error', detail);
         return;
       }
 

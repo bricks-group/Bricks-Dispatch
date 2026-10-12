@@ -91,6 +91,7 @@ def test_non_auth_tiers_keep_their_own_limits():
     """Per-path max_r values stay what the limiter already intended."""
     expected = {
         "/api/onboarding/apply": (10, 60),
+        "/api/onboarding/sample-uploads": (10, 60),
         "/api/v1/dispatch/jobs": (30, 60),
         "/api/jobs/": (30, 60),
         "/api/notifications": (30, 60),
