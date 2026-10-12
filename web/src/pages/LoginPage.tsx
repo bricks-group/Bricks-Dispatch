@@ -376,8 +376,8 @@ export function LoginPage() {
           onClick={onGoogle}
           disabled={submitting || googleLoading || otpLoading || authRestricted}
         >
-          <GoogleMark />
-          {googleLoading && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{googleLoading ? 'Redirecting…' : authRestricted ? 'Google unavailable' : 'Continue with Google'}
+          {googleLoading ? <BricksLoader variant="cycle" size={16} color="currentColor" /> : <GoogleMark />}
+          {googleLoading ? 'Redirecting…' : authRestricted ? 'Google unavailable' : 'Continue with Google'}
         </button>
         {phoneEnabled !== false && !authRestricted && (
           <button
