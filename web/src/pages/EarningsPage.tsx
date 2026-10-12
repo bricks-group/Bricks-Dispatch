@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import BricksLoader from '../components/BricksLoader';
 
 type EarningJob = {
   id: string;
@@ -121,7 +122,7 @@ export function EarningsPage() {
         </>
       )}
 
-      {!data && !error && <p className="muted">Loading…</p>}
+      {!data && !error && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import BricksLoader from '../components/BricksLoader';
 
 type Notification = {
   id: string;
@@ -81,7 +82,7 @@ export function NotificationsPage() {
       </div>
 
       {error && <p className="error">{error}</p>}
-      {loading && <p className="muted">Loading…</p>}
+      {loading && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
 
       {!loading && items.length === 0 ? (
         <section className="card full">

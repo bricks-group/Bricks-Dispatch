@@ -21,6 +21,7 @@ import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { UnderReviewPage } from './pages/UnderReviewPage';
 import { AddEmailPage, NotOnTeamPage } from './pages/AddEmailPage';
 import { hasAppAccess, AuthMember } from './lib/api';
+import BricksLoader from './components/BricksLoader';
 
 /** Native GO keeps working from cache offline; on web we at least say so plainly. */
 function useOnline(): boolean {
@@ -138,7 +139,12 @@ function ProtectedLayout() {
     navigate('/login', { replace: true });
   };
 
-  if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
+  if (loading) return (
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+      <BricksLoader variant="assemble" size={64} />
+      <p style={{ margin: 0, color: 'var(--c-ink-mute)' }}>Checking session…</p>
+    </div>
+  );
   if (rateLimited) return <RateLimitedNotice retryAfter={retryAfter} onRetry={refreshSession} />;
   if (!isAuthed) return <Navigate to="/login" replace />;
   if (needsEmail) return <AddEmailPage onConfirmed={refreshSession} onLogout={onLogout} />;
@@ -212,7 +218,12 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     refreshSession();
   }, []);
-  if (loading) return <p style={{ padding: 28, color: 'var(--c-ink-mute)' }}>Checking session…</p>;
+  if (loading) return (
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+      <BricksLoader variant="assemble" size={64} />
+      <p style={{ margin: 0, color: 'var(--c-ink-mute)' }}>Checking session…</p>
+    </div>
+  );
   if (!ok) return <Navigate to="/login" replace />;
   if (rateLimited) return <RateLimitedNotice retryAfter={retryAfter} onRetry={refreshSession} />;
   if (needsEmail) return <AddEmailPage onConfirmed={refreshSession} />;

@@ -4,6 +4,7 @@ import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer, submitCaptureSe
 import type { CaptureKind, CaptureSession } from '../lib/capture-api';
 import { captureStatusCopy } from '../lib/capture-modes';
 import { TourTagEditor } from '../components/TourTagEditor';
+import BricksLoader from '../components/BricksLoader';
 
 export function CaptureReviewPage() {
   const [params] = useSearchParams();
@@ -129,7 +130,7 @@ export function CaptureReviewPage() {
                   disabled={submitting || !canSubmit}
                   onClick={handleSubmit}
                 >
-                  {submitting ? 'Retrying…' : 'Retry compile'}
+                  {submitting && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{submitting ? 'Retrying…' : 'Retry compile'}
                 </button>
               ) : null}
               {ready && (kind === 'splat' || kind === 'floorplan') ? (
@@ -138,7 +139,7 @@ export function CaptureReviewPage() {
                   disabled={rebuilding}
                   onClick={handleRebuild}
                 >
-                  {rebuilding ? 'Rebuilding…' : (kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
+                  {rebuilding && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{rebuilding ? 'Rebuilding…' : (kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
                 </button>
               ) : null}
               <Link to={`/capture?jobId=${encodeURIComponent(jobId)}&kind=${kind}`}>
@@ -210,7 +211,7 @@ export function CaptureReviewPage() {
 
           <div className="row" style={{ marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
             <button type="button" disabled={!canSubmit || submitting} onClick={handleSubmit}>
-              {submitting ? 'Submitting…' : 'Submit capture'}
+              {submitting && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{submitting ? 'Submitting…' : 'Submit capture'}
             </button>
             <Link to={jobHref}>Back to job</Link>
           </div>

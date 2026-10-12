@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { requestAccountDeletion, DELETION_INFO_URL, SUPPORT_EMAIL, type DeletionResult } from '../lib/web-account';
+import BricksLoader from '../components/BricksLoader';
 
 type Settings = {
   company_name: string;
@@ -49,7 +50,7 @@ function StripeConnectSection() {
     <section className="card full">
       <h3>Payouts</h3>
       <div className="stack">
-        {!status && <p className="muted">Loading…</p>}
+        {!status && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
         {status && (
           <div className="row">
             <span className={`badge ${status.connected ? 'badge-green' : 'badge-gray'}`}>
@@ -133,7 +134,7 @@ function DeleteAccountSection() {
             </label>
             <div className="row">
               <button type="button" className="btn-danger" data-testid="delete-account-confirm" onClick={send} disabled={step === 'sending'}>
-                {step === 'sending' ? 'Sending…' : 'Yes, delete my account'}
+                {step === 'sending' && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{step === 'sending' ? 'Sending…' : 'Yes, delete my account'}
               </button>
               <button type="button" onClick={() => setStep('idle')} disabled={step === 'sending'}>Cancel</button>
             </div>
@@ -178,7 +179,7 @@ export function SettingsPage() {
 
       <StripeConnectSection />
 
-      {!data && <p className="muted">Loading…</p>}
+      {!data && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
 
       {data && (
         <section className="card full">

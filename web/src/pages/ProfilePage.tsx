@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { api, VendorProfile } from '../lib/api';
+import BricksLoader from '../components/BricksLoader';
 
 const SKILLS: { id: string; label: string }[] = [
   { id: 'photo', label: 'Photo' },
@@ -102,7 +103,7 @@ export function ProfilePage() {
       </div>
 
       {error && <p className="error">{error}</p>}
-      {!data && !error && <p className="muted">Loading…</p>}
+      {!data && !error && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
 
       {data && (
         <>

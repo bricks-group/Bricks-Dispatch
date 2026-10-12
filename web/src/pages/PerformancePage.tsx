@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import BricksLoader from '../components/BricksLoader';
 
 type Performance = {
   completion_rate: number;
@@ -23,7 +24,7 @@ export function PerformancePage() {
         </div>
       </div>
 
-      {!data && <p className="muted">Loading…</p>}
+      {!data && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
 
       {data && (
         <div className="page-grid">

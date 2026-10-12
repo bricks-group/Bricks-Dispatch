@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, Job, PaginatedJobsResponse } from '../lib/api';
 import { captureNeitherCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
+import BricksLoader from '../components/BricksLoader';
 
 type Overview = {
   jobs_assigned_today: number;
@@ -131,7 +132,7 @@ export function OverviewPage() {
         </>
       )}
 
-      {!data && !error && <p className="muted">Loading…</p>}
+      {!data && !error && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
     </div>
   );
 }

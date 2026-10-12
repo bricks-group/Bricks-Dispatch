@@ -13,6 +13,7 @@ import {
   sendPhoneOtp,
   verifyPhoneOtp,
 } from '../lib/phone-auth';
+import BricksLoader from '../components/BricksLoader';
 
 function BrickMark() {
   return (
@@ -309,7 +310,7 @@ export function LoginPage() {
             <input type="text" value={otp} onChange={(e) => setOtp(e.target.value)} required placeholder="123456" />
           </label>
           {error && <p className="error" style={{ padding: 0 }}>{error}</p>}
-          <button type="submit" disabled={submitting}>{submitting ? 'Verifying…' : 'Verify'}</button>
+          <button type="submit" disabled={submitting}>{submitting && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{submitting ? 'Verifying…' : 'Verify'}</button>
           <button type="button" className="btn-link" onClick={() => setStep('login')}>Back to login</button>
         </form>
       </div>
@@ -376,7 +377,7 @@ export function LoginPage() {
           disabled={submitting || googleLoading || otpLoading || authRestricted}
         >
           <GoogleMark />
-          {googleLoading ? 'Redirecting…' : authRestricted ? 'Google unavailable' : 'Continue with Google'}
+          {googleLoading && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{googleLoading ? 'Redirecting…' : authRestricted ? 'Google unavailable' : 'Continue with Google'}
         </button>
         {phoneEnabled !== false && !authRestricted && (
           <button

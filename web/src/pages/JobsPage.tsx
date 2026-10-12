@@ -16,6 +16,7 @@ import {
   exposureBiasFromName,
 } from '../lib/bracket-require';
 import { autoNameAebFiles } from '../lib/aeb-exif';
+import BricksLoader from '../components/BricksLoader';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -739,7 +740,7 @@ function CaptureStatusBlock({ job }: { job: Job }) {
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                 {ready && (r.kind === 'splat' || r.kind === 'floorplan') ? (
                   <button type="button" disabled={rebuildState.busy} onClick={() => handleRebuild(r.kind, r.sessionId)}>
-                    {rebuildState.busy ? 'Rebuilding…' : (r.kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
+                    {rebuildState.busy && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{rebuildState.busy ? 'Rebuilding…' : (r.kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
                   </button>
                 ) : null}
                 <Link to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>

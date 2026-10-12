@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { startGoogleCalendarOAuth } from '../lib/googleCalendarConnect';
+import BricksLoader from '../components/BricksLoader';
 
 type Availability = {
   work_start: string;
@@ -156,7 +157,7 @@ export function AvailabilityPage() {
         </section>
       )}
 
-      {!data && <p className="muted">Loading…</p>}
+      {!data && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
       {err && <p className="error">{err}</p>}
 
       {data && (
