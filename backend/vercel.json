@@ -19,7 +19,7 @@
   "crons": [
     {
       "path": "/api/vendor-os/calendars/sync-cron",
-      "schedule": "0 * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }

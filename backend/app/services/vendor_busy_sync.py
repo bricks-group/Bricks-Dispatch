@@ -323,6 +323,32 @@ async def sync_all(db) -> dict:
     return {"ok": True, "members": len(ids), "results": out}
 
 
+async def sync_stale(db, max_age_min: int = 60, budget_s: float = 6.0) -> int:
+    """Re-sync members whose calendars are older than max_age_min (bounded by budget).
+
+    Vercel Hobby only allows a daily cron, so booking-calendar reads keep the cache
+    fresh opportunistically.
+    """
+    import asyncio
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_min)
+    try:
+        res = await db.table("vendor_calendar_connections").select("member_id, last_synced_at").execute()
+    except Exception:
+        return 0
+    stale = sorted({
+        str(r["member_id"]) for r in (res.data or [])
+        if r.get("member_id") and ((_parse_ts(r.get("last_synced_at")) or datetime.min.replace(tzinfo=timezone.utc)) < cutoff)
+    })
+    if not stale:
+        return 0
+    try:
+        await asyncio.wait_for(asyncio.gather(*(sync_member(db, m) for m in stale[:10]), return_exceptions=True), timeout=budget_s)
+    except Exception:
+        pass
+    return len(stale)
+
+
 async def cached_busy(db, member_id: str, start: datetime, end: datetime) -> Optional[bool]:
     """True if a synced busy block overlaps [start, end); None otherwise (fail-soft)."""
     try:
@@ -408,6 +434,7 @@ async def availability_days(db, start: date, days: int, area: str = "", tz_name:
     span_a = _utc(datetime.combine(start, time(0), tz))
     span_b = _utc(datetime.combine(end_day, time(0), tz))
 
+    await sync_stale(db)
     mres = await db.table("vendor_members").select("id, role, is_active, onboarding_status, service_areas, home_city").execute()
     members = [
         m for m in (mres.data or [])
