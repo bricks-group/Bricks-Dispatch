@@ -209,17 +209,20 @@ async def notify_owner_jev_hold(db, job: dict, yes_probability) -> None:
         logger.error("Jev hold email failed for job %s: %s", job_id, type(e).__name__)
 
 
-def vendor_application_fit_line(yes_probability) -> str:
-    """Plain sentence for a person. Empty when there is no score.
+def vendor_application_fit_line(yes_probability, needs_review: bool = False) -> str:
+    """Plain sentence for a person. Empty when there is no score and nothing to flag.
 
     The number is how sure the check is that the applicant is a poor fit.
-    Above 0.7 is a weak fit. 0.7 and below is not. No name, no decimal.
+    Above 0.7 is a weak fit. A portfolio nobody could open, or a location that
+    may not be in the GTA, is "needs review", never a fit. No name, no decimal.
     """
-    if not isinstance(yes_probability, float):
-        return ""
-    if yes_probability > 0.7:
+    if isinstance(yes_probability, float) and yes_probability > 0.7:
         return "This looks like a weak fit."
-    return "This does not look like a weak fit."
+    if needs_review:
+        return "This needs review."
+    if isinstance(yes_probability, float):
+        return "This does not look like a weak fit."
+    return ""
 
 
 def _human_reason_lines(yes_probability, reasons) -> list:
@@ -245,6 +248,136 @@ def _human_reason_lines(yes_probability, reasons) -> list:
     return lines
 
 
+# Strict GTA: Toronto and the four GTA regions. Wider Ontario is "may not be in the GTA".
+_GTA_PLACES = {
+    "gta", "greater toronto", "greater toronto area", "toronto", "etobicoke",
+    "scarborough", "north york", "east york", "york", "downtown toronto",
+    "mississauga", "brampton", "caledon", "peel",
+    "oakville", "burlington", "milton", "halton hills", "georgetown", "halton",
+    "vaughan", "markham", "richmond hill", "aurora", "newmarket",
+    "king city", "stouffville", "whitchurch", "east gwillimbury",
+    "georgina", "woodbridge", "concord", "thornhill", "maple", "unionville",
+    "pickering", "ajax", "whitby", "oshawa", "clarington", "bowmanville",
+    "uxbridge", "durham",
+}
+# Words that add nothing about where in Ontario someone is.
+_LOCATION_FILLER = {
+    "on", "ont", "ontario", "canada", "ca", "area", "the", "downtown",
+    "based", "in", "near", "around", "city", "of", "region", "greater", "gta",
+}
+
+
+def _location_key(text: str) -> str:
+    import unicodedata
+    folded = unicodedata.normalize("NFKD", text or "")
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return " ".join(folded.lower().replace(".", " ").split())
+
+
+def location_check(city: str) -> tuple:
+    """(bullet, unclear). Self-reported text only; nothing is geocoded."""
+    import re
+    raw = " ".join(str(city or "").split())
+    if not raw:
+        return ("No city given.", True)
+    key = _location_key(raw)
+    parts = [p.strip() for p in re.split(r"[/,;|&+()\\-]| and | or ", key) if p.strip()]
+    gta = 0
+    other = 0
+    for part in parts:
+        if part in _GTA_PLACES:
+            gta += 1
+            continue
+        words = [w for w in part.split() if w not in _LOCATION_FILLER]
+        phrase = " ".join(words)
+        if not phrase:
+            if "gta" in part.split() or "greater" in part.split():
+                gta += 1
+            continue
+        if phrase in _GTA_PLACES:
+            gta += 1
+        else:
+            other += 1
+    if gta and not other:
+        return (f"Self-reported city: {raw} (GTA).", False)
+    return (f"Location unclear / may not be in the GTA (says: {raw}).", True)
+
+
+def _short(text: str, limit: int = 100) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def equipment_line(equipment) -> str:
+    items = [" ".join(str(i or "").split()) for i in (equipment or ())]
+    items = [i for i in items if i]
+    if not items:
+        return "No equipment listed."
+    return f"Says they have: {_short(', '.join(items))}."
+
+
+def drone_line(drone, level=None) -> str:
+    if not drone:
+        return "No drone certificate claimed."
+    lvl = str(level or "").strip().lower()
+    if lvl in ("basic", "advanced"):
+        return f"Says they hold a {lvl} drone (RPAS) certificate, not verified."
+    return "Says they are drone certified, not verified."
+
+
+def portfolio_check_lines(check, urls) -> tuple:
+    """(bullets, needs_review). Only what was actually seen.
+
+    There is no image or vision model on this path, so a page that opens is
+    "opened, work not reviewed". Nothing here says the work is a fit.
+    """
+    urls = list(urls or ())
+    if not urls:
+        return (["No portfolio link to check."], True)
+    if check is None:
+        return ([f"Portfolio not checked (link: {', '.join(urls)})."], True)
+    lines = []
+    opened = check.opened
+    failed = check.failed
+    if opened:
+        lines.append(
+            f"Portfolio opened, work not reviewed (link: {', '.join(c.url for c in opened)})."
+        )
+    if failed:
+        lines.append(f"Portfolio couldn't be opened (link: {', '.join(c.url for c in failed)}).")
+    if check.instagram:
+        lines.append("Instagram link provided, not reviewed.")
+    unchecked = [u for u in urls if u not in {c.url for c in check.links}]
+    if unchecked:
+        lines.append(f"Not checked (link: {', '.join(unchecked)}).")
+    return (lines, check.needs_review)
+
+
+def vendor_application_facts(
+    city: str,
+    portfolio_links=(),
+    *,
+    portfolio_check=None,
+    equipment=None,
+    drone=None,
+    drone_level=None,
+) -> tuple:
+    """(bullets, needs_review) from what the applicant typed plus the link check.
+
+    Equipment, city, and drone are self-reported and worded that way.
+    None for equipment/drone means the caller did not pass them; skip the bullet.
+    """
+    urls = _public_portfolio_urls(portfolio_links)
+    lines, review = portfolio_check_lines(portfolio_check, urls)
+    loc, unclear = location_check(city)
+    lines.append(loc)
+    if equipment is not None:
+        lines.append(equipment_line(equipment))
+    if drone is not None:
+        lines.append(drone_line(drone, drone_level))
+    return (lines, review or unclear)
+
+
 def vendor_application_sms_body(
     name: str,
     city: str,
@@ -252,16 +385,18 @@ def vendor_application_sms_body(
     yes_probability,
     reasons=(),
     portfolio_links=(),
+    facts=(),
+    needs_review: bool = False,
 ) -> str:
-    """Owner text. Fit sentence and bullets when there is a score. Public portfolio URL on its own line."""
+    """Owner text. Fit sentence and bullets. Public portfolio URL on its own line."""
     who = (name or "").strip() or "Someone"
     where = (city or "").strip() or "an unknown city"
     kind = (vendor_type or "").strip() or "vendor"
-    fit = vendor_application_fit_line(yes_probability)
+    fit = vendor_application_fit_line(yes_probability, needs_review)
     head = f"New Bricks {kind} application: {who} in {where}."
-    bullets = _human_reason_lines(yes_probability, reasons)
+    bullets = list(facts or ()) + _human_reason_lines(yes_probability, reasons)
     urls = _public_portfolio_urls(portfolio_links)
-    if not fit and not urls:
+    if not fit and not urls and not bullets:
         return f"{head} Pending your approval."
     parts = [f"{head} {fit}"] if fit else [head]
     parts.extend(f"- {line}" for line in bullets)
@@ -304,6 +439,8 @@ def vendor_application_email_body(
     yes_probability,
     reasons=(),
     portfolio_links=(),
+    facts=(),
+    needs_review: bool = False,
     source=None,
     source_detail=None,
 ) -> str:
@@ -316,9 +453,10 @@ def vendor_application_email_body(
     found = found_us_line(source, source_detail)
     if found:
         lines.append(found)
-    fit = vendor_application_fit_line(yes_probability)
+    fit = vendor_application_fit_line(yes_probability, needs_review)
     if fit:
         lines.append(fit)
+    lines.extend(f"- {line}" for line in facts or ())
     lines.extend(f"- {line}" for line in _human_reason_lines(yes_probability, reasons))
     lines.extend(_portfolio_lines(portfolio_links))
     lines.append("Pending your approval.")
@@ -334,6 +472,10 @@ async def notify_owner_vendor_application(
     yes_probability,
     reasons=(),
     portfolio_links=(),
+    portfolio_check=None,
+    equipment=None,
+    drone=None,
+    drone_level=None,
     source=None,
     source_detail=None,
 ) -> None:
@@ -344,7 +486,21 @@ async def notify_owner_vendor_application(
     """
     from ..shared.job_scope import KAM_MEMBER_ID
 
-    sms_body = vendor_application_sms_body(name, city, vendor_type, yes_probability, reasons, portfolio_links)
+    try:
+        facts, needs_review = vendor_application_facts(
+            city,
+            portfolio_links,
+            portfolio_check=portfolio_check,
+            equipment=equipment,
+            drone=drone,
+            drone_level=drone_level,
+        )
+    except Exception as e:
+        logger.error("Vendor application facts failed: %s", type(e).__name__)
+        facts, needs_review = [], True
+    sms_body = vendor_application_sms_body(
+        name, city, vendor_type, yes_probability, reasons, portfolio_links, facts, needs_review
+    )
     phone = ""
     try:
         res = await db.table("vendor_members").select("phone").eq(
@@ -375,7 +531,7 @@ async def notify_owner_vendor_application(
 
         subject = vendor_application_email_subject(name)
         body = vendor_application_email_body(
-            name, city, vendor_type, yes_probability, reasons, portfolio_links,
+            name, city, vendor_type, yes_probability, reasons, portfolio_links, facts, needs_review,
             source=source, source_detail=source_detail,
         )
         # Kam alone. No cc, no bcc, no applicant, no hiring@, no personal Gmail.

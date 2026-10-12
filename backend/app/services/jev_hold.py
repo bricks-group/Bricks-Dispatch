@@ -386,30 +386,15 @@ APPLICANT_INSTRUCTIONS = "Does this applicant look like a poor fit for Bricks ph
 _REASON_POOR_FIT = 0.5
 
 # Same decision call. Plain sentences only. No name and no number in the text.
+# Equipment only. This model sees the applicant's typed fields, never the
+# portfolio itself, so it must not produce a portfolio, city, or drone "fit"
+# line. Those bullets come from vendor_selection.vendor_application_facts
+# (a real link fetch plus self-reported wording).
 _APPLICANT_REASONS = (
     (
         "equipment",
-        "Does the equipment look like a poor fit for Bricks photographer work?",
-        "Equipment does not look suitable for this work.",
-        "Equipment looks suitable for this work.",
-    ),
-    (
-        "city",
-        "Does the city look like a poor fit for Bricks photographer work?",
-        "The city does not look like a fit for this work.",
-        "The city looks like a fit for this work.",
-    ),
-    (
-        "portfolio",
-        "Does the portfolio look like a poor fit for Bricks photographer work?",
-        "The portfolio does not look like a fit for this work.",
-        "The portfolio looks like a fit for this work.",
-    ),
-    (
-        "drone",
-        "Does drone certification look like a poor fit for Bricks photographer work?",
-        "Drone certification does not look like a fit for this work.",
-        "Drone certification looks like a fit for this work.",
+        "Does the listed equipment look like a poor fit for Bricks photographer work?",
+        "Listed equipment may not suit this work.",
     ),
 )
 
@@ -458,7 +443,7 @@ def _applicant_questions() -> dict:
             },
         }
     }
-    for key, instructions, _weak, _ok in _APPLICANT_REASONS:
+    for key, instructions, _weak in _APPLICANT_REASONS:
         questions[key] = {
             "type": "noul",
             "instructions": instructions,
@@ -482,17 +467,18 @@ def _applicant_body(applicant: dict) -> dict:
 
 
 def applicant_reason_lines(payload: Any, overall: float) -> tuple:
-    """Plain bullets that support the fit sentence. Skip a factor with no score."""
-    weak = overall > 0.7
+    """Weak-signal bullets only, and only when the overall call is weak.
+
+    No "looks suitable" line: a text model reading a typed list has not
+    verified anything.
+    """
+    if overall <= 0.7:
+        return ()
     lines = []
-    for key, _instructions, weak_line, ok_line in _APPLICANT_REASONS:
+    for key, _instructions, weak_line in _APPLICANT_REASONS:
         probability = yes_probability(payload, key)
-        if probability is None:
-            continue
-        if weak and probability > _REASON_POOR_FIT:
+        if probability is not None and probability > _REASON_POOR_FIT:
             lines.append(weak_line)
-        elif not weak and probability <= _REASON_POOR_FIT:
-            lines.append(ok_line)
     return tuple(lines)
 
 

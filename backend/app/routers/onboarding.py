@@ -324,15 +324,31 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
 
     poor_fit = None
     reasons = ()
-    try:
+    portfolio_links = _application_portfolio_links(application)
+    portfolio_check = None
+
+    async def _score():
         from ..services.jev_hold import jev_applicant_poor_fit
-        decision = await jev_applicant_poor_fit(_applicant_jev_fields(application))
+        return await jev_applicant_poor_fit(_applicant_jev_fields(application))
+
+    async def _open_portfolio():
+        # Actually fetch the links (timeout, no vision model). The owner email
+        # must not call a portfolio a fit when nobody could open it.
+        from ..services.portfolio_check import check_portfolio
+        from ..services.vendor_selection import _public_portfolio_urls
+        return await check_portfolio(_public_portfolio_urls(portfolio_links))
+
+    import asyncio as _asyncio
+    decision, checked = await _asyncio.gather(_score(), _open_portfolio(), return_exceptions=True)
+    if isinstance(decision, BaseException):
+        logger.warning("Jev applicant score failed open (%s)", type(decision).__name__)
+    else:
         poor_fit = getattr(decision, "yes_probability", None)
         reasons = tuple(getattr(decision, "reasons", ()) or ())
-    except Exception as exc:
-        logger.warning("Jev applicant score failed open (%s)", type(exc).__name__)
-        poor_fit = None
-        reasons = ()
+    if isinstance(checked, BaseException):
+        logger.warning("Portfolio check failed (%s)", type(checked).__name__)
+    else:
+        portfolio_check = checked
 
     if isinstance(poor_fit, float):
         await _store_applicant_jev_probability(result["member_id"], existing_notes, poor_fit)
@@ -346,7 +362,11 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
             vendor_type=vtype,
             yes_probability=poor_fit,
             reasons=reasons,
-            portfolio_links=_application_portfolio_links(application),
+            portfolio_links=portfolio_links,
+            portfolio_check=portfolio_check,
+            equipment=[item for item in (application.equipment_list or []) if item],
+            drone=bool(application.drone_certified),
+            drone_level=getattr(application, "rpas_certificate_level", None),
             source=getattr(application, "source", None),
             source_detail=getattr(application, "source_detail", None),
         )

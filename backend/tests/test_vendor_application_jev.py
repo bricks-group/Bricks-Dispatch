@@ -155,7 +155,13 @@ def _assert_no_printed_score(text):
     assert re.search(r"\b0\.\d+\b", visible) is None
 
 
-async def _apply(monkeypatch, client_cls, api_key="test-not-a-real-key", channels_fail=False):
+def _opened_check(urls):
+    from app.services.portfolio_check import LinkCheck, OK_PAGE, PortfolioCheck
+    return PortfolioCheck(tuple(LinkCheck(u, OK_PAGE) for u in urls))
+
+
+async def _apply(monkeypatch, client_cls, api_key="test-not-a-real-key", channels_fail=False,
+                 portfolio=None):
     monkeypatch.delenv("ADMIN_NOTIFICATION_EMAIL", raising=False)
     if api_key is None:
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
@@ -173,7 +179,9 @@ async def _apply(monkeypatch, client_cls, api_key="test-not-a-real-key", channel
     with patch("app.routers.onboarding.get_db", AsyncMock(return_value=db)), \
             patch("app.notifications.send_dispatch_sms", sms), \
             patch("app.services.notifications.send_email_via_resend", email), \
-            patch("app.services.jev_hold.httpx.AsyncClient", client_cls):
+            patch("app.services.jev_hold.httpx.AsyncClient", client_cls), \
+            patch("app.services.portfolio_check.check_portfolio",
+                  AsyncMock(side_effect=portfolio or (lambda urls: _opened_check(urls)))):
         result = await apply_to_bricks(_application(), BackgroundTasks())
     return result, db
 
@@ -227,9 +235,7 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     call = calls[0]
     assert call["url"] == DECISIONS_URL
     assert call["json"]["model"] == JEV_MODEL
-    assert set(call["json"]["questions"]) == {
-        APPLICANT_QUESTION_KEY, "equipment", "city", "portfolio", "drone",
-    }
+    assert set(call["json"]["questions"]) == {APPLICANT_QUESTION_KEY, "equipment"}
     assert len(calls) == 1
     question = call["json"]["questions"][APPLICANT_QUESTION_KEY]
     assert question["type"] == "noul"
@@ -252,8 +258,11 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     assert sms_body == (
         "New Bricks photographer application: Alex Rivera in Toronto. "
         "This looks like a weak fit.\n"
-        "- Equipment does not look suitable for this work.\n"
-        "- The portfolio does not look like a fit for this work.\n"
+        "- Portfolio opened, work not reviewed (link: https://portfolio.example.com/alex).\n"
+        "- Self-reported city: Toronto (GTA).\n"
+        "- Says they have: Sony A7IV, 16-35mm.\n"
+        "- Says they are drone certified, not verified.\n"
+        "- Listed equipment may not suit this work.\n"
         "https://portfolio.example.com/alex\n"
         "Pending your approval."
     )
@@ -265,10 +274,10 @@ async def test_apply_notifies_kam_and_stores_jev_without_changing_status(monkeyp
     assert "Alex Rivera in Toronto applied as a photographer." in html
     assert "Pending your approval." in html
     assert "This looks like a weak fit." in html
-    assert "- Equipment does not look suitable for this work." in html
-    assert "- The portfolio does not look like a fit for this work." in html
-    assert "The city does not look like a fit" not in html
-    assert "Drone certification does not look like a fit" not in html
+    assert "- Listed equipment may not suit this work." in html
+    assert "- Portfolio opened, work not reviewed" in html
+    assert "looks like a fit" not in html
+    assert "suitable" not in html
     assert "Portfolio:" in html
     assert "https://portfolio.example.com/alex" in html
     assert "\nhttps://portfolio.example.com/alex\n" in sms_body
@@ -311,13 +320,18 @@ async def test_jev_failure_still_notifies_and_stays_pending(monkeypatch, mode):
     assert "Jev poor-fit" not in (member.get("internal_notes") or "")
     assert db.sms.call_count == 1
     sms_body = db.sms.call_args.args[1]
+    # No score: no fit sentence, but the factual bullets still go out.
     assert sms_body == (
         "New Bricks photographer application: Alex Rivera in Toronto.\n"
+        "- Portfolio opened, work not reviewed (link: https://portfolio.example.com/alex).\n"
+        "- Self-reported city: Toronto (GTA).\n"
+        "- Says they have: Sony A7IV, 16-35mm.\n"
+        "- Says they are drone certified, not verified.\n"
         "https://portfolio.example.com/alex\n"
         "Pending your approval."
     )
     assert "weak fit" not in sms_body
-    assert sms_body.count("\n- ") == 0
+    assert "looks like a fit" not in sms_body
     html = db.email.await_args.kwargs["html"]
     assert "Pending your approval." in html
     assert "https://portfolio.example.com/alex" in html
@@ -325,7 +339,7 @@ async def test_jev_failure_still_notifies_and_stays_pending(monkeypatch, mode):
     assert "bcc" not in db.email.await_args.kwargs
     assert db.email.await_args.kwargs["to"] == "admin@brxs.ca"
     assert "weak fit" not in html
-    assert "- " not in html
+    assert "looks like a fit" not in html
     _assert_plain_copy(sms_body)
     _assert_plain_copy(html)
     _assert_no_printed_score(sms_body)
@@ -362,19 +376,13 @@ def test_fit_sentences_and_reason_bullets():
         _noul(0.91, {"equipment": 0.8, "city": 0.2, "portfolio": 0.51, "drone": 0.5}),
         0.91,
     )
-    assert weak_reasons == (
-        "Equipment does not look suitable for this work.",
-        "The portfolio does not look like a fit for this work.",
-    )
+    # The text model never saw the portfolio: no portfolio/city/drone line.
+    assert weak_reasons == ("Listed equipment may not suit this work.",)
     ok_reasons = applicant_reason_lines(
         _noul(0.7, {"equipment": 0.5, "city": 0.2, "portfolio": 0.9, "drone": 0.1}),
         0.7,
     )
-    assert ok_reasons == (
-        "Equipment looks suitable for this work.",
-        "The city looks like a fit for this work.",
-        "Drone certification looks like a fit for this work.",
-    )
+    assert ok_reasons == ()
     no_factors = applicant_reason_lines(_noul(0.91), 0.91)
     assert no_factors == ()
 
@@ -386,7 +394,7 @@ def test_fit_sentences_and_reason_bullets():
     )
     assert "This does not look like a weak fit." in sms
     assert "This does not look like a weak fit." in email
-    assert "- Equipment looks suitable for this work." in sms
+    assert "- " not in sms
     assert "portfolio" not in sms.lower()
     bare = vendor_application_sms_body("Alex Rivera", "Toronto", "photographer", 0.91, ())
     assert bare == (
