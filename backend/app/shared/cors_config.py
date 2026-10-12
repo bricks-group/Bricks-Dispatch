@@ -14,7 +14,7 @@ from app.shared.rate_limit import RateLimitMiddleware
 DEFAULT_ALLOWED_ORIGINS = (
     "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca,https://www.brxs.ca,"
     "https://brxs.ca,https://bricks-dispatch-web.vercel.app,https://app.brxs.ca,"
-    "https://go.brxs.ca"
+    "https://go.brxs.ca,https://companion.brxs.ca"
 )
 
 _CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
