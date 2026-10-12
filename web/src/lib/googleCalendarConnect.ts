@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 
 export const GOOGLE_CAL_CALLBACK = 'https://go.brxs.ca/auth/google-calendar';
 export const GOOGLE_CAL_SCOPE =
-  'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.freebusy';
+  'https://www.googleapis.com/auth/calendar.freebusy';
 
 export type GoogleConnectStart = {
   mode?: string | null;

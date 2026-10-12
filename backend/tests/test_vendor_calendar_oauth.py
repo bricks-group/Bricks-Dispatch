@@ -98,7 +98,7 @@ def test_supabase_connect_payload(monkeypatch):
 
     body = build_google_supabase_connect_payload()
     assert body["mode"] == "supabase"
-    assert "calendar.readonly" in body["scope"]
+    assert body["scope"] == "https://www.googleapis.com/auth/calendar.freebusy"
     assert body["redirect_uri"].endswith("/auth/google-calendar")
 
 

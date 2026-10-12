@@ -93,12 +93,8 @@ def microsoft_redirect_uri() -> str:
     ).strip()
 
 
-GOOGLE_CAL_SCOPE = (
-    "https://www.googleapis.com/auth/calendar.readonly "
-    "https://www.googleapis.com/auth/calendar.freebusy"
-)
-# Fallback scope used by OS Calendar Connect when freebusy isn't granted via Supabase.
-GOOGLE_CAL_SCOPE_EVENTS = "https://www.googleapis.com/auth/calendar.events"
+# Non-sensitive scope only (no unverified-app warning). Busy sync uses FreeBusy API.
+GOOGLE_CAL_SCOPE = "https://www.googleapis.com/auth/calendar.freebusy"
 
 
 def supabase_configured() -> bool:
@@ -188,7 +184,7 @@ def build_google_supabase_connect_payload() -> dict:
 
 
 async def google_calendar_ping(access_token: str) -> dict:
-    """Verify calendar scope before marking Connected. Prefer FreeBusy; fall back to events."""
+    """Verify calendar scope before marking Connected. Uses FreeBusy (calendar.freebusy scope)."""
     if not access_token:
         return {"ok": False, "status": 0, "via": None}
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -206,16 +202,6 @@ async def google_calendar_ping(access_token: str) -> dict:
             )
             if resp.status_code < 400:
                 return {"ok": True, "status": resp.status_code, "via": "freebusy"}
-            if resp.status_code in (401, 403):
-                # calendar.events may be granted without freebusy — try events list
-                ev = await client.get(
-                    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-                    params={"maxResults": 1, "singleEvents": "true"},
-                    headers=headers,
-                )
-                if ev.status_code < 400:
-                    return {"ok": True, "status": ev.status_code, "via": "events"}
-                return {"ok": False, "status": ev.status_code, "via": "events"}
             return {"ok": False, "status": resp.status_code, "via": "freebusy"}
     except Exception as e:
         logger.warning("Google Calendar ping error: %s", e)
