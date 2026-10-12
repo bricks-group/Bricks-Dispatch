@@ -1,7 +1,7 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet, Platform } from 'react-native';
-import { BrickLoader } from '../components/BricksWordmark';
+import BricksLoader from '../components/BricksLoader';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
@@ -148,7 +148,7 @@ export default function RootLayout() {
   if (!fontsLoaded) {
     return (
       <View style={styles.loadingContainer}>
-        <BrickLoader />
+        <BricksLoader variant="assemble" size={160} startAtHold />
       </View>
     );
   }

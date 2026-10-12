@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -6,8 +6,7 @@ import Animated, {
   withTiming,
   withSequence,
   withDelay,
-  withRepeat,
-  cancelAnimation,
+
   Easing,
   SharedValue,
 } from 'react-native-reanimated';
@@ -54,41 +53,6 @@ function AnimatedLogoMark({ size, color, b1, b2, b3 }: {
         style3,
       ]} />
     </View>
-  );
-}
-
-// Brick mark spinning on Y axis — used as loading indicator
-export function BrickLoader({ size = 2.5, color = C.accent }: { size?: number; color?: string }) {
-  const rot = useSharedValue(0);
-
-  useEffect(() => {
-    rot.value = withRepeat(
-      withTiming(1, { duration: 1600, easing: Easing.linear }),
-      -1,
-    );
-    return () => cancelAnimation(rot);
-  }, []);
-
-  const h     = Math.round(7 * size);
-  const wTop  = Math.round(11 * size);
-  const wBotL = Math.round(6 * size);
-  const wBotR = Math.round(10 * size);
-  const rGap  = Math.round(2 * size);
-  const cGap  = Math.max(1, Math.round(size));
-  const r     = 1.2 * size;
-
-  const spinStyle = useAnimatedStyle(() => ({
-    transform: [{ perspective: 400 }, { rotateY: `${rot.value * 360}deg` }],
-  }));
-
-  return (
-    <Animated.View style={spinStyle}>
-      <View style={{ width: wBotL + cGap + wBotR, height: h + rGap + h, position: 'relative' }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, width: wTop, height: h, borderRadius: r, backgroundColor: color }} />
-        <View style={{ position: 'absolute', left: 0, top: h + rGap, width: wBotL, height: h, borderRadius: r, backgroundColor: color }} />
-        <View style={{ position: 'absolute', left: wBotL + cGap, top: h + rGap, width: wBotR, height: h, borderRadius: r, backgroundColor: color }} />
-      </View>
-    </Animated.View>
   );
 }
 
