@@ -235,3 +235,144 @@ async def check_portfolio(urls: Iterable[str]) -> PortfolioCheck:
     for url, res in zip(picked, results):
         out.append(res if isinstance(res, LinkCheck) else LinkCheck(url, FAILED, "error"))
     return PortfolioCheck(tuple(out))
+
+
+# ---------------------------------------------------------------------------
+# Image scrape for the applicant review. Same SSRF guard as the link check:
+# every hop's host must resolve to public addresses only.
+# ---------------------------------------------------------------------------
+PAGE_MAX_BYTES = 1024 * 1024
+IMAGE_MAX_BYTES = 8 * 1024 * 1024
+_IMG_SRC_RE = re.compile(
+    r"""(?:<img\b[^>]*?\b(?:data-src|data-lazy-src|src)\s*=\s*["']([^"']+)["'])"""
+    r"""|(?:<meta\b[^>]*?property\s*=\s*["']og:image["'][^>]*?content\s*=\s*["']([^"']+)["'])"""
+    r"""|(?:<meta\b[^>]*?content\s*=\s*["']([^"']+)["'][^>]*?property\s*=\s*["']og:image["'])""",
+    re.I,
+)
+_SRCSET_RE = re.compile(r"""\b(?:data-srcset|srcset)\s*=\s*["']([^"']+)["']""", re.I)
+_SKIP_IMG = re.compile(r"(logo|icon|favicon|sprite|avatar|badge|placeholder|spinner|\.svg)(\b|$|\?)", re.I)
+VIDEO_HOSTS = ("youtube.com", "youtu.be", "vimeo.com", "tiktok.com")
+
+
+def is_video_host(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in VIDEO_HOSTS)
+
+
+async def _guarded_get(client: httpx.AsyncClient, url: str, cap: int) -> tuple:
+    """(final_url, content_type, body) or (url, '', b'') on any failure."""
+    current = url
+    for _hop in range(MAX_REDIRECTS + 1):
+        parts = urlsplit(current)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            return url, "", b""
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        if await _host_is_public(parts.hostname, port) is not True:
+            return url, "", b""
+        try:
+            async with client.stream("GET", current) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    loc = resp.headers.get("location")
+                    if not loc:
+                        return url, "", b""
+                    current = urljoin(current, loc)
+                    continue
+                if not (200 <= resp.status_code < 300):
+                    return url, "", b""
+                ctype = (resp.headers.get("content-type") or "").lower()
+                body = b""
+                async for chunk in resp.aiter_bytes():
+                    body += chunk
+                    if len(body) > cap:
+                        return current, ctype, b""  # too big: skip, never truncate an image
+                return current, ctype, body
+        except Exception:
+            return url, "", b""
+    return url, "", b""
+
+
+def extract_image_urls(html: str, base_url: str, limit: int = 30) -> list:
+    """Candidate photo URLs on a page, largest srcset entry first, no logos/icons."""
+    out: list = []
+
+    def _add(u: str):
+        u = (u or "").strip()
+        if not u or u.startswith("data:"):
+            return
+        full = urljoin(base_url, u)
+        if not full.lower().startswith(("http://", "https://")) or _SKIP_IMG.search(full):
+            return
+        if full not in out:
+            out.append(full)
+
+    for m in _SRCSET_RE.finditer(html or ""):
+        best, best_w = "", -1
+        for part in m.group(1).split(","):
+            bits = part.strip().split()
+            if not bits:
+                continue
+            w = 0
+            if len(bits) > 1 and bits[1].endswith("w"):
+                try:
+                    w = int(bits[1][:-1])
+                except ValueError:
+                    w = 0
+            if w > best_w:
+                best, best_w = bits[0], w
+        _add(best)
+    for m in _IMG_SRC_RE.finditer(html or ""):
+        _add(m.group(1) or m.group(2) or m.group(3) or "")
+    return out[:limit]
+
+
+async def scrape_page_images(url: str, max_images: int = 6, min_side: int = 700) -> list:
+    """Download up to max_images real photos from a public page. Never raises.
+
+    Returns [(image_url, bytes)]. Tiny images (thumbnails, logos) are skipped.
+    """
+    from PIL import Image
+    import io
+
+    found: list = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=8.0,
+            follow_redirects=False,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/html,image/*;q=0.9,*/*;q=0.5"},
+        ) as client:
+            final, ctype, body = await _guarded_get(client, url, PAGE_MAX_BYTES)
+            if not body:
+                return []
+            if ctype.startswith("image/"):
+                candidates = [final]
+                cache = {final: body}
+            else:
+                candidates = extract_image_urls(body.decode("utf-8", errors="ignore"), final)
+                cache = {}
+            sem = asyncio.Semaphore(4)
+
+            async def _one(u):
+                async with sem:
+                    if u in cache:
+                        return u, cache[u]
+                    _f, ct, data = await _guarded_get(client, u, IMAGE_MAX_BYTES)
+                    if not data or (ct and not ct.startswith("image/")):
+                        return u, b""
+                    return u, data
+
+            results = await asyncio.gather(*(_one(u) for u in candidates[:18]))
+            for u, data in results:
+                if not data:
+                    continue
+                try:
+                    with Image.open(io.BytesIO(data)) as im:
+                        if max(im.size) < min_side:
+                            continue
+                except Exception:
+                    continue
+                found.append((u, data))
+                if len(found) >= max_images:
+                    break
+    except Exception:
+        return found
+    return found

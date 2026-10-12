@@ -389,8 +389,10 @@ def _paid_booking_admin_email_html(
 </div></body></html>"""
 
 
-async def send_email_via_resend(to: str, subject: str, html: str) -> bool:
-    """Send transactional email via Resend. Returns True on success."""
+async def send_email_via_resend(to: str, subject: str, html: str, text: str | None = None) -> bool:
+    """Send transactional email via Resend. Returns True on success.
+
+    text: optional plain-text alternative (multipart/alternative)."""
     api_key = os.environ.get("RESEND_API_KEY", "")
     if not api_key:
         logger.debug("RESEND_API_KEY not set — skipping email")
@@ -409,6 +411,7 @@ async def send_email_via_resend(to: str, subject: str, html: str) -> bool:
                     "to": [to],
                     "subject": subject,
                     "html": html,
+                    **({"text": text} if text else {}),
                 },
             )
             r.raise_for_status()

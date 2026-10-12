@@ -18,6 +18,7 @@ _TIERS: list[tuple[str, int, int]] = [
     # Auth (vendors + onboarding submit)
     ("/api/vendor-os/auth/", 10, 60),               # All auth endpoints - 10/min
     ("/api/onboarding/apply", 10, 60),              # Onboarding submission - 10/min
+    ("/api/onboarding/sample-uploads", 10, 60),     # Applicant photo upload URLs - 10/min
     # Job intake (booking -> dispatch)
     ("/api/v1/dispatch/jobs", 30, 60),             # Job intake - 30/min
     # Job mutations (auto-assign, cancel, reschedule, status changes)

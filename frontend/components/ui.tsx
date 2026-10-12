@@ -4,7 +4,7 @@
  */
 import React from 'react';
 import {
-  View, Text, TextInput, ScrollView, ActivityIndicator, Pressable,
+  View, Text, TextInput, ScrollView, Pressable,
   StyleSheet, type TextInputProps, type ViewStyle, type StyleProp, type TextStyle,
   type ScrollViewProps,
 } from 'react-native';
@@ -12,6 +12,7 @@ import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
 import { ChevronLeft, ChevronRight, X, type LucideIcon } from 'lucide-react-native';
 import { color, type as T, space, radius, layout, hairline, toneColors, type Tone } from '../theme';
 import { PressScale } from './motion';
+import BricksLoader from './BricksLoader';
 
 /* ───────────────── Text helpers ───────────────── */
 
@@ -169,7 +170,7 @@ export function Row({
       </View>
       {value ? <Text style={[T.data, s.rowValue]}>{value}</Text> : null}
       {right}
-      {loading ? <ActivityIndicator size="small" color={color.textMuted} /> : null}
+      {loading ? <BricksLoader variant="cycle" size={18} /> : null}
       {chevron && !loading ? <ChevronRight size={layout.icon} color={color.textFaint} strokeWidth={layout.iconStroke} /> : null}
     </View>
   );
@@ -245,7 +246,7 @@ export function Button({
       style={[s.button, v.box, full && s.buttonFull, inactive && s.disabled, style]}
     >
       {loading ? (
-        <ActivityIndicator size="small" color={v.fg} />
+        <BricksLoader variant="cycle" size={18} color={v.fg} />
       ) : (
         <>
           {Icon ? <Icon size={layout.icon} color={v.fg} strokeWidth={layout.iconStroke} /> : null}
@@ -432,7 +433,7 @@ export function EmptyState({ icon: Icon, title, body, action }: {
 export function LoadingState({ label }: { label?: string }) {
   return (
     <View style={s.loading}>
-      <ActivityIndicator color={color.accent} />
+      <BricksLoader variant="assemble" size={40} />
       {label ? <Text style={[T.bodySm, { color: color.textMuted }]}>{label}</Text> : null}
     </View>
   );

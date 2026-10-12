@@ -15,7 +15,7 @@ from ..services.storage import upload_file
 from ..services.notifications import create_notification
 from ..shared.database import get_db, maybe_single_row
 from ..shared.applicant_source import ApplicantSourceError, found_us_line, normalize_applicant_source
-from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, VendorMember, VendorDocument
+from ..shared.schemas import AvailabilitySettings, SampleUploadRequest, VendorApplicationCreate, VendorMember, VendorDocument
 from ..shared.portfolio import (
     PORTFOLIO_MEDIA_TYPES,
     assemble_portfolio_samples,
@@ -189,11 +189,71 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     if len(city) < 2:
         errs.append("Please enter your home city.")
 
+    from ..services import applicant_evidence as ev
+    from ..services.vendor_profile import normalize_vendor_type as _nvt
+    _vtype_early = _nvt(getattr(application, "vendor_type", None) or "photographer")
+    is_photographer = _vtype_early == "photographer"
+
+    structured = application.equipment if isinstance(application.equipment, dict) else None
+    if structured is not None:
+        eq = {k: " ".join(str(structured.get(k) or "").split())[:160]
+              for k in ("camera_body", "lenses", "drone_model", "lighting", "tripod")}
+        application.equipment = eq
+        if is_photographer:
+            if not eq["camera_body"]:
+                errs.append("Tell us your camera body.")
+            if not eq["lenses"]:
+                errs.append("List your lenses.")
+            if not eq["tripod"]:
+                errs.append("Tell us your tripod (or type 'none').")
+        application.equipment_list = ev.equipment_list_from_profile(eq) or application.equipment_list
     equipment = [e.strip() for e in (application.equipment_list or []) if e and e.strip()]
     if len(equipment) == 0:
         errs.append("Please list your equipment.")
     elif len(" ".join(equipment)) < 8:
         errs.append("Please describe your equipment in a little more detail.")
+
+    # Sample photos: 8-15, uploaded to Bricks storage under a signed session.
+    session = (application.sample_upload_session or "").strip()
+    paths = []
+    for raw in application.sample_paths or []:
+        p_ = str(raw or "").strip()
+        if p_ and p_ not in paths:
+            paths.append(p_)
+    cert_path = (application.rpas_cert_path or "").strip() or None
+    if paths or cert_path:
+        if not ev.verify_upload_session(session):
+            errs.append("Your photo upload expired. Please re-add your sample photos.")
+        elif any(not ev.path_in_session(x, session) for x in paths + ([cert_path] if cert_path else [])):
+            errs.append("Sample photos must be uploaded through this form.")
+    application.sample_paths = paths
+    application.rpas_cert_path = cert_path
+    if is_photographer:
+        if len(paths) < ev.MIN_SAMPLES:
+            errs.append(
+                f"Upload {ev.MIN_SAMPLES}-{ev.MAX_SAMPLES} sample real estate photos "
+                "(update the Bricks GO app, or apply at brxs.ca/photographers)."
+            )
+        elif len(paths) > ev.MAX_SAMPLES:
+            errs.append(f"Upload at most {ev.MAX_SAMPLES} sample photos.")
+
+    # Drone: a claim needs the number, the level and a photo of the certificate.
+    if is_photographer and application.drone_certified:
+        lvl = (application.rpas_certificate_level or "").strip().lower()
+        if lvl not in ("basic", "advanced"):
+            errs.append("Pick your RPAS certificate level (Basic or Advanced).")
+        if not (application.rpas_certificate_number or "").strip():
+            errs.append("Enter your RPAS pilot certificate number.")
+        if not cert_path:
+            errs.append("Add a photo of your RPAS pilot certificate.")
+        application.rpas_certificate_level = lvl or None
+
+    # Availability (self-reported). Required for photographers on the new form.
+    if application.availability is not None or (is_photographer and structured is not None):
+        try:
+            application.availability = ev.normalize_availability(application.availability)
+        except ev.AvailabilityError as exc:
+            errs.append(str(exc))
 
     samples = sanitize_portfolio_samples(
         [s.dict() if hasattr(s, "dict") else s for s in (application.portfolio_samples or [])]
@@ -208,7 +268,7 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         if link and not link.lower().startswith(("http://", "https://")):
             errs.append("Portfolio sample links must be full URLs (starting with https://).")
             break
-    if not samples and not links:
+    if not samples and not links and not paths:
         errs.append("Add at least one portfolio sample (image upload or link) by media type.")
 
     hst = (application.hst_number or "").strip()
@@ -220,7 +280,7 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     application.vendor_type = vtype
     # Stager / cleaner may not have a media portfolio yet.
     if vtype in ("stager", "cleaner"):
-        errs = [e for e in errs if "portfolio" not in e.lower()]
+        errs = [e for e in errs if "portfolio" not in e.lower() and "sample" not in e.lower()]
 
     try:
         application.source, application.source_detail = normalize_applicant_source(
@@ -322,56 +382,12 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
     type_label = {"photographer": "photographer", "stager": "stager", "cleaner": "cleaner"}.get(vtype, "vendor")
 
-    poor_fit = None
-    reasons = ()
-    portfolio_links = _application_portfolio_links(application)
-    portfolio_check = None
-
-    async def _score():
-        from ..services.jev_hold import jev_applicant_poor_fit
-        return await jev_applicant_poor_fit(_applicant_jev_fields(application))
-
-    async def _open_portfolio():
-        # Actually fetch the links (timeout, no vision model). The owner email
-        # must not call a portfolio a fit when nobody could open it.
-        from ..services.portfolio_check import check_portfolio
-        from ..services.vendor_selection import _public_portfolio_urls
-        return await check_portfolio(_public_portfolio_urls(portfolio_links))
-
-    import asyncio as _asyncio
-    decision, checked = await _asyncio.gather(_score(), _open_portfolio(), return_exceptions=True)
-    if isinstance(decision, BaseException):
-        logger.warning("Jev applicant score failed open (%s)", type(decision).__name__)
-    else:
-        poor_fit = getattr(decision, "yes_probability", None)
-        reasons = tuple(getattr(decision, "reasons", ()) or ())
-    if isinstance(checked, BaseException):
-        logger.warning("Portfolio check failed (%s)", type(checked).__name__)
-    else:
-        portfolio_check = checked
-
-    if isinstance(poor_fit, float):
-        await _store_applicant_jev_probability(result["member_id"], existing_notes, poor_fit)
-
-    try:
-        from ..services.vendor_selection import notify_owner_vendor_application
-        await notify_owner_vendor_application(
-            await get_db(),
-            name=application.name,
-            city=application.city,
-            vendor_type=vtype,
-            yes_probability=poor_fit,
-            reasons=reasons,
-            portfolio_links=portfolio_links,
-            portfolio_check=portfolio_check,
-            equipment=[item for item in (application.equipment_list or []) if item],
-            drone=bool(application.drone_certified),
-            drone_level=getattr(application, "rpas_certificate_level", None),
-            source=getattr(application, "source", None),
-            source_detail=getattr(application, "source_detail", None),
-        )
-    except Exception as exc:
-        logger.error("Vendor application owner notify failed (%s)", type(exc).__name__)
+    # Evidence-based review (samples through the vision rubric, link checks,
+    # hashes, gear / location / availability / RPAS rules), stored on
+    # vendor_applicant_reviews, then one short text + one HTML email to Kam.
+    # Runs after the response; it never approves or rejects.
+    from ..services.applicant_review_runner import review_application
+    background_tasks.add_task(review_application, result["member_id"], notify=True, trigger="apply")
 
     found = found_us_line(getattr(application, "source", None), getattr(application, "source_detail", None))
     # In-app record only. Kam's text and admin@brxs.ca email are the notify above.
@@ -436,6 +452,24 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         "stager": "staging",
         "cleaner": "cleaning",
     }.get(vtype, "photo")
+    from ..services import applicant_evidence as ev
+    application_profile = None
+    if vtype == "photographer" or application.sample_paths or application.equipment:
+        application_profile = {
+            "version": 1,
+            "location": {"city": application.city, "in_gta": ev.city_in_gta(application.city)},
+            "specialties": list(application.specialties or []),
+            "equipment": application.equipment or ev.equipment_from_list(application.equipment_list or []),
+            "equipment_structured": bool(application.equipment),
+            "rpas": {
+                "claimed": bool(application.drone_certified) if vtype == "photographer" else False,
+                "number": application.rpas_certificate_number if vtype == "photographer" else None,
+                "level": application.rpas_certificate_level if vtype == "photographer" else None,
+                "cert_path": application.rpas_cert_path if vtype == "photographer" else None,
+            },
+            "samples": [{"path": p} for p in (application.sample_paths or [])],
+            "upload_session": application.sample_upload_session or None,
+        }
     member = VendorMember(
         id=str(uuid.uuid4()),
         application_token=application_token,
@@ -464,6 +498,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         terms_accepted_at=now_iso,
         source=getattr(application, "source", None),
         source_detail=getattr(application, "source_detail", None),
+        application_profile=application_profile,
+        rpas_certificate_url=application.rpas_cert_path if vtype == "photographer" else None,
         internal_notes=f"IC agreement v{_IC_AGREEMENT_VERSION} accepted on {now_iso}; vendor_type={vtype}",
     )
 
@@ -495,6 +531,7 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
             inserted_via_pg = True
         else:
             # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
+            # application_profile is kept: migration 0017 is live on Canada.
             member_dict.pop("portfolio_samples", None)
             try:
                 await db.table("vendor_members").insert(member_dict).execute()
@@ -529,6 +566,21 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         available=True
     )
     avail_dict = availability.dict()
+    if isinstance(application.availability, dict) and application.availability.get("days_of_week"):
+        av = application.availability
+        avail_dict.update({
+            "work_start": av["work_start"],
+            "work_end": av["work_end"],
+            "jobs_per_day": av["jobs_per_day"],
+            "days_of_week": av["days_of_week"],
+            "time_windows": av["time_windows"],
+            "weekends": av["weekends"],
+            "earliest_start_date": av["earliest_start_date"],
+            "shoots_per_week": av["shoots_per_week"],
+            "notice_hours": av["notice_hours"],
+            "has_car": av["has_car"],
+            "has_licence": av["has_licence"],
+        })
     try:
         await (await get_db()).table("vendor_availability").insert(avail_dict).execute()
     except Exception as e:
@@ -554,6 +606,70 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         "application_token": application_token,
         "_internal_notes": member.internal_notes,
     }
+
+
+@router.post("/sample-uploads")
+async def mint_sample_uploads(body: SampleUploadRequest):
+    """Signed upload URLs for application sample photos and the RPAS cert photo.
+
+    Files go straight from the browser / GO to Bricks storage (brxs-deliverables),
+    never through this function (Vercel body cap). Limits: 15 samples + 1
+    certificate per session, JPEG/PNG/WebP/HEIC, 15 MB per sample, 10 MB cert.
+    The review re-checks real bytes (magic number, size) before using them.
+    """
+    from ..services import applicant_evidence as ev
+    from ..services.storage import create_signed_upload_url
+
+    files = list(body.files or [])
+    if not files:
+        raise HTTPException(status_code=400, detail="No files.")
+    samples = [f for f in files if (f.kind or "sample") == "sample"]
+    certs = [f for f in files if f.kind == "rpas_cert"]
+    if len(samples) > ev.MAX_SAMPLES or len(certs) > 1 or len(samples) + len(certs) != len(files):
+        raise HTTPException(status_code=400, detail=f"Up to {ev.MAX_SAMPLES} sample photos and one certificate photo.")
+    for f in files:
+        mime = (f.type or "").lower()
+        if mime not in ev.SAMPLE_MIME:
+            raise HTTPException(status_code=400, detail=f"{f.name or 'A file'} isn't a JPEG, PNG, WebP or HEIC photo.")
+        cap = ev.MAX_CERT_BYTES if f.kind == "rpas_cert" else ev.MAX_SAMPLE_BYTES
+        if f.size <= 0 or f.size > cap:
+            raise HTTPException(status_code=400, detail=f"{f.name or 'A file'} is too large ({cap // (1024 * 1024)} MB max).")
+        if f.kind != "rpas_cert" and f.size < ev.MIN_SAMPLE_BYTES:
+            raise HTTPException(status_code=400, detail=f"{f.name or 'A photo'} is too small to review. Upload the full-size export.")
+    session = (body.session or "").strip()
+    if not session or not ev.verify_upload_session(session, grace=0):
+        session = ev.mint_upload_session()
+    out = []
+    for i, f in enumerate(files):
+        kind = "cert" if f.kind == "rpas_cert" else "sample"
+        path = ev.sample_path(session, i, kind, f.type.lower())
+        signed = await create_signed_upload_url(path)
+        if not signed or not signed.get("signed_url"):
+            raise HTTPException(status_code=503, detail="Photo upload is unavailable right now. Please try again shortly.")
+        out.append({"name": f.name, "kind": f.kind, "path": signed.get("path") or path,
+                    "signed_url": signed["signed_url"], "token": signed.get("token")})
+    return {"session": session, "uploads": out,
+            "limits": {"min_samples": ev.MIN_SAMPLES, "max_samples": ev.MAX_SAMPLES,
+                       "max_sample_mb": ev.MAX_SAMPLE_BYTES // (1024 * 1024)}}
+
+
+@router.post("/review/{member_id}")
+async def rerun_applicant_review(member_id: str, request: Request, notify: bool = False, store: bool = True):
+    """Re-run the automatic review for one applicant. Internal key only.
+
+    notify=false by default: re-runs never text or email anyone unless asked,
+    and the applicant is never contacted from here.
+    """
+    _api_keys = set(k for k in os.environ.get("INTERNAL_API_KEYS", "").split(",") if k)
+    if not _api_keys or request.headers.get("X-Internal-Api-Key", "") not in _api_keys:
+        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    from ..services.applicant_review_runner import review_application
+
+    result = await review_application(member_id, notify=notify, trigger="rerun", store=store)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Applicant not found or review failed")
+    return {k: result[k] for k in ("verdict", "colour", "score", "incomplete", "needs_samples", "parts",
+                                   "criteria", "evidence", "flags", "missing", "cost_usd", "model")}
 
 
 @router.post("/validate-rpas/{member_id}")
