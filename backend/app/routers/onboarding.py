@@ -14,6 +14,7 @@ import re
 from ..services.storage import upload_file
 from ..services.notifications import create_notification
 from ..shared.database import get_db, maybe_single_row
+from ..shared.applicant_source import ApplicantSourceError, found_us_line, normalize_applicant_source
 from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, VendorMember, VendorDocument
 from ..shared.portfolio import (
     PORTFOLIO_MEDIA_TYPES,
@@ -221,6 +222,13 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     if vtype in ("stager", "cleaner"):
         errs = [e for e in errs if "portfolio" not in e.lower()]
 
+    try:
+        application.source, application.source_detail = normalize_applicant_source(
+            getattr(application, "source", None), getattr(application, "source_detail", None)
+        )
+    except ApplicantSourceError as exc:
+        errs.append(str(exc))
+
     if errs:
         raise HTTPException(status_code=400, detail=" ".join(errs))
 
@@ -339,10 +347,13 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
             yes_probability=poor_fit,
             reasons=reasons,
             portfolio_links=_application_portfolio_links(application),
+            source=getattr(application, "source", None),
+            source_detail=getattr(application, "source_detail", None),
         )
     except Exception as exc:
         logger.error("Vendor application owner notify failed (%s)", type(exc).__name__)
 
+    found = found_us_line(getattr(application, "source", None), getattr(application, "source_detail", None))
     # In-app record only. Kam's text and admin@brxs.ca email are the notify above.
     # Do not email ADMIN_NOTIFICATION_EMAIL — that env is unset, and this path
     # must not fall through to a personal mailbox.
@@ -356,6 +367,7 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
             f"City: {application.city}\n"
             f"Specialties: {', '.join(application.specialties) if application.specialties else 'n/a'}\n"
             f"Drone certified: {application.drone_certified}"
+            + (f"\n{found}" if found else "")
         ),
         ntype="vendor_application",
         data={"member_id": result["member_id"], "vendor_type": vtype},
@@ -430,6 +442,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         service_areas=application.preferred_regions if application.preferred_regions else [application.city],
         ic_agreement_version=_IC_AGREEMENT_VERSION,
         terms_accepted_at=now_iso,
+        source=getattr(application, "source", None),
+        source_detail=getattr(application, "source_detail", None),
         internal_notes=f"IC agreement v{_IC_AGREEMENT_VERSION} accepted on {now_iso}; vendor_type={vtype}",
     )
 

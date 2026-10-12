@@ -378,6 +378,9 @@ class VendorMember(BaseModel):
     # session to check against yet. Only set for applicants created via
     # /apply -- None for members created directly by an admin (create_vendor_member).
     application_token: Optional[str] = None
+    # How the applicant heard about Bricks. Null for older applicants.
+    source: Optional[str] = None
+    source_detail: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -412,6 +415,10 @@ class VendorApplicationCreate(BaseModel):
     # Honeypot: real users never see/fill this (off-screen). Bots that autofill
     # every field will, and we reject silently-ish on the server.
     company_website: Optional[str] = None
+    # "How did you hear about Bricks?" (www form). Optional here so older
+    # clients still apply; see app/shared/applicant_source.py.
+    source: Optional[str] = None
+    source_detail: Optional[str] = None
 
 
 class VendorDocument(BaseModel):

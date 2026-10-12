@@ -1691,6 +1691,8 @@ def pg_insert_vendor_application(row: dict) -> Optional[dict]:
         "ic_agreement_version",
         "terms_accepted_at",
         "application_token",
+        "source",
+        "source_detail",
         "created_at",
         "updated_at",
     }

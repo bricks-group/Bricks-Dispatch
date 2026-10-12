@@ -304,11 +304,18 @@ def vendor_application_email_body(
     yes_probability,
     reasons=(),
     portfolio_links=(),
+    source=None,
+    source_detail=None,
 ) -> str:
     who = (name or "").strip() or "Someone"
     where = (city or "").strip() or "an unknown city"
     kind = (vendor_type or "").strip() or "vendor"
     lines = [f"{who} in {where} applied as a {kind}."]
+    from ..shared.applicant_source import found_us_line
+
+    found = found_us_line(source, source_detail)
+    if found:
+        lines.append(found)
     fit = vendor_application_fit_line(yes_probability)
     if fit:
         lines.append(fit)
@@ -327,6 +334,8 @@ async def notify_owner_vendor_application(
     yes_probability,
     reasons=(),
     portfolio_links=(),
+    source=None,
+    source_detail=None,
 ) -> None:
     """SMS the owner profile phone and email admin@brxs.ca. Never raises.
 
@@ -366,7 +375,8 @@ async def notify_owner_vendor_application(
 
         subject = vendor_application_email_subject(name)
         body = vendor_application_email_body(
-            name, city, vendor_type, yes_probability, reasons, portfolio_links
+            name, city, vendor_type, yes_probability, reasons, portfolio_links,
+            source=source, source_detail=source_detail,
         )
         # Kam alone. No cc, no bcc, no applicant, no hiring@, no personal Gmail.
         if HOLD_ADMIN_EMAIL != "admin@brxs.ca":
