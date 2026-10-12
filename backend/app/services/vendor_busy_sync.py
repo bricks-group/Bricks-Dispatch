@@ -482,7 +482,7 @@ async def availability_days(db, start: date, days: int, area: str = "", tz_name:
     out = []
     for i in range(days):
         d = start + timedelta(days=i)
-        if d <= today_local:
+        if d < today_local:
             out.append({"date": d.isoformat(), "available": False, "open": 0, "reason": "past"})
             continue
         open_count = 0
