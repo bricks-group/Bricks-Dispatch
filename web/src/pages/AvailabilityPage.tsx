@@ -16,7 +16,18 @@ type CalStatus = {
   connected: boolean;
   status: string;
   detail: string;
+  last_synced_at?: string | null;
+  last_sync_status?: string | null;
 };
+
+function syncedLabel(c: CalStatus): string {
+  if (c.last_sync_status === 'error') return 'Couldn’t read this calendar on the last sync';
+  if (!c.last_synced_at) return 'Syncing free/busy…';
+  const mins = Math.max(0, Math.round((Date.now() - new Date(c.last_synced_at).getTime()) / 60000));
+  if (mins < 1) return 'Free/busy synced just now';
+  if (mins < 60) return `Free/busy synced ${mins} min ago`;
+  return `Free/busy synced ${Math.round(mins / 60)} h ago`;
+}
 
 type CalResponse = {
   connections: CalStatus[];
@@ -26,8 +37,8 @@ type CalResponse = {
 
 const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google Calendar',
-  apple: 'Apple Calendar (CalDAV)',
-  ics: 'ICS URL',
+  apple: 'Apple / iCloud Calendar',
+  ics: 'Other calendar (ICS link)',
   microsoft: 'Microsoft calendar', // disconnect-only if already connected
 };
 
@@ -51,6 +62,11 @@ export function AvailabilityPage() {
 
   useEffect(() => { load(); }, []);
 
+  /** Pull free/busy right away so a fresh connection counts before the hourly sync. */
+  const syncNow = () => {
+    api.post('/api/vendor-os/calendars/sync', {}).then(load).catch(() => {});
+  };
+
   // Surface OAuth callback query params (calendar_connected / calendar_error)
   useEffect(() => {
     try {
@@ -62,7 +78,7 @@ export function AvailabilityPage() {
       } else if (connected) {
         setSaved(true);
         setTimeout(() => setSaved(false), 4000);
-        load();
+        syncNow();
       }
       if (connected || calErr) {
         const url = new URL(window.location.href);
@@ -107,6 +123,7 @@ export function AvailabilityPage() {
       if (res.status === 'needs_env' || res.status === 'needs_app_password' || res.status === 'noscope') {
         setErr(res.detail || 'Not connected');
       }
+      if (res.connected) syncNow();
       load();
     } catch (e) {
       setErr((e as Error).message);
@@ -209,7 +226,7 @@ export function AvailabilityPage() {
                 <div>
                   <strong>{PROVIDER_LABELS[c.provider] || c.provider}</strong>
                   <p className="muted" style={{ margin: '4px 0 0', padding: 0 }}>
-                    {c.connected ? 'Connected' : c.detail}
+                    {c.connected ? `Connected · ${syncedLabel(c)}` : c.detail}
                     {c.status === 'needs_env' ? ' · OAuth not configured on this environment' : ''}
                   </p>
                 </div>

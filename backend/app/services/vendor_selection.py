@@ -972,7 +972,16 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
         if bounds:
             filtered = []
             for v in vendors:
-                busy = await vendor_is_busy(v, bounds[0], bounds[1], db=db)
+                # Synced free/busy cache first (periodic sync of linked calendars),
+                # then a live FreeBusy probe for anything not yet synced.
+                busy = None
+                try:
+                    from .vendor_busy_sync import cached_busy
+                    busy = await cached_busy(db, v.id, bounds[0], bounds[1])
+                except Exception:
+                    busy = None
+                if busy is not True:
+                    busy = await vendor_is_busy(v, bounds[0], bounds[1], db=db)
                 if busy is True:
                     logger.info("Vendor %s excluded: calendar busy for job %s", v.id, job_id)
                     continue

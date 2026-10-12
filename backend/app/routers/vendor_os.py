@@ -1020,6 +1020,61 @@ async def update_vendor_availability(
 
 
 
+@router.get("/public/availability-days")
+async def public_availability_days(
+    start: str | None = None,
+    days: int = 42,
+    area: str = "",
+    tz: str = "America/Toronto",
+):
+    """Per-day booking availability aggregated from photographers' linked calendars,
+    work hours and booked jobs. Public (no PII): only dates + open counts."""
+    from datetime import date as _date
+    from ..services.vendor_busy_sync import availability_days
+    try:
+        d0 = _date.fromisoformat((start or "")[:10]) if start else datetime.now(timezone.utc).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="start must be YYYY-MM-DD")
+    try:
+        return await availability_days(await get_db(), d0, int(days or 42), (area or "")[:120], tz or "America/Toronto")
+    except Exception as e:
+        logger.warning("availability-days soft-fail: %s", e)
+        return {"ok": False, "source": "unavailable", "days": []}
+
+
+def _cron_authorized(authorization: str | None, x_internal_key: str | None) -> bool:
+    secret = (os.environ.get("CRON_SECRET") or "").strip()
+    if secret and (authorization or "").strip() == f"Bearer {secret}":
+        return True
+    keys = [k.strip() for k in (os.environ.get("INTERNAL_API_KEYS") or "").split(",") if k.strip()]
+    return bool(x_internal_key and x_internal_key.strip() in keys)
+
+
+@router.get("/calendars/sync-cron")
+async def calendars_sync_cron(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_internal_key: str | None = Header(default=None, alias="X-Internal-Key"),
+):
+    """Vercel cron: refresh synced free/busy for every linked photographer calendar."""
+    if not _cron_authorized(authorization, x_internal_key):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    from ..services.vendor_busy_sync import sync_all
+    res = await sync_all(await get_db())
+    return {"ok": res.get("ok"), "members": res.get("members")}
+
+
+@router.post("/calendars/sync")
+async def calendars_sync_self(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Sync the signed-in photographer's linked calendars now."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    from ..services.vendor_busy_sync import sync_member
+    member = await get_vendor_member(actor_id)
+    return await sync_member(await get_db(), actor_id, member)
+
+
 @router.get("/calendars")
 async def list_vendor_calendars(
     authorization: str | None = Header(default=None, alias="Authorization"),

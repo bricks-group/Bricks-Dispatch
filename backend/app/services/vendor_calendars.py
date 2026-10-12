@@ -360,6 +360,15 @@ async def upsert_oauth_connection(
 
 def connection_status(conn: dict | None) -> dict:
     """Honest status payload for UI — never fake Connected."""
+    out = _connection_status(conn)
+    c = conn or {}
+    if out.get("connected"):
+        out["last_synced_at"] = c.get("last_synced_at")
+        out["last_sync_status"] = c.get("last_sync_status")
+    return out
+
+
+def _connection_status(conn: dict | None) -> dict:
     c = conn or {}
     provider = str(c.get("provider") or "").lower()
     token = c.get("access_token") or c.get("refresh_token")
