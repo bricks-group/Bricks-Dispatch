@@ -30,6 +30,8 @@ export default function Root({ children }: PropsWithChildren) {
                 -webkit-tap-highlight-color: transparent;
                 touch-action: manipulation;
               }
+              /* iOS zooms into inputs under 16px; keep every field at 16px on the web build. */
+              input, textarea, select { font-size: 16px !important; }
               body {
                 margin: 0;
                 height: 100%;

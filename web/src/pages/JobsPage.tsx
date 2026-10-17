@@ -161,16 +161,16 @@ export function JobsPage() {
                 className={selected?.id === job.id ? 'row-selected' : 'row-click'}
                 onClick={() => setSelected(job)}
               >
-                <td style={{ fontWeight: 500 }}>{job.address}</td>
-                <td className="muted">{job.listing_address || '—'}</td>
-                <td className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
-                <td className="muted">{formatShootWindow(job)}</td>
-                <td>{(job.assignee_id && (assigneeNames[job.assignee_id] ?? job.assignee_name)) || 'Unassigned'}</td>
-                <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
+                <td data-label="Address" style={{ fontWeight: 500 }}>{job.address}</td>
+                <td data-label="Listing" className="muted">{job.listing_address || '—'}</td>
+                <td data-label="Date" className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
+                <td data-label="Time" className="muted">{formatShootWindow(job)}</td>
+                <td data-label="Assigned to">{(job.assignee_id && (assigneeNames[job.assignee_id] ?? job.assignee_name)) || 'Unassigned'}</td>
+                <td data-label="Payout" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
                   {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
                   {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : null}
                 </td>
-                <td>
+                <td data-label="Status">
                   <span className={`badge ${STATUS_BADGE[job.status] ?? 'badge-gray'}`}>
                     {(job.status || '').replace('_', ' ')}
                   </span>

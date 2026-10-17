@@ -14,6 +14,7 @@ import {
   verifyPhoneOtp,
 } from '../lib/phone-auth';
 import BricksLoader from '../components/BricksLoader';
+import { LoginShell } from '../components/LoginSlides';
 
 function BrickMark() {
   return (
@@ -292,15 +293,15 @@ export function LoginPage() {
 
   if (phoneMode) {
     return (
-      <div className="login-wrap">
+      <LoginShell>
         <PhoneLogin onBack={() => setPhoneMode(false)} />
-      </div>
+      </LoginShell>
     );
   }
 
   if (step === 'verify') {
     return (
-      <div className="login-wrap">
+      <LoginShell>
         <form className="login-card" onSubmit={onVerify}>
           <BrickMark />
           <h2>Check your email</h2>
@@ -313,12 +314,12 @@ export function LoginPage() {
           <button type="submit" className="btn-primary" disabled={submitting}>{submitting && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{submitting ? 'Verifying…' : 'Verify'}</button>
           <button type="button" className="btn-link" onClick={() => setStep('login')}>Back to login</button>
         </form>
-      </div>
+      </LoginShell>
     );
   }
 
   return (
-    <div className="login-wrap">
+    <LoginShell>
       <form className="login-card" onSubmit={onPasswordLogin}>
         <BrickMark />
         <h2>bricks</h2>
@@ -393,6 +394,6 @@ export function LoginPage() {
         )}
         {/* Apple stays OFF until Apple Developer / Supabase Apple is connected — same honesty as OS. */}
       </form>
-    </div>
+    </LoginShell>
   );
 }

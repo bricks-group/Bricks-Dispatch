@@ -103,14 +103,14 @@ export function EarningsPage() {
                 <tbody>
                   {data.recent_jobs.map((job) => (
                     <tr key={job.id}>
-                      <td style={{ fontWeight: 500 }}>{job.address}</td>
-                      <td className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
-                      <td>
+                      <td data-label="Address" style={{ fontWeight: 500 }}>{job.address}</td>
+                      <td data-label="Date" className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
+                      <td data-label="Status">
                         <span className={`badge ${PAYOUT_BADGE[job.payout_status] ?? 'badge-gray'}`}>
                           {job.payout_status}
                         </span>
                       </td>
-                      <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
+                      <td data-label="Payout" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
                         ${job.payout_amount.toLocaleString()}
                       </td>
                     </tr>
