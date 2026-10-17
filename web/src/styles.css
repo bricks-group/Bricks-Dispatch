@@ -823,7 +823,7 @@ button.btn-danger:hover { background: rgba(192, 67, 39, 0.12); color: #F4F1EB; }
 
 /* ── Phone pass (≤640px): stacked table rows, 16px inputs (no iOS zoom), styled selects ── */
 @media (max-width: 860px) {
-  input, select, textarea { font-size: 16px; }
+  input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px !important; }
   .nav { -webkit-mask-image: linear-gradient(to right, #000 85%, transparent); mask-image: linear-gradient(to right, #000 85%, transparent); }
 }
 select {
@@ -839,7 +839,7 @@ select {
   table.table tbody tr { padding: 12px 16px; border-bottom: 1px solid var(--c-hair); }
   table.table tbody tr:last-child { border-bottom: 0; }
   table.table tbody td { display: flex; justify-content: space-between; gap: 16px; padding: 3px 0; border: 0; text-align: right; font-size: 14px; }
-  table.table tbody td::before { content: attr(data-label); color: var(--c-ink-mute); font-size: 13px; text-align: left; flex: 0 0 auto; }
+  table.table tbody td::before { content: attr(data-label); color: var(--c-ink-mute); font-size: 13px; font-family: var(--font-sans, 'General Sans', system-ui, sans-serif); letter-spacing: 0; text-align: left; flex: 0 0 auto; }
   table.table tbody td:first-child { display: block; text-align: left; font-size: 15px; padding-bottom: 6px; }
   table.table tbody td:first-child::before, table.table tbody td[colspan]::before { content: none; }
   table.table tbody td[colspan] { display: block; text-align: left; }

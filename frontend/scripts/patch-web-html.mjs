@@ -34,7 +34,7 @@ if (!html.includes('bricks-mobile-native')) {
         user-select: none;
         -webkit-touch-callout: none;
       }
-      input, textarea, select { font-size: 16px; }
+      input, textarea, select { font-size: 16px !important; }
     </style>
 `;
   html = html.replace('</head>', `${inject}  </head>`);
