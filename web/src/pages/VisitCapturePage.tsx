@@ -75,8 +75,7 @@ export function VisitCapturePage() {
       </div>
       <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>Deliver Virtual Visit</h1>
       <p className="muted" style={{ marginBottom: 18, lineHeight: 1.45 }}>
-        Free-roam splat of the space — not the path-confined 3D tour. Paste a Polycam share URL, or upload a .sog / .spz / .ply / .splat (Bricks-hosted, embeddable).
-        Both paths land on the listing the same way (property_visits + media_delivery). Owned GPU cook from GO frames comes later.
+        Paste a Polycam link, or upload a .sog, .spz, .ply or .splat file.
       </p>
 
       <label className="muted" style={{ display: 'block', marginBottom: 6 }}>Polycam / share URL</label>
@@ -126,7 +125,7 @@ export function VisitCapturePage() {
       {error && <p className="error" style={{ marginBottom: 12 }}>{error}</p>}
       {done && <p style={{ color: '#7dba7d', marginBottom: 12 }}>{done}</p>}
 
-      <button className="btn-capture" type="button" disabled={!canSubmit} onClick={deliver}>
+      <button className="btn-primary" type="button" disabled={!canSubmit} onClick={deliver}>
         {phaseLabel(phase, busy)}
       </button>
     </div>

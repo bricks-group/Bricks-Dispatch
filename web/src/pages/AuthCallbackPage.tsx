@@ -76,7 +76,7 @@ export function AuthCallbackPage() {
         const msg = (e as Error).message || 'Could not load your account.';
         // Honest: Google worked but vendor member row missing / forbidden.
         fail(msg.includes('Vendor member')
-          ? 'Google signed you in, but this email is not on the GO team yet. Ask an owner to add you.'
+          ? 'Google signed you in, but this email isn’t on the team yet. Ask an owner to add you.'
           : msg);
         return true;
       }

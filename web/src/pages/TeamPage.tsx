@@ -121,7 +121,7 @@ export function TeamPage() {
             <option value="stager">Stager</option>
             <option value="cleaner">Cleaner</option>
           </select>
-          <button type="submit" onClick={addMember}>Add</button>
+          <button type="submit" className="btn-primary" onClick={addMember}>Add</button>
         </div>
       </section>
     </div>

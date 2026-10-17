@@ -184,12 +184,11 @@ body {
   margin: 0;
   padding: 16px 20px;
   border-bottom: 1px solid var(--c-hair);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-family: 'General Sans', ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
   font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--c-ink-faint);
+  letter-spacing: 0;
+  color: var(--c-ink);
 }
 
 /* Metric number inside card */
@@ -256,12 +255,9 @@ body {
 .table th {
   text-align: left;
   padding: 10px 20px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 12.5px;
   font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--c-ink-faint);
+  color: var(--c-ink-mute);
   border-bottom: 1px solid var(--c-hair);
 }
 
@@ -273,43 +269,71 @@ body {
 
 .table tbody tr:last-child td { border-bottom: none; }
 
-/* ── Buttons ── */
-button {
+/* ── Buttons ──
+   One system for every button: 44px tall, radius 2, even padding, one-line labels.
+   Bare <button> = secondary (1px graphite outline). .btn-primary = solid off-white.
+   .btn-tertiary = text only. Pressed + disabled states below. */
+:root { --c-graphite: #4A453E; --c-graphite-press: #6B645A; }
+button, .btn {
   cursor: pointer;
   font: inherit;
-  border-radius: var(--radius);
+  font-family: 'General Sans', ui-sans-serif, system-ui, sans-serif;
+  border-radius: 2px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 14px;
   font-weight: 500;
-  transition: opacity 0.1s, background 0.1s, border-color 0.1s;
+  letter-spacing: 0;
+  text-transform: none;
   line-height: 1;
-}
-
-button[type="submit"] {
-  background: var(--c-brick);
-  color: #fff;
-  border: none;
-  padding: 9px 18px;
-}
-
-button[type="submit"]:hover { opacity: 0.85; }
-
-button:not([type="submit"]) {
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
   background: transparent;
-  color: var(--c-ink-soft);
-  border: 1px solid var(--c-hair);
-  padding: 8px 14px;
+  color: var(--c-ink);
+  border: 1px solid var(--c-graphite);
+  box-sizing: border-box;
+}
+.btn-label { overflow: hidden; text-overflow: ellipsis; }
+button:hover, .btn:hover { background: var(--c-bg-deep); }
+button:active, .btn:active { background: var(--c-bg-deep); border-color: var(--c-graphite-press); }
+button:focus-visible, .btn:focus-visible { outline: 2px solid var(--c-ink-soft); outline-offset: 2px; }
+
+button.btn-primary, .btn.btn-primary, button[type="submit"].btn-primary {
+  background: var(--c-ink); color: var(--c-bg); border-color: var(--c-ink);
+}
+button.btn-primary:hover, .btn.btn-primary:hover { background: #FFFFFF; border-color: #FFFFFF; }
+button.btn-primary:active, .btn.btn-primary:active { background: var(--c-ink-soft); border-color: var(--c-ink-soft); }
+
+button.btn-tertiary, .btn.btn-tertiary { border-color: transparent; color: var(--c-ink-soft); padding: 0 10px; }
+button.btn-tertiary:hover, .btn.btn-tertiary:hover { color: var(--c-ink); background: var(--c-bg-deep); }
+
+button:disabled, .btn[aria-disabled="true"] {
+  cursor: not-allowed; color: var(--c-ink-faint); border-color: var(--c-hair); background: transparent;
+}
+button.btn-primary:disabled { background: var(--c-bg-deep); border-color: var(--c-bg-deep); color: var(--c-ink-faint); }
+button.btn-tertiary:disabled { border-color: transparent; }
+
+/* Joined field + button (e.g. arrive time + Tell agent) */
+.joined { display: flex; align-items: stretch; max-width: 420px; }
+.joined > input, .joined > select { flex: 1; min-width: 0; min-height: 44px; border-radius: 2px 0 0 2px; border-right: 0; box-sizing: border-box; }
+.joined > .btn, .joined > button { border-radius: 0 2px 2px 0; }
+
+/* Action rows: equal-height buttons, wrap to full-width stack on phones */
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions > .btn { flex: 1 1 0; min-width: 0; }
+.actions .btn-primary { order: 9; }
+@media (max-width: 560px) {
+  .actions > .btn { flex: 1 1 calc(50% - 4px); }
+  .actions > .btn-primary { flex-basis: 100%; }
 }
 
-button:not([type="submit"]):hover {
-  background: var(--c-bg-deep);
-  border-color: var(--c-hair-s);
-}
-
-button:disabled { opacity: 0.38; cursor: not-allowed; }
+/* Quiet sentence-case field labels (replaces mono caps eyebrows) */
+.label { color: var(--c-ink-mute); font-size: 13px; font-weight: 500; margin: 0; padding: 0; letter-spacing: 0; text-transform: none; font-family: 'General Sans', ui-sans-serif, system-ui, sans-serif; }
 
 .btn-logout {
   background: transparent;
@@ -570,10 +594,7 @@ label {
   color: var(--c-ink-mute);
   border: 1px solid var(--c-hair);
   padding: 7px 12px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 13px;
 }
 .chip.chip-on {
   background: rgba(210, 84, 43, 0.16);
@@ -583,19 +604,7 @@ label {
 input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
 
 /* ── GO capture (web shutter) ── */
-.btn-capture {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--c-brick);
-  color: #fff;
-  text-decoration: none;
-  font-weight: 600;
-  padding: 10px 16px;
-  border-radius: var(--radius);
-  border: none;
-}
-.btn-capture:hover { filter: brightness(1.05); }
+/* .btn-capture: legacy alias, now rendered via ButtonLink (secondary) */
 .capture-none {
   margin-top: 8px;
   padding: 10px 12px;
@@ -774,7 +783,7 @@ input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
 .capture-status-row.is-ready { border-color: rgba(47, 107, 79, 0.55); }
 .capture-status-row.is-failed { border-color: rgba(139, 46, 31, 0.7); background: rgba(139, 46, 31, 0.08); }
 .today-capture { margin-top: 6px; }
-.today-capture .btn-capture { padding: 8px 12px; font-size: 13px; }
+
 
 /* ── Offline + danger ── */
 .offline-bar {
@@ -784,10 +793,9 @@ input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
   background: var(--c-bg-deep);
   font-size: 12.5px;
 }
-button.btn-danger {
+button.btn-danger, .btn.btn-danger {
   background: transparent;
   color: #E0693F;
   border: 1px solid #C04327;
-  border-radius: var(--radius);
 }
 button.btn-danger:hover { background: rgba(192, 67, 39, 0.12); color: #F4F1EB; }

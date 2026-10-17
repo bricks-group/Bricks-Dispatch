@@ -17,6 +17,8 @@ import {
 } from '../lib/bracket-require';
 import { autoNameAebFiles } from '../lib/aeb-exif';
 import BricksLoader from '../components/BricksLoader';
+import { Button, ButtonLink } from '../components/Button';
+import { captureLinks } from '../components/CaptureLinks';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -371,28 +373,27 @@ function JobListingPanel({
 
   return (
     <section className="card full">
-      <h3>Job detail</h3>
+      <h3>Job</h3>
       <div className="stack" style={{ padding: 20, maxWidth: 720 }}>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>ADDRESS</p>
+          <p className="label">Address</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{job.address}</p>
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>WHEN</p>
+          <p className="label">When</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{formatShootWhen(job)}</p>
           {['assigned', 'in_progress', 'pending_assignment'].includes(job.status) ? (
-            <form className="row" onSubmit={confirmArrive} style={{ marginTop: 8, gap: 8, alignItems: 'center' }}>
-              <label className="muted" style={{ margin: 0 }}>Confirm arrive</label>
+            <form className="joined" onSubmit={confirmArrive} style={{ marginTop: 12 }}>
               <input
                 type="time"
+                aria-label="Arrival time"
                 value={arriveAt}
                 onChange={(e) => setArriveAt(e.target.value)}
-                style={{ width: 140 }}
                 required
               />
-              <button type="submit" disabled={busy}>
+              <Button type="submit" disabled={busy}>
                 {job.confirmed_arrive_at ? 'Update agent' : 'Tell agent'}
-              </button>
+              </Button>
             </form>
           ) : null}
           {job.confirmed_arrive_at ? (
@@ -401,12 +402,12 @@ function JobListingPanel({
             </p>
           ) : (
             <p className="muted" style={{ padding: 0, margin: '6px 0 0' }}>
-              Pick your exact arrive time inside the window — we email the agent.
+              We email the agent your exact arrival time.
             </p>
           )}
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>LISTING</p>
+          <p className="label">Listing</p>
           {job.listing_address ? (
             <p style={{ margin: '4px 0 0', fontWeight: 500 }}>
               {job.listing_address}
@@ -417,7 +418,7 @@ function JobListingPanel({
           )}
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>ASSIGNED TO</p>
+          <p className="label">Assigned to</p>
           <p style={{ margin: '4px 0 8px', fontWeight: 500 }}>{assignedLabel}</p>
           {isAdmin ? (
             <form className="row" onSubmit={assign}>
@@ -427,22 +428,24 @@ function JobListingPanel({
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
-              <button type="submit" disabled={busy}>{job.assignee_id ? 'Reassign' : 'Assign'}</button>
+              <Button type="submit" disabled={busy}>{job.assignee_id ? 'Reassign' : 'Assign'}</Button>
             </form>
           ) : null}
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>PAYOUT</p>
+          <p className="label">Payout</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>
             {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
             {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : <span className="muted"> · rate card</span>}
           </p>
         </div>
-        <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+        {/* One primary per state (Accept / Check in / Mark complete); capture links are secondary. */}
+        <div className="actions">
+          {['assigned', 'in_progress'].includes(job.status) ? captureLinks(job) : null}
           {job.status === 'pending_assignment' ? (
             <>
-              <button
-                type="button"
+              <Button
+                variant="primary"
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true); setErr('');
@@ -452,9 +455,8 @@ function JobListingPanel({
                   } catch (e) { setErr((e as Error).message); }
                   finally { setBusy(false); }
                 }}
-              >Accept</button>
-              <button
-                type="button"
+              >Accept</Button>
+              <Button
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true); setErr('');
@@ -464,15 +466,15 @@ function JobListingPanel({
                   } catch (e) { setErr((e as Error).message); }
                   finally { setBusy(false); }
                 }}
-              >Decline</button>
+              >Decline</Button>
             </>
           ) : null}
           {job.status === 'assigned' ? (
-            <button type="button" disabled={busy} onClick={checkIn}>Check in</button>
+            <Button variant="primary" disabled={busy} onClick={checkIn}>Check in</Button>
           ) : null}
           {job.status === 'in_progress' ? (
-            <button
-              type="button"
+            <Button
+              variant="primary"
               disabled={busy}
               onClick={async () => {
                 setBusy(true); setErr('');
@@ -489,29 +491,31 @@ function JobListingPanel({
                 } catch (e) { setErr((e as Error).message); }
                 finally { setBusy(false); }
               }}
-            >Mark complete</button>
-          ) : null}
-          {['assigned', 'in_progress'].includes(job.status) ? (
-            <button type="button" disabled={busy} onClick={() => setNoShowOpen((v) => !v)}>
-              {noShowOpen ? 'Cancel no-show' : 'Report agent no-show'}
-            </button>
+            >Mark complete</Button>
           ) : null}
         </div>
+        {['assigned', 'in_progress'].includes(job.status) ? (
+          <div>
+            <Button variant="tertiary" disabled={busy} onClick={() => setNoShowOpen((v) => !v)}>
+              {noShowOpen ? 'Cancel no-show' : 'Report no-show'}
+            </Button>
+          </div>
+        ) : null}
         {noShowOpen ? (
           <div className="stack" style={{ border: '1px solid var(--c-hair, #333)', padding: 12, borderRadius: 8 }}>
             <p className="muted" style={{ margin: 0, padding: 0 }}>
-              GPS is recorded on mobile. On web, add optional notes. A $60 trip fee is added to your next payout if the claim is approved.
+              A $60 trip fee is added to your next payout if the claim is approved.
             </p>
             <textarea
               value={noShowNotes}
               onChange={(e) => setNoShowNotes(e.target.value)}
-              placeholder="Optional: describe what happened…"
+              placeholder="What happened? (optional)"
               rows={3}
               maxLength={500}
               style={{ width: '100%' }}
             />
-            <button
-              type="button"
+            <Button
+              variant="danger"
               disabled={busy}
               onClick={async () => {
                 setBusy(true); setErr('');
@@ -525,37 +529,37 @@ function JobListingPanel({
                 } catch (e) { setErr((e as Error).message); }
                 finally { setBusy(false); }
               }}
-            >Confirm no-show</button>
+            >Confirm no-show</Button>
           </div>
         ) : null}
         {['assigned', 'in_progress'].includes(job.status) ? (
-          <CaptureStartBlock job={job} />
+          <CaptureNone job={job} />
         ) : null}
         <JobShootChecklist job={job} />
         <CaptureStatusBlock job={job} />
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS · CAMERA / DRONE / REEL / TWILIGHT / STAGING / FLOOR PLAN</p>
+          <p className="label">Uploads</p>
           <p className="muted" style={{ padding: 0, margin: '4px 0 8px', fontSize: 12 }}>
-            HDR stills stay on the camera. After the shoot, upload JPEG/HEIC ±EV brackets (no camera RAW) / MP4 / floor-plan PNG or PDF here — files go straight to storage (not the 4MB API cap). Tag Twilight for real dusk so listing enhance keeps dusk sky (no blue-sky / day-to-dusk). Tag Staging for vacant/staged rooms so listing delivery keeps the original (no enhance). Tag Floor plan for CubiCasa/PDF/PNG exports (original to listing, no HDR enhance).
+            Upload after the shoot. Pick a type first so delivery handles it right.
           </p>
           {requiresBracketSet(stillsType) ? (
             <>
               <p style={{ padding: 0, margin: '0 0 8px', fontSize: 13, color: 'var(--c-brick, #D2542B)' }}>
-                {BRACKET_HINT} Minimum 3 exposures per room/angle. JPEG/HEIC only (no camera RAW). Single frames are rejected.
+                {BRACKET_HINT} At least 3 per angle, JPEG or HEIC.
               </p>
               {stillsType === 'twilight' ? (
                 <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
-                  Real dusk only — enhance keeps the dusk sky (no blue-sky / day-to-dusk).
+                  Real dusk only. We keep the dusk sky.
                 </p>
               ) : null}
             </>
           ) : stillsType === 'staging' ? (
             <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
-              Staging delivers the original to the listing (no enhance, no virtual staging).
+              Delivered as shot. No enhance.
             </p>
           ) : stillsType === 'floorplan' ? (
             <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
-              Floor plan delivers the original to the listing (PNG/PDF — no HDR enhance).
+              PNG or PDF, delivered as is.
             </p>
           ) : null}
           <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
@@ -598,11 +602,11 @@ function JobListingPanel({
             placeholder="Search office listings or paste id"
             style={{ flex: 1, minWidth: 220 }}
           />
-          <button type="submit" disabled={busy}>{busy ? '…' : 'Search'}</button>
+          <Button type="submit" disabled={busy}>{busy ? '…' : 'Search'}</Button>
           {job.transaction_id ? (
-            <button type="button" disabled={busy} onClick={() => attach(null)}>Detach</button>
+            <Button variant="tertiary" disabled={busy} onClick={() => attach(null)}>Detach</Button>
           ) : null}
-          <button type="button" onClick={onClose}>Close</button>
+          <Button variant="tertiary" onClick={onClose}>Close</Button>
         </form>
         {err && <p className="error" style={{ padding: 0 }}>{err}</p>}
         {hits.length > 0 && (
@@ -635,9 +639,7 @@ function JobShootChecklist({ job }: { job: Job }) {
   if (!items.length) return null;
   return (
     <div>
-      <p className="muted" style={{ padding: 0, margin: 0, fontSize: 11, letterSpacing: '0.06em' }}>
-        SHOOT CHECKLIST · ONE VISIT
-      </p>
+      <p className="label">Shoot checklist</p>
       <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
         {items.map((item: any) => (
           <li key={item.id} className={item.completed ? 'muted' : undefined}>{item.label}</li>
@@ -648,38 +650,16 @@ function JobShootChecklist({ job }: { job: Job }) {
 }
 
 
-function CaptureStartBlock({ job }: { job: Job }) {
+function CaptureNone({ job }: { job: Job }) {
   const flags = jobCaptureModes(job);
-  const hasMode = flags.tour || flags.floorplan || flags.visit;
-  if (!hasMode) {
-    return (
-      <div className="capture-none">
-        <p className="muted" style={{ padding: 0, margin: 0 }}>{captureNeitherCopy(flags)}</p>
-      </div>
-    );
-  }
-  const links = [];
-  if (flags.tour) {
-    links.push(
-      <Link key="tour" className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=splat`}>Start Capture · 3D tour</Link>
-    );
-  }
-  if (flags.floorplan) {
-    links.push(
-      <Link key="fp" className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=floorplan`}>Start Capture · Floor plan</Link>
-    );
-  }
-  if (flags.visit) {
-    links.push(
-      <Link key="visit" className="btn-capture" to={`/capture/visit?jobId=${encodeURIComponent(job.id)}`}>Deliver Visit</Link>
-    );
-  }
+  if (flags.tour || flags.floorplan || flags.visit) return null;
   return (
-    <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
-      {links}
+    <div className="capture-none">
+      <p className="muted" style={{ padding: 0, margin: 0 }}>{captureNeitherCopy(flags)}</p>
     </div>
   );
 }
+
 
 
 function CaptureStatusBlock({ job }: { job: Job }) {
@@ -719,15 +699,15 @@ function CaptureStatusBlock({ job }: { job: Job }) {
     }
     setRebuildState({
       msg: kind === 'floorplan'
-        ? 'Floor plan PNG rebuilt from stored stations. Refresh the listing — no recapture.'
-        : 'Tour player rebuilt from existing 360s. Hard-refresh the listing iframe — no recapture.',
+        ? 'Floor plan rebuilt. Refresh the listing.'
+        : 'Tour rebuilt. Hard-refresh the listing.',
     });
   };
 
   if (rows.length === 0) return null;
   return (
     <div className="capture-status-block">
-      <p className="muted" style={{ padding: 0, margin: '0 0 8px' }}>CAPTURE STATUS</p>
+      <p className="label" style={{ marginBottom: 8 }}>Capture status</p>
       <div className="stack" style={{ gap: 8 }}>
         {rows.map((r) => {
           const failed = r.status === 'failed';
@@ -739,13 +719,13 @@ function CaptureStatusBlock({ job }: { job: Job }) {
               <span>{r.line}</span>
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                 {ready && (r.kind === 'splat' || r.kind === 'floorplan') ? (
-                  <button type="button" disabled={rebuildState.busy} onClick={() => handleRebuild(r.kind, r.sessionId)}>
-                    {rebuildState.busy && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{rebuildState.busy ? 'Rebuilding…' : (r.kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
-                  </button>
+                  <Button disabled={rebuildState.busy} onClick={() => handleRebuild(r.kind, r.sessionId)}>
+                    {rebuildState.busy && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{rebuildState.busy ? 'Rebuilding…' : (r.kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour')}
+                  </Button>
                 ) : null}
-                <Link to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>
-                  {failed ? 'Review / retry' : 'Open review'}
-                </Link>
+                <ButtonLink variant="tertiary" to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>
+                  {failed ? 'Review and retry' : 'Review'}
+                </ButtonLink>
               </div>
             </div>
           );

@@ -216,7 +216,7 @@ export function ProfilePage() {
                 <span className="muted">Comma-separated. Office, never brokerage.</span>
               </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <button type="submit" onClick={save}>Save profile</button>
+                <button type="submit" className="btn-primary" onClick={save}>Save profile</button>
                 {saved && <span className="muted">Saved</span>}
               </div>
             </div>

@@ -123,7 +123,7 @@ export function CaptureReviewPage() {
             </p>
             {rebuildMsg ? <p className={(rebuildMsg.startsWith('Tour player rebuilt') || rebuildMsg.startsWith('Floor plan PNG rebuilt')) ? undefined : 'error'} style={{ margin: 0, padding: 0 }}>{rebuildMsg}</p> : null}
             <div className="row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
-              <Link className="btn-capture" to={jobHref}>Back to job</Link>
+              <Link className="btn btn-secondary" to={jobHref}>Back to job</Link>
               {failed ? (
                 <button
                   type="button"
