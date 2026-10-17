@@ -211,6 +211,8 @@ async def verify_document(
     member_id: str,
     doc_id: str,
     status: str = "verified",
+    liability_cad: Optional[int] = None,
+    aviation_covered: Optional[bool] = None,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
@@ -232,14 +234,30 @@ async def verify_document(
         api_error(404, "Document not found", "document_not_found")
 
     doc = res.data[0]
-    # Optional record only. Copy a verified COI/WSIB expiry onto the member
-    # for history. These dates do not suspend the vendor or block approval,
-    # assignment, or dispatch.
-    if status == "verified" and doc.get("doc_type") in ("coi", "wsib") and doc.get("expiry_date"):
-        column = "coi_expires_on" if doc["doc_type"] == "coi" else "wsib_expires_on"
+    # WSIB: optional record only (expiry copied for history, never a gate).
+    if status == "verified" and doc.get("doc_type") == "wsib" and doc.get("expiry_date"):
         await db.table("vendor_members").update({
-            column: doc["expiry_date"],
+            "wsib_expires_on": doc["expiry_date"],
         }).eq("id", member_id).execute()
+    # COI: listing jobs still ignore it, but a verified COI is what the
+    # commercial job gate and the Tier A rule read (Kam, 2026-10-17). The
+    # admin confirms the liability limit and drone/aviation coverage; the
+    # vendor's declared values are only a default.
+    if doc.get("doc_type") == "coi":
+        if status == "verified":
+            declared = ((doc.get("validation_result") or {}).get("declared") or {}) if isinstance(doc.get("validation_result"), dict) else {}
+            limit = liability_cad if liability_cad is not None else declared.get("liability_cad")
+            aviation = aviation_covered if aviation_covered is not None else bool(declared.get("aviation_covered"))
+            patch = {
+                "coi_verified": True,
+                "coi_expires_on": doc.get("expiry_date") or declared.get("expires_on"),
+                "coi_liability_cad": int(limit) if limit else None,
+                "coi_aviation_covered": bool(aviation),
+                "coi_verified_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.table("vendor_members").update(patch).eq("id", member_id).execute()
+        elif status in ("rejected", "flagged"):
+            await db.table("vendor_members").update({"coi_verified": False}).eq("id", member_id).execute()
 
     return {"id": doc_id, "status": status}
 

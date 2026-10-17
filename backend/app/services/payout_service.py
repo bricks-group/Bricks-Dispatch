@@ -336,10 +336,15 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # ICs: fixed vendor_payout_rates card (never % of rack).
     from ..shared.vendor_identity import is_owner_member as _is_owner_member
     from .vendor_profile import owner_payout_cents
+    from .commercial_jobs import commercial_payout_cents
     owner_job = _is_owner_member(member)
     if owner_job:
         payout_amount = owner_payout_cents(job)
         logger.info(f"Owner payout for job {job_id}: full package {payout_amount} cents, $0 deduction")
+    elif commercial_payout_cents(job) is not None:
+        # Commercial (builder/developer) visit: fixed sourced table, Tier A only.
+        payout_amount = int(commercial_payout_cents(job))
+        logger.info(f"Commercial payout for job {job_id}: {payout_amount} cents")
     else:
         payout_amount = await get_fixed_payout_amount(db, job.get("package_id"), job.get("sqft"), vendor_tier)
         if payout_amount is None:

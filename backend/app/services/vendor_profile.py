@@ -17,7 +17,9 @@ ORG_VENDOR_ID = "default_vendor"
 
 TIER_LABELS = {1: "C", 2: "B", 3: "A"}  # display only; pay is the rate card
 TOP_TIER = 3
-SKILL_KEYS = ("photo", "drone", "reel", "tour", "twilight")
+# "mapping" (orthomosaic / 3D capture) is admin-granted only, never inferred from
+# equipment or specialty text — commercial mapped work requires a QC'd test mission.
+SKILL_KEYS = ("photo", "drone", "reel", "tour", "twilight", "mapping")
 
 # Free-text specialty / job_type labels that map onto SKILL_KEYS (www / Companion /
 # media_intake portfolio lockstep). Used by assign scoring so specialty=reel still
@@ -262,7 +264,7 @@ def vendor_skills(member: Any) -> set[str]:
         skills.add("tour")
     elif spec in ("video", "cinematic", "cinematic_reel", "reel"):
         skills.add("reel")
-    elif spec:
+    elif spec and spec != "mapping":
         skills.add(spec)
     if m.get("drone_certified") or has_advanced_rpas(m):
         skills.add("drone")
@@ -271,7 +273,7 @@ def vendor_skills(member: Any) -> set[str]:
     for item in m.get("equipment_list") or []:
         t = str(item).lower()
         for skill in SKILL_KEYS:
-            if skill in t:
+            if skill != "mapping" and skill in t:
                 skills.add(skill)
         if "polycam" in t or "splat" in t or "virtual" in t:
             skills.add("tour")
@@ -299,6 +301,12 @@ def _add_on_keys(add_ons: Iterable) -> set[str]:
 
 def job_required_skills(job: Any) -> set[str]:
     j = _as_dict(job)
+    # Commercial (builder/developer) kinds: drone (+ mapping for mapped work).
+    # progress_capture used to fall through to skills.add("progress_capture"),
+    # a skill no vendor can hold, so OS progress visits never auto-assigned.
+    from .commercial_jobs import is_commercial_job, required_skills as _commercial_skills
+    if is_commercial_job(j):
+        return _commercial_skills(j)
     needed_type = job_required_vendor_type(j)
     # Non-media Wave A jobs: type match is the hard gate; skills are soft labels.
     if needed_type == "stager":
@@ -346,6 +354,9 @@ def job_required_skills(job: Any) -> set[str]:
 
 def min_tier_for_job(job: Any) -> int:
     j = _as_dict(job)
+    from .commercial_jobs import TOP_TIER as _COMMERCIAL_TIER, is_commercial_job
+    if is_commercial_job(j):
+        return _COMMERCIAL_TIER
     explicit = j.get("min_tier_required")
     if explicit:
         try:
@@ -514,17 +525,24 @@ def location_matches(member: Any, job: Any) -> bool:
 
 def is_drone_job(job: Any) -> bool:
     j = _as_dict(job)
+    from .commercial_jobs import is_commercial_job, job_requires_advanced_rpas
+    if is_commercial_job(j):
+        return job_requires_advanced_rpas(j)
     if str(j.get("job_type") or "").lower() == "drone":
         return True
     return "drone" in _add_on_keys(j.get("add_ons") or [])
 
 
 def member_eligible_for_job(member: Any, job: Any) -> bool:
-    """Approved, active, type/location/skill match. Insurance is not a gate.
+    """Approved, active, type/location/skill match.
 
-    COI and WSIB are optional records. Missing, expired, or unverified proof
-    must not exclude an otherwise approved vendor from assignment or dispatch.
-    coi_expires_on and wsib_expires_on are ignored here.
+    Listing jobs: insurance is not a gate. COI and WSIB are optional records and
+    missing, expired, or unverified proof must not exclude an otherwise approved
+    vendor from a listing job.
+
+    Commercial jobs (commercial_jobs.COMMERCIAL_KINDS, incl. OS progress_capture):
+    Tier A + verified, unexpired drone/aviation liability >= the job minimum
+    (default $2M) + Advanced RPAS unless the job opts out (Kam, 2026-10-17).
     """
     m = _as_dict(member)
     if not m.get("is_active"):
@@ -548,6 +566,10 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     if is_drone_job(job) and not has_advanced_rpas(m):
         return False
     if "tour" in needed and not (m.get("polycam_equipped") or "tour" in have):
+        return False
+    # Commercial: Tier A + verified, unexpired drone liability >= job minimum.
+    from .commercial_jobs import commercial_gate_failures
+    if commercial_gate_failures(m, job, has_skills=have, advanced_rpas=has_advanced_rpas(m)):
         return False
     return True
 

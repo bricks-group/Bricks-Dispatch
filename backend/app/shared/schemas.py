@@ -88,6 +88,12 @@ class Job(BaseModel):
     dev_project_id: Optional[str] = None
     dev_phase_id: Optional[str] = None
     dev_capture_visit_id: Optional[str] = None
+    # Commercial jobs: minimum verified drone/aviation liability (CAD) the
+    # assignee must hold; None = $2M default (5_000_000 for CCDC 41 contracts).
+    min_insurance_cad: Optional[int] = None
+    # Commercial jobs default to Advanced RPAS; False only when the site is
+    # confirmed outside controlled airspace / away from people.
+    requires_rpas_advanced: Optional[bool] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -153,6 +159,12 @@ class JobIntakeRequest(BaseModel):
     dev_project_id: Optional[str] = None
     dev_phase_id: Optional[str] = None
     dev_capture_visit_id: Optional[str] = None
+    # Commercial jobs: minimum verified drone/aviation liability (CAD) the
+    # assignee must hold; None = $2M default (5_000_000 for CCDC 41 contracts).
+    min_insurance_cad: Optional[int] = None
+    # Commercial jobs default to Advanced RPAS; False only when the site is
+    # confirmed outside controlled airspace / away from people.
+    requires_rpas_advanced: Optional[bool] = None
 
 
 class JobStatusUpdate(BaseModel):
@@ -359,6 +371,15 @@ class VendorMember(BaseModel):
     # not read these fields and do not require a COI or WSIB record.
     coi_expires_on: Optional[str] = None
     wsib_expires_on: Optional[str] = None
+    # Commercial gate (Kam, 2026-10-17): listing jobs still ignore insurance.
+    # Commercial jobs and Tier A require coi_verified + coi_aviation_covered +
+    # unexpired coi_expires_on + coi_liability_cad >= job minimum (default $2M).
+    # Set only by an admin verify (OS /admin/vendors/{id}/insurance or
+    # Dispatch admin_ops.verify_document), never by the vendor.
+    coi_verified: Optional[bool] = False
+    coi_liability_cad: Optional[int] = None
+    coi_aviation_covered: Optional[bool] = False
+    coi_verified_at: Optional[str] = None
     internal_notes: str = ""
     completion_rate: float = 1.0
     avg_turnaround_days: float = 0.0

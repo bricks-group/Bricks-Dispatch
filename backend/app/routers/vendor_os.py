@@ -816,6 +816,13 @@ async def assign_job_to_member(
         api_error(403, "Insufficient permissions", err)
     if status_code == 404:
         api_error(404, "Job not found" if err == "job_not_found" else "Member not found", err)
+    if status_code == 409:
+        api_error(
+            409,
+            "Commercial jobs need a Tier A vendor with verified, unexpired drone liability "
+            "insurance at or above the job minimum and Advanced RPAS",
+            err,
+        )
     vendor_id = str(existing_job.get("vendor_id") or actor_member.get("vendor_id") or ORG_VENDOR_ID)
 
     if err == "auto":

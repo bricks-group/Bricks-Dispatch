@@ -192,5 +192,15 @@ def resolve_manual_assignment(
         return 404, "member_not_found", {}
     if not member_in_vendor_scope(target_member, actor_id, actor_member):
         return 404, "member_not_found", {}
+    # Commercial jobs: manual assign still enforces Tier A + insurance + RPAS +
+    # skills (location/availability stay an admin override as before).
+    from ..services.commercial_jobs import commercial_gate_failures
+    from ..services.vendor_profile import has_advanced_rpas, vendor_skills
+    if commercial_gate_failures(
+        target_member, job,
+        has_skills=vendor_skills(target_member),
+        advanced_rpas=has_advanced_rpas(target_member),
+    ):
+        return 409, "commercial_requirements_unmet", {}
     return 200, "ok", assignment_fields(job, mid)
 

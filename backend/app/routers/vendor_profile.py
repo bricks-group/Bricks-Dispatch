@@ -170,6 +170,10 @@ async def update_profile_impl(
         patch["service_areas"] = [s.strip() for s in payload.service_areas if s and s.strip()]
     if payload.skills is not None:
         patch["skills"] = [s for s in payload.skills if s in VENDOR_SKILLS]
+        # "mapping" is admin-granted after a QC'd test mission; a self-serve
+        # profile save keeps it but can never add it.
+        if "mapping" in (member.get("skills") or []):
+            patch["skills"].append("mapping")
         if "drone" in patch["skills"] and not member.get("drone_certified"):
             patch["drone_certified"] = True
     if payload.rpas_certificate_level is not None:
@@ -246,6 +250,81 @@ async def upload_rpas_impl(
     profile = await build_profile(updated)
     profile["rpas_document_id"] = doc_id
     profile["rpas_certificate_url"] = file_key
+    return profile
+
+
+async def upload_insurance_impl(
+    authorization: Optional[str],
+    x_user_id: Optional[str],
+    file: UploadFile,
+    liability_cad: int,
+    expires_on: str,
+    aviation_covered: bool = False,
+    insurer: str = "",
+    policy_number: str = "",
+):
+    """Vendor uploads a certificate of insurance (COI) for commercial work.
+
+    Stored as a pending vendor_documents row with the vendor's declared limit,
+    expiry and drone/aviation coverage. Nothing here marks the member verified:
+    an admin verifies in OS hiring (or Dispatch admin_ops), which is what the
+    commercial job gate and Tier A rule read. A pending upload never removes an
+    existing verified COI.
+    """
+    from datetime import date as _date
+
+    member = await _actor_member(authorization, x_user_id)
+    raw = await file.read()
+    if not raw:
+        api_error(400, "Empty file", "empty_file")
+    if len(raw) > 12 * 1024 * 1024:
+        api_error(400, "File too large (12 MB max)", "file_too_large")
+    try:
+        exp = _date.fromisoformat((expires_on or "").strip()[:10])
+    except ValueError:
+        api_error(400, "expires_on must be YYYY-MM-DD", "invalid_expiry")
+    if exp < datetime.now(timezone.utc).date():
+        api_error(400, "This certificate has already expired", "insurance_expired")
+    try:
+        limit = int(liability_cad)
+    except (TypeError, ValueError):
+        api_error(400, "liability_cad must be a whole number of dollars", "invalid_liability")
+    if limit <= 0:
+        api_error(400, "liability_cad must be positive", "invalid_liability")
+    filename = os.path.basename(file.filename or "certificate-of-insurance.pdf").lstrip(".") or "certificate-of-insurance.pdf"
+    mime = file.content_type or "application/pdf"
+    from ..services.storage import upload_file
+    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], filename, mime)
+    db = await get_db()
+    doc_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    declared = {
+        "declared": {
+            "liability_cad": limit,
+            "expires_on": exp.isoformat(),
+            "aviation_covered": bool(aviation_covered),
+            "insurer": (insurer or "").strip()[:120] or None,
+            "policy_number": (policy_number or "").strip()[:80] or None,
+        }
+    }
+    await db.table("vendor_documents").insert({
+        "id": doc_id,
+        "vendor_id": member.get("vendor_id", "default_vendor"),
+        "member_id": member["id"],
+        "doc_type": "coi",
+        "file_url": file_key,
+        "status": "pending",
+        "expiry_date": exp.isoformat(),
+        "validation_result": declared,
+        "created_at": now,
+    }).execute()
+    patch = {}
+    if (policy_number or "").strip():
+        patch["insurance_policy_number"] = policy_number.strip()[:80]
+    updated = (await _persist_safe(db, member["id"], patch)) if patch else member
+    profile = await build_profile(updated or member)
+    profile["insurance_document_id"] = doc_id
+    profile["insurance_pending_review"] = True
     return profile
 
 
@@ -393,6 +472,23 @@ async def upload_rpas(
     return await upload_rpas_impl(authorization, x_user_id, file, level, certificate_number)
 
 
+@router.post("/api/profile/insurance")
+async def upload_insurance(
+    file: UploadFile = File(...),
+    liability_cad: int = Form(...),
+    expires_on: str = Form(...),
+    aviation_covered: bool = Form(False),
+    insurer: str = Form(""),
+    policy_number: str = Form(""),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await upload_insurance_impl(
+        authorization, x_user_id, file, liability_cad, expires_on,
+        aviation_covered, insurer, policy_number,
+    )
+
+
 @router.get("/api/payouts")
 async def get_payouts(
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -428,6 +524,22 @@ async def os_upload_rpas(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     return await upload_rpas_impl(authorization, x_user_id, file, level, certificate_number)
+
+@os_router.post("/profile/insurance")
+async def os_upload_insurance(
+    file: UploadFile = File(...),
+    liability_cad: int = Form(...),
+    expires_on: str = Form(...),
+    aviation_covered: bool = Form(False),
+    insurer: str = Form(""),
+    policy_number: str = Form(""),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await upload_insurance_impl(
+        authorization, x_user_id, file, liability_cad, expires_on,
+        aviation_covered, insurer, policy_number,
+    )
 
 @router.post("/api/profile/photo")
 async def upload_photo(

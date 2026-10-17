@@ -102,6 +102,22 @@ async def create_dispatch_job(
     else:
         job_data["assignee_id"] = preassigned
         job_data["status"] = "assigned"
+    # Commercial jobs: a pre-stamped assignee must still clear the Tier A +
+    # insurance + RPAS gate, otherwise fall back to auto-assign.
+    if preassigned:
+        from ..services.commercial_jobs import is_commercial_job
+        if is_commercial_job(job_data):
+            try:
+                _pm = await db.table("vendor_members").select("*").eq("id", preassigned).limit(1).execute()
+                _prow = (_pm.data or [None])[0]
+            except Exception:
+                _prow = None
+            from ..services.vendor_profile import member_eligible_for_job
+            if not _prow or not member_eligible_for_job(_prow, job_data):
+                logger.info("Commercial job %s: preassigned %s fails commercial gate; auto-assigning", job_id, preassigned)
+                preassigned = ""
+                job_data["assignee_id"] = ""
+                job_data["status"] = "pending_assignment"
     if not job_data.get("vendor_id") or job_data.get("vendor_id") == job_data.get("assignee_id"):
         job_data["vendor_id"] = "default_vendor"
     # Booked clocks are property-local HH:MM — never raw ISO UTC.

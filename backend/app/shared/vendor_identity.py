@@ -133,6 +133,11 @@ async def photographer_payout_cents(db, job: dict, member: Optional[dict]) -> in
     if is_owner_member(member):
         return int(round(rack_dollars(job) * 100))
 
+    from ..services.commercial_jobs import commercial_payout_cents
+    commercial = commercial_payout_cents(job)
+    if commercial is not None:
+        return int(commercial)
+
     package_id = job.get("package_id")
     sqft = job.get("sqft")
     tier = (member or {}).get("tier") or job.get("vendor_tier") or 1
@@ -209,6 +214,11 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "portfolio_links": member.get("portfolio_links") or [],
         "portfolio_samples": member.get("portfolio_samples") or [],
     }
+    # Commercial gate visibility (flag only; never demotes or notifies).
+    from ..services.commercial_jobs import insurance_status, top_tier_insurance_flag
+    out["insurance"] = insurance_status(member)
+    out["top_tier_insurance_missing"] = top_tier_insurance_flag({**member, "tier": tier})
+    out["mapping_qualified"] = "mapping" in ((member.get("skills") or []) if isinstance(member.get("skills"), list) else [])
     if extra:
         out.update(extra)
     # Prefer assembled samples when caller passed documents via extra.
