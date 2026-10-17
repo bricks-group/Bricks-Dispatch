@@ -653,6 +653,28 @@ async def mint_sample_uploads(body: SampleUploadRequest):
                        "max_sample_mb": ev.MAX_SAMPLE_BYTES // (1024 * 1024)}}
 
 
+@router.get("/review-backlog")
+async def applicant_review_backlog(request: Request, limit: int = 5):
+    """Daily Vercel cron: review pending photographers that have no review yet
+    (applied before the evidence review, or the background run failed).
+
+    Never notifies anyone (Kam already got the apply text/email) and never
+    contacts the applicant. Auth: Vercel CRON_SECRET bearer or internal key.
+    """
+    from .vendor_os import _cron_authorized
+    from ..services.applicant_review_runner import pending_without_review, review_application
+
+    if not _cron_authorized(request.headers.get("Authorization"), request.headers.get("X-Internal-Key")
+                            or request.headers.get("X-Internal-Api-Key")):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    ids = await pending_without_review(limit=max(1, min(int(limit or 5), 10)))
+    done = []
+    for mid in ids:
+        r = await review_application(mid, notify=False, trigger="backlog")
+        done.append({"member_id": mid, "verdict": (r or {}).get("verdict"), "score": (r or {}).get("score")})
+    return {"ok": True, "reviewed": done}
+
+
 @router.post("/review/{member_id}")
 async def rerun_applicant_review(member_id: str, request: Request, notify: bool = False, store: bool = True):
     """Re-run the automatic review for one applicant. Internal key only.

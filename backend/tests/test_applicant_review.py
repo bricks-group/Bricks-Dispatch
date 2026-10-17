@@ -488,3 +488,27 @@ def test_apply_path_no_longer_calls_the_text_guess():
     assert "jev_applicant_poor_fit" not in apply_src
     assert "review_application" in apply_src
     assert "notify_owner_vendor_application" not in apply_src
+
+
+@pytest.mark.asyncio
+async def test_review_backlog_requires_auth_and_never_notifies(monkeypatch):
+    from starlette.requests import Request
+    from app.routers.onboarding import applicant_review_backlog
+    from app.services import applicant_review_runner as runner
+
+    monkeypatch.setenv("CRON_SECRET", "cron-test")
+    def req(headers):
+        return Request({"type": "http", "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()]})
+    with pytest.raises(HTTPException):
+        await applicant_review_backlog(req({}))
+    calls = []
+
+    async def fake_review(mid, notify=True, trigger="apply", **kw):
+        calls.append((mid, notify, trigger))
+        return {"verdict": "needs_review", "score": 20}
+
+    with patch.object(runner, "pending_without_review", AsyncMock(return_value=["a", "b"])), \
+            patch.object(runner, "review_application", fake_review):
+        out = await applicant_review_backlog(req({"Authorization": "Bearer cron-test"}))
+    assert [c[0] for c in calls] == ["a", "b"] and all(c[1] is False and c[2] == "backlog" for c in calls)
+    assert out["reviewed"][0]["score"] == 20
