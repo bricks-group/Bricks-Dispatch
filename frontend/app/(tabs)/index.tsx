@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { fmtMoneyExact } from '../../lib/money';
 import { View, Text, StyleSheet, RefreshControl, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Bell, Navigation, Phone, Check as CheckIcon, Sun, Box, LayoutGrid, Video } from 'lucide-react-native';
@@ -34,9 +35,7 @@ function todayISO() {
   return new Date().toLocaleDateString('en-CA');
 }
 
-function fmtMoney(amount: number) {
-  return `$${amount.toLocaleString('en-US')}`;
-}
+const fmtMoney = (v: number) => fmtMoneyExact(v);
 
 function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' | 'floorplan' | 'visit' | 'mode') => void }) {
   const flags = jobCaptureModes(job);

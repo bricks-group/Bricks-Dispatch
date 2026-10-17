@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { fmtMoneyCompact, fmtMoneyExact } from '../lib/money';
 import { api } from '../lib/api';
 import BricksLoader from '../components/BricksLoader';
 
@@ -71,17 +72,17 @@ export function EarningsPage() {
           <div className="page-grid">
             <section className="card">
               <h3>This week</h3>
-              <p className="metric">${data.week_total.toLocaleString()}</p>
+              <p className="metric" title={fmtMoneyExact(data.week_total)}>{fmtMoneyCompact(data.week_total)}</p>
               <p className="muted">{data.week_job_count} job{data.week_job_count !== 1 ? 's' : ''}</p>
             </section>
             <section className="card">
               <h3>Paid</h3>
-              <p className="metric">${data.paid_amount.toLocaleString()}</p>
+              <p className="metric" title={fmtMoneyExact(data.paid_amount)}>{fmtMoneyCompact(data.paid_amount)}</p>
               <p className="muted">settled</p>
             </section>
             <section className="card">
               <h3>Pending</h3>
-              <p className="metric">${data.pending_amount.toLocaleString()}</p>
+              <p className="metric" title={fmtMoneyExact(data.pending_amount)}>{fmtMoneyCompact(data.pending_amount)}</p>
               <p className="muted">Pays out {data.payout_day}</p>
             </section>
           </div>
@@ -111,7 +112,7 @@ export function EarningsPage() {
                         </span>
                       </td>
                       <td data-label="Payout" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
-                        ${job.payout_amount.toLocaleString()}
+                        {fmtMoneyExact(job.payout_amount)}
                       </td>
                     </tr>
                   ))}
