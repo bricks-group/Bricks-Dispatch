@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { fmtMoneyCompact, fmtMoneyExact } from '../../../lib/money';
 import { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, Share } from 'react-native';
 import { CreditCard, FileText, Wallet } from 'lucide-react-native';
@@ -26,9 +27,7 @@ type RecentJob = {
   payout_status: 'Paid' | 'Pending';
 };
 
-function fmtMoney(cents: number) {
-  return `$${cents.toLocaleString('en-US')}`;
-}
+const fmtMoney = (v: number) => fmtMoneyExact(v);
 
 function fmtDate(iso: string) {
   if (!iso) return '—';
@@ -85,7 +84,7 @@ export default function PayoutsScreen() {
 
   return (
     <Screen>
-      <PageHeader overline="Earnings" title="Payouts" />
+      <PageHeader title="Payouts" />
 
       {loading && !data ? (
         <LoadingState />
@@ -93,7 +92,7 @@ export default function PayoutsScreen() {
         <>
           <View style={s.hero}>
             <Overline>This week</Overline>
-            <Text style={[T.kpi, s.total]}>{fmtMoney(data?.week_total ?? 0)}</Text>
+            <Text style={[T.kpi, s.total]} accessibilityLabel={fmtMoneyExact(data?.week_total ?? 0)}>{fmtMoneyCompact(data?.week_total ?? 0)}</Text>
             <Text style={[T.bodySm, { color: color.textMuted }]}>
               Pays out {data?.payout_day ?? 'Monday'} · {data?.week_job_count ?? 0} job{(data?.week_job_count ?? 0) === 1 ? '' : 's'}
             </Text>
@@ -109,7 +108,7 @@ export default function PayoutsScreen() {
 
           <Section label="Recent jobs">
             {jobs.length === 0 ? (
-              <EmptyState icon={Wallet} title="No jobs this period" body="Delivered jobs and what they pay show up here." />
+              <EmptyState icon={Wallet} title="No jobs this period" body="Delivered jobs show up here." />
             ) : (
               <Group>
                 {jobs.map((job) => (
@@ -130,7 +129,7 @@ export default function PayoutsScreen() {
 
           <Section label="Account">
             <Group>
-              <Row icon={CreditCard} title="Payout account" subtitle="Stripe Connect setup and status" chevron onPress={() => router.push('/settings' as any)} />
+              <Row icon={CreditCard} title="Payout account" subtitle="Setup and status" chevron onPress={() => router.push('/settings' as any)} />
               <Row icon={FileText} title="Share earnings summary" chevron onPress={handleExport} disabled={!data} />
             </Group>
           </Section>

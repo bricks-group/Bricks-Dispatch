@@ -204,7 +204,7 @@ export function AvailabilityPage() {
               </label>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button type="submit" onClick={save}>Save</button>
+              <button type="submit" className="btn-primary" onClick={save}>Save</button>
               {saved && <span className="muted">Saved</span>}
             </div>
           </div>

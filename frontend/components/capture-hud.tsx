@@ -167,7 +167,7 @@ export function CameraPermission({ onAllow, onClose, body }: { onAllow: () => vo
       <EmptyState
         icon={Camera}
         title="Camera access"
-        body={body ?? 'GO uses the camera only while you capture this listing.'}
+        body={body ?? 'Bricks uses the camera only while you capture this listing.'}
         action={<Button title="Allow camera" onPress={onAllow} />}
       />
     </SafeAreaView>

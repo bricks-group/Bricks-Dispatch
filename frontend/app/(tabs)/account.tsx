@@ -99,7 +99,7 @@ export default function AccountScreen() {
   if (loading && !profile) {
     return (
       <Screen>
-        <PageHeader overline="Profile" title="Me" />
+        <PageHeader title="Me" />
         <LoadingState />
       </Screen>
     );
@@ -108,7 +108,7 @@ export default function AccountScreen() {
   if (error || !profile) {
     return (
       <Screen>
-        <PageHeader overline="Profile" title="Me" />
+        <PageHeader title="Me" />
         <Notice tone="bad" title="Couldn’t load your profile">Check your connection and try again.</Notice>
         <View style={s.retry}><Button variant="secondary" title="Retry" onPress={fetchProfile} /></View>
         {accountRows}
@@ -121,7 +121,7 @@ export default function AccountScreen() {
 
   return (
     <Screen>
-      <PageHeader overline="Profile" title="Me" />
+      <PageHeader title="Me" />
 
       <View style={s.identity}>
         {avatar ? <Image source={{ uri: avatar }} style={s.avatarImg} /> : <Avatar name={profile.name} size={56} />}

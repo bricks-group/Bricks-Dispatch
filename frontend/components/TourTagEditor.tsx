@@ -8,6 +8,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { COLORS, FONTS } from '../constants/CaptureTheme';
+import { Button } from './ui';
 import { color, radius, layout } from '../theme';
 import { AMENITY_PRESETS } from '../constants/amenityPresets';
 import { addTourTag, deleteTourTag } from '../lib/capture-api';
@@ -208,13 +209,12 @@ export function TourTagEditor({ jobId, session, onSession }: Props) {
         editable={!busy}
       />
 
-      <TouchableOpacity
-        style={[styles.addBtn, (busy || !label.trim()) && { opacity: 0.5 }]}
+      <Button
+        title={busy ? 'Saving…' : 'Add tag'}
         onPress={handleAdd}
         disabled={busy || !label.trim()}
-      >
-        <Text style={styles.addBtnText}>{busy ? 'Saving…' : 'Add tag'}</Text>
-      </TouchableOpacity>
+        style={styles.addBtn}
+      />
 
       {msg ? (
         <Text style={[styles.msg, msgOk ? styles.msgOk : styles.msgErr]}>{msg}</Text>
@@ -223,7 +223,7 @@ export function TourTagEditor({ jobId, session, onSession }: Props) {
       <Text style={styles.count}>
         {tags.length
           ? `${tags.length} tag${tags.length === 1 ? '' : 's'} on this tour`
-          : 'No feature tags yet — none are invented.'}
+          : 'No tags yet.'}
       </Text>
 
       {tags.map((t) => (
@@ -237,13 +237,13 @@ export function TourTagEditor({ jobId, session, onSession }: Props) {
               {stationLabel(t.station_index ?? 0)} · {Number(t.yaw).toFixed(0)}° / {Number(t.pitch).toFixed(0)}°
             </Text>
           </View>
-          <TouchableOpacity
-            style={styles.removeBtn}
+          <Button
+            variant="tertiary"
+            full={false}
+            title="Remove"
             onPress={() => handleDelete(t.id)}
             disabled={busy}
-          >
-            <Text style={styles.removeBtnText}>Remove</Text>
-          </TouchableOpacity>
+          />
         </View>
       ))}
     </View>
@@ -350,14 +350,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.paperSoft || COLORS.paper,
     marginTop: 4,
   },
-  addBtn: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    backgroundColor: COLORS.brick,
-    borderRadius: radius.sm,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
+  addBtn: { marginTop: 10 },
   addBtnText: {
     fontFamily: FONTS.bodySemibold,
     fontSize: 14,

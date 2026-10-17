@@ -33,7 +33,7 @@ export default function DeleteAccountRow() {
   const confirm = () =>
     Alert.alert(
       'Delete your account?',
-      'This permanently deletes your Bricks GO account, profile, availability, and saved devices. Jobs already delivered to clients stay with the client. This cannot be undone.',
+      'This permanently deletes your Bricks account, profile, availability, and saved devices. Jobs already delivered to clients stay with the client. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'What gets deleted', onPress: () => Linking.openURL(DELETION_INFO_URL).catch(() => {}) },

@@ -11,7 +11,7 @@ import { color, type as T, space, radius, layout, hairline } from '../../theme';
 
 const SLIDES = [
   {
-    eye: 'Bricks GO',
+    eye: 'Bricks',
     head: 'Real estate shoots on your schedule.',
     body: 'Jobs are routed to you by tier and drive time. You shoot and upload; we edit and pay you.',
   },

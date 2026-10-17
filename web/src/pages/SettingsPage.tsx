@@ -105,7 +105,7 @@ function DeleteAccountSection() {
       <h3>Delete account</h3>
       <div className="stack">
         <p className="muted" style={{ margin: 0 }}>
-          Removes your GO login, profile and payout details within 30 days. Records Bricks must keep for tax and
+          Removes your Bricks login, profile and payout details within 30 days. Records Bricks must keep for tax and
           client delivery (completed jobs, invoices) are kept as required by law. <a href={DELETION_INFO_URL} target="_blank" rel="noreferrer">Details</a>
         </p>
         {result?.ok && (
@@ -199,7 +199,7 @@ export function SettingsPage() {
               <input value={data.support_email} onChange={(e) => setData({ ...data, support_email: e.target.value })} type="email" style={{ width: '100%', maxWidth: 320 }} />
             </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button type="submit" onClick={save}>Save</button>
+              <button type="submit" className="btn-primary" onClick={save}>Save</button>
               {saved && <span className="muted">Saved</span>}
             </div>
           </div>

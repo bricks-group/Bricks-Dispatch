@@ -32,7 +32,6 @@ export function Sidebar() {
           <BrickMark size={20} />
           <span className="brand-word">bricks</span>
         </div>
-        <span className="brand-sub">GO</span>
       </div>
       <nav className="nav">
         {items.map((item) => (

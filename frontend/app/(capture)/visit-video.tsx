@@ -162,7 +162,7 @@ export default function VisitVideoHub() {
         <Footer>
           {!allUploaded ? (
             <Text style={[T.caption, styles.footNote]}>
-              {online ? 'Keep GO open while it uploads. It resumes if the connection drops.' : 'Offline. Upload resumes when you’re back online.'}
+              {online ? 'Keep Bricks open while it uploads. It resumes if the connection drops.' : 'Offline. Upload resumes when you’re back online.'}
             </Text>
           ) : null}
           <Button title="Send for processing" onPress={submit} loading={submitting} disabled={!allUploaded || uploading} />
@@ -174,7 +174,7 @@ export default function VisitVideoHub() {
           {items.length ? (bundle?.address || 'Recordings') : 'One video per floor'}
         </Text>
         {!items.length ? (
-          <Text style={[T.body, { color: color.textMuted }]}>Walk every room in one take. GO marks the rooms and builds the 3D visit.</Text>
+          <Text style={[T.body, { color: color.textMuted }]}>Walk every room in one take. We build the 3D visit.</Text>
         ) : null}
       </View>
 
@@ -183,7 +183,7 @@ export default function VisitVideoHub() {
           <Group>
             <Row icon={Layers} title="One take per floor" subtitle="Start at the entrance. Don’t stop between rooms." />
             <Row icon={Footprints} title="Two laps, then corner to corner" subtitle="Along the walls, back the other way, then both diagonals." />
-            <Row icon={RotateCcw} title="Slow, upright, no zoom" subtitle="Guided-tour pace. GO tells you when to slow down." />
+            <Row icon={RotateCcw} title="Slow, upright, no zoom" subtitle="We tell you when to slow down." />
           </Group>
           <Button icon={Video} title="Get ready to record" onPress={record} />
         </>

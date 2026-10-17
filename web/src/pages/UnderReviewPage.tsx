@@ -33,7 +33,7 @@ export function UnderReviewPage({ onLogout }: { onLogout?: () => void }) {
             fontFamily: 'ui-monospace, monospace',
           }}
         >
-          BRICKS GO · APPLICATION PENDING
+          Application pending
         </div>
         <h1 style={{ fontSize: 34, fontWeight: 500, letterSpacing: -1.1, margin: '0 0 14px', textTransform: 'lowercase' }}>
           Under review

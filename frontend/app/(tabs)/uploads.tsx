@@ -214,7 +214,7 @@ export default function UploadsScreen() {
     <Screen
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={color.accent} />}
     >
-      <PageHeader overline="Deliverables" title="Upload" subtitle="Signed upload from the camera card. No size cap." />
+      <PageHeader title="Upload" subtitle="Straight from your camera card." />
 
       <Section first label="What are you uploading?">
         <ChipRow>

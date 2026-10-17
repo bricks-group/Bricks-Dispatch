@@ -81,7 +81,7 @@ export function AddEmailPage({ onConfirmed, onLogout }: { onConfirmed: () => voi
         <h2>Add your email</h2>
         <p className="muted" style={{ margin: 0 }}>
           {phone ? `You're signed in with ${formatPhoneDisplay(phone)}. ` : ''}
-          Applications, the contractor agreement and payouts use email, so confirm one before you apply or open GO.
+          Confirm an email to apply and get paid.
         </p>
         <label className="login-field">
           Email
@@ -90,7 +90,7 @@ export function AddEmailPage({ onConfirmed, onLogout }: { onConfirmed: () => voi
         </label>
         {error && <p className="error" style={{ padding: 0 }} role="alert" data-testid="add-email-error">{error}</p>}
         {info && !error && <p className="muted" style={{ margin: 0 }}>{info}</p>}
-        <button type="submit" disabled={busy || cooldown > 0} data-testid="add-email-send">
+        <button type="submit" className="btn-primary" disabled={busy || cooldown > 0} data-testid="add-email-send">
           {busy ? '…' : sentTo ? (cooldown > 0 ? `Resend link in ${cooldown}s` : 'Resend confirmation link') : 'Send confirmation link'}
         </button>
         {sentTo && (
@@ -108,9 +108,9 @@ export function NotOnTeamPage({ onLogout }: { onLogout: () => void }) {
   return (
     <div className="login-wrap" data-testid="not-on-team-page">
       <div className="login-card">
-        <h2>Not on the GO team yet</h2>
+        <h2>Not on the team yet</h2>
         <p className="muted" style={{ margin: 0 }}>
-          You're signed in, but this account isn't linked to a GO member. Apply with the same email at{' '}
+          You're signed in, but this account isn't linked to a Bricks photographer. Apply with the same email at{' '}
           <a href="https://www.brxs.ca/photographers">brxs.ca/photographers</a>, or ask an owner to add you.
         </p>
         <button type="button" className="btn-link" onClick={onLogout}>Sign out</button>

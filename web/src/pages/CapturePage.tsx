@@ -82,12 +82,12 @@ export function CapturePage() {
     try {
       if (!window.isSecureContext) {
         setPerm('denied');
-        setCamNote('Camera needs HTTPS (or localhost). Open the live GO site on your phone.');
+        setCamNote('Camera needs HTTPS (or localhost). Open Bricks on your phone.');
         return;
       }
       if (!navigator.mediaDevices?.getUserMedia) {
         setPerm('denied');
-        setCamNote('This browser has no camera API. Use Expo Go / the native GO app for capture.');
+        setCamNote('This browser has no camera API. Use the Bricks app to capture.');
         return;
       }
       // iPhone Safari often rejects tight constraints — fall back to simpler facingMode, then any camera.
@@ -297,7 +297,7 @@ export function CapturePage() {
             <p>{camNote || 'Bricks needs camera access to photograph listings.'}</p>
             <button type="button" onClick={startCamera}>Allow camera</button>
             <p className="muted" style={{ marginTop: 12 }}>
-              Phone browsers work best. Desktop may only see a webcam. Full pan + heading is strongest in Expo Go / native GO.
+              Works best on a phone. The Bricks app tracks heading best.
             </p>
           </div>
         ) : (

@@ -14,6 +14,7 @@ import {
   verifyPhoneOtp,
 } from '../lib/phone-auth';
 import BricksLoader from '../components/BricksLoader';
+import { LoginShell } from '../components/LoginSlides';
 
 function BrickMark() {
   return (
@@ -138,7 +139,7 @@ function PhoneLogin({ onBack }: { onBack: () => void }) {
       )}
       {error && <p className="error" style={{ padding: 0 }} role="alert" data-testid="phone-auth-error">{error}</p>}
       {info && !error && <p className="muted" style={{ margin: 0 }}>{info}</p>}
-      <button type="submit" disabled={busy || (!phone && cooldown > 0)} data-testid={phone ? 'phone-verify-btn' : 'phone-send-btn'}>
+      <button type="submit" className="btn-primary" disabled={busy || (!phone && cooldown > 0)} data-testid={phone ? 'phone-verify-btn' : 'phone-send-btn'}>
         {busy ? '…' : phone ? 'Verify and sign in' : 'Text me a code'}
       </button>
       {phone && (
@@ -292,15 +293,15 @@ export function LoginPage() {
 
   if (phoneMode) {
     return (
-      <div className="login-wrap">
+      <LoginShell>
         <PhoneLogin onBack={() => setPhoneMode(false)} />
-      </div>
+      </LoginShell>
     );
   }
 
   if (step === 'verify') {
     return (
-      <div className="login-wrap">
+      <LoginShell>
         <form className="login-card" onSubmit={onVerify}>
           <BrickMark />
           <h2>Check your email</h2>
@@ -310,19 +311,19 @@ export function LoginPage() {
             <input type="text" value={otp} onChange={(e) => setOtp(e.target.value)} required placeholder="123456" />
           </label>
           {error && <p className="error" style={{ padding: 0 }}>{error}</p>}
-          <button type="submit" disabled={submitting}>{submitting && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{submitting ? 'Verifying…' : 'Verify'}</button>
+          <button type="submit" className="btn-primary" disabled={submitting}>{submitting && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{submitting ? 'Verifying…' : 'Verify'}</button>
           <button type="button" className="btn-link" onClick={() => setStep('login')}>Back to login</button>
         </form>
-      </div>
+      </LoginShell>
     );
   }
 
   return (
-    <div className="login-wrap">
+    <LoginShell>
       <form className="login-card" onSubmit={onPasswordLogin}>
         <BrickMark />
         <h2>bricks</h2>
-        <p className="muted" style={{ margin: 0 }}>Sign in to GO.</p>
+        <p className="muted" style={{ margin: 0 }}>Sign in to Bricks.</p>
         {authRestricted && (
           <p className="muted" style={{ margin: '8px 0 0' }} data-testid="auth-fair-use-banner">
             Google and magic link are unavailable under Fair Use — use email and password.
@@ -351,7 +352,7 @@ export function LoginPage() {
           />
         </label>
         {error && <p className="error" style={{ padding: 0 }} data-testid="auth-error">{error}</p>}
-        <button type="submit" disabled={submitting || googleLoading || otpLoading}>
+        <button type="submit" className="btn-primary" disabled={submitting || googleLoading || otpLoading}>
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
 
@@ -393,6 +394,6 @@ export function LoginPage() {
         )}
         {/* Apple stays OFF until Apple Developer / Supabase Apple is connected — same honesty as OS. */}
       </form>
-    </div>
+    </LoginShell>
   );
 }

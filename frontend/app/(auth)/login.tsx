@@ -6,7 +6,7 @@ import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { color, type as T, space, radius, layout } from '../../theme';
-import { Overline, Field, Button, Notice, Divider, TextLink } from '../../components/ui';
+import { Field, Button, Notice, Divider, TextLink } from '../../components/ui';
 import BricksWordmark from '../../components/BricksWordmark';
 import { EnterFadeDown } from '../../components/motion';
 import { APPLE_SIGN_IN_ENABLED, AppleAuthentication, appleSignInAvailable, signInWithApple } from '../../lib/apple-auth';
@@ -198,7 +198,6 @@ export default function LoginScreen() {
               <BricksWordmark size={1.0} color={color.accent} pressable />
             </View>
 
-            <Overline style={s.eyebrow}>Bricks GO</Overline>
             <Text style={[T.display, { color: color.text }]} accessibilityRole="header">
               {mode === 'signin' ? 'Sign in' : 'Create your account'}
             </Text>
@@ -275,7 +274,7 @@ export default function LoginScreen() {
               {mode === 'signin' ? (
                 <>
                   <View style={s.footerLine}>
-                    <Text style={[T.bodySm, { color: color.textMuted }]}>New to Bricks GO?</Text>
+                    <Text style={[T.bodySm, { color: color.textMuted }]}>New to Bricks?</Text>
                     <TextLink tone="accent" title="Create account" onPress={() => { setMode('signup'); setError(''); }} />
                   </View>
                   <TextLink title="Apply to shoot with Bricks" onPress={() => router.push('/onboarding/slides')} />
@@ -299,7 +298,6 @@ const s = StyleSheet.create({
   flex: { flex: 1 },
   scroll: { flexGrow: 1, paddingHorizontal: layout.gutter, paddingBottom: space[24] },
   wordmarkWrap: { paddingTop: space[24], paddingBottom: space[48] },
-  eyebrow: { marginBottom: space[10] },
   sub: { color: color.textMuted, marginTop: space[8], marginBottom: space[32] },
   form: { gap: space[16] },
   primary: { marginTop: space[8] },

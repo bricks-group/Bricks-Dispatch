@@ -77,7 +77,7 @@ export default function CaptureModeScreen() {
       <NavBar title="Capture" close onBack={() => router.back()} border={false} />
       <View style={styles.body}>
         {none ? (
-          <EmptyState icon={Camera} title="Nothing to capture in GO" body={captureNeitherCopy(flags)} />
+          <EmptyState icon={Camera} title="Nothing to capture here" body={captureNeitherCopy(flags)} />
         ) : (
           <>
             <Text style={[T.display, { color: color.text }]} accessibilityRole="header">What are you capturing?</Text>

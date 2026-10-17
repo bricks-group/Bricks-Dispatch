@@ -76,17 +76,17 @@ export function TeamPage() {
           <tbody>
             {members.map((m) => (
               <tr key={m.id}>
-                <td style={{ fontWeight: 500 }}>{m.name}</td>
-                <td className="muted">{(m as any).vendor_type ? `${(m as any).vendor_type} · ${m.title || m.role}` : (m.title || m.role)}</td>
-                <td className="muted">{(m.skills || []).join(', ') || '—'}</td>
-                <td className="muted">{m.rpas_certificate_level || '—'}</td>
-                <td>
+                <td data-label="Name" style={{ fontWeight: 500 }}>{m.name}</td>
+                <td data-label="Title" className="muted">{(m as any).vendor_type ? `${(m as any).vendor_type} · ${m.title || m.role}` : (m.title || m.role)}</td>
+                <td data-label="Skills" className="muted">{(m.skills || []).join(', ') || '—'}</td>
+                <td data-label="RPAS" className="muted">{m.rpas_certificate_level || '—'}</td>
+                <td data-label="Assignable">
                   <span className={`badge ${m.assignable ? 'badge-green' : 'badge-yellow'}`}>
                     {m.assignable ? 'Yes' : (m.assignable_reason || 'No')}
                   </span>
                 </td>
-                <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>{m.assigned_jobs}</td>
-                <td>
+                <td data-label="Active jobs" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>{m.assigned_jobs}</td>
+                <td data-label="Availability">
                   <div className="status-toggle">
                     {STATUS_OPTIONS.map((s) => (
                       <button
@@ -121,7 +121,7 @@ export function TeamPage() {
             <option value="stager">Stager</option>
             <option value="cleaner">Cleaner</option>
           </select>
-          <button type="submit" onClick={addMember}>Add</button>
+          <button type="submit" className="btn-primary" onClick={addMember}>Add</button>
         </div>
       </section>
     </div>
