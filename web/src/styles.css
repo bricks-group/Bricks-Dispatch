@@ -805,21 +805,21 @@ button.btn-danger:hover { background: rgba(192, 67, 39, 0.12); color: #F4F1EB; }
 .login-split .login-wrap { flex: 1 1 auto; min-width: 0; min-height: 0; padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
 .login-aside { display: none; }
 @media (min-width: 1024px) {
-  .login-aside { display: block; position: relative; flex: 0 0 clamp(380px, 42vw, 760px); border-left: 1px solid var(--c-hair); overflow: hidden; background: #1a1612; }
+  .login-aside { display: block; position: relative; flex: 0 0 clamp(380px, 42vw, 760px); overflow: hidden; background: #1a1612; }
 }
 .ls { position: absolute; inset: 0; overflow: hidden; }
-.ls-slide { position: absolute; inset: 0; opacity: 0; transition: opacity 1200ms ease; }
+.ls-slide { position: absolute; inset: 0; opacity: 0; transition: opacity 1400ms ease; }
 .ls-slide.is-on { opacity: 1; }
-.ls-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.ls-frame { position: absolute; left: 50%; top: 10%; transform: translateX(-50%); height: 62%; width: auto; max-width: 70%; object-fit: contain; border: 1px solid rgba(244,241,235,.12); border-radius: 2px; box-shadow: 0 30px 80px rgba(0,0,0,.35); }
-.ls-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(to top, rgba(14,11,9,.62) 0%, rgba(14,11,9,.2) 30%, rgba(14,11,9,0) 52%); }
-.ls-copy { position: absolute; left: 40px; right: 40px; bottom: 40px; }
-.ls-line { font-size: 22px; font-weight: 500; letter-spacing: -0.4px; line-height: 1.25; color: #F4F1EB; max-width: 420px; animation: lsIn 900ms ease both; }
-.ls-ticks { display: flex; gap: 6px; margin-top: 16px; }
+.ls-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.045); transition: transform 8300ms cubic-bezier(.2,.6,.2,1); }
+.ls-slide.is-on .ls-img { transform: scale(1); }
+.ls-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(to top, rgba(12,10,8,.58) 0%, rgba(12,10,8,.22) 22%, rgba(12,10,8,0) 42%); }
+.ls-copy { position: absolute; left: clamp(32px, 4vw, 56px); right: clamp(32px, 4vw, 56px); bottom: clamp(32px, 4.5vw, 56px); }
+.ls-line { font-size: clamp(22px, 1.75vw, 30px); font-weight: 400; letter-spacing: -0.02em; line-height: 1.2; color: #F4F1EB; max-width: 460px; text-shadow: 0 1px 18px rgba(0,0,0,.25); animation: lsIn 900ms ease both; }
+.ls-ticks { display: flex; gap: 6px; margin-top: 20px; }
 .ls-ticks span { width: 6px; height: 6px; background: rgba(244,241,235,.3); transition: background .6s ease; }
 .ls-ticks span.is-on { background: #F4F1EB; }
 @keyframes lsIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .ls-slide { transition: none; } .ls-line { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ls-slide, .ls-img { transition: none; transform: none; } .ls-line { animation: none; } }
 
 /* ── Phone pass (≤640px): stacked table rows, 16px inputs (no iOS zoom), styled selects ── */
 @media (max-width: 860px) {

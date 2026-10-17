@@ -1,16 +1,17 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 
 /** Calm login rotation: one real image + one short line per slide.
- *  ~5.5s per slide, 1.2s crossfade. Pauses on hover and when the tab is hidden.
+ *  Full-bleed photography, ~5.5s per slide, 1.4s crossfade, slow scale settle. Pauses on hover and when the tab is hidden.
  *  prefers-reduced-motion shows the first slide only. Images load one ahead. */
 const SLIDE_MS = 5500;
 
-type Slide = { src: string; widths: number[]; alt: string; line: string; pos?: string; frame?: boolean };
+type Slide = { src: string; alt: string; line: string; pos?: string };
+const WIDTHS = [1000, 1600];
 
 export const DISPATCH_SLIDES: Slide[] = [
-  { src: '/login/jobs', widths: [720], frame: true, alt: 'Bricks Today screen with the next shoot and Navigate', line: 'Jobs dispatched to your phone.' },
-  { src: '/login/shoots', widths: [960, 1600], pos: '40% 55%', alt: 'Row of brick homes, listing photo by a Bricks photographer', line: 'Listing shoots near you, at an exact time.' },
-  { src: '/login/drone', widths: [960, 1600], pos: '50% 50%', alt: 'Drone view of a new development', line: 'Drone jobs for licensed pilots.' },
+  { src: '/login/shoots', pos: '40% 55%', alt: 'Row of brick homes, listing photo by a Bricks photographer', line: 'Listing shoots near you, at an exact time.' },
+  { src: '/login/interiors', pos: '45% 50%', alt: 'Condo living room with a city view, shot for Bricks', line: 'Homes, condos and commercial work.' },
+  { src: '/login/drone', pos: '50% 50%', alt: 'Drone view of a new commercial development', line: 'Drone jobs for licensed pilots.' },
 ];
 
 function useReducedMotion() {
@@ -55,10 +56,10 @@ export function LoginSlides({ slides = DISPATCH_SLIDES }: { slides?: Slide[] }) 
         <div key={s.src} className={k === cur ? 'ls-slide is-on' : 'ls-slide'} aria-hidden={k !== cur}>
           {loaded.has(k) && (
             <img
-              className={s.frame ? 'ls-frame' : 'ls-img'}
-              src={`${s.src}-${s.widths[0]}.webp`}
-              srcSet={s.widths.map((w) => `${s.src}-${w}.webp ${w}w`).join(', ')}
-              sizes="(min-width: 1600px) 720px, 45vw"
+              className="ls-img"
+              src={`${s.src}-${WIDTHS[0]}.webp`}
+              srcSet={WIDTHS.map((w) => `${s.src}-${w}.webp ${w}w`).join(', ')}
+              sizes="(min-width: 1810px) 760px, 42vw"
               alt={s.alt}
               decoding="async"
               loading={k === 0 ? 'eager' : 'lazy'}
