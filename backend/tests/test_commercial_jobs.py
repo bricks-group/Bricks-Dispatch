@@ -255,3 +255,24 @@ def test_employee_payout_cents_zero_via_identity():
     import asyncio
     from app.shared.vendor_identity import photographer_payout_cents
     assert asyncio.run(photographer_payout_cents(None, {"job_type": "progress_capture"}, _employee())) == 0
+
+
+def test_www_commercial_booking_skips_companion_status_webhook(monkeypatch):
+    import asyncio
+    from app.services import webhooks
+
+    class Boom:
+        def __init__(self, *a, **k):
+            raise AssertionError("must not call Companion for cb_ bookings")
+    monkeypatch.setattr(webhooks.httpx, "AsyncClient", Boom)
+    assert asyncio.run(webhooks.send_dispatch_status_update_webhook("cb_123", "job1", "assigned")) is False
+
+
+def test_www_commercial_booking_payload_is_commercial():
+    # Shape OS commercial_booking.py sends (no payout fields).
+    job = {"job_type": "site_mapped_capture", "booking_id": "cb_x", "min_insurance_cad": 5_000_000,
+           "requires_rpas_advanced": True, "add_ons": ["mapped_setup"], "scheduled_date": "2026-10-22"}
+    from app.services import commercial_jobs as cj
+    assert cj.is_commercial_job(job) and cj.job_min_insurance_cad(job) == 5_000_000
+    assert cj.required_skills(job) == {"drone", "mapping"} and cj.job_requires_advanced_rpas(job)
+    assert (cj.commercial_payout_cents(job) or 0) > 0  # Dispatch owns the figure
