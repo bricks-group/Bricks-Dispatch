@@ -72,13 +72,23 @@ def _setup(monkeypatch, allows):
     monkeypatch.setattr(cc, "_resolve_photographer_name", photog)
     monkeypatch.setattr(cc, "_email_agent_direct", email)
     monkeypatch.setattr(cc, "_agent_allows", lambda e, f: asked.append((e, f)) or allows.get(f, True))
+    from app.shared import web_push
+    pushed = []
+
+    async def fake_push(connect, email, msg, **_k):
+        pushed.append((email, msg))
+        return {"sent": 1, "devices": 1}
+
+    monkeypatch.setattr(web_push, "push_to_email", fake_push)
+    _setup.pushed = pushed
     return sent, asked
 
 
 def test_booking_confirmed_muted(monkeypatch):
     sent, asked = _setup(monkeypatch, {"new_booking_email": False})
     asyncio.run(cc.notify_booking_confirmed("j1"))
-    assert sent == [] and asked == [("agent@example.com", "new_booking_email")]
+    assert sent == [] and asked == [("agent@example.com", "new_booking_push"), ("agent@example.com", "new_booking_email")]
+    assert len(_setup.pushed) == 1  # push has its own toggle; muting email doesn't mute push
 
 
 def test_booking_confirmed_default_sends(monkeypatch):
@@ -94,3 +104,31 @@ def test_delivery_muted_and_default(monkeypatch):
     sent, _ = _setup(monkeypatch, {})
     assert asyncio.run(cc.notify_capture_delivered("j1", products=["3D tour"])) is True
     assert sent[0][1].startswith("Your 3D tour is ready")
+
+
+def test_booking_confirmed_pushes_with_desk_link(monkeypatch):
+    sent, _ = _setup(monkeypatch, {})
+    asyncio.run(cc.notify_booking_confirmed("j1"))
+    (email, msg), = _setup.pushed
+    assert email == "agent@example.com"
+    assert msg["title"] == "Shoot confirmed · 1 Main St" and "Pat" in msg["body"]
+    assert msg["url"].endswith("/properties/j1") and msg["tag"] == "booking-j1"
+    assert sent  # email still goes
+
+
+def test_booking_push_muted_keeps_email(monkeypatch):
+    sent, _ = _setup(monkeypatch, {"new_booking_push": False})
+    asyncio.run(cc.notify_booking_confirmed("j1"))
+    assert _setup.pushed == [] and sent
+
+
+def test_push_failure_never_blocks_email(monkeypatch):
+    sent, _ = _setup(monkeypatch, {})
+    from app.shared import web_push
+
+    async def boom(*a, **k):
+        raise RuntimeError("push service down")
+
+    monkeypatch.setattr(web_push, "push_to_email", boom)
+    asyncio.run(cc.notify_booking_confirmed("j1"))
+    assert sent and sent[0][1].startswith("Shoot confirmed")

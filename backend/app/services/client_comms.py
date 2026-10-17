@@ -229,6 +229,30 @@ def _when_line(job: dict) -> str:
     return format_when_line(job)
 
 
+async def _push_agent_new_booking(agent_email: str, address: str, when: str, photographer: str, job_id: str) -> dict:
+    """"New booking: push" from Bricks OS Settings → Notifications. Web Push to every
+    device the agent turned on; gated by notification_prefs.new_booking_push (fails
+    open like the email). Never raises: a push problem must not block the booking."""
+    try:
+        if not (agent_email or "").strip() or not _agent_allows(agent_email, "new_booking_push"):
+            return {"sent": 0, "skipped": "muted_or_no_email"}
+        from ..shared import web_push
+        from ..shared.pg_fallback import _pg_connect
+        parts = [p for p in (when, photographer) if p]
+        msg = web_push.notification(
+            f"Shoot confirmed · {address}",
+            " · ".join(parts) or "Your Bricks shoot is confirmed.",
+            _listing_desk_url(job_id),
+            f"booking-{job_id}",
+        )
+        res = await web_push.push_to_email(_pg_connect, agent_email, msg)
+        logger.info("New booking push for job %s: %s", job_id, res)
+        return res
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("New booking push failed for job %s: %s", job_id, type(exc).__name__)
+        return {"sent": 0, "error": type(exc).__name__}
+
+
 async def notify_booking_confirmed(job_id: str) -> None:
     """
     Notifies the agent that their shoot is confirmed and a photographer has been assigned.
@@ -274,6 +298,7 @@ async def notify_booking_confirmed(job_id: str) -> None:
   Need to reschedule? Reply to this email or write booking@brxs.ca.
 </p>
 """
+        await _push_agent_new_booking(agent_email, address, when, photographer_name, job_id)
         if not _agent_allows(agent_email, "new_booking_email"):
             logger.info("Booking confirmed email muted by agent's notification settings for job %s", job_id)
             return
