@@ -95,7 +95,7 @@ export default function FloorPlanCaptureScreen() {
 
   if (!permission) return <View style={styles.dark} />;
   if (!permission.granted) {
-    return <CameraPermission onAllow={requestPermission} onClose={() => router.back()} body="GO uses the camera only while you photograph room corners for the floor plan." />;
+    return <CameraPermission onAllow={requestPermission} onClose={() => router.back()} body="Bricks uses the camera only while you photograph room corners for the floor plan." />;
   }
 
   const address = session?.address || 'Property';

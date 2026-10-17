@@ -260,7 +260,7 @@ export default function ProfileEditScreen() {
             <Group>
               <Row
                 title="Available for assignments"
-                subtitle="Connect a calendar on GO web so auto-assign only offers jobs that fit."
+                subtitle="Connect a calendar on Bricks web so you only get offers that fit."
                 right={
                   <Toggle value={availability} onValueChange={setAvailability} accessibilityLabel="Available for assignments" />
                 }

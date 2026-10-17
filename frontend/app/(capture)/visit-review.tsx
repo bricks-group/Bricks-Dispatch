@@ -99,7 +99,7 @@ export default function VisitReview() {
         </Section>
       ) : null}
 
-      {isPreview ? <Notice tone="neutral">Recording needs the GO app on a phone. The web build shows the flow only.</Notice> : null}
+      {isPreview ? <Notice tone="neutral">Recording needs the Bricks app on a phone.</Notice> : null}
     </Screen>
   );
 }

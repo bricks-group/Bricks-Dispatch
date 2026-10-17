@@ -48,18 +48,18 @@ function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' 
   if (modes > 1) {
     return (
       <Group style={s.captureStack}>
-        {flags.tour ? <Row icon={Box} title="Start capture · 360° tour" chevron onPress={() => onOpen('splat')} /> : null}
-        {flags.floorplan ? <Row icon={LayoutGrid} title="Start capture · Floor plan" chevron onPress={() => onOpen('floorplan')} /> : null}
+        {flags.tour ? <Row icon={Box} title="360° tour" chevron onPress={() => onOpen('splat')} /> : null}
+        {flags.floorplan ? <Row icon={LayoutGrid} title="Floor plan" chevron onPress={() => onOpen('floorplan')} /> : null}
         {flags.visit ? <Row icon={Video} title="Virtual visit" chevron onPress={() => onOpen('visit')} /> : null}
       </Group>
     );
   }
   if (flags.visit) {
-    return <View style={s.captureStack}><Button variant="secondary" title="Virtual visit" onPress={() => onOpen('visit')} /></View>;
+    return <View style={s.captureStack}><Button variant="secondary" icon={Video} title="Virtual visit" onPress={() => onOpen('visit')} /></View>;
   }
   const kind = flags.tour ? 'splat' : 'floorplan';
-  const label = flags.tour ? 'Start capture' : 'Start capture · Floor plan';
-  return <View style={s.captureStack}><Button variant="secondary" title={label} onPress={() => onOpen(kind)} /></View>;
+  const label = flags.tour ? '3D tour' : 'Floor plan';
+  return <View style={s.captureStack}><Button variant="secondary" icon={flags.tour ? Box : LayoutGrid} title={label} onPress={() => onOpen(kind)} /></View>;
 }
 
 export default function TodayScreen() {
@@ -147,11 +147,11 @@ export default function TodayScreen() {
         {loading && jobs.length === 0 ? (
           <LoadingState />
         ) : jobs.length === 0 ? (
-          <EmptyState icon={Sun} title="Nothing on the books" body="New jobs appear here the morning of the shoot. Pull down to refresh." />
+          <EmptyState icon={Sun} title="Nothing on the books" body="Pull down to refresh." />
         ) : (
           <>
             {nextJob && (
-              <Section first label={minsUntil ? `Next up · in ${minsUntil} min` : 'Next up · now'}>
+              <Section first label={minsUntil ? `Next up · in ${minsUntil} min` : 'Next up'}>
                 <PressScale
                   style={s.nextCard}
                   scaleTo={0.99}

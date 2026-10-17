@@ -143,7 +143,7 @@ export default function ScheduleScreen() {
         {loading && allJobs.length === 0 ? (
           <LoadingState />
         ) : selectedJobs.length === 0 ? (
-          <EmptyState icon={CalendarDays} title="Nothing booked" body="Pick another day, or keep your availability current to get offers." />
+          <EmptyState icon={CalendarDays} title="Nothing booked" body="Pick another day." />
         ) : (
           <Group>
             {selectedJobs.map((job) => {

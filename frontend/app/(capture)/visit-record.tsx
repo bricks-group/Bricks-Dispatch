@@ -147,7 +147,7 @@ export default function VisitRecord() {
 
   if (!IS_WEB && !permission) return <View style={styles.dark} />;
   if (!IS_WEB && permission && !permission.granted) {
-    return <CameraPermission onAllow={requestPermission} onClose={() => router.back()} body="GO uses the camera only while you record this home’s walk-through. No sound is recorded." />;
+    return <CameraPermission onAllow={requestPermission} onClose={() => router.back()} body="Bricks uses the camera only while you record this home’s walk-through. No sound is recorded." />;
   }
 
   const phase = phaseFor(secInRoom, scope);
@@ -157,7 +157,7 @@ export default function VisitRecord() {
 
   let card: { step?: string; title: string; body?: string; tone: 'accent' | 'warn' | 'bad' | 'ok' };
   if (error) card = { title: 'Recording stopped', body: error, tone: 'bad' };
-  else if (limitWarn) card = { step: `${fmtClock(left)} left`, title: 'Wrap up this floor', body: 'GO stops at 15:00. Record the rest as another floor.', tone: 'warn' };
+  else if (limitWarn) card = { step: `${fmtClock(left)} left`, title: 'Wrap up this floor', body: 'Recording stops at 15:00. Record the rest as another floor.', tone: 'warn' };
   else if (cue) card = { step: 'Coach', title: cue.title, body: cue.body, tone: 'warn' };
   else if (recording) card = { ...phase, tone: 'accent' };
   else card = {

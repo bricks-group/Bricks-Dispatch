@@ -85,7 +85,7 @@ export default function PayoutsScreen() {
 
   return (
     <Screen>
-      <PageHeader overline="Earnings" title="Payouts" />
+      <PageHeader title="Payouts" />
 
       {loading && !data ? (
         <LoadingState />
@@ -109,7 +109,7 @@ export default function PayoutsScreen() {
 
           <Section label="Recent jobs">
             {jobs.length === 0 ? (
-              <EmptyState icon={Wallet} title="No jobs this period" body="Delivered jobs and what they pay show up here." />
+              <EmptyState icon={Wallet} title="No jobs this period" body="Delivered jobs show up here." />
             ) : (
               <Group>
                 {jobs.map((job) => (
@@ -130,7 +130,7 @@ export default function PayoutsScreen() {
 
           <Section label="Account">
             <Group>
-              <Row icon={CreditCard} title="Payout account" subtitle="Stripe Connect setup and status" chevron onPress={() => router.push('/settings' as any)} />
+              <Row icon={CreditCard} title="Payout account" subtitle="Setup and status" chevron onPress={() => router.push('/settings' as any)} />
               <Row icon={FileText} title="Share earnings summary" chevron onPress={handleExport} disabled={!data} />
             </Group>
           </Section>

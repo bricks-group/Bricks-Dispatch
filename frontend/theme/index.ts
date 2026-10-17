@@ -90,8 +90,9 @@ export const type = {
   callout:  { fontFamily: font.medium,  fontSize: 14, lineHeight: 20 },   // buttons, row titles
   bodySm:   { fontFamily: font.regular, fontSize: 13, lineHeight: 19 },
   caption:  { fontFamily: font.regular, fontSize: 12, lineHeight: 16 },
-  overline: { fontFamily: font.monoMedium, fontSize: 10.5, lineHeight: 14, letterSpacing: 1.4, textTransform: 'uppercase' as const },
-  tabLabel: { fontFamily: font.monoMedium, fontSize: 10, lineHeight: 12, letterSpacing: 1.2, textTransform: 'uppercase' as const },
+  // Section labels / eyebrows: quiet sentence-case grotesque (was mono caps). Mono stays for pills, times, figures.
+  overline: { fontFamily: font.medium, fontSize: 13, lineHeight: 18, letterSpacing: 0 },
+  tabLabel: { fontFamily: font.medium, fontSize: 11, lineHeight: 13, letterSpacing: 0 },
   pill:     { fontFamily: font.monoMedium, fontSize: 10, lineHeight: 12, letterSpacing: 1.4, textTransform: 'uppercase' as const },
   kpi:      { fontFamily: font.mono, fontSize: 36, lineHeight: 40, letterSpacing: -1 },
   kpiSm:    { fontFamily: font.mono, fontSize: 24, lineHeight: 28, letterSpacing: -0.5 },

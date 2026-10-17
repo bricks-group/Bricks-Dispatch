@@ -59,7 +59,7 @@ export default function VisitScreen() {
         <Row
           icon={Video}
           title="Record the walk-through"
-          subtitle="GO sets up the camera and coaches you while you walk."
+          subtitle="We set up the camera and coach you as you walk."
           chevron
           onPress={() => router.push({ pathname: '/(capture)/visit-video', params: { jobId } } as any)}
         />
@@ -76,7 +76,7 @@ export default function VisitScreen() {
             autoCorrect={false}
             keyboardType="url"
             editable={!busy}
-            hint="Files (.sog, .spz, .ply, .splat) upload on GO web."
+            hint="Files (.sog, .spz, .ply, .splat) upload on Bricks web."
           />
           {error ? <Notice tone="bad">{error}</Notice> : null}
           {done ? <Notice tone="ok">{done}</Notice> : null}

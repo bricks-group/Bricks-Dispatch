@@ -638,10 +638,10 @@ export default function JobDetailScreen() {
             <Section label="No-show">
               <Notice tone="warn">
                 {!escalationSentAt
-                  ? 'If the agent or client is not there, text them first. You can file a claim 15 minutes after.'
+                  ? 'Agent not here? Text them first. You can file a claim 15 min later.'
                   : escalationWaitSecs > 0
                     ? `Text sent to the agent. You can file a claim in ${fmtWait}.`
-                    : 'Wait complete. You can now file a no-show claim.'}
+                    : 'You can file a no-show claim now.'}
               </Notice>
               <View style={s.blockGapSm}>
                 {!escalationSentAt ? (
@@ -658,7 +658,7 @@ export default function JobDetailScreen() {
               <Row icon={User} title={job.assignee_name || (job.assignee_id ? job.assignee_id : 'Unassigned')} />
               {isAdmin ? (
                 <View style={s.pickBlock}>
-                  <Text style={[T.caption, { color: color.textMuted }]}>Active photographers. Pending applicants are not listed.</Text>
+                  <Text style={[T.caption, { color: color.textMuted }]}>Active photographers only.</Text>
                 </View>
               ) : null}
               {isAdmin ? <Row title="Unassigned" right={<Check checked={!pick} />} onPress={() => setPick('')} /> : null}

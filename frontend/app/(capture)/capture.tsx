@@ -107,7 +107,7 @@ export default function CaptureScreen() {
 
   if (!permission) return <View style={styles.dark} />;
   if (!permission.granted) {
-    return <CameraPermission onAllow={requestPermission} onClose={() => router.back()} body="GO uses the camera only while you shoot this listing's 360 stations." />;
+    return <CameraPermission onAllow={requestPermission} onClose={() => router.back()} body="Bricks uses the camera only while you shoot this listing's 360 stations." />;
   }
 
   const address = session?.address || 'Property';
