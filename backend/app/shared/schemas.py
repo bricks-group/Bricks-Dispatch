@@ -380,6 +380,9 @@ class VendorMember(BaseModel):
     coi_liability_cad: Optional[int] = None
     coi_aviation_covered: Optional[bool] = False
     coi_verified_at: Optional[str] = None
+    # contractor (default) | employee (in-house staff: company policy covers
+    # commercial insurance; no per-job payout; salary handled outside Dispatch)
+    worker_type: Optional[str] = "contractor"
     internal_notes: str = ""
     completion_rate: float = 1.0
     avg_turnaround_days: float = 0.0

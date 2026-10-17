@@ -129,15 +129,29 @@ def test_rule_based_pick_only_insured_top_tier():
 
 
 def test_commercial_payout_table():
-    assert commercial_payout_cents(_job()) == COMMERCIAL_PAYOUT_CENTS[VISUAL] == 23500
-    assert commercial_payout_cents(_job("site_mapped_capture")) == 94500
-    assert commercial_payout_cents(_job("site_mapped_capture", add_ons=["mapped_setup"])) == 94500 + MAPPED_SETUP_PAYOUT_CENTS
+    assert commercial_payout_cents(_job()) == COMMERCIAL_PAYOUT_CENTS[VISUAL] == 18500
+    assert commercial_payout_cents(_job("site_mapped_capture")) == 73500
+    assert MAPPED_SETUP_PAYOUT_CENTS == 31500
+    assert commercial_payout_cents(_job("site_mapped_capture", add_ons=["mapped_setup"])) == 73500 + 31500
     assert commercial_payout_cents(Job(address="1", time_window_start="09:00", job_type="photo")) is None
     rows = {r["kind"]: r for r in payout_table()}
-    # 63% capture share of the sourced client rack, nearest $5.
+    # Kam rule: Bricks keeps the larger cut; commercial = top of Tier A (45-50%).
     for kind in (VISUAL, MAPPED, "mapped_setup"):
         share = rows[kind]["vendor_payout_cad"] / rows[kind]["client_rack_cad"]
-        assert 0.62 <= share <= 0.64
+        assert 0.45 <= share < 0.50
+        assert rows[kind]["bricks_keeps_cad"] > rows[kind]["vendor_payout_cad"]
+
+
+def test_every_monthly_plan_keeps_positive_per_visit_margin():
+    # (price per site per month, visits) for each plan; payout is fixed per visit.
+    plans = {
+        "visual_monthly": (300, 1, VISUAL), "visual_biweekly": (600, 2, VISUAL), "visual_weekly": (1200, 4, VISUAL),
+        "mapped_monthly": (1200, 1, MAPPED), "mapped_biweekly": (2400, 2, MAPPED), "mapped_weekly": (4500, 4, MAPPED),
+    }
+    for key, (price, visits, kind) in plans.items():
+        per_visit = price / visits
+        assert per_visit - COMMERCIAL_PAYOUT_CENTS[kind] / 100 > 0, key
+    assert 650 - MAPPED_SETUP_PAYOUT_CENTS / 100 > 0
 
 
 def test_top_tier_requires_insurance_and_flags_existing():
@@ -174,3 +188,70 @@ def test_manual_assign_listing_job_unchanged():
     ic = {**_vendor("ic3", tier=1, insured=False).model_dump(), "vendor_id": ORG_VENDOR_ID}
     code, _, _ = resolve_manual_assignment(actor_id=KAM_MEMBER_ID, actor_member=KAM, job=job, member_id="ic3", target_member=ic)
     assert code == 200
+
+
+# ── In-house employees (future hook) ─────────────────────────────────────────
+from app.services.commercial_jobs import (  # noqa: E402
+    is_employee,
+    member_commercial_payout_cents,
+    set_company_policy,
+)
+
+POLICY = {"id": "bricks", "verified_at": "2026-10-17T00:00:00Z", "aviation_covered": True,
+          "covers_employees": True, "liability_cad": 5_000_000, "expires_on": FUTURE}
+
+
+def _employee(vid="e1", tier=1, rpas="advanced", skills=("photo", "drone")):
+    v = _vendor(vid, tier=tier, insured=False, limit=None, expires=None, aviation=False, rpas=rpas, skills=skills)
+    d = v.model_dump()
+    d["worker_type"] = "employee"
+    return d
+
+
+def teardown_function(_fn):
+    set_company_policy(None)
+
+
+def test_employee_covered_by_company_policy_not_personal_coi():
+    set_company_policy(POLICY)
+    e = _employee()
+    assert is_employee(e)
+    assert member_eligible_for_job(e, _job()) is True
+    assert member_eligible_for_job(e, _job(min_insurance_cad=5_000_000)) is True
+    assert top_tier_insurance_flag(e) is None
+
+
+def test_employee_blocked_without_or_with_bad_company_policy():
+    e = _employee()
+    set_company_policy(None)
+    assert "company_insurance_missing" in commercial_gate_failures(e, _job())
+    set_company_policy({**POLICY, "covers_employees": False})
+    assert "company_policy_excludes_employees" in commercial_gate_failures(e, _job())
+    set_company_policy({**POLICY, "expires_on": PAST})
+    assert "company_insurance_expired" in commercial_gate_failures(e, _job())
+    set_company_policy({**POLICY, "liability_cad": 2_000_000})
+    assert member_eligible_for_job(e, _job(min_insurance_cad=5_000_000)) is False
+
+
+def test_employee_still_needs_rpas_and_skills():
+    set_company_policy(POLICY)
+    assert member_eligible_for_job(_employee(rpas="basic"), _job()) is False
+    assert member_eligible_for_job(_employee(), _job("site_mapped_capture")) is False
+    assert member_eligible_for_job(_employee(skills=("photo", "drone", "mapping")), _job("site_mapped_capture")) is True
+
+
+def test_contractor_cannot_use_company_policy():
+    set_company_policy(POLICY)
+    assert member_eligible_for_job(_vendor(insured=False), _job()) is False
+
+
+def test_employee_has_no_per_job_payout():
+    assert member_commercial_payout_cents(_employee(), _job()) == 0
+    assert member_commercial_payout_cents(_vendor(), _job()) == 18500
+    assert member_commercial_payout_cents(_employee(), Job(address="1", time_window_start="09:00", job_type="photo")) is None
+
+
+def test_employee_payout_cents_zero_via_identity():
+    import asyncio
+    from app.shared.vendor_identity import photographer_payout_cents
+    assert asyncio.run(photographer_payout_cents(None, {"job_type": "progress_capture"}, _employee())) == 0

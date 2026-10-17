@@ -111,6 +111,8 @@ async def _availability_flag(db, member: dict) -> bool:
 
 async def build_profile(member: dict) -> dict:
     db = await get_db()
+    from ..services.commercial_jobs import refresh_company_policy
+    await refresh_company_policy(db)
     member = await _seed_owner(db, member)
     if not member.get("rpas_certificate_url"):
         try:

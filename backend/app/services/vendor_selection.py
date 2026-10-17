@@ -891,6 +891,11 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
 
     db = await get_db()
     try:
+        from .commercial_jobs import refresh_company_policy
+        await refresh_company_policy(db)  # employees on commercial jobs read the org policy
+    except Exception:
+        pass
+    try:
         res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
         job_doc = maybe_single_row(res) or None
     except Exception as e:

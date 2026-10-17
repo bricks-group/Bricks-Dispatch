@@ -543,6 +543,8 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     Commercial jobs (commercial_jobs.COMMERCIAL_KINDS, incl. OS progress_capture):
     Tier A + verified, unexpired drone/aviation liability >= the job minimum
     (default $2M) + Advanced RPAS unless the job opts out (Kam, 2026-10-17).
+    In-house employees (worker_type="employee") use the company policy instead
+    of a personal COI and are not tier-banded.
     """
     m = _as_dict(member)
     if not m.get("is_active"):
@@ -557,7 +559,10 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     # Stager / cleaner: type + location + active/approved. No photo skill/RPAS gates.
     if needed_type in ("stager", "cleaner"):
         return True
-    if int(m.get("tier") or 1) < min_tier_for_job(job):
+    from .commercial_jobs import is_commercial_job, is_employee
+    # Tier bands are a contractor concept; in-house staff on commercial jobs
+    # are gated by the company policy + RPAS + skills instead.
+    if int(m.get("tier") or 1) < min_tier_for_job(job) and not (is_employee(m) and is_commercial_job(job)):
         return False
     needed = job_required_skills(job)
     have = vendor_skills(m)

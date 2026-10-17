@@ -336,8 +336,12 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # ICs: fixed vendor_payout_rates card (never % of rack).
     from ..shared.vendor_identity import is_owner_member as _is_owner_member
     from .vendor_profile import owner_payout_cents
-    from .commercial_jobs import commercial_payout_cents
+    from .commercial_jobs import commercial_payout_cents, is_employee
     owner_job = _is_owner_member(member)
+    if (not owner_job) and member and is_employee(member):
+        # In-house staff are salaried outside Dispatch: no per-job payout row.
+        logger.info(f"Job {job_id}: assignee {assignee_id} is an employee; no per-job payout")
+        return {"skipped": "employee_salaried", "job_id": job_id, "amount": 0}
     if owner_job:
         payout_amount = owner_payout_cents(job)
         logger.info(f"Owner payout for job {job_id}: full package {payout_amount} cents, $0 deduction")

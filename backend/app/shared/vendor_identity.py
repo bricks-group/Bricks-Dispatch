@@ -133,7 +133,9 @@ async def photographer_payout_cents(db, job: dict, member: Optional[dict]) -> in
     if is_owner_member(member):
         return int(round(rack_dollars(job) * 100))
 
-    from ..services.commercial_jobs import commercial_payout_cents
+    from ..services.commercial_jobs import commercial_payout_cents, is_employee
+    if is_employee(member):
+        return 0  # in-house staff: salary handled outside Dispatch
     commercial = commercial_payout_cents(job)
     if commercial is not None:
         return int(commercial)
@@ -215,7 +217,11 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "portfolio_samples": member.get("portfolio_samples") or [],
     }
     # Commercial gate visibility (flag only; never demotes or notifies).
-    from ..services.commercial_jobs import insurance_status, top_tier_insurance_flag
+    from ..services.commercial_jobs import insurance_status, is_employee, top_tier_insurance_flag
+    out["worker_type"] = "employee" if is_employee(member) else "contractor"
+    if out["worker_type"] == "employee" and not owner:
+        out["payout_model"] = "employee_salaried"
+        out["payout_label"] = "In-house staff · salaried (no per-job payout)"
     out["insurance"] = insurance_status(member)
     out["top_tier_insurance_missing"] = top_tier_insurance_flag({**member, "tier": tier})
     out["mapping_qualified"] = "mapping" in ((member.get("skills") or []) if isinstance(member.get("skills"), list) else [])

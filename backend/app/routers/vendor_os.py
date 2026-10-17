@@ -805,6 +805,8 @@ async def assign_job_to_member(
             if not _is_rest_quota_error(e):
                 raise
             target = pg_select_vendor_member(member_id)
+    from ..services.commercial_jobs import refresh_company_policy
+    await refresh_company_policy(db)
     status_code, err, patch = resolve_manual_assignment(
         actor_id=actor_id,
         actor_member=actor_member,

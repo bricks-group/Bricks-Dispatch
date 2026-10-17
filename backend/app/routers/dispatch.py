@@ -105,8 +105,9 @@ async def create_dispatch_job(
     # Commercial jobs: a pre-stamped assignee must still clear the Tier A +
     # insurance + RPAS gate, otherwise fall back to auto-assign.
     if preassigned:
-        from ..services.commercial_jobs import is_commercial_job
+        from ..services.commercial_jobs import is_commercial_job, refresh_company_policy
         if is_commercial_job(job_data):
+            await refresh_company_policy(db)
             try:
                 _pm = await db.table("vendor_members").select("*").eq("id", preassigned).limit(1).execute()
                 _prow = (_pm.data or [None])[0]

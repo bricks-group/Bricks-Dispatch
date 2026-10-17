@@ -21,17 +21,26 @@ Hard gates for every commercial kind (``commercial_gate_failures``):
   * skills: drone (+ mapping for mapped work)
 
 Payout: fixed per visit, tier-independent (only Tier A can hold the job),
-never indexed to a client-side plan discount. Sourced in
-/workspace/ship/commercial/commercial-pricing-payout-20261017.md:
-  client one-off rack = median of published Canadian per-visit prices
-  vendor share = 63% = median published capture share of client price
-  (Cropcopters CAD price splits, cropcopters.com/construction-intelligence),
-  vs ~48% Tier A share on listing packages.
+never indexed to a client-side plan discount. Kam's standing rule (payout scan
+2026-09-27): Bricks always keeps the larger cut, vendor <= 50% of rack, bands
+C 35-40% / B 40-45% / A 45-50%. Commercial pays the top of Tier A, ~49% of the
+one-off rack (Kam, 2026-10-17 correction of the earlier 63% draft):
+  $185 of $375 visual · $735 of $1,499 mapped · +$315 of $650 first setup.
+Client rack = median of published Canadian per-visit prices, see
+/workspace/ship/commercial/commercial-pricing-payout-20261017.md.
+
+In-house staff (worker_type="employee", Kam: "the goal is to have in house
+employees handling these jobs later"): eligible for commercial jobs when the
+company insurance policy (recorded once at org level, table company_insurance)
+covers employees, instead of a personal COI. Tier bands do not apply to staff.
+Advanced RPAS and skills still do. Employees get no per-job payout (salary is
+handled outside Dispatch). No HR/payroll here.
 """
 from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Optional
+import time
 
 TOP_TIER = 3
 DEFAULT_MIN_INSURANCE_CAD = 2_000_000
@@ -61,10 +70,18 @@ _KIND_ALIASES = {
 
 # Client rack (CAD, pre-tax) for one-off visits; used for margin display only.
 COMMERCIAL_RACK_CAD = {VISUAL: 375.0, MAPPED: 1499.0, "mapped_setup": 650.0}
-COMMERCIAL_VENDOR_SHARE = 0.63
-# Fixed vendor payout cents (63% of rack, rounded to the nearest $5).
-COMMERCIAL_PAYOUT_CENTS = {VISUAL: 23500, MAPPED: 94500}
-MAPPED_SETUP_PAYOUT_CENTS = 41000  # first capture on a site (control + mission build)
+# Top of the Tier A band (45-50%); Bricks keeps the larger share.
+COMMERCIAL_VENDOR_SHARE = 0.49
+VENDOR_MAX_SHARE = 0.50
+# Fixed vendor payout cents (~49% of one-off rack, rounded to the nearest $5).
+COMMERCIAL_PAYOUT_CENTS = {VISUAL: 18500, MAPPED: 73500}
+MAPPED_SETUP_PAYOUT_CENTS = 31500  # first capture on a site (control + mission build)
+
+EMPLOYEE = "employee"
+CONTRACTOR = "contractor"
+COMPANY_POLICY_ID = "bricks"
+_COMPANY_POLICY: dict = {"row": None, "at": 0.0}
+_COMPANY_POLICY_TTL_S = 300.0
 
 
 def _as_dict(obj: Any) -> dict:
@@ -160,7 +177,75 @@ def _job_date(job: Any) -> date:
     return date.today()
 
 
+def worker_type(member: Any) -> str:
+    raw = str(_as_dict(member).get("worker_type") or "").strip().lower()
+    return EMPLOYEE if raw in (EMPLOYEE, "staff", "in_house", "in-house") else CONTRACTOR
+
+
+def is_employee(member: Any) -> bool:
+    return worker_type(member) == EMPLOYEE
+
+
+def set_company_policy(row: Optional[dict]) -> None:
+    """Prime the org-level policy cache (tests, or after an admin update)."""
+    _COMPANY_POLICY["row"] = dict(row) if row else None
+    _COMPANY_POLICY["at"] = time.monotonic()
+
+
+def company_policy() -> Optional[dict]:
+    return _COMPANY_POLICY["row"]
+
+
+async def refresh_company_policy(db=None, *, force: bool = False) -> Optional[dict]:
+    """Load the company insurance row (cached 5 min). Missing table/row = None,
+    which keeps employees out of commercial work (safe default)."""
+    if not force and _COMPANY_POLICY["at"] and time.monotonic() - _COMPANY_POLICY["at"] < _COMPANY_POLICY_TTL_S:
+        return _COMPANY_POLICY["row"]
+    try:
+        if db is None:
+            from ..shared.database import get_db
+            db = await get_db()
+        res = await db.table("company_insurance").select("*").eq("id", COMPANY_POLICY_ID).limit(1).execute()
+        data = res.data if isinstance(getattr(res, "data", None), list) else []
+        row = data[0] if data and isinstance(data[0], dict) else None
+    except Exception:
+        row = _COMPANY_POLICY["row"]
+    set_company_policy(row)
+    return row
+
+
+def _company_policy_status(on: date, minimum_cad: int) -> dict:
+    pol = company_policy()
+    if not pol:
+        return {"source": "company", "verified": False, "expires_on": None, "liability_cad": None,
+                "aviation_covered": False, "minimum_cad": minimum_cad, "valid": False,
+                "reason": "company_insurance_missing"}
+    st = _personal_status({
+        "coi_verified": bool(pol.get("verified_at")) or bool(pol.get("verified")),
+        "coi_aviation_covered": pol.get("aviation_covered"),
+        "coi_expires_on": pol.get("expires_on"),
+        "coi_liability_cad": pol.get("liability_cad"),
+    }, on=on, minimum_cad=minimum_cad)
+    st["source"] = "company"
+    if st["valid"] and not pol.get("covers_employees"):
+        st["valid"] = False
+        st["reason"] = "company_policy_excludes_employees"
+    elif st["reason"]:
+        st["reason"] = "company_" + st["reason"]
+    return st
+
+
 def insurance_status(member: Any, *, on: Optional[date] = None, minimum_cad: int = DEFAULT_MIN_INSURANCE_CAD) -> dict:
+    """Employees: the company policy. Contractors: their own verified COI."""
+    on = on or date.today()
+    if is_employee(member):
+        return _company_policy_status(on, minimum_cad)
+    st = _personal_status(member, on=on, minimum_cad=minimum_cad)
+    st["source"] = "personal"
+    return st
+
+
+def _personal_status(member: Any, *, on: Optional[date] = None, minimum_cad: int = DEFAULT_MIN_INSURANCE_CAD) -> dict:
     """Verified, unexpired (on ``on``), and liability limit >= minimum_cad."""
     m = _as_dict(member)
     on = on or date.today()
@@ -205,8 +290,11 @@ def can_hold_top_tier(member: Any, *, on: Optional[date] = None) -> bool:
 def top_tier_insurance_flag(member: Any, *, on: Optional[date] = None) -> Optional[str]:
     """Reason string when a member sits at Tier A without valid insurance.
 
-    Flag only. Never demotes and never notifies (Kam, 2026-10-17)."""
+    Flag only. Never demotes and never notifies (Kam, 2026-10-17). Tier bands
+    are a contractor concept, so employees are never flagged here."""
     m = _as_dict(member)
+    if is_employee(m):
+        return None
     try:
         tier = int(m.get("tier") or 1)
     except (TypeError, ValueError):
@@ -227,7 +315,7 @@ def commercial_gate_failures(member: Any, job: Any, *, has_skills: Optional[set]
         tier = int(m.get("tier") or 1)
     except (TypeError, ValueError):
         tier = 1
-    if tier < TOP_TIER:
+    if tier < TOP_TIER and not is_employee(m):
         fails.append("tier_below_top")
     st = insurance_status(m, on=_job_date(job), minimum_cad=job_min_insurance_cad(job))
     if not st["valid"]:
@@ -252,6 +340,14 @@ def commercial_payout_cents(job: Any) -> Optional[int]:
     return cents
 
 
+def member_commercial_payout_cents(member: Any, job: Any) -> Optional[int]:
+    """Per-job payout for this member: None = not commercial, 0 = employee."""
+    cents = commercial_payout_cents(job)
+    if cents is None:
+        return None
+    return 0 if is_employee(member) else cents
+
+
 def payout_table() -> list[dict]:
     rows = []
     for key, label in ((VISUAL, "Site progress — visual visit"), (MAPPED, "Mapped capture (orthomosaic / 3D)")):
@@ -260,11 +356,13 @@ def payout_table() -> list[dict]:
             "label": label,
             "client_rack_cad": COMMERCIAL_RACK_CAD[key],
             "vendor_payout_cad": COMMERCIAL_PAYOUT_CENTS[key] / 100,
+            "bricks_keeps_cad": COMMERCIAL_RACK_CAD[key] - COMMERCIAL_PAYOUT_CENTS[key] / 100,
         })
     rows.append({
         "kind": "mapped_setup",
         "label": "Mapped first-capture setup (add-on)",
         "client_rack_cad": COMMERCIAL_RACK_CAD["mapped_setup"],
         "vendor_payout_cad": MAPPED_SETUP_PAYOUT_CENTS / 100,
+        "bricks_keeps_cad": COMMERCIAL_RACK_CAD["mapped_setup"] - MAPPED_SETUP_PAYOUT_CENTS / 100,
     })
     return rows
