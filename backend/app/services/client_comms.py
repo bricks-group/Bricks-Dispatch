@@ -213,6 +213,12 @@ async def _resolve_photographer_name(assignee_id: str | None, fallback: str) -> 
         return fallback
 
 
+def _agent_allows(email: str, field: str) -> bool:
+    """Bricks OS Settings → Notifications (fails open)."""
+    from ..shared.notif_prefs_gate import agent_allows
+    return agent_allows(email, field)
+
+
 async def _email_agent_direct(to: str, subject: str, html: str) -> bool:
     from .notifications import send_email_via_resend
     return bool(await send_email_via_resend(to, subject, html))
@@ -268,6 +274,9 @@ async def notify_booking_confirmed(job_id: str) -> None:
   Need to reschedule? Reply to this email or write booking@brxs.ca.
 </p>
 """
+        if not _agent_allows(agent_email, "new_booking_email"):
+            logger.info("Booking confirmed email muted by agent's notification settings for job %s", job_id)
+            return
         sent = await _email_agent_direct(
             agent_email,
             f"Shoot confirmed — {address}",
@@ -412,6 +421,10 @@ async def notify_capture_delivered(
         for u in urls[:5]
         if isinstance(u, dict) and u.get("url")
     )
+
+    if agent_email and not _agent_allows(agent_email, "delivery_ready_email"):
+        logger.info(f"Job {job_id}: delivery email muted by agent's notification settings")
+        return False
 
     if agent_email:
         desk = _listing_desk_url(job_id)
