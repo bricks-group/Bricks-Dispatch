@@ -9,7 +9,7 @@ import {
   NavBar, Footer, Section, Group, Row, Button, IconButton, TextLink, Field, Pill, Notice, StatGrid,
   Overline, EmptyState, LoadingState, Check,
 } from '../../components/ui';
-import { User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home, Box, LayoutGrid, Video, Upload as UploadIcon } from 'lucide-react-native';
+import { User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home, Box, LayoutGrid, Video, Camera, Upload as UploadIcon } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { actorHeaders } from '../../lib/api';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
@@ -333,10 +333,10 @@ export default function JobDetailScreen() {
         Alert.alert('Incomplete brackets', bracketBlock.message || BRACKET_HINT);
         return;
       }
-      Alert.alert('Mark Complete', 'Confirm that this shoot is finished?', [
+      Alert.alert('Mark complete', 'Is this shoot finished?', [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Mark Complete',
+          text: 'Mark complete',
           onPress: async () => {
             setActioning(true);
             try {
@@ -475,13 +475,19 @@ export default function JobDetailScreen() {
     if (captureFlags.floorplan) { openCapture('floorplan'); return; }
     if (captureFlags.visit) { openCapture('visit'); }
   };
+  // Short labels so the footer never wraps at 390. Same targets as before.
   const captureStartLabel = ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1)
-    ? 'Start capture'
+    ? 'Capture'
     : captureFlags.visit && !captureFlags.tour && !captureFlags.floorplan
-      ? 'Start capture · Virtual visit'
+      ? 'Virtual visit'
       : captureFlags.tour
-        ? 'Start capture'
-        : 'Start capture · Floor plan';
+        ? '3D tour'
+        : 'Floor plan';
+  const captureStartIcon = ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1)
+    ? Camera
+    : captureFlags.visit && !captureFlags.tour && !captureFlags.floorplan
+      ? Video
+      : captureFlags.tour ? Box : LayoutGrid;
   const canReportNoShow = isActive && (() => {
     // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
     // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
@@ -551,6 +557,7 @@ export default function JobDetailScreen() {
               <View style={s.arriveRow}>
                 <View style={s.flex}>
                   <Field
+                    boxStyle={s.arriveField}
                     value={arriveAt}
                     onChangeText={setArriveAt}
                     placeholder="10:30"
@@ -561,12 +568,13 @@ export default function JobDetailScreen() {
                 <Button
                   variant="secondary"
                   full={false}
+                  style={s.arriveButton}
                   title={job.confirmed_arrive_at ? 'Update agent' : 'Tell agent'}
                   onPress={confirmArrive}
                   loading={confirmingArrive}
                 />
               </View>
-              <Text style={[T.caption, s.hint]}>Your exact time inside the window. We email the agent.</Text>
+              <Text style={[T.caption, s.hint]}>We email the agent your exact time.</Text>
             </Section>
           ) : null}
 
@@ -709,25 +717,23 @@ export default function JobDetailScreen() {
             ) : null}
           </Section>
 
-          {!isComplete && hasCaptureMode ? (
-            <Section label="Wrap up">
-              <Button variant="secondary" icon={CheckCircle} title="Mark complete" onPress={markComplete} loading={actioning} />
-            </Section>
-          ) : null}
         </EnterFadeDown>
       </ScrollView>
 
       <Footer>
+        {/* One primary (Mark complete). Navigate + capture are quiet secondaries, equal width. */}
         <View style={s.buttonRowFooter}>
           <Button style={s.flex} variant="secondary" icon={Navigation} title="Navigate" onPress={openMaps} />
-          {!isComplete ? (
-            hasCaptureMode ? (
-              <Button style={s.flex} title={captureStartLabel} onPress={startCapture} disabled={actioning} />
-            ) : (
-              <Button style={s.flex} icon={CheckCircle} title="Mark complete" onPress={markComplete} loading={actioning} />
-            )
+          {!isComplete && hasCaptureMode ? (
+            <Button style={s.flex} variant="secondary" icon={captureStartIcon} title={captureStartLabel} onPress={startCapture} disabled={actioning} />
+          ) : null}
+          {!isComplete && !hasCaptureMode ? (
+            <Button style={s.flex} icon={CheckCircle} title="Mark complete" onPress={markComplete} loading={actioning} />
           ) : null}
         </View>
+        {!isComplete && hasCaptureMode ? (
+          <Button style={s.footerPrimary} icon={CheckCircle} title="Mark complete" onPress={markComplete} loading={actioning} />
+        ) : null}
       </Footer>
 
       <Modal visible={noShowVisible} animationType="fade" transparent onRequestClose={() => setNoShowVisible(false)}>
@@ -772,7 +778,10 @@ const s = StyleSheet.create({
   heroTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space[16] },
   blockGap: { marginTop: space[16] },
   blockGapSm: { marginTop: space[12] },
-  arriveRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space[10] },
+  arriveRow: { flexDirection: 'row', alignItems: 'stretch' },
+  arriveField: { borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRightWidth: 0 },
+  arriveButton: { borderTopLeftRadius: 0, borderBottomLeftRadius: 0 },
+  footerPrimary: { marginTop: space[10] },
   hint: { color: color.textFaint, marginTop: space[8] },
   checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space[12], paddingHorizontal: space[16], paddingVertical: space[14] },
   strike: { textDecorationLine: 'line-through' },

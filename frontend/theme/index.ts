@@ -33,6 +33,8 @@ export const color = {
   surfaceDeep: palette.nightDeep,  // nested fill, neutral pill, input well
   hair: '#F4F1EB14',               // 1px hairline, 8% moon
   hairStrong: '#F4F1EB26',         // selected / focused / hero border
+  graphite: '#4A453E',             // 1px outline on secondary buttons
+  graphitePressed: '#6B645A',      // secondary outline while pressed
 
   text: palette.moon,              // headings, values
   textBody: palette.moonSoft,      // paragraph copy

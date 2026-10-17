@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
 import { ChevronLeft, ChevronRight, X, type LucideIcon } from 'lucide-react-native';
-import { color, type as T, space, radius, layout, hairline, toneColors, type Tone } from '../theme';
+import { color, type as T, space, radius, layout, hairline, palette, toneColors, type Tone } from '../theme';
 import { PressScale } from './motion';
 import BricksLoader from './BricksLoader';
 
@@ -215,10 +215,14 @@ export function StatGrid({ items, large }: { items: { label: string; value: stri
 
 /* ───────────────── Controls ───────────────── */
 
+type ButtonVariant = 'primary' | 'accent' | 'secondary' | 'tertiary' | 'ghost' | 'danger';
+
 type ButtonProps = {
   title: string;
   onPress?: () => void;
-  variant?: 'primary' | 'accent' | 'secondary' | 'ghost' | 'danger';
+  /** primary: solid off-white · secondary: 1px graphite outline · tertiary/ghost: text only · danger: red outline.
+   *  `accent` is kept as an alias of primary so there is one primary style app-wide. */
+  variant?: ButtonVariant;
   icon?: LucideIcon;
   iconRight?: LucideIcon;
   loading?: boolean;
@@ -229,42 +233,76 @@ type ButtonProps = {
   accessibilityLabel?: string;
 };
 
+/** The one button for the whole app. Fixed 48pt height (≥44pt target), radius 2, one-line labels. */
 export function Button({
   title, onPress, variant = 'primary', icon: Icon, iconRight: IconRight, loading,
   disabled, full = true, style, testID, accessibilityLabel,
 }: ButtonProps) {
   const v = buttonVariants[variant];
   const inactive = disabled || loading;
+  const [pressed, setPressed] = React.useState(false);
+  const fg = disabled && !loading ? v.fgDisabled : v.fg;
   return (
     <PressScale
       onPress={onPress}
       disabled={inactive}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
       testID={testID}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel || title}
       accessibilityState={{ disabled: !!inactive, busy: !!loading }}
-      style={[s.button, v.box, full && s.buttonFull, inactive && s.disabled, style]}
+      style={[s.button, v.box, full && s.buttonFull, pressed && !inactive && v.pressed, disabled && !loading && v.disabled, style]}
     >
       {loading ? (
         <BricksLoader variant="cycle" size={18} color={v.fg} />
       ) : (
         <>
-          {Icon ? <Icon size={layout.icon} color={v.fg} strokeWidth={layout.iconStroke} /> : null}
-          <Text style={[T.callout, { color: v.fg }]}>{title}</Text>
-          {IconRight ? <IconRight size={layout.icon} color={v.fg} strokeWidth={layout.iconStroke} /> : null}
+          {Icon ? <Icon size={layout.icon} color={fg} strokeWidth={layout.iconStroke} /> : null}
+          <Text style={[T.callout, s.buttonLabel, { color: fg }]} numberOfLines={1}>{title}</Text>
+          {IconRight ? <IconRight size={layout.icon} color={fg} strokeWidth={layout.iconStroke} /> : null}
         </>
       )}
     </PressScale>
   );
 }
 
-const buttonVariants = {
-  primary: { box: { backgroundColor: color.accent }, fg: color.textOnAccent },
-  accent: { box: { backgroundColor: color.accent }, fg: color.textOnAccent },
-  secondary: { box: { borderWidth: hairline, borderColor: color.hairStrong }, fg: color.text },
-  ghost: { box: {}, fg: color.textBody },
-  danger: { box: { borderWidth: hairline, borderColor: color.bad }, fg: color.bad },
-} as const;
+type ButtonLook = { box: ViewStyle; pressed: ViewStyle; disabled: ViewStyle; fg: string; fgDisabled: string };
+const solid: ButtonLook = {
+  box: { backgroundColor: color.inverse, borderWidth: hairline, borderColor: color.inverse },
+  pressed: { backgroundColor: palette.moonSoft, borderColor: palette.moonSoft },
+  disabled: { backgroundColor: color.surfaceDeep, borderColor: color.surfaceDeep },
+  fg: color.textInverse,
+  fgDisabled: color.textFaint,
+};
+const quiet: ButtonLook = {
+  box: { borderWidth: hairline, borderColor: color.graphite },
+  pressed: { backgroundColor: color.surfaceDeep, borderColor: color.graphitePressed },
+  disabled: { borderColor: color.hair },
+  fg: color.text,
+  fgDisabled: color.textFaint,
+};
+const text: ButtonLook = {
+  box: { borderWidth: hairline, borderColor: 'transparent' },
+  pressed: { backgroundColor: color.surfaceDeep },
+  disabled: {},
+  fg: color.textBody,
+  fgDisabled: color.textFaint,
+};
+const buttonVariants: Record<ButtonVariant, ButtonLook> = {
+  primary: solid,
+  accent: solid,
+  secondary: quiet,
+  tertiary: text,
+  ghost: text,
+  danger: {
+    box: { borderWidth: hairline, borderColor: color.bad },
+    pressed: { backgroundColor: color.badTint, borderColor: color.bad },
+    disabled: { borderColor: color.hair },
+    fg: color.bad,
+    fgDisabled: color.textFaint,
+  },
+};
 
 export function IconButton({ icon: Icon, label, onPress, iconSize = layout.icon, tint, outline, badge, testID }: {
   icon: LucideIcon; label: string; onPress?: () => void; iconSize?: number;
@@ -295,16 +333,16 @@ export function TextLink({ title, onPress, tone = 'muted', testID, style }: {
   );
 }
 
-type FieldProps = TextInputProps & { label?: string; hint?: string; error?: string; right?: React.ReactNode };
+type FieldProps = TextInputProps & { label?: string; hint?: string; error?: string; right?: React.ReactNode; boxStyle?: StyleProp<ViewStyle> };
 
 export const Field = React.forwardRef<TextInput, FieldProps>(function Field(
-  { label, hint, error, right, style, onFocus, onBlur, ...rest }, ref,
+  { label, hint, error, right, style, boxStyle, onFocus, onBlur, ...rest }, ref,
 ) {
   const [focused, setFocused] = React.useState(false);
   return (
     <View style={s.field}>
       {label ? <Text style={[T.bodySm, s.fieldLabel]}>{label}</Text> : null}
-      <View style={[s.fieldBox, focused && s.fieldBoxFocused, !!error && s.fieldBoxError]}>
+      <View style={[s.fieldBox, boxStyle, focused && s.fieldBoxFocused, !!error && s.fieldBoxError]}>
         <TextInput
           ref={ref}
           placeholderTextColor={color.textFaint}
@@ -512,9 +550,10 @@ const s = StyleSheet.create({
   statDivider: { borderLeftWidth: hairline, borderLeftColor: color.hair },
 
   button: {
-    minHeight: layout.control, borderRadius: radius.sm, paddingHorizontal: space[20],
+    height: layout.control, minWidth: layout.tap, borderRadius: radius.sm, paddingHorizontal: space[16],
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space[8],
   },
+  buttonLabel: { flexShrink: 1, textAlign: 'center' },
   buttonFull: { alignSelf: 'stretch' },
 
   iconButton: { width: layout.tap, height: layout.tap, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
