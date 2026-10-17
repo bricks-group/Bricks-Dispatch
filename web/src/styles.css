@@ -844,4 +844,16 @@ select {
   table.table tbody td:first-child::before, table.table tbody td[colspan]::before { content: none; }
   table.table tbody td[colspan] { display: block; text-align: left; }
   .card { margin-left: 0; margin-right: 0; }
+  /* One-line rows: title left + status chip right, then one non-wrapping meta line (no labels). */
+  table.table.t1l tbody tr { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 6px; }
+  table.table.t1l tbody tr::after { content: ""; order: 2; flex: 0 0 100%; height: 0; }
+  table.table.t1l tbody td { order: 3; display: block; flex: 0 0 auto; min-width: 0; padding: 0; text-align: left; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  table.table.t1l tbody td::before { content: none; }
+  table.table.t1l tbody td.c-t { order: 0; flex: 1 1 0; font-size: 15px; padding: 0; }
+  table.table.t1l tbody td.c-s { order: 1; margin-left: auto; overflow: visible; }
+  table.table.t1l tbody td.c-x { flex: 1 1 0; max-width: max-content; }
+  table.table.t1l tbody td.c-mh { display: none; }
+  table.table.t1l tbody td[colspan] { flex: 1 1 100%; white-space: normal; }
 }
+.d-short { display: none; }
+@media (max-width: 640px) { table.table.t1l .d-full { display: none; } table.table.t1l .d-short { display: inline; } }

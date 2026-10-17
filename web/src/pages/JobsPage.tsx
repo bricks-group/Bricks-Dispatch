@@ -17,6 +17,7 @@ import {
 } from '../lib/bracket-require';
 import { autoNameAebFiles } from '../lib/aeb-exif';
 import BricksLoader from '../components/BricksLoader';
+import { DayCell } from '../components/DayCell';
 import { Button, ButtonLink } from '../components/Button';
 import { captureLinks } from '../components/CaptureLinks';
 
@@ -142,7 +143,7 @@ export function JobsPage() {
             </select>
           ) : null}
         </div>
-        <table className="table">
+        <table className="table t1l">
           <thead>
             <tr>
               <th>Address</th>
@@ -161,16 +162,16 @@ export function JobsPage() {
                 className={selected?.id === job.id ? 'row-selected' : 'row-click'}
                 onClick={() => setSelected(job)}
               >
-                <td data-label="Address" style={{ fontWeight: 500 }}>{job.address}</td>
-                <td data-label="Listing" className="muted">{job.listing_address || '—'}</td>
-                <td data-label="Date" className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
+                <td data-label="Address" className="c-t" style={{ fontWeight: 500 }}>{job.address}</td>
+                <td data-label="Listing" className="muted c-mh">{job.listing_address || '—'}</td>
+                <td data-label="Date" className="muted"><DayCell d={job.scheduled_date} /></td>
                 <td data-label="Time" className="muted">{formatShootWindow(job)}</td>
-                <td data-label="Assigned to">{(job.assignee_id && (assigneeNames[job.assignee_id] ?? job.assignee_name)) || 'Unassigned'}</td>
+                <td data-label="Assigned to" className="c-x">{(job.assignee_id && (assigneeNames[job.assignee_id] ?? job.assignee_name)) || 'Unassigned'}</td>
                 <td data-label="Payout" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
                   {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
                   {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : null}
                 </td>
-                <td data-label="Status">
+                <td data-label="Status" className="c-s">
                   <span className={`badge ${STATUS_BADGE[job.status] ?? 'badge-gray'}`}>
                     {(job.status || '').replace('_', ' ')}
                   </span>

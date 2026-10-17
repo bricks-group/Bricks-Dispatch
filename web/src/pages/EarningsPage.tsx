@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { fmtMoneyCompact, fmtMoneyExact } from '../lib/money';
 import { api } from '../lib/api';
 import BricksLoader from '../components/BricksLoader';
+import { DayCell } from '../components/DayCell';
 
 type EarningJob = {
   id: string;
@@ -92,7 +93,7 @@ export function EarningsPage() {
             {data.recent_jobs.length === 0 ? (
               <p className="muted" style={{ padding: '20px' }}>No recent jobs</p>
             ) : (
-              <table className="table">
+              <table className="table t1l">
                 <thead>
                   <tr>
                     <th>Address</th>
@@ -104,9 +105,9 @@ export function EarningsPage() {
                 <tbody>
                   {data.recent_jobs.map((job) => (
                     <tr key={job.id}>
-                      <td data-label="Address" style={{ fontWeight: 500 }}>{job.address}</td>
-                      <td data-label="Date" className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
-                      <td data-label="Status">
+                      <td data-label="Address" className="c-t" style={{ fontWeight: 500 }}>{job.address}</td>
+                      <td data-label="Date" className="muted"><DayCell d={job.scheduled_date} /></td>
+                      <td data-label="Status" className="c-s">
                         <span className={`badge ${PAYOUT_BADGE[job.payout_status] ?? 'badge-gray'}`}>
                           {job.payout_status}
                         </span>
