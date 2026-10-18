@@ -26,13 +26,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--job-id", required=True); ap.add_argument("--capture-url", required=True)
     ap.add_argument("--spec", required=True)
-    ap.add_argument("--image", default=os.environ.get("VISIT_WORKER_IMAGE", "ghcr.io/bricks-group/visit-worker:0.1"))
+    # No default: ghcr.io/bricks-group/visit-worker isn't pushed yet, and a pod stuck pulling a missing image bills
+    # until the watchdog fires. Pass a pushed image, or use pilot_ssh.py (stock image + bootstrap.sh).
+    ap.add_argument("--image", default=os.environ.get("VISIT_WORKER_IMAGE"))
     ap.add_argument("--iters", type=int, default=15000); ap.add_argument("--cap-max", type=int, default=1000000)
     ap.add_argument("--max-minutes", type=float, default=90); ap.add_argument("--max-usd", type=float, default=2.0)
     ap.add_argument("--max-rate", type=float, default=float(os.environ.get("VISIT_MAX_USD_HR", "0.99")),
                     help="refuse a pod that bills more than this per hour (Secure 4090 is ~0.59-0.69)")
     ap.add_argument("--reserve-usd", type=float, default=1.0, help="leave at least this much balance untouched")
     a = ap.parse_args()
+    if not a.image:
+        sys.exit("refused: no --image / VISIT_WORKER_IMAGE (the visit-worker image isn't in a registry yet)")
     # Pre-flight, before any pod exists (nothing bills yet): worst case = max rate x max minutes.
     worst = a.max_rate * a.max_minutes / 60
     if worst > a.max_usd:
