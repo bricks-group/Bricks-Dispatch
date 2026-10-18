@@ -853,17 +853,19 @@
     {
       "id": "wrap-05",
       "phase": "wrap",
-      "title": "Upload stills unedited",
-      "body": "Upload every bracket frame straight out of camera within 6 hours of wrap. Bricks edits, reviews and exports every still.",
+      "title": "Upload RAW stills",
+      "body": "Upload every bracket frame as a camera RAW, straight out of camera, within 6 hours of wrap. Bricks edits, reviews and exports every still.",
       "diagram": null,
       "diagram_alt": null,
       "do": [
-        "JPEG or HEIC, full resolution, EXIF intact",
-        "Include the window pull and any flash frame",
+        "RAW brackets plus the window frame and any flash frame",
+        "CR2, CR3, NEF, ARW, RAF, ORF, RW2, DNG, PEF or SRW, EXIF intact",
+        "JPEG only if a RAW is over 50 MB",
         "Keep your RAWs until the job is approved"
       ],
       "dont": [
         "Edit, merge or apply a preset",
+        "Export JPEGs when the RAW fits",
         "Make MLS sizes or add watermarks"
       ],
       "applies_to": [
@@ -1647,7 +1649,8 @@
       "23.976p": "1/48 or 1/50",
       "59.94p": "1/120"
     },
-    "stills_upload": "Unedited out-of-camera JPEG or HEIC bracket frames, EXIF intact. Keep RAWs until approval.",
+    "stills_upload": "Unedited camera RAW bracket frames plus the window frame, EXIF intact. JPEG only for a RAW over 50 MB. Keep RAWs until approval.",
+    "stills_upload_max_mb": 50,
     "stills_brackets": {
       "frames": 5,
       "ev_step": 2,

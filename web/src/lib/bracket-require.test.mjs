@@ -22,7 +22,9 @@ const {
   inferMediaType,
   isCameraRawName,
   isImageName,
-  cameraRawRejectionMessage,
+  fileTooLargeMessage,
+  pickStillsUploads,
+  UPLOAD_MAX_FILE_BYTES,
   validateHdrBracketSelection,
   validateHdrUploadsForComplete,
   requiresBracketSet,
@@ -236,10 +238,36 @@ assert.equal(isCameraRawName('living_0.jpg'), false);
 assert.equal(isCameraRawName('shot.HEIC'), false);
 assert.equal(isImageName('living_0.jpg'), true);
 assert.equal(isImageName('shot.heic'), true);
-assert.equal(isImageName('living_-2.CR3'), false);
-assert.equal(isImageName('shot.dng'), false);
-assert.match(cameraRawRejectionMessage, /JPEG \(or HEIC\)/i);
-assert.match(cameraRawRejectionMessage, /not supported/i);
+// Camera RAW is the primary stills upload — it counts as a listing still frame.
+assert.equal(isImageName('living_-2.CR3'), true);
+assert.equal(isImageName('shot.dng'), true);
+for (const ext of ['CR2', 'CR3', 'NEF', 'ARW', 'RAF', 'ORF', 'RW2', 'DNG', 'PEF', 'SRW']) {
+  assert.equal(isCameraRawName(`IMG_1.${ext}`), true, ext);
+}
+assert.equal(
+  fileTooLargeMessage('D850_0001.NEF'),
+  'This file is over 50 MB. Upload the JPEG for now and keep the RAW.',
+);
+assert.match(fileTooLargeMessage('clip.mov'), /over 50 MB/);
+{
+  const MB = 1024 * 1024;
+  const pick = pickStillsUploads([
+    { name: 'IMG_1.CR3', size: 25 * MB },
+    { name: 'IMG_1.JPG', size: 8 * MB }, // twin of an OK RAW → dropped
+    { name: 'IMG_2.NEF', size: 60 * MB }, // too big, JPEG twin present → JPEG goes
+    { name: 'IMG_2.JPG', size: 9 * MB },
+    { name: 'IMG_3.ARW', size: 70 * MB }, // too big, no twin → vendor message
+    { name: 'IMG_4.DNG', size: 30 * MB },
+    { name: 'reel.mp4', size: 40 * MB },
+  ]);
+  assert.deepEqual(pick.files.map((f) => f.name), ['IMG_1.CR3', 'IMG_2.JPG', 'IMG_4.DNG', 'reel.mp4']);
+  assert.deepEqual(pick.droppedTwins.map((f) => f.name), ['IMG_1.JPG']);
+  assert.deepEqual(pick.usedJpegFor.map((f) => f.name), ['IMG_2.NEF']);
+  assert.deepEqual(pick.tooLarge.map((f) => f.name), ['IMG_3.ARW']);
+  assert.equal(UPLOAD_MAX_FILE_BYTES, 50 * MB);
+}
+// RAW brackets pass the HDR gate like JPEG brackets.
+assert.equal(validateHdrBracketSelection(['den_-2.CR3', 'den_0.CR3', 'den_+2.CR3'], []), null);
 // RAW must not count as bracket stills (would hollow enhance→listing)
 assert.equal(
   validateHdrBracketSelection(['living_-2.CR3', 'living_0.CR3', 'living_+2.CR3'], []),

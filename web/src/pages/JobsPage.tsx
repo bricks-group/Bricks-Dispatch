@@ -5,11 +5,21 @@ import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer } from '../lib/c
 import type { CaptureKind } from '../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
-import { STILLS_TYPES, uploadStillFile, type StillsType } from '../lib/stills-upload';
+import './job-uploads.css';
+import {
+  STILLS_ACCEPT,
+  STILLS_TYPES,
+  StillsUploadError,
+  requestRawPreview,
+  uploadStillFile,
+  type RawPreview,
+  type StillsType,
+} from '../lib/stills-upload';
 import {
   BRACKET_HINT,
-  cameraRawRejectionMessage,
+  fileTooLargeMessage,
   isCameraRawName,
+  pickStillsUploads,
   requiresBracketSet,
   validateHdrBracketSelection,
   validateHdrUploadsForComplete,
@@ -219,7 +229,11 @@ function JobListingPanel({
   const [hits, setHits] = useState<ListingHit[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [uploads, setUploads] = useState<{ id: string; filename: string; media_type?: string }[]>([]);
+  const [uploads, setUploads] = useState<
+    { id: string; filename: string; media_type?: string; camera_raw?: boolean; preview?: RawPreview }[]
+  >([]);
+  const [notices, setNotices] = useState<string[]>([]);
+  const [progress, setProgress] = useState<{ index: number; total: number; pct: number } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [stillsType, setStillsType] = useState<StillsType>('hdr');
   const [allowIncompleteBrackets, setAllowIncompleteBrackets] = useState(false);
@@ -285,15 +299,24 @@ function JobListingPanel({
     if (!files.length) return;
     setUploading(true);
     setErr('');
+    setNotices([]);
+    const notes: string[] = [];
     try {
-      if (files.some((f) => isCameraRawName(f.name))) {
-        setErr(cameraRawRejectionMessage);
-        return;
+      // RAW first. A RAW+JPEG camera gives two files per frame: upload the RAW,
+      // and the JPEG only when that RAW is over the size limit.
+      const pick = pickStillsUploads(files);
+      for (const f of pick.tooLarge) notes.push(`${f.name}: ${fileTooLargeMessage(f.name)}`);
+      for (const f of pick.usedJpegFor) notes.push(`${f.name} is over 50 MB, so its JPEG is uploading. Keep the RAW.`);
+      if (pick.droppedTwins.length) {
+        notes.push(`Skipped ${pick.droppedTwins.length} JPEG ${pick.droppedTwins.length === 1 ? 'copy' : 'copies'}. The RAW is uploading.`);
       }
+      setNotices([...notes]);
+      files = pick.files;
+      if (!files.length) return;
       if (requiresBracketSet(stillsType)) {
         // Camera AEB bursts (IMG_4031…4035) carry ±EV only in EXIF — name them
         // <firstFrame>_±EV so the gate + post-prod merge see one bracketed angle.
-        // Unprovable frames keep the vendor's filename.
+        // Works for camera RAW and JPEG. Unprovable frames keep the vendor's filename.
         ({ files } = await autoNameAebFiles(files, (n) => exposureBiasFromName(n) == null));
         const issue = validateHdrBracketSelection(
           files.map((f) => f.name),
@@ -305,16 +328,37 @@ function JobListingPanel({
           return;
         }
       }
-      for (const file of files) {
-        // Preserve original filename (±EV / under / over) for backend group_brackets.
-        const rec = await uploadStillFile(job.id, file, stillsType);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setProgress({ index: i + 1, total: files.length, pct: 0 });
+        let rec;
+        try {
+          // Preserve original filename (±EV / under / over) for backend group_brackets.
+          rec = await uploadStillFile(job.id, file, stillsType, (sent, total) =>
+            setProgress({ index: i + 1, total: files.length, pct: total ? Math.round((sent / total) * 100) : 0 }),
+          );
+        } catch (e) {
+          if (e instanceof StillsUploadError && e.code === 'file_too_large') {
+            notes.push(`${file.name}: ${e.message}`);
+            setNotices([...notes]);
+            continue;
+          }
+          throw e;
+        }
         setUploads((list) => [...list, rec]);
         onPatched({ ...job, uploaded_count: (job.uploaded_count || 0) + 1 });
+        if (rec.camera_raw) {
+          // Background: Bricks makes the working JPEG + preview from the RAW.
+          void requestRawPreview(job.id, rec.id).then((preview) =>
+            setUploads((list) => list.map((u) => (u.id === rec.id ? { ...u, preview } : u))),
+          );
+        }
       }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setUploading(false);
+      setProgress(null);
       input.value = '';
     }
   };
@@ -548,7 +592,10 @@ function JobListingPanel({
           {requiresBracketSet(stillsType) ? (
             <>
               <p style={{ padding: 0, margin: '0 0 8px', fontSize: 13, color: 'var(--c-brick, #D2542B)' }}>
-                {BRACKET_HINT} At least 3 per angle, JPEG or HEIC.
+                {BRACKET_HINT} At least 3 per angle, plus the window frame.
+              </p>
+              <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
+                Upload the RAW files. JPEG only if a RAW is over 50 MB. Keep your RAWs until the job is approved.
               </p>
               {stillsType === 'twilight' ? (
                 <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
@@ -565,28 +612,63 @@ function JobListingPanel({
               PNG or PDF, delivered as is.
             </p>
           ) : null}
-          <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
-            {uploads.length === 0 ? <li className="muted">None yet</li> : uploads.map((u) => (
-              <li key={u.id}>{u.filename}{u.media_type ? <span className="muted"> · {u.media_type}</span> : null}</li>
-            ))}
+          <ul className="upload-list">
+            {uploads.length === 0 ? <li className="muted">None yet</li> : uploads.map((u) => {
+              const raw = u.camera_raw || isCameraRawName(u.filename);
+              return (
+                <li key={u.id} className="upload-row">
+                  {u.preview?.preview_url ? (
+                    <img className="upload-thumb" src={u.preview.preview_url} alt="" />
+                  ) : (
+                    <span className="upload-thumb upload-thumb-empty" aria-hidden="true">{raw ? 'RAW' : ''}</span>
+                  )}
+                  <span className="upload-meta">
+                    <span className="upload-name">{u.filename}</span>
+                    <span className="muted">
+                      {raw ? 'RAW' : null}
+                      {raw && u.media_type ? ' · ' : null}
+                      {u.media_type || null}
+                      {raw && u.preview?.status === 'pending' ? ' · Making preview' : null}
+                      {raw && u.preview?.status === 'ready' ? ' · Preview ready' : null}
+                    </span>
+                    {raw && u.preview?.status === 'needs_review' ? (
+                      <span className="upload-warn">{u.preview.message || 'Bricks will check this RAW. Keep the file.'}</span>
+                    ) : null}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
-          <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="row upload-controls">
             <select
               value={stillsType}
               onChange={(e) => setStillsType(e.target.value as StillsType)}
               disabled={uploading || job.status === 'assigned'}
+              aria-label="Upload type"
             >
               {STILLS_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
             </select>
-            <input
-              type="file"
-              multiple
-              accept="image/jpeg,image/png,image/tiff,image/webp,image/heic,image/heif,application/pdf,video/*,.jpg,.jpeg,.png,.tif,.tiff,.webp,.heic,.heif,.pdf,.mp4,.mov"
-              onChange={onUpload}
-              disabled={uploading || job.status === 'assigned'}
-            />
-            {uploading && <span className="muted"> Uploading…</span>}
+            <label className={`btn btn-secondary upload-pick${uploading || job.status === 'assigned' ? ' is-disabled' : ''}`}>
+              <span className="btn-label">{uploading ? 'Uploading' : 'Choose files'}</span>
+              <input
+                type="file"
+                multiple
+                accept={STILLS_ACCEPT}
+                onChange={onUpload}
+                disabled={uploading || job.status === 'assigned'}
+              />
+            </label>
           </div>
+          {progress ? (
+            <p className="muted upload-progress" role="status">
+              Uploading {progress.index} of {progress.total} · {progress.pct}%
+            </p>
+          ) : null}
+          {notices.length ? (
+            <ul className="upload-notices" role="status">
+              {notices.map((n) => <li key={n}>{n}</li>)}
+            </ul>
+          ) : null}
           {isAdmin ? (
             <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
               <input

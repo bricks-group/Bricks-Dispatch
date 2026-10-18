@@ -14,7 +14,7 @@ for (const m of ['aeb-exif', 'bracket-require']) {
     { stdio: 'inherit', cwd: path.join(here, '../..') },
   );
 }
-const { parseJpegExif, planAebRenames, formatEv } = await import('/tmp/aeb-exif.mjs');
+const { parseJpegExif, parseRawExif, planAebRenames, formatEv } = await import('/tmp/aeb-exif.mjs');
 const { exposureBiasFromName, bracketStem, validateHdrUploadsForComplete } = await import('/tmp/bracket-require.mjs');
 
 /** Minimal JPEG: SOI + APP1 Exif (IFD0 Model + ExifIFD ptr; ExifIFD bias/DTO/SubSec) + EOI. */
@@ -111,3 +111,34 @@ assert.equal(planAebRenames([frame('A_0101.jpg', -2, 0), frame('A_0102.jpg', 2, 
 assert.equal(planAebRenames([frame('A_0101.jpg', 0, 0), frame('A_0102.jpg', -2, 0.3), frame('A_0103.jpg', -1, 0.6)], needs).size, 0, 'no over → untouched');
 
 console.log('aeb-exif tests passed');
+
+// Camera RAW heads (real samples from raw.pixls.us when present on this box).
+{
+  const fs = await import('node:fs');
+  const dir = process.env.RAW_SAMPLES_DIR || '/workspace/samples-raw';
+  const want = {
+    'Canon_EOS_R6_RAW_ISO_100_nocrop_nodual.CR3': 'Canon EOS R6',
+    'Nikon-D850-14bit-lossless-compressed.NEF': 'NIKON D850',
+    '_DSC0009.ARW': 'ILCE-7M3',
+    'AFXT2720.RAF': 'X-T3',
+    'iPhone12Pro_IMG_1361.DNG': 'iPhone 12 Pro',
+    'B13A0729.CR2': 'Canon EOS 5D Mark IV',
+  };
+  let checked = 0;
+  for (const [name, model] of Object.entries(want)) {
+    const p = path.join(dir, name);
+    if (!fs.existsSync(p)) continue;
+    const fd = fs.openSync(p, 'r');
+    const buf = Buffer.alloc(1024 * 1024);
+    fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
+    const x = parseRawExif(ab);
+    assert.equal(x.model, model, name);
+    assert.equal(x.bias, 0, name);
+    assert.ok(typeof x.time === 'number' && x.time > 1e9, name);
+    checked++;
+  }
+  console.log(`aeb-exif: RAW EXIF checked on ${checked} sample files`);
+}
+console.log('aeb-exif RAW tests ok');

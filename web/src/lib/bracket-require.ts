@@ -108,21 +108,89 @@ export function bracketHasUnderMidOver(filenames: string[]): boolean {
   return hasUnder && hasMid && hasOver;
 }
 
-/** Listing-decodable stills only — enhance decodes JPEG/PNG/TIFF/WebP/HEIC/HEIF. */
-export function isImageName(name: string): boolean {
-  return /\.(jpe?g|png|tif{1,2}|webp|heic|heif)$/i.test(name);
-}
+/** Camera RAW (parity with backend raw_decode.CAMERA_RAW_EXTS). RAW is the primary stills upload. */
+export const CAMERA_RAW_EXT_RE =
+  /\.(cr2|cr3|crw|dng|nef|nrw|arw|srf|sr2|raf|orf|rw2|pef|ptx|srw|x3f|raw|rwl|3fr|fff|iiq|mos|erf|kdc|mrw)$/i;
 
-/** Camera RAW the enhance desk cannot decode (parity with backend CAMERA_RAW_EXTS). */
 export function isCameraRawName(name: string): boolean {
-  return /\.(cr2|cr3|dng|nef|nrw|arw|srf|sr2|raf|orf|rw2|pef|ptx|srw|x3f|raw|rwl)$/i.test(
-    name || '',
-  );
+  return CAMERA_RAW_EXT_RE.test(name || '');
 }
 
-export const cameraRawRejectionMessage =
-  'Camera RAW files (CR2/CR3/DNG/NEF/ARW/…) are not supported for listing stills. ' +
-  'Export JPEG (or HEIC) ±EV brackets from your camera or Lightroom, then upload those.';
+/** Listing still frames: camera RAW, or JPEG/PNG/TIFF/WebP/HEIC/HEIF. */
+export function isImageName(name: string): boolean {
+  return /\.(jpe?g|png|tif{1,2}|webp|heic|heif)$/i.test(name) || isCameraRawName(name);
+}
+
+/** Storage per-file cap today (Supabase Free plan). The API sends the live value. */
+export const UPLOAD_MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+export function fileTooLargeMessage(name: string, limitBytes = UPLOAD_MAX_FILE_BYTES): string {
+  const mb = Math.round(limitBytes / (1024 * 1024));
+  return isCameraRawName(name)
+    ? `This file is over ${mb} MB. Upload the JPEG for now and keep the RAW.`
+    : `This file is over ${mb} MB. Export a smaller file and try again.`;
+}
+
+function frameKey(name: string): string {
+  const base = basename(name);
+  const stem = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base;
+  return stem.toLowerCase();
+}
+
+export type StillsPick<F extends { name: string; size: number }> = {
+  /** Files to upload: the RAW of each frame, or its JPEG when the RAW is too big. */
+  files: F[];
+  /** RAWs over the limit that have no JPEG twin in this pick. */
+  tooLarge: F[];
+  /** RAWs over the limit replaced by their JPEG/HEIC twin. */
+  usedJpegFor: F[];
+  /** JPEG/HEIC twins dropped because the RAW is uploading. */
+  droppedTwins: F[];
+};
+
+/**
+ * RAW first. Cameras shooting RAW+JPEG give two files per frame (IMG_4031.CR3
+ * + IMG_4031.JPG). Upload the RAW; use the JPEG only when the RAW is over the
+ * storage limit. Non-stills (video/PDF) are passed through untouched.
+ */
+export function pickStillsUploads<F extends { name: string; size: number }>(
+  files: F[],
+  limitBytes = UPLOAD_MAX_FILE_BYTES,
+): StillsPick<F> {
+  const rawsByKey = new Map<string, F>();
+  for (const f of files) if (isCameraRawName(f.name)) rawsByKey.set(frameKey(f.name), f);
+  const out: StillsPick<F> = { files: [], tooLarge: [], usedJpegFor: [], droppedTwins: [] };
+  const twinKeys = new Set<string>();
+  for (const f of files) {
+    if (!isCameraRawName(f.name) && isImageName(f.name) && rawsByKey.has(frameKey(f.name))) {
+      twinKeys.add(frameKey(f.name));
+    }
+  }
+  for (const f of files) {
+    const key = frameKey(f.name);
+    if (isCameraRawName(f.name)) {
+      if (f.size > limitBytes) {
+        if (twinKeys.has(key)) out.usedJpegFor.push(f);
+        else out.tooLarge.push(f);
+        continue;
+      }
+      out.files.push(f);
+      continue;
+    }
+    if (twinKeys.has(key) && isImageName(f.name)) {
+      const raw = rawsByKey.get(key)!;
+      if (raw.size > limitBytes) out.files.push(f);
+      else out.droppedTwins.push(f);
+      continue;
+    }
+    if (f.size > limitBytes) {
+      out.tooLarge.push(f);
+      continue;
+    }
+    out.files.push(f);
+  }
+  return out;
+}
 
 function isVisitName(name: string): boolean {
   return /\.(splat|ply|spz)$/i.test(name);
