@@ -857,3 +857,24 @@ select {
 }
 .d-short { display: none; }
 @media (max-width: 640px) { table.table.t1l .d-full { display: none; } table.table.t1l .d-short { display: inline; } }
+
+/* ── Profile: drone liability insurance ── */
+.ins-card .stack { max-width: 640px; }
+.ins-status { display: flex; gap: 12px; align-items: flex-start; }
+.ins-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 7px; flex: none; background: var(--c-ink-faint); }
+.ins-ok .ins-dot { background: var(--c-ink); }
+.ins-wait .ins-dot { background: transparent; border: 1.5px solid var(--c-ink-soft); }
+.ins-warn .ins-dot { background: var(--c-brick); }
+.ins-head { margin: 0; font-weight: 500; color: var(--c-ink); }
+.ins-detail { margin: 2px 0 0; padding: 0 !important; }
+.ins-form { display: flex; flex-direction: column; gap: 14px; }
+.ins-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ins-field { flex-direction: column !important; align-items: stretch !important; gap: 6px; min-width: 0; }
+.ins-field input { width: 100%; min-width: 0; }
+.ins-check { gap: 10px; }
+.ins-error { margin: 0; }
+.ins-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 560px) {
+  .ins-row { grid-template-columns: 1fr; }
+  .ins-actions > .btn-primary { flex-basis: 100%; }
+}

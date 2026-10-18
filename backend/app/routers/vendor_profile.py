@@ -125,6 +125,7 @@ async def build_profile(member: dict) -> dict:
             pass
     avail = await _availability_flag(db, member)
     portfolio_docs = []
+    coi_docs = []
     try:
         docs = await db.table("vendor_documents").select(
             "id, doc_type, file_url, status, created_at"
@@ -135,12 +136,55 @@ async def build_profile(member: dict) -> dict:
         ]
     except Exception:
         portfolio_docs = []
+    try:
+        # Separate read so a column problem here never hides the portfolio.
+        res = await db.table("vendor_documents").select(
+            "id, status, created_at, expiry_date, validation_result"
+        ).eq("member_id", member["id"]).eq("doc_type", "coi").order(
+            "created_at", desc=True
+        ).limit(5).execute()
+        coi_docs = res.data or []
+    except Exception:
+        coi_docs = []
     extra = {
         "availability": avail,
         "bio": member.get("bio") or member.get("internal_notes") or "",
         "_portfolio_documents": portfolio_docs,
+        "insurance_review": latest_coi_review(coi_docs),
     }
     return public_profile(member, extra)
+
+
+def latest_coi_review(docs: list) -> Optional[dict]:
+    """The vendor's most recent certificate-of-insurance upload, for GO.
+
+    Lets the photographer see "In review" / "Not accepted" after a reload
+    (the verified state itself comes from insurance_status on the member).
+    Only the vendor's own declared values are echoed; no file key, no
+    reviewer notes.
+    """
+    rows = [d for d in (docs or []) if isinstance(d, dict)]
+    if not rows:
+        return None
+    rows.sort(key=lambda d: str(d.get("created_at") or ""), reverse=True)
+    d = rows[0]
+    vr = d.get("validation_result")
+    declared = (vr.get("declared") or {}) if isinstance(vr, dict) else {}
+    status = str(d.get("status") or "pending").lower()
+    if status not in ("pending", "verified", "rejected", "flagged"):
+        status = "pending"
+    try:
+        limit = int(declared.get("liability_cad")) if declared.get("liability_cad") is not None else None
+    except (TypeError, ValueError):
+        limit = None
+    return {
+        "status": "rejected" if status == "flagged" else status,
+        "uploaded_at": d.get("created_at"),
+        "expires_on": (str(d.get("expiry_date") or declared.get("expires_on") or "")[:10] or None),
+        "liability_cad": limit,
+        "aviation_covered": bool(declared.get("aviation_covered")),
+        "insurer": declared.get("insurer") or None,
+    }
 
 
 async def get_profile_impl(
@@ -327,6 +371,14 @@ async def upload_insurance_impl(
     profile = await build_profile(updated or member)
     profile["insurance_document_id"] = doc_id
     profile["insurance_pending_review"] = True
+    profile["insurance_review"] = {
+        "status": "pending",
+        "uploaded_at": now,
+        "expires_on": exp.isoformat(),
+        "liability_cad": limit,
+        "aviation_covered": bool(aviation_covered),
+        "insurer": declared["declared"]["insurer"],
+    }
     return profile
 
 

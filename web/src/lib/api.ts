@@ -1,3 +1,4 @@
+import type { InsuranceStatus, InsuranceReview } from './insurance';
 import { supabase } from './supabase';
 import { fetchOAuthProviderEnabled, GOOGLE_UNAVAILABLE_MESSAGE } from './web-account';
 
@@ -149,6 +150,8 @@ export type VendorProfile = {
   payout_label: string;
   show_platform_cut: boolean;
   avatar_url?: string | null;
+  insurance?: InsuranceStatus | null;
+  insurance_review?: InsuranceReview;
 };
 
 export async function login(email: string): Promise<void> {

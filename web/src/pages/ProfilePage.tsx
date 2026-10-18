@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { api, VendorProfile } from '../lib/api';
 import BricksLoader from '../components/BricksLoader';
+import { InsuranceCard } from '../components/InsuranceCard';
 
 const SKILLS: { id: string; label: string }[] = [
   { id: 'photo', label: 'Photo' },
@@ -178,13 +179,11 @@ export function ProfilePage() {
             <h3>Advanced RPAS</h3>
             <div className="stack">
               <p className="muted" style={{ padding: 0 }}>
-                Transport Canada Advanced certificate. Stored as a file URL on your member record.
+                Transport Canada Advanced certificate.
                 {data.rpas_certificate_level ? ` Current level: ${data.rpas_certificate_level}.` : ''}
               </p>
               {data.rpas_certificate_url ? (
-                <p style={{ margin: 0 }}>
-                  On file · <span className="muted">{data.rpas_certificate_url}</span>
-                </p>
+                <p style={{ margin: 0 }}>On file</p>
               ) : (
                 <p className="muted" style={{ padding: 0 }}>No certificate uploaded yet</p>
               )}
@@ -194,6 +193,8 @@ export function ProfilePage() {
               </div>
             </div>
           </section>
+
+          <InsuranceCard profile={data} onSaved={setData} />
 
           <section className="card full">
             <h3>Service area &amp; availability</h3>
