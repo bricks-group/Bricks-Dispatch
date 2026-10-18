@@ -7,6 +7,8 @@ spec.json (all URLs pre-signed by Dispatch, e.g. via /api/capture/visit/sign; PU
    "result":  {"put": "...", "get": "..."}}
 Prints a JSON result: status, qc verdict, output GET URLs, pod runtime and cost. Not wired to any production trigger yet.
 Termination layers: finally-block DELETE, detached watchdog process, in-pod MAX_RUNTIME_S self-terminate, entry_job EXIT trap.
+Spend guards: refuses before creating a pod when max-rate x max-minutes > --max-usd or the balance can't cover it plus
+--reserve-usd; refuses a pod billing over --max-rate; stops polling (and terminates) once spend reaches --max-usd.
 """
 import argparse, json, os, subprocess, sys, time, urllib.request
 from pathlib import Path
@@ -27,7 +29,17 @@ def main():
     ap.add_argument("--image", default=os.environ.get("VISIT_WORKER_IMAGE", "ghcr.io/bricks-group/visit-worker:0.1"))
     ap.add_argument("--iters", type=int, default=15000); ap.add_argument("--cap-max", type=int, default=1000000)
     ap.add_argument("--max-minutes", type=float, default=90); ap.add_argument("--max-usd", type=float, default=2.0)
+    ap.add_argument("--max-rate", type=float, default=float(os.environ.get("VISIT_MAX_USD_HR", "0.99")),
+                    help="refuse a pod that bills more than this per hour (Secure 4090 is ~0.59-0.69)")
+    ap.add_argument("--reserve-usd", type=float, default=1.0, help="leave at least this much balance untouched")
     a = ap.parse_args()
+    # Pre-flight, before any pod exists (nothing bills yet): worst case = max rate x max minutes.
+    worst = a.max_rate * a.max_minutes / 60
+    if worst > a.max_usd:
+        sys.exit(f"refused: worst case ${worst:.2f} ({a.max_minutes:.0f} min at ${a.max_rate}/hr) > --max-usd {a.max_usd}")
+    bal = float((rp.balance() or {}).get("clientBalance") or 0)
+    if bal < worst + a.reserve_usd:
+        sys.exit(f"refused: balance ${bal:.2f} < worst case ${worst:.2f} + reserve ${a.reserve_usd:.2f}")
     spec = json.load(open(a.spec))
     worker_spec = {"outputs": {k: {"put": v["put"]} for k, v in spec["outputs"].items()}, "result": {"put": spec["result"]["put"]}}
     env = {"JOB_ID": a.job_id, "CAPTURE_URL": a.capture_url, "JOB_SPEC": json.dumps(worker_spec), "ITERS": str(a.iters),
@@ -35,14 +47,16 @@ def main():
     pod_id, t0, wd, res = None, time.time(), None, None
     try:
         pod = rp.create_pod(f"bricks-visit-{a.job_id}", image=a.image, env=env, ports=())
-        pod_id = pod["id"]; cost_hr = float(pod.get("costPerHr") or 0.89)
-        if cost_hr * a.max_minutes / 60 > a.max_usd:
-            raise RuntimeError("projected cost exceeds --max-usd")
+        pod_id = pod["id"]; cost_hr = float(pod.get("costPerHr") or a.max_rate)
+        if cost_hr > a.max_rate or cost_hr * a.max_minutes / 60 > a.max_usd:
+            raise RuntimeError(f"pod bills ${cost_hr}/hr: over --max-rate/--max-usd")  # finally terminates it
         wd = subprocess.Popen(["bash", "-c", f"sleep {int(a.max_minutes * 60)}; python3 {Path(__file__).parent}/runpod_api.py terminate {pod_id}"],
                               start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while time.time() - t0 < a.max_minutes * 60:
             res = fetch_json(spec["result"]["get"])
             if res: break
+            if cost_hr * (time.time() - t0) / 3600 > a.max_usd:  # hard spend cap, independent of the timer
+                break
             code, p = rp.get_pod(pod_id)
             if code == 404 or (p and p.get("desiredStatus") in ("EXITED", "TERMINATED")):
                 time.sleep(10); res = fetch_json(spec["result"]["get"]); break
