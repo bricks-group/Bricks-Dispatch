@@ -74,6 +74,9 @@ export function VisitCapturePage() {
         <span className="kicker" style={{ letterSpacing: 2, fontSize: 11, color: 'var(--c-brick, #C45C26)' }}>VIRTUAL VISIT</span>
       </div>
       <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>Deliver Virtual Visit</h1>
+      <p className="muted" style={{ marginBottom: 12, lineHeight: 1.45 }}>
+        Recording on a phone? <Link to={`/capture/guided?jobId=${encodeURIComponent(jobId)}&type=virtual-visit`}>Use the guided camera</Link>.
+      </p>
       <p className="muted" style={{ marginBottom: 18, lineHeight: 1.45 }}>
         Paste a Polycam link, or upload a .sog, .spz, .ply or .splat file.
       </p>

@@ -16,6 +16,7 @@ import { TeamPage } from './pages/TeamPage';
 import { CapturePage } from './pages/CapturePage';
 import { CaptureReviewPage } from './pages/CaptureReviewPage';
 import { VisitCapturePage } from './pages/VisitCapturePage';
+import { GuidedCapturePage } from './pages/GuidedCapturePage';
 import { GoogleCalendarCallbackPage } from './pages/GoogleCalendarCallbackPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { UnderReviewPage } from './pages/UnderReviewPage';
@@ -233,6 +234,12 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** Guided capture is gated like every capture page. `?demo=` skips the gate in dev builds only (screenshots). */
+function GuidedCaptureRoute() {
+  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get('demo')) return <GuidedCapturePage />;
+  return <CaptureGate><GuidedCapturePage /></CaptureGate>;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -242,6 +249,7 @@ export default function App() {
       <Route path="/capture" element={<CaptureGate><CapturePage /></CaptureGate>} />
       <Route path="/capture/review" element={<CaptureGate><CaptureReviewPage /></CaptureGate>} />
       <Route path="/capture/visit" element={<CaptureGate><VisitCapturePage /></CaptureGate>} />
+      <Route path="/capture/guided" element={<GuidedCaptureRoute />} />
       <Route path="/*"     element={<ProtectedLayout />} />
     </Routes>
   );

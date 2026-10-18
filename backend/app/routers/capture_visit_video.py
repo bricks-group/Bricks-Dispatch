@@ -357,7 +357,7 @@ def validate_recording(payload: dict) -> dict:
     coach = (payload or {}).get("coach")
     coach_clean: dict = {}
     if isinstance(coach, dict):
-        for k in ("turn_fast_pct", "tilt_pct", "shake_pct", "still_pct", "max_turn_dps"):
+        for k in ("turn_fast_pct", "tilt_pct", "shake_pct", "still_pct", "max_turn_dps", "pauses", "avg_walk_mps"):
             v = coach.get(k)
             if isinstance(v, (int, float)) and math.isfinite(v):
                 coach_clean[k] = round(float(v), 2)
@@ -372,7 +372,39 @@ def validate_recording(payload: dict) -> dict:
         "height": int((payload or {}).get("height") or 0) or None,
         "lens": str((payload or {}).get("lens") or "")[:60] or None,
         "coach": coach_clean or None,
+        "capture": clean_capture_meta((payload or {}).get("capture")),
     }
+
+
+_CAPTURE_STR_KEYS = ("guide", "platform", "device", "device_status", "lens", "stabilization", "hdr", "mime", "codec")
+_CAPTURE_NUM_KEYS = ("guide_version", "width", "height", "fps", "bitrate")
+_LOCK_KINDS = ("exposure", "focus", "whiteBalance")
+_LOCK_STATES = ("locked", "metering-locked", "auto", "unsupported", "failed")
+
+
+def clean_capture_meta(raw: Any) -> Optional[dict]:
+    """Guided-capture settings the phone reports (what was locked, lens, format, device policy).
+
+    Advisory metadata for QC and the Visit worker; never trusted for access decisions. Unknown
+    keys are dropped, strings are capped, lock states are limited to a known set.
+    """
+    if not isinstance(raw, dict):
+        return None
+    out: dict = {}
+    for k in _CAPTURE_STR_KEYS:
+        v = raw.get(k)
+        if isinstance(v, str) and v.strip():
+            out[k] = v.strip()[:60]
+    for k in _CAPTURE_NUM_KEYS:
+        v = raw.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and 0 <= v < 1e9:
+            out[k] = round(float(v), 2)
+    locks = raw.get("locks")
+    if isinstance(locks, dict):
+        clean = {k: locks[k] for k in _LOCK_KINDS if locks.get(k) in _LOCK_STATES}
+        if clean:
+            out["locks"] = clean
+    return out or None
 
 
 def recording_complete(row: Optional[dict], man: Optional[dict]) -> bool:

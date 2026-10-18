@@ -397,3 +397,30 @@ def test_routes_registered_and_separate_from_360_tour():
     assert vv.KIND == "visit"
     from app.routers import capture
     assert "visit" not in capture._VALID_KINDS  # kind=splat stays the 360 tour
+
+
+def test_guided_capture_metadata_is_sanitized_into_manifest(env):
+    _, blobs = env
+    run(vv.ensure_visit_session({"job_id": "job-1"}))
+    capture = {
+        "guide": "virtual-visit", "guide_version": 1, "platform": "ios", "device": "iPhone 15 Pro",
+        "device_status": "approved", "lens": "ultra-wide", "width": 3840, "height": 2160, "fps": 30,
+        "stabilization": "standard", "hdr": "off", "codec": "h265", "bitrate": 30_000_000,
+        "locks": {"exposure": "locked", "focus": "locked", "whiteBalance": "metering-locked", "iso": "locked"},
+        "secret": "dropped", "fps_bad": float("nan"),
+    }
+    coach = {"turn_fast_pct": 3.2, "pauses": 6, "avg_walk_mps": 0.62, "junk": 1}
+    out = run(vv.create_recording(_rec(capture=capture, coach=coach)))
+    man = json.loads(blobs.files[vv.manifest_path(out["session_id"], out["recording_id"])])
+    cap = man["capture"]
+    assert cap["guide"] == "virtual-visit" and cap["lens"] == "ultra-wide" and cap["fps"] == 30
+    assert cap["locks"] == {"exposure": "locked", "focus": "locked", "whiteBalance": "metering-locked"}
+    assert "secret" not in cap and "fps_bad" not in cap
+    assert man["coach"] == {"turn_fast_pct": 3.2, "pauses": 6.0, "avg_walk_mps": 0.62}
+
+
+def test_capture_metadata_optional_and_bad_shapes_ignored():
+    assert vv.clean_capture_meta(None) is None
+    assert vv.clean_capture_meta("x") is None
+    assert vv.clean_capture_meta({"locks": {"exposure": "maybe"}, "fps": True}) is None
+    assert vv.clean_capture_meta({"device": "x" * 200})["device"] == "x" * 60

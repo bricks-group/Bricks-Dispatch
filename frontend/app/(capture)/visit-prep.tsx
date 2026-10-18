@@ -42,7 +42,7 @@ export default function VisitPrep() {
   const ready = allChecked && name.trim().length > 0;
 
   const go = () => router.replace({
-    pathname: '/(capture)/visit-record',
+    pathname: '/(capture)/guided',
     params: { jobId, name: name.trim(), scope, floor: String(floorIndex) },
   } as any);
 

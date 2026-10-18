@@ -38,7 +38,9 @@ export interface LocalRecording {
   durationS: number;
   lens?: string | null;
   rooms: RoomMark[];
-  coach?: CoachSummary | null;
+  coach?: (CoachSummary & { pauses?: number; avg_walk_mps?: number }) | null;
+  /** Guided capture: what the camera actually pinned (lens, format, lock states, device policy). */
+  capture?: Record<string, unknown> | null;
   createdAt: number;
   serverId?: string | null;
   partSize?: number;
@@ -141,7 +143,7 @@ export const visitApi = {
     method: 'POST',
     body: JSON.stringify({
       job_id: rec.jobId, name: rec.name, scope: rec.scope, floor_index: rec.floorIndex,
-      size_bytes: rec.sizeBytes, duration_s: rec.durationS, rooms: rec.rooms, lens: rec.lens, coach: rec.coach,
+      size_bytes: rec.sizeBytes, duration_s: rec.durationS, rooms: rec.rooms, lens: rec.lens, coach: rec.coach, capture: rec.capture ?? undefined,
       content_type: rec.uri.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/mp4',
     }),
   }),
