@@ -29,7 +29,7 @@ BRACKET_HINT = "Upload bracketed exposures for each angle (− / 0 / +)."
 _MID_ABS = 0.5
 
 _IMAGE_EXT = re.compile(
-    r"\.(jpe?g|png|tif{1,2}|webp|heic|dng|cr2|nef|arw|raf|orf)$",
+    r"\.(jpe?g|png|tif{1,2}|webp|heic|heif)$",
     re.IGNORECASE,
 )
 
@@ -44,7 +44,10 @@ def basename(path_or_name: str) -> str:
 
 
 def is_image_name(name: str) -> bool:
-    return bool(_IMAGE_EXT.search(name or ""))
+    """Listing still frame: camera JPEG/HEIC or camera RAW (all RAW formats)."""
+    from .raw_decode import is_camera_raw_name
+
+    return bool(_IMAGE_EXT.search(name or "")) or is_camera_raw_name(name)
 
 
 def group_by_bracket_stem(filenames: Sequence[str]) -> Dict[str, List[str]]:

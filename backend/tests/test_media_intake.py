@@ -287,20 +287,12 @@ def test_is_camera_raw_file_ext_and_mime():
         assert ext in CAMERA_RAW_EXTS
 
 
-def test_assert_listing_still_decodable_rejects_raw():
-    try:
-        assert_listing_still_decodable("IMG_0001.CR3")
-        raise AssertionError("expected api_error")
-    except HTTPException as exc:
-        assert exc.status_code == 400
-        assert exc.detail["code"] == "camera_raw_unsupported"
-        assert "JPEG" in exc.detail["message"] or "HEIC" in exc.detail["message"]
-
-    try:
-        assert_listing_still_decodable("x.bin", "image/x-adobe-dng")
-        raise AssertionError("expected api_error")
-    except HTTPException as exc:
-        assert exc.detail["code"] == "camera_raw_unsupported"
+def test_assert_listing_still_decodable_accepts_raw():
+    # Camera RAW is the primary stills upload now (Bricks Standard v1.1).
+    assert_listing_still_decodable("IMG_0001.CR3")
+    assert_listing_still_decodable("x.bin", "image/x-adobe-dng")
+    assert is_photo_file("IMG_0001.CR3", "application/octet-stream", None)
+    assert is_photo_file("DSC_0001.NEF", "", "hdr")
 
     # visit / video / JPEG / HEIC pass through
     assert_listing_still_decodable("tour.splat")

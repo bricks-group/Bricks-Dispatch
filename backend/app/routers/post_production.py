@@ -863,6 +863,14 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
         path = u.get("processed_url") or u.get("file_url")
         if not path:
             continue
+        # Camera RAW is the master, never a client deliverable (MLS/web/zip).
+        from ..services.raw_decode import is_camera_raw_name
+
+        if is_camera_raw_name(path):
+            logger.info(
+                f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — camera RAW has no JPEG yet"
+            )
+            continue
         # Provider-returned HTTPS URLs are already public signed links — no need to re-sign.
         # Calling get_signed_download_url on an HTTPS URL would pass it as a Supabase storage
         # path, causing a 404 error.

@@ -460,10 +460,12 @@ async def run_qc_for_job(job_id: str) -> dict:
         # Auto-edit failed → unedited original stays held. Do not let a vision /
         # OpenCV pass re-score it into client delivery (every still auto-edited).
         if str(u.get("provider") or "").lower() == "original":
-            from .post_production import unedited_original_hold
+            from .post_production import raw_review_hold, unedited_original_hold
+            from .raw_decode import RAW_REVIEW_QC_NOTE
 
+            keep_raw_note = str(u.get("qc_notes") or "").startswith(RAW_REVIEW_QC_NOTE[:40])
             await _persist_qc(db, u["id"], {
-                **unedited_original_hold(),
+                **(raw_review_hold() if keep_raw_note else unedited_original_hold()),
                 "qc_at": datetime.now(timezone.utc).isoformat(),
             })
             counts["total"] += 1
@@ -475,6 +477,20 @@ async def run_qc_for_job(job_id: str) -> dict:
         # Supabase Storage egress per review since QC only needs enough
         # resolution to judge sharpness/exposure/composition, not the original.
         path = u.get("qc_variant_url") or u.get("processed_url") or u.get("file_url")
+        from .raw_decode import is_camera_raw_name
+
+        if path and is_camera_raw_name(path):
+            # No JPEG was made from this RAW — never score/deliver the RAW itself.
+            from .post_production import raw_review_hold
+
+            await _persist_qc(db, u["id"], {
+                **raw_review_hold(),
+                "qc_at": datetime.now(timezone.utc).isoformat(),
+            })
+            counts["total"] += 1
+            counts["rejected"] += 1
+            image_upload_count += 1
+            continue
         if not path:
             # No path to review — hold. Leaving qc_status=pending would let
             # finalize deliver an unreviewed still (only rejected is pruned).

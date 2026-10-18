@@ -267,10 +267,8 @@ def test_deliver_twilight_durable_name_apply_sky_false(monkeypatch):
     assert updates[0][1]["provider"] == "bricks_inhouse"
 
 
-def test_complete_rejects_camera_raw(monkeypatch):
-    """Hollow enhance hole closes at register — CR3 never inserts."""
-    from fastapi import HTTPException
-
+def test_complete_accepts_camera_raw(monkeypatch):
+    """Camera RAW is the primary stills upload — CR3 registers as an hdr still."""
     job = {
         "id": "job-d",
         "uploaded_count": 0,
@@ -282,60 +280,98 @@ def test_complete_rejects_camera_raw(monkeypatch):
     upload_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     filename = "IMG_0001.CR3"
     storage_path = f"bricks-go/jobs/job-d/{upload_id}/{filename}"
-
-    class Db:
-        def table(self, name):
-            raise AssertionError("DB must not be touched for RAW")
-
+    inserted = []
     monkeypatch.setattr(
-        up,
-        "_actor_job",
-        AsyncMock(return_value=(Db(), "photog-1", "default_vendor", job)),
+        up, "_actor_job", AsyncMock(return_value=(MagicMock(), "photog-1", "default_vendor", job))
     )
+    monkeypatch.setattr(up, "_job_upload_rows", AsyncMock(return_value=[]))
+    monkeypatch.setattr(up, "_insert_upload_row", AsyncMock(side_effect=lambda db, row: inserted.append(row)))
+    monkeypatch.setattr(up, "_bump_uploaded_count", AsyncMock(return_value=1))
     monkeypatch.setattr(up, "_maybe_start_post", AsyncMock())
 
-    try:
-        _run(
-            up.complete_stills_upload(
-                BackgroundTasks(),
-                {
-                    "job_id": "job-d",
-                    "upload_id": upload_id,
-                    "storage_path": storage_path,
-                    "filename": filename,
-                    "mime_type": "image/x-canon-cr3",
-                    "media_type": "hdr",
-                    "file_size": 12,
-                },
-            )
+    out = _run(
+        up.complete_stills_upload(
+            BackgroundTasks(),
+            {
+                "job_id": "job-d",
+                "upload_id": upload_id,
+                "storage_path": storage_path,
+                "filename": filename,
+                "mime_type": "",
+                "media_type": "hdr",
+                "file_size": 24_000_000,
+            },
         )
-        raise AssertionError("expected camera_raw_unsupported")
-    except HTTPException as exc:
-        assert exc.status_code == 400
-        assert exc.detail["code"] == "camera_raw_unsupported"
+    )
+    assert out["filename"] == filename
+    assert inserted and inserted[0]["file_url"] == storage_path
+    # Browser sent no type for the RAW — stored with the canonical RAW type.
+    assert inserted[0]["mime_type"] == "image/x-canon-cr3"
 
 
-def test_sign_rejects_camera_raw(monkeypatch):
+def test_sign_accepts_camera_raw_with_tus(monkeypatch):
+    from app.services import upload_backend
+
+    monkeypatch.setattr(
+        up, "_actor_job", AsyncMock(return_value=(MagicMock(), "photog-1", "default_vendor", {}))
+    )
+
+    async def fake_target(key, content_type, size):
+        return {
+            "provider": "supabase", "method": "PUT", "signed_url": "https://x.supabase.co/sign?token=t",
+            "token": "t", "tus": {"endpoint": "https://x.storage.supabase.co/storage/v1/upload/resumable/sign"},
+            "storage_path": key, "headers": {"Content-Type": content_type},
+            "max_file_bytes": 50 * 1024 * 1024, "via_proxy": False,
+        }
+
+    monkeypatch.setattr(upload_backend, "create_direct_upload", fake_target)
+    out = _run(
+        up.sign_stills_upload(
+            {"job_id": "job-d", "filename": "bracket.DNG", "mime_type": "", "media_type": "hdr", "file_size": 30_000_000}
+        )
+    )
+    assert out["camera_raw"] is True
+    assert out["content_type"] == "image/x-adobe-dng"
+    assert out["tus"]["endpoint"].endswith("/upload/resumable/sign")
+    assert out["storage_path"].endswith("/bracket.DNG")
+
+
+def test_sign_rejects_over_50mb_with_vendor_message(monkeypatch):
     from fastapi import HTTPException
 
     monkeypatch.setattr(
-        up,
-        "_actor_job",
-        AsyncMock(side_effect=AssertionError("_actor_job must not run for RAW")),
+        up, "_actor_job", AsyncMock(side_effect=AssertionError("must not reach auth/sign for oversize"))
     )
-
     try:
         _run(
             up.sign_stills_upload(
-                {
-                    "job_id": "job-d",
-                    "filename": "bracket.DNG",
-                    "mime_type": "image/x-adobe-dng",
-                    "media_type": "hdr",
-                }
+                {"job_id": "job-d", "filename": "D850_0001.NEF", "media_type": "hdr", "file_size": 55_196_715}
             )
         )
-        raise AssertionError("expected camera_raw_unsupported")
+        raise AssertionError("expected file_too_large")
     except HTTPException as exc:
-        assert exc.status_code == 400
-        assert exc.detail["code"] == "camera_raw_unsupported"
+        assert exc.status_code == 413
+        assert exc.detail["code"] == "file_too_large"
+        assert exc.detail["message"] == "This file is over 50 MB. Upload the JPEG for now and keep the RAW."
+
+
+def test_sign_refuses_big_file_on_blob_proxy(monkeypatch):
+    """Fair-Use proxy runs through a Vercel function (4.5 MB) — say so up front."""
+    from fastapi import HTTPException
+    from app.services import upload_backend
+
+    monkeypatch.setattr(
+        up, "_actor_job", AsyncMock(return_value=(MagicMock(), "photog-1", "default_vendor", {}))
+    )
+
+    async def proxy_target(key, content_type, size):
+        return {"provider": "blob_proxy", "method": "PUT", "signed_url": "https://dispatch-api.brxs.ca/api/capture/blob-put?x",
+                "token": None, "tus": None, "storage_path": key, "via_proxy": True}
+
+    monkeypatch.setattr(upload_backend, "create_direct_upload", proxy_target)
+    try:
+        _run(up.sign_stills_upload({"job_id": "job-d", "filename": "IMG_1.CR3", "media_type": "hdr", "file_size": 25_000_000}))
+        raise AssertionError("expected storage_unavailable_large")
+    except HTTPException as exc:
+        assert exc.status_code == 503
+        assert "keep the RAW" in exc.detail["message"]

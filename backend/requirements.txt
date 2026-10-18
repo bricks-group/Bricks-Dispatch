@@ -4,6 +4,8 @@ pillow-heif>=0.16.0
 numpy>=1.26.0
 # <5: opencv 5.x wheel bundles openblas+gfortran; Vercel runtime dependency install ran out of /tmp (ENOSPC) -> prod 500, 2026-10-11
 opencv-python-headless>=4.10.0,<5
+# Camera RAW (CR2/CR3/NEF/ARW/RAF/ORF/RW2/DNG/PEF/SRW) → working JPEG. ~3 MB wheel, bundles LibRaw.
+rawpy>=0.21,<0.28
 slowapi>=0.1.9
 python-json-logger>=2.0.7
 aiohappyeyeballs==2.6.1

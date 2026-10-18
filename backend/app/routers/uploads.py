@@ -17,7 +17,17 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Form, Header, HTTPException
 
-from ..services.media_intake import assert_listing_still_decodable, durable_media_filename, infer_media_type, stills_storage_path, wants_staging
+from ..services.media_intake import (
+    assert_listing_still_decodable,
+    assert_upload_size,
+    durable_media_filename,
+    file_too_large_message,
+    infer_media_type,
+    is_camera_raw_file,
+    stills_storage_path,
+    upload_content_type,
+    wants_staging,
+)
 from ..services.storage import create_signed_upload_url, upload_file
 from ..services.post_production import process_job_assets
 from fastapi import BackgroundTasks
@@ -241,37 +251,63 @@ async def sign_stills_upload(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """Mint a signed PUT for a camera still / drone / reel (bypasses 4.5MB Vercel POST).
+    """Mint a direct browser → storage upload (bypasses the 4.5MB Vercel POST).
 
     Body: job_id, filename, mime_type?, media_type?, file_size?
-    PUT bytes to signed_url, then POST /api/uploads/complete.
+    Upload bytes to `tus` (resumable, big files) or PUT to signed_url, then
+    POST /api/uploads/complete. Camera RAW is accepted (the master); the
+    pipeline edits from a working JPEG made by POST /api/uploads/{id}/preview.
     """
+    from ..services.upload_backend import BLOB_PROXY_MAX_BYTES, create_direct_upload
+
     job_id = str((payload or {}).get("job_id") or "").strip()
     filename = str((payload or {}).get("filename") or "still.jpg")
     mime_type = str((payload or {}).get("mime_type") or "")
+    try:
+        file_size = int((payload or {}).get("file_size") or 0)
+    except (TypeError, ValueError):
+        file_size = 0
     media_type = infer_media_type(filename, mime_type, (payload or {}).get("media_type"))
     durable_name = durable_media_filename(filename, media_type)
     assert_listing_still_decodable(filename, mime_type, media_type)
     if not job_id:
         api_error(400, "job_id is required", "missing_job_id")
+    assert_upload_size(file_size, filename, mime_type)
     await _actor_job(authorization, x_user_id, job_id)
     upload_id = str(uuid.uuid4())
+    content_type = upload_content_type(filename, mime_type)
     # Keep signed storage_path on the client-provided basename so PUT contract stays stable.
-    path = stills_storage_path(job_id, upload_id, filename)
-    signed = await create_signed_upload_url(path)
-    if not signed or not signed.get("signed_url"):
+    key = stills_storage_path(job_id, upload_id, filename)
+    target = await create_direct_upload(key, content_type, file_size)
+    if not target or not target.get("signed_url"):
         api_error(502, "Could not mint stills upload URL", "stills_sign_failed")
+    if target.get("via_proxy") and file_size > BLOB_PROXY_MAX_BYTES:
+        # Fair-Use fallback proxies bytes through a Vercel function (4.5 MB cap):
+        # the PUT would fail at the end. Say so now instead.
+        msg = (
+            "Big uploads are paused right now. Upload the JPEG for now and keep the RAW."
+            if is_camera_raw_file(filename, mime_type)
+            else "Big uploads are paused right now. Try again in a few minutes."
+        )
+        api_error(503, msg, "storage_unavailable_large")
+    path = target.get("storage_path") or key
     return {
         "ok": True,
         "upload_id": upload_id,
         "job_id": job_id,
         "storage_path": path,
-        "path": signed.get("path") or path,
-        "signed_url": signed.get("signed_url"),
-        "token": signed.get("token"),
-        "content_type": mime_type or "application/octet-stream",
+        "path": target.get("path") or path,
+        "signed_url": target.get("signed_url"),
+        "token": target.get("token"),
+        "method": target.get("method") or "PUT",
+        "provider": target.get("provider"),
+        "tus": target.get("tus"),
+        "headers": target.get("headers") or {"Content-Type": content_type},
+        "max_file_bytes": target.get("max_file_bytes"),
+        "content_type": content_type,
         "filename": durable_name,
         "media_type": media_type,
+        "camera_raw": is_camera_raw_file(filename, mime_type),
         "requires_staging": media_type == "staging",
     }
 
@@ -292,12 +328,13 @@ async def complete_stills_upload(
     file_size = int((payload or {}).get("file_size") or 0)
     media_type = infer_media_type(filename, mime_type, (payload or {}).get("media_type"))
     assert_listing_still_decodable(filename, mime_type, media_type)
+    mime_type = upload_content_type(filename, mime_type)
     # Persist kind in filename column (uploads has no media_type col) for leftover routing.
     filename = durable_media_filename(filename, media_type)
     if not job_id or not upload_id or not storage_path:
         api_error(400, "job_id, upload_id, and storage_path are required", "missing_complete_fields")
     prefix = f"bricks-go/jobs/{job_id}/{upload_id}/"
-    if not storage_path.startswith(prefix):
+    if not (storage_path.startswith(prefix) or storage_path.startswith(f"r2:{prefix}")):
         api_error(400, "storage_path must be the signed stills path for this job", "bad_stills_path")
     db, _, _, job = await _actor_job(authorization, x_user_id, job_id)
 
@@ -347,6 +384,78 @@ async def complete_stills_upload(
     fresh["uploaded_count"] = new_uploaded
     await _maybe_start_post(fresh, new_uploaded, job_id)
     return record.dict()
+
+
+RAW_PREVIEW_REVIEW_MESSAGE = (
+    "We couldn't read this RAW. Bricks will check it. Keep the file until the job is approved."
+)
+
+
+@router.post("/{upload_id}/preview")
+async def make_upload_preview(
+    upload_id: str,
+    payload: dict = Body(default={}),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+):
+    """Make the working JPEG + preview for a camera RAW right after upload.
+
+    Background step the web app fires after /complete so post-production
+    reads a small JPEG instead of decoding every RAW at delivery time. The
+    RAW stays the master. Non-RAW uploads return skipped. A RAW that cannot
+    be decoded is reported (needs_review) — post-production holds it.
+    """
+    from ..services.raw_working import RawDecodeError, ensure_working_jpeg, is_raw_asset
+    from ..services.storage import get_signed_download_url
+
+    job_id = str((payload or {}).get("job_id") or "").strip()
+    if not job_id:
+        api_error(400, "job_id is required", "missing_job_id")
+    db, _, _, _job = await _actor_job(authorization, x_user_id, job_id)
+    row = {}
+    for r in await _job_upload_rows(db, job_id):
+        if str((r or {}).get("id") or "") == upload_id:
+            row = r
+            break
+    if not row:
+        api_error(404, "Upload not found", "upload_not_found")
+    path = row.get("file_url") or ""
+    if not is_raw_asset(row, path):
+        return {"ok": True, "upload_id": upload_id, "camera_raw": False, "skipped": True}
+    try:
+        jpeg, meta = await ensure_working_jpeg(path)
+    except RawDecodeError as e:
+        logger.warning("RAW preview failed upload=%s: %s", upload_id, str(e)[:200])
+        return {
+            "ok": False,
+            "upload_id": upload_id,
+            "camera_raw": True,
+            "status": "needs_review",
+            "message": RAW_PREVIEW_REVIEW_MESSAGE,
+        }
+    if not jpeg:
+        api_error(404, "Uploaded file not found in storage", "upload_object_missing")
+    preview_path = meta.get("preview_path")
+    if preview_path and not row.get("thumbnail_url"):
+        try:
+            await db.table("uploads").update({"thumbnail_url": preview_path}).eq("id", upload_id).execute()
+        except Exception as e:
+            logger.info("RAW preview thumbnail_url not saved upload=%s: %s", upload_id, str(e)[:120])
+    preview_url = await get_signed_download_url(preview_path, expiry=3600) if preview_path else None
+    return {
+        "ok": True,
+        "upload_id": upload_id,
+        "camera_raw": True,
+        "status": "ready",
+        "preview_url": preview_url,
+        "working": {
+            "width": meta.get("width"),
+            "height": meta.get("height"),
+            "method": meta.get("method"),
+            "exposure_bias": meta.get("exposure_bias"),
+            "cached": bool(meta.get("cached")),
+        },
+    }
 
 
 def _annotate_inferred_media_type(rows: list | None) -> list:

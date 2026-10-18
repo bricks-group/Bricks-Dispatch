@@ -144,7 +144,15 @@ def to_srgb_rgb(img: Image.Image) -> Image.Image:
 
 
 def open_rgb(image_bytes: bytes) -> Image.Image:
-    """Open upload bytes, EXIF-transpose, convert to sRGB RGB."""
+    """Open upload bytes, EXIF-transpose, convert to sRGB RGB.
+
+    Camera RAW bytes decode through raw_decode (Pillow would open a TIFF-based
+    RAW as its tiny IFD0 thumbnail, or fail on CR3/RAF).
+    """
+    from .raw_decode import decode_raw, sniff_camera_raw
+
+    if sniff_camera_raw(image_bytes):
+        return decode_raw(image_bytes).image.convert("RGB")
     img = Image.open(io.BytesIO(image_bytes))
     try:
         oriented = ImageOps.exif_transpose(img)

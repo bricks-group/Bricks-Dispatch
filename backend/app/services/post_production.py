@@ -104,6 +104,34 @@ def unedited_original_hold() -> dict:
     }
 
 
+def raw_review_hold() -> dict:
+    """QC hold for a camera RAW that could not be decoded (never delivered).
+
+    provider=original keeps run_qc_for_job from re-scoring it; the note tells
+    the reviewer it is a RAW decode problem, not a bad edit.
+    """
+    from .raw_decode import RAW_REVIEW_QC_NOTE
+
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": RAW_REVIEW_QC_NOTE,
+    }
+
+
+async def _hold_raw_for_review(db, job_id: str, upload_id: str, file_path: str, now: str, err: Exception) -> None:
+    logger.warning(
+        f"Job {job_id}: RAW {upload_id} ({file_path}) could not be decoded ({err}) — held for review"
+    )
+    await _safe_update_upload(db, upload_id, {
+        "processing_status": "done",
+        "processed_url": file_path,
+        "provider": "original",
+        "processed_at": now,
+        **raw_review_hold(),
+    })
+
+
 EQUIRECT_360_QC_NOTE = (
     "360° equirectangular panorama — held uncropped, not a listing still. "
     "Listing export would crop it to a warped 4:3 slice; deliver it through "
@@ -559,17 +587,24 @@ async def deliver_bracket_group_without_vendor(
         upload_enhanced,
         upload_qc_variant,
     )
-    from .storage import download_bytes
+    from .raw_working import RawDecodeError, load_still_source
 
     now = datetime.now(timezone.utc).isoformat()
     frames = []
     filenames = []
     loaded = []
+    raw_failed = []
     for asset in group:
         path = asset.get("file_url")
         if not path:
             continue
-        raw = await download_bytes(path)
+        # Camera RAW → working JPEG (RAW stays the master, never merged raw).
+        try:
+            raw = await load_still_source(asset, path)
+        except RawDecodeError as e:
+            logger.warning(f"Job {job_id}: bracket RAW {asset.get('id')} undecodable ({e}) — left out of merge")
+            raw_failed.append(asset)
+            continue
         if not raw:
             continue
         frames.append(raw)
@@ -596,6 +631,15 @@ async def deliver_bracket_group_without_vendor(
         b = exposure_bias_from_name(str(item.get("filename") or ""))
         return (999.0 if b is None else abs(b), str(item.get("filename") or ""))
 
+    if not loaded and raw_failed:
+        # Every exposure is a RAW we cannot decode: hold the angle for a human.
+        primary = sorted(raw_failed, key=_bias_key)[0]
+        await _hold_raw_for_review(
+            db, job_id, primary.get("id"), primary.get("file_url"), now,
+            RawDecodeError("no exposure in this bracket decoded"),
+        )
+        await _fold_siblings(primary, primary.get("file_url"))
+        return
     if not loaded:
         # Every exposure download missed: single-frame path on the primary
         # (retries download; holds the unedited original if it misses again).
@@ -776,6 +820,19 @@ async def _heic_as_is_jpeg_url(db, job_id: str, upload_id: str, asset: dict, fil
         return None
     if is_video_file(filename, mime_type, asset.get("media_type")):
         return None
+    from .raw_working import ensure_working_jpeg, is_raw_asset
+
+    if is_raw_asset(asset, file_path):
+        # RAW master stays put; the browser/listing gets the working JPEG.
+        # RawDecodeError propagates — callers hold the file for review.
+        jpeg, meta = await ensure_working_jpeg(file_path)
+        if not jpeg:
+            return None
+        if meta.get("work_path"):
+            return meta["work_path"]
+        from .photo_enhance_service import upload_enhanced
+
+        return await upload_enhanced(db.storage, job_id, upload_id, jpeg)
     name = str(filename or file_path or "").lower()
     mime = str(mime_type or "").lower()
     is_heic = (
@@ -837,14 +894,16 @@ async def _listing_export_as_is_url(db, job_id: str, upload_id: str, asset: dict
         return None
     name = str(filename or file_path or "").lower().replace("\\", "/").split("/")[-1]
     mime = str(mime_type or "").lower()
-    is_image = name.endswith(IMAGE_EXTS) or mime.startswith("image/")
+    from .raw_decode import is_camera_raw_name
+
+    is_image = name.endswith(IMAGE_EXTS) or mime.startswith("image/") or is_camera_raw_name(name)
     if not is_image:
         return None
     try:
         from .photo_enhance_service import apply_listing_export, upload_enhanced
-        from .storage import download_bytes
+        from .raw_working import load_still_source
 
-        original = await download_bytes(file_path)
+        original = await load_still_source(asset, file_path)
         if not original:
             return None
         pano = _pano_hold_kind(original)
@@ -901,7 +960,13 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     # PropTx MLS listing_export (4:3 / le2400) — same as drone/reel stills; HDR OFF.
     if route == "staging":
         processed_url = file_path
-        jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
+        from .raw_working import RawDecodeError
+
+        try:
+            jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
+        except RawDecodeError as e:
+            await _hold_raw_for_review(db, job_id, upload_id, file_path, now, e)
+            return
         if jpeg_url:
             processed_url = jpeg_url
         listing_url = await _listing_export_as_is_url(
@@ -944,7 +1009,19 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             else "as_is"
         )
         processed_url = file_path
-        jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
+        from .raw_working import RawDecodeError, is_raw_asset
+
+        try:
+            jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
+        except RawDecodeError as e:
+            await _hold_raw_for_review(db, job_id, upload_id, file_path, now, e)
+            return
+        if is_raw_asset(asset, file_path) and not jpeg_url:
+            # Never deliver a RAW as is (drone DNG, mis-tagged frame).
+            await _hold_raw_for_review(
+                db, job_id, upload_id, file_path, now, RawDecodeError("RAW source missing")
+            )
+            return
         if jpeg_url:
             processed_url = jpeg_url
         # Drone / reel stills: PropTx MLS listing_export (4:3 / le2400 / sRGB JPEG).
@@ -1001,7 +1078,13 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 upload_enhanced,
                 upload_qc_variant,
             )
-            original = await download_bytes(file_path)
+            from .raw_working import RawDecodeError, load_still_source
+
+            try:
+                original = await load_still_source(asset, file_path)
+            except RawDecodeError as raw_err:
+                await _hold_raw_for_review(db, job_id, upload_id, file_path, now, raw_err)
+                return file_path
             pano = _pano_hold_kind(original)
             if pano:
                 await _hold_equirect_360(db, job_id, upload_id, file_path, now, pano)
@@ -1077,7 +1160,13 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                 upload_enhanced,
                 upload_qc_variant,
             )
-            original = await download_bytes(file_path)
+            from .raw_working import RawDecodeError, load_still_source
+
+            try:
+                original = await load_still_source(asset, file_path)
+            except RawDecodeError as raw_err:
+                await _hold_raw_for_review(db, job_id, upload_id, file_path, now, raw_err)
+                return file_path
             enhance_meta = {}
             pano = _pano_hold_kind(original)
             if pano:

@@ -349,6 +349,10 @@ async def get_signed_download_url(storage_path: str, expiry: int = SIGNED_URL_EX
     """Return a Supabase signed URL, or HMAC Blob proxy URL on Fair-Use fallback."""
     if not storage_path:
         return None
+    from .r2_storage import is_r2_path, r2_presign
+
+    if is_r2_path(storage_path):
+        return r2_presign("GET", storage_path, min(max(60, int(expiry or 3600)), 7 * 24 * 3600))
     try:
         db = await get_db()
         result = await db.storage.from_(STORAGE_BUCKET).create_signed_url(storage_path, expiry)
@@ -463,6 +467,10 @@ async def download_bytes(storage_path: str) -> Optional[bytes]:
     """Fetch object bytes from brxs-deliverables. Blob fallback when Supabase fails."""
     if not storage_path:
         return None
+    from .r2_storage import is_r2_path, r2_get
+
+    if is_r2_path(storage_path):
+        return await r2_get(storage_path)
     try:
         db = await get_db()
         data = await db.storage.from_(STORAGE_BUCKET).download(storage_path)
@@ -547,6 +555,10 @@ async def upload_bytes(
     """Upload raw bytes to brxs-deliverables (Blob fallback on failure). Returns True on success."""
     if not storage_path or not data:
         return False
+    from .r2_storage import is_r2_path, r2_put
+
+    if is_r2_path(storage_path):
+        return await r2_put(storage_path, data, content_type or "application/octet-stream")
     try:
         db = await get_db()
         bucket = db.storage.from_(STORAGE_BUCKET)

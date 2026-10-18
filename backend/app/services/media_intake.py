@@ -17,14 +17,14 @@ STAGING_TYPES = frozenset({"staging", "virtual_staging"})
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm", ".avi")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".heif")
 PDF_EXTS = (".pdf",)
-# Camera RAW — enhance only decodes JPEG/PNG/WebP/HEIC via image_io.open_rgb.
-# Reject at upload so vendors never land a hollow enhance→listing path.
-CAMERA_RAW_EXTS = (
-    ".cr2", ".cr3", ".dng", ".nef", ".nrw", ".arw", ".srf", ".sr2",
-    ".raf", ".orf", ".rw2", ".pef", ".ptx", ".srw", ".x3f", ".raw", ".rwl",
-)
+# Camera RAW is the primary stills upload (Bricks Standard v1.1: vendors
+# capture, Bricks edits). The RAW stays the master; raw_decode makes the
+# working JPEG that edit / QC / previews / delivery read. Never delivered raw.
+from .raw_decode import CAMERA_RAW_EXTS, raw_mime_for  # noqa: E402
+
 _CAMERA_RAW_MIME_MARKERS = (
     "image/x-adobe-dng",
+    "image/dng",
     "image/x-canon-cr2",
     "image/x-canon-cr3",
     "image/x-nikon-nef",
@@ -32,16 +32,57 @@ _CAMERA_RAW_MIME_MARKERS = (
     "image/x-fuji-raf",
     "image/x-olympus-orf",
     "image/x-panasonic-rw2",
+    "image/x-panasonic-raw",
     "image/x-pentax-pef",
     "image/x-samsung-srw",
     "image/x-sigma-x3f",
     "image/x-raw",
     "image/x-dcraw",
 )
-CAMERA_RAW_REJECT_MESSAGE = (
-    "Camera RAW files (CR2/CR3/DNG/NEF/ARW/…) are not supported for listing stills. "
-    "Export JPEG (or HEIC) ±EV brackets from your camera or Lightroom, then upload those."
+
+# Storage per-file cap. Supabase Free = 50 MB for every object (cannot be
+# raised on Free); R2 defaults to 5 GB. UPLOAD_MAX_FILE_MB overrides.
+def upload_max_file_bytes() -> int:
+    from .upload_backend import max_file_bytes
+
+    return max_file_bytes()
+
+
+FILE_TOO_LARGE_RAW_MESSAGE = (
+    "This file is over 50 MB. Upload the JPEG for now and keep the RAW."
 )
+FILE_TOO_LARGE_MESSAGE = "This file is over 50 MB. Export a smaller file and try again."
+
+
+def file_too_large_message(filename=None, mime_type=None, limit_bytes=None) -> str:
+    limit = int(limit_bytes or upload_max_file_bytes())
+    mb = int(round(limit / (1024 * 1024)))
+    if is_camera_raw_file(filename, mime_type):
+        return FILE_TOO_LARGE_RAW_MESSAGE.replace("50 MB", f"{mb} MB")
+    return FILE_TOO_LARGE_MESSAGE.replace("50 MB", f"{mb} MB")
+
+
+def assert_upload_size(file_size=None, filename=None, mime_type=None) -> None:
+    """413 before minting a URL the storage would reject at the end of the PUT."""
+    try:
+        size = int(file_size or 0)
+    except (TypeError, ValueError):
+        size = 0
+    limit = upload_max_file_bytes()
+    if size > limit:
+        from ..shared.errors import api_error
+
+        api_error(413, file_too_large_message(filename, mime_type, limit), "file_too_large")
+
+
+def upload_content_type(filename=None, mime_type=None) -> str:
+    """Stable Content-Type for storage. Browsers send '' / octet-stream for RAW."""
+    mime = _lower(mime_type)
+    if is_camera_raw_file(filename, None) and (not mime or mime == "application/octet-stream" or not mime.startswith("image/")):
+        return raw_mime_for(filename)
+    return str(mime_type or "") or "application/octet-stream"
+
+
 VISIT_EXTS = (".splat", ".ply", ".spz", ".sog")
 
 
@@ -164,7 +205,7 @@ def is_pdf_file(filename: Any = None, mime_type: Any = None) -> bool:
 
 
 def is_camera_raw_file(filename: Any = None, mime_type: Any = None) -> bool:
-    """True when filename ext or mime marks a camera RAW the enhance desk cannot decode."""
+    """True when filename ext or mime marks a camera RAW (decoded via raw_decode)."""
     name = _lower(filename)
     if name.endswith(CAMERA_RAW_EXTS):
         return True
@@ -186,23 +227,11 @@ def assert_listing_still_decodable(
     mime_type: Any = None,
     media_type: Any = None,
 ) -> None:
-    """Reject camera RAW before sign/complete/create so enhance→listing is never hollow.
+    """Kept for callers: camera RAW is accepted now (decoded to a working JPEG).
 
-    Skips Visit (.splat/.ply/.spz) and video (drone reel / cinematic) — those are
-    not listing stills decoded by image_io.open_rgb.
+    Nothing is rejected here any more; size is checked by assert_upload_size.
     """
-    if is_visit_file(filename):
-        return
-    if is_video_file(filename, mime_type, media_type):
-        return
-    if is_pdf_file(filename, mime_type):
-        return
-    if _lower(media_type) == "floorplan":
-        return
-    if is_camera_raw_file(filename, mime_type):
-        from ..shared.errors import api_error
-
-        api_error(400, CAMERA_RAW_REJECT_MESSAGE, "camera_raw_unsupported")
+    return None
 
 
 def is_photo_file(filename: Any = None, mime_type: Any = None, media_type: Any = None) -> bool:
@@ -226,6 +255,8 @@ def is_photo_file(filename: Any = None, mime_type: Any = None, media_type: Any =
     if mime.startswith("image/"):
         return True
     name = _lower(filename)
+    if name.endswith(CAMERA_RAW_EXTS):
+        return True
     return name.endswith(IMAGE_EXTS) or not name
 
 
