@@ -619,9 +619,9 @@ function JobListingPanel({
                 <li key={u.id} className="upload-row">
                   {u.preview?.preview_url ? (
                     <img className="upload-thumb" src={u.preview.preview_url} alt="" />
-                  ) : (
-                    <span className="upload-thumb upload-thumb-empty" aria-hidden="true">{raw ? 'RAW' : ''}</span>
-                  )}
+                  ) : raw ? (
+                    <span className="upload-thumb upload-thumb-empty" aria-hidden="true">RAW</span>
+                  ) : null}
                   <span className="upload-meta">
                     <span className="upload-name">{u.filename}</span>
                     <span className="muted">
