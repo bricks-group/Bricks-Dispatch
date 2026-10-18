@@ -1020,63 +1020,28 @@ async def _patch_media_delivery(job_id: str, fields: dict) -> None:
             raise
 
 
-async def _send_delivery_notification(job_id: str, delivery_urls: list) -> None:
-    """Delegates delivery notification to Booking service (which owns the agent relationship)."""
-    db = await get_db()
-    job = {}
-    try:
-        res_job = await db.table("jobs").select("booking_id, address").eq("id", job_id).maybe_single().execute()
-        job = _maybe_single_row(res_job)
-    except Exception as e:
-        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
-        if not _is_rest_quota_error(e):
-            raise
-        job = pg_select_job_by_id(job_id) or {}
-    if not job:
-        return
+async def _send_delivery_notification(job_id: str, delivery_urls: list) -> str:
+    """Email the agent (jobs.agent_email first, Companion booking fallback) and
+    record the honest outcome on media_delivery: sent | muted | skipped | failed.
 
-    booking_id = job.get("booking_id") or ""
-    if not booking_id:
-        logger.warning(f"Job {job_id}: no booking_id — skipping delivery notification")
-        return
-
-    _internal_api_key = get_own_internal_api_key()
-    _booking_api_url = os.environ.get("BOOKING_API_URL", "https://bricks-companion-api.vercel.app")
-
-    if not _internal_api_key:
-        logger.info(f"Job {job_id}: INTERNAL_API_KEYS not set — skipping delivery notification")
-        return
-
-    # splat_status is not on the live media_delivery schema (Visit registers via
-    # property_visits). Keep splat_pending=False — Visit arrives separately.
-    splat_pending = False
+    Links point at the never-expiring client share page, not 1h signed URLs.
+    """
+    from ..services.client_comms import notify_photos_delivered
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{_booking_api_url}/api/internal/comms/job-delivered",
-                headers={"X-Internal-Api-Key": _internal_api_key},
-                json={
-                    "booking_id": booking_id,
-                    "job_id": job_id,
-                    "address": job.get("address", ""),
-                    "delivery_count": len(delivery_urls),
-                    "delivery_urls": delivery_urls[:5],
-                    "splat_pending": splat_pending,
-                },
-            )
-            resp.raise_for_status()
-            await _patch_media_delivery(job_id, {
-                "notified_at": datetime.now(timezone.utc).isoformat(),
-                "notification_status": "sent",
-            })
-            logger.info(f"Job {job_id}: delivery notification delegated to Booking service (splat_pending={splat_pending})")
-    except Exception as e:
+        status = await notify_photos_delivered(job_id, delivery_urls)
+    except Exception as e:  # noqa: BLE001 - never fail the delivery over email
         logger.error(f"Job {job_id}: delivery notification failed: {e}")
-        try:
-            await _patch_media_delivery(job_id, {"notification_status": "failed"})
-        except Exception as e2:
-            logger.error(f"Job {job_id}: media_delivery notify-failed patch failed: {e2}")
+        status = "failed"
+    fields = {"notification_status": status}
+    if status == "sent":
+        fields["notified_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        await _patch_media_delivery(job_id, fields)
+    except Exception as e2:
+        logger.error(f"Job {job_id}: media_delivery notification patch failed: {e2}")
+    logger.info(f"Job {job_id}: delivery notification {status}")
+    return status
 
 
 # ---------------------------------------------------------------------------

@@ -491,3 +491,177 @@ async def notify_capture_delivered(
     if ok:
         logger.info(f"Job {job_id}: capture delivery notification sent products={clean_products!r}")
     return ok
+
+
+# ---------------------------------------------------------------------------
+# Photo / video delivery email (post_production)
+# ---------------------------------------------------------------------------
+
+_VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm")
+
+
+async def _client_share_link(job_id: str) -> str:
+    """Never-expiring client share page for the listing (OS mints the token).
+
+    The share page re-signs storage links on every open, so the email never
+    carries a signed URL that dies. Returns "" when OS can't be reached.
+    """
+    api_key = get_own_internal_api_key()
+    os_url = (os.environ.get("BRICKS_OS_API_URL") or "https://api.brxs.ca").strip().rstrip("/")
+    if not api_key or not job_id:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{os_url}/api/internal/share-link",
+                headers={"X-Internal-Api-Key": api_key},
+                json={"property_id": job_id},
+            )
+            resp.raise_for_status()
+            url = str((resp.json() or {}).get("share_url") or "").strip()
+            return url if url.startswith("https://") else ""
+    except Exception as e:  # noqa: BLE001 - email still goes out with the desk link
+        logger.warning("share-link mint failed for job %s: %s", job_id, type(e).__name__)
+        return ""
+
+
+def _delivery_has_video(delivery_urls: list | None) -> bool:
+    for u in delivery_urls or []:
+        if not isinstance(u, dict):
+            continue
+        name = str(u.get("filename") or u.get("url") or "").lower().split("?", 1)[0]
+        mime = str(u.get("mime_type") or "").lower()
+        if mime.startswith("video/") or name.endswith(_VIDEO_EXTS):
+            return True
+    return False
+
+
+def photos_delivered_email(
+    *, agent_name: str, address: str, share_url: str, desk_url: str, has_video: bool
+) -> tuple[str, str]:
+    """(subject, html) for the delivery email. Links never expire."""
+    what = "media" if has_video else "photos"
+    addr = (address or "").strip() or "your listing"
+    subject = f"Your photos are ready · {addr}" if what == "photos" else f"Your media is ready · {addr}"
+    verb = "are" if what == "photos" else "is"
+    primary = share_url or desk_url
+    note = (
+        "This link doesn't expire. You can share it with your seller as is."
+        if share_url
+        else "Sign in to view and download everything."
+    )
+    body = f"""
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {_html.escape(agent_name or 'there')},</p>
+<p style="color:#555;line-height:1.6;margin:0 0 20px 0">
+  Your {what} for <strong>{_html.escape(addr)}</strong> {verb} ready.
+</p>
+<p style="margin:0 0 20px 0">
+  <a href="{_html.escape(primary)}" style="display:inline-block;background:#14110E;color:#F4F1EB;text-decoration:none;font-weight:500;font-size:14px;padding:12px 20px;border-radius:2px">View and download</a>
+</p>
+<p style="color:#888;font-size:13px;line-height:1.5;margin:0 0 8px 0">{note}</p>
+"""
+    if share_url and desk_url:
+        body += (
+            f'<p style="color:#888;font-size:13px;line-height:1.5;margin:0">'
+            f'Or open the listing file: <a href="{_html.escape(desk_url)}" style="color:#d2542b">'
+            f"{_html.escape(desk_url)}</a></p>"
+        )
+    title = "Media ready" if has_video else "Photos ready"
+    return subject, _branded_card(title, body)
+
+
+async def _call_booking_comms_json(path: str, payload: dict) -> dict | None:
+    """Like _call_booking_comms but returns the JSON body (None on failure)."""
+    api_key = get_own_internal_api_key()
+    booking_url = (os.environ.get("BOOKING_API_URL") or os.environ.get("BOOKING_CALLBACK_URL") or "").strip()
+    if not api_key or not booking_url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{booking_url.rstrip('/')}{path}",
+                headers={"X-Internal-Api-Key": api_key},
+                json=payload,
+            )
+            resp.raise_for_status()
+            try:
+                return resp.json() or {}
+            except Exception:  # noqa: BLE001
+                return {}
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Booking comms call to {path} failed: {e}")
+        return None
+
+
+def _looks_like_uuid(v: str) -> bool:
+    import uuid as _uuid
+    try:
+        _uuid.UUID(str(v))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+async def notify_photos_delivered(
+    job_id: str, delivery_urls: list | None = None, *, to_override: str | None = None
+) -> str:
+    """Email the agent that the listing media is delivered.
+
+    Returns the media_delivery.notification_status to record:
+    sent | muted | skipped (no recipient) | failed.
+
+    Why: this used to only delegate to Companion by booking_id, but www /book
+    bookings live on jobs.agent_email (Companion's bookings table has no row
+    for them, and e2e ids aren't UUIDs), so every prod delivery email failed.
+    Now: jobs.agent_email first (same as en-route / capture delivery), with a
+    link to the never-expiring share page instead of 1h signed URLs.
+    to_override: ops test sends only (the agent is never contacted).
+    """
+    job = await _load_job(job_id, "id, booking_id, address, agent_email, agent_name")
+    if not job:
+        logger.warning(f"Job {job_id}: missing job — skipping delivery email")
+        return "skipped"
+    address = (job.get("address") or "").strip()
+    agent_email = (to_override or job.get("agent_email") or "").strip()
+    agent_name = (job.get("agent_name") or "").strip() if not to_override else "there"
+    share_url = await _client_share_link(job_id)
+    desk_url = _listing_desk_url(job_id)
+    has_video = _delivery_has_video(delivery_urls)
+
+    if agent_email:
+        if not to_override and not _agent_allows(agent_email, "delivery_ready_email"):
+            logger.info(f"Job {job_id}: delivery email muted by agent's notification settings")
+            return "muted"
+        subject, html = photos_delivered_email(
+            agent_name=agent_name, address=address, share_url=share_url,
+            desk_url=desk_url, has_video=has_video,
+        )
+        ok = await _email_agent_direct(agent_email, subject, html)
+        logger.info(
+            "Job %s: delivery email %s (share_link=%s)", job_id, "sent" if ok else "failed", bool(share_url)
+        )
+        return "sent" if ok else "failed"
+
+    booking_id = (job.get("booking_id") or "").strip()
+    if not booking_id or not _looks_like_uuid(booking_id):
+        logger.warning(f"Job {job_id}: no agent_email and no Companion booking — delivery email skipped")
+        return "skipped"
+    body = await _call_booking_comms_json("/api/internal/comms/job-delivered", {
+        "booking_id": booking_id,
+        "job_id": job_id,
+        "address": address,
+        "delivery_count": len(delivery_urls or []),
+        # Never raw signed URLs (they die in 1h); the share page re-signs.
+        "delivery_urls": [],
+        "share_url": share_url,
+        "desk_url": desk_url,
+        "has_video": has_video,
+        "splat_pending": False,
+    })
+    if body is None:
+        return "failed"
+    if body.get("sent"):
+        return "sent"
+    if body.get("muted"):
+        return "muted"
+    return "skipped"
