@@ -293,6 +293,11 @@ async def upload_rpas_impl(
     if (certificate_number or "").strip():
         rpas_patch["rpas_certificate_number"] = certificate_number.strip()
     updated = (await _persist_safe(db, member["id"], rpas_patch)) or {**member, **rpas_patch}
+    try:
+        from ..services.credential_review_notify import notify_rpas_uploaded
+        await notify_rpas_uploaded(updated or member, level, certificate_number)
+    except Exception:
+        pass
     profile = await build_profile(updated)
     profile["rpas_document_id"] = doc_id
     profile["rpas_certificate_url"] = file_key
@@ -368,6 +373,11 @@ async def upload_insurance_impl(
     if (policy_number or "").strip():
         patch["insurance_policy_number"] = policy_number.strip()[:80]
     updated = (await _persist_safe(db, member["id"], patch)) if patch else member
+    try:
+        from ..services.credential_review_notify import notify_insurance_uploaded
+        await notify_insurance_uploaded(updated or member, declared["declared"])
+    except Exception:
+        pass
     profile = await build_profile(updated or member)
     profile["insurance_document_id"] = doc_id
     profile["insurance_pending_review"] = True
