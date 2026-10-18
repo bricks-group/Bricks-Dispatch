@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 288" width="480" height="288" role="img" aria-labelledby="t">
+<title id="t">Pan arc of 15 to 40 degrees at 5 degrees per second maximum</title>
+<rect id="bg" width="480" height="288" fill="#F4F1EB"/>
+<g fill="none" stroke="#14110E" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="10">
+<path d="M234.0 242.0L246.0 242.0L246.0 230.0L234.0 230.0z" vector-effect="non-scaling-stroke"/>
+<path d="M237.0 230.0L235.0 225.0L245.0 225.0L243.0 230.0" vector-effect="non-scaling-stroke"/>
+<line x1="240.0" y1="236.0" x2="182.5" y2="78.1" stroke="#97928A" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<line x1="240.0" y1="236.0" x2="297.5" y2="78.1" stroke="#97928A" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<path d="M199.0 123.2A120 120 0 0 1 281.0 123.2" vector-effect="non-scaling-stroke"/>
+<path d="M274.1 124.2L281.0 123.2L276.5 117.9" vector-effect="non-scaling-stroke"/>
+<text x="240" y="100" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="middle">15–40° total</text>
+<text x="240" y="84" fill="#14110E" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="middle">5°/s max</text>
+<text x="176.54061592128767" y="82.1316397079674" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="end">Start</text>
+<text x="303.45938407871233" y="82.1316397079674" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="start">End</text>
+<text x="264" y="240" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="start">Fluid head or gimbal</text>
+<text x="24" y="276" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="12" font-weight="400" text-anchor="start">Slow pan: smooth and even. 30° takes at least 6 s.</text>
+</g>
+</svg>

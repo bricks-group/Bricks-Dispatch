@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 288" width="480" height="288" role="img" aria-labelledby="t">
+<title id="t">Window light and time of day</title>
+<rect id="bg" width="480" height="288" fill="#F4F1EB"/>
+<g fill="none" stroke="#14110E" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="10">
+<path d="M36 48h168v144h-168z" vector-effect="non-scaling-stroke"/>
+<line x1="84.0" y1="48.0" x2="156.0" y2="48.0" stroke="#F4F1EB" vector-effect="non-scaling-stroke"/>
+<line x1="84.0" y1="44.0" x2="156.0" y2="44.0" vector-effect="non-scaling-stroke"/>
+<line x1="84.0" y1="52.0" x2="156.0" y2="52.0" vector-effect="non-scaling-stroke"/>
+<line x1="84.0" y1="44.0" x2="84.0" y2="52.0" vector-effect="non-scaling-stroke"/>
+<line x1="156.0" y1="44.0" x2="156.0" y2="52.0" vector-effect="non-scaling-stroke"/>
+<line x1="96.0" y1="24.0" x2="112.0" y2="92.0" stroke="#97928A" vector-effect="non-scaling-stroke"/><path d="M107.3 86.8L112.0 92.0L113.9 85.3" stroke="#97928A" vector-effect="non-scaling-stroke"/>
+<line x1="120.0" y1="24.0" x2="136.0" y2="92.0" stroke="#97928A" vector-effect="non-scaling-stroke"/><path d="M131.3 86.8L136.0 92.0L137.9 85.3" stroke="#97928A" vector-effect="non-scaling-stroke"/>
+<line x1="144.0" y1="24.0" x2="160.0" y2="92.0" stroke="#97928A" vector-effect="non-scaling-stroke"/><path d="M155.3 86.8L160.0 92.0L161.9 85.3" stroke="#97928A" vector-effect="non-scaling-stroke"/>
+<path d="M108 100L156 100L172 156L124 156Z" stroke="#97928A" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>
+<path d="M51.8 165.8L57.8 176.2L68.2 170.2L62.2 159.8z" vector-effect="non-scaling-stroke"/>
+<path d="M63.7 162.4L67.0 158.2L72.0 166.8L66.7 167.6" vector-effect="non-scaling-stroke"/>
+<text x="120" y="214" fill="#14110E" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="13" font-weight="500" text-anchor="middle">Window to the side</text>
+<text x="120" y="232" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="middle">Light across the room</text>
+<line x1="252.0" y1="156.0" x2="444.0" y2="156.0" stroke="#B7B2AA" vector-effect="non-scaling-stroke"/>
+<path d="M264 156A84 72 0 0 1 432 156" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<path d="M427.1 151.0L432.0 156.0L433.6 149.2" vector-effect="non-scaling-stroke"/>
+<circle cx="348.0" cy="84.0" r="7" vector-effect="non-scaling-stroke"/>
+<text x="252" y="174" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="middle">E</text>
+<text x="444" y="174" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="middle">W</text>
+<text x="348" y="174" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="middle">S</text>
+<text x="252" y="48" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="start">Morning</text>
+<text x="252" y="62" fill="#97928A" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="start">east faces</text>
+<text x="444" y="48" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="end">Afternoon</text>
+<text x="444" y="62" fill="#97928A" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="end">west faces</text>
+<text x="348" y="214" fill="#14110E" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="13" font-weight="500" text-anchor="middle">Sun on the facade</text>
+<text x="348" y="232" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="middle">Twilight: sunset +10 to +30 min</text>
+<text x="24" y="276" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="12" font-weight="400" text-anchor="start">Shoot each space when its light is best. Windows hold detail.</text>
+</g>
+</svg>

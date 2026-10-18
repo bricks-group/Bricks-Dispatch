@@ -22,6 +22,7 @@ import { UnderReviewPage } from './pages/UnderReviewPage';
 import { AddEmailPage, NotOnTeamPage } from './pages/AddEmailPage';
 import { hasAppAccess, AuthMember } from './lib/api';
 import BricksLoader from './components/BricksLoader';
+import { GuidePage } from './guide/GuidePage';
 
 /** Native GO keeps working from cache offline; on web we at least say so plainly. */
 function useOnline(): boolean {
@@ -171,6 +172,7 @@ function ProtectedLayout() {
           <Route path="/availability" element={<AvailabilityPage />} />
           <Route path="/performance"  element={<PerformancePage />} />
           <Route path="/settings"     element={<SettingsPage />} />
+          <Route path="/guide"        element={<GuidePage />} />
           <Route path="*"             element={<Navigate to="/" replace />} />
         </Routes>
       </main>

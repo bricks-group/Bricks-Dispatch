@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 288" width="480" height="288" role="img" aria-labelledby="t">
+<title id="t">Drone orbit path, 45 to 90 degrees at 5 degrees per second maximum</title>
+<rect id="bg" width="480" height="288" fill="#F4F1EB"/>
+<g fill="none" stroke="#14110E" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="10">
+
+<path d="M212 116h56v48h-56z" vector-effect="non-scaling-stroke"/>
+<line x1="212.0" y1="140.0" x2="268.0" y2="140.0" stroke="#97928A" vector-effect="non-scaling-stroke"/>
+<circle cx="240.0" cy="140.0" r="100" stroke="#B7B2AA" stroke-dasharray="2 6" vector-effect="non-scaling-stroke"/>
+<path d="M146.0 105.8A100 100 0 0 1 274.2 46.0" vector-effect="non-scaling-stroke"/>
+<path d="M267.7 48.7L274.2 46.0L268.5 42.0" vector-effect="non-scaling-stroke"/>
+<line x1="146.0" y1="105.8" x2="211.8" y2="129.7" stroke="#97928A" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<line x1="274.2" y1="46.0" x2="250.3" y2="111.8" stroke="#97928A" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<text x="116.03073792140916" y="135.79798566743312" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="end">Start</text>
+<text x="274.2020143325669" y="22.03073792140917" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="middle">End</text>
+<line x1="240.0" y1="140.0" x2="326.6" y2="190.0" stroke="#615D57" vector-effect="non-scaling-stroke"/>
+<text x="332" y="216" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="start">Radius 25–40 m</text>
+<text x="456" y="48" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="end">45–90° arc</text>
+<text x="456" y="64" fill="#14110E" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="end">5°/s, 2 m/s max</text>
+<text x="456" y="80" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="end">Height 20–30 m</text>
+<path d="M140.03073792140916 99.79798566743312h12v12h-12z" vector-effect="non-scaling-stroke"/>
+<line x1="140.0" y1="99.8" x2="133.0" y2="92.8" vector-effect="non-scaling-stroke"/>
+<circle cx="129.0" cy="88.8" r="6" vector-effect="non-scaling-stroke"/>
+<line x1="152.0" y1="99.8" x2="159.0" y2="92.8" vector-effect="non-scaling-stroke"/>
+<circle cx="163.0" cy="88.8" r="6" vector-effect="non-scaling-stroke"/>
+<line x1="152.0" y1="111.8" x2="159.0" y2="118.8" vector-effect="non-scaling-stroke"/>
+<circle cx="163.0" cy="122.8" r="6" vector-effect="non-scaling-stroke"/>
+<line x1="140.0" y1="111.8" x2="133.0" y2="118.8" vector-effect="non-scaling-stroke"/>
+<circle cx="129.0" cy="122.8" r="6" vector-effect="non-scaling-stroke"/>
+<text x="24" y="276" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="12" font-weight="400" text-anchor="start">Drone orbit: home centred, even speed, same height throughout.</text>
+</g>
+</svg>

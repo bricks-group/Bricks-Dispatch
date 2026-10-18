@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 288" width="480" height="288" role="img" aria-labelledby="t">
+<title id="t">Slow push-in path, 0.6 to 1.2 metres at 15 centimetres per second maximum</title>
+<rect id="bg" width="480" height="288" fill="#F4F1EB"/>
+<g fill="none" stroke="#14110E" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="10">
+<path d="M48 36h384v216h-384z" vector-effect="non-scaling-stroke"/>
+<line x1="192.0" y1="36.0" x2="288.0" y2="36.0" stroke="#B7B2AA" vector-effect="non-scaling-stroke"/>
+<text x="240" y="30" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="middle">Back wall</text>
+<path d="M234.0 222.0L246.0 222.0L246.0 210.0L234.0 210.0z" vector-effect="non-scaling-stroke"/>
+<path d="M237.0 210.0L235.0 205.0L245.0 205.0L243.0 210.0" vector-effect="non-scaling-stroke"/>
+<path d="M234.0 138.0L246.0 138.0L246.0 126.0L234.0 126.0z" vector-effect="non-scaling-stroke"/>
+<path d="M237.0 126.0L235.0 121.0L245.0 121.0L243.0 126.0" vector-effect="non-scaling-stroke"/>
+<line x1="229.0" y1="121.0" x2="151.0" y2="36.0" stroke="#97928A" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<line x1="251.0" y1="121.0" x2="329.0" y2="36.0" stroke="#97928A" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<line x1="240.0" y1="200.0" x2="240.0" y2="150.0" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/><path d="M243.4 156.1L240.0 150.0L236.6 156.1" vector-effect="non-scaling-stroke"/>
+
+<line x1="300.0" y1="216.0" x2="300.0" y2="132.0" stroke="#615D57" vector-effect="non-scaling-stroke"/>
+<line x1="295.0" y1="216.0" x2="305.0" y2="216.0" stroke="#615D57" vector-effect="non-scaling-stroke"/>
+<line x1="295.0" y1="132.0" x2="305.0" y2="132.0" stroke="#615D57" vector-effect="non-scaling-stroke"/>
+<text x="312" y="170" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="start">0.6–1.2 m</text>
+<text x="312" y="186" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="start">15 cm/s max</text>
+<text x="178" y="220" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="end">Start</text>
+<text x="178" y="136" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="end">End</text>
+<text x="24" y="276" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="12" font-weight="400" text-anchor="start">Slow push-in: straight line, constant speed. Hold 2 s at each end.</text>
+</g>
+</svg>

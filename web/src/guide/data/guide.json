@@ -1,0 +1,1708 @@
+{
+  "title": "The Bricks Standard: vendor guide",
+  "version": "1.1",
+  "updated": "2026-10-18",
+  "intro": "Calm, composed and true. Follow these steps on every job. Diagrams use metres and seconds.",
+  "phases": [
+    {
+      "id": "before",
+      "title": "Before you arrive",
+      "order": 1
+    },
+    {
+      "id": "setup",
+      "title": "Setup",
+      "order": 2
+    },
+    {
+      "id": "stills",
+      "title": "Stills",
+      "order": 3
+    },
+    {
+      "id": "clips",
+      "title": "Clips",
+      "order": 4
+    },
+    {
+      "id": "drone",
+      "title": "Drone",
+      "order": 5
+    },
+    {
+      "id": "virtual-visit",
+      "title": "Virtual Visit",
+      "order": 6
+    },
+    {
+      "id": "wrap",
+      "title": "Wrap and upload",
+      "order": 7
+    }
+  ],
+  "diagrams": [
+    {
+      "file": "svg/camera-height.svg",
+      "title": "Camera height: lens at 1.2 to 1.4 metres, camera level"
+    },
+    {
+      "file": "svg/perspective.svg",
+      "title": "One-point versus two-point perspective"
+    },
+    {
+      "file": "svg/verticals.svg",
+      "title": "Keeping verticals straight: tilted versus level camera"
+    },
+    {
+      "file": "svg/push-in.svg",
+      "title": "Slow push-in path, 0.6 to 1.2 metres at 15 cm/s maximum"
+    },
+    {
+      "file": "svg/pan-arc.svg",
+      "title": "Pan arc of 15 to 40 degrees at 5 degrees per second maximum"
+    },
+    {
+      "file": "svg/locked-off.svg",
+      "title": "Locked-off frame held for 10 seconds"
+    },
+    {
+      "file": "svg/drone-rise.svg",
+      "title": "Drone rise from 3 m to 30 to 45 m at 1 m/s maximum"
+    },
+    {
+      "file": "svg/drone-orbit.svg",
+      "title": "Drone orbit, 45 to 90 degrees at 5 degrees per second maximum"
+    },
+    {
+      "file": "svg/room-positions.svg",
+      "title": "Camera positions in a room: two corners and the doorway"
+    },
+    {
+      "file": "svg/window-light.svg",
+      "title": "Window light and time of day"
+    },
+    {
+      "file": "svg/clip-duration.svg",
+      "title": "Clip duration bar: hold 2 s, move, hold 2 s"
+    },
+    {
+      "file": "svg/vv-walk-path.svg",
+      "title": "Virtual Visit walking path: loop each room, cross doorways twice"
+    },
+    {
+      "file": "svg/vv-walk-speed.svg",
+      "title": "Virtual Visit walking speed, about 0.5 m/s"
+    },
+    {
+      "file": "svg/vv-phone-height.svg",
+      "title": "Virtual Visit phone height, 1.3 to 1.4 m, ultra-wide"
+    }
+  ],
+  "steps": [
+    {
+      "id": "before-01",
+      "phase": "before",
+      "title": "Open the job",
+      "body": "Check the package, property type and footprint in the app. Your shot list and clip list load from these.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Read every item on both lists",
+        "Note anything marked as a client request"
+      ],
+      "dont": [
+        "Arrive without checking which package was booked"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "before-02",
+      "phase": "before",
+      "title": "Plan around the light",
+      "body": "Check which way the front of the home faces. Book your exterior time for when the sun is on the facade.",
+      "diagram": "svg/window-light.svg",
+      "diagram_alt": "Window light and time of day",
+      "do": [
+        "East-facing: shoot the front in the morning",
+        "West-facing: shoot the front in the afternoon",
+        "North-facing: bright overcast or twilight"
+      ],
+      "dont": [
+        "Shoot the hero exterior into the sun"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "before-03",
+      "phase": "before",
+      "title": "Pack the right kit",
+      "body": "Stills and clips need a dedicated camera. Virtual Visit needs an approved phone.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Camera, 16–24 mm and 35–50 mm lenses, tripod",
+        "Gimbal or slider for clips, ND filters, grey card",
+        "Spare batteries and cards, charged approved phone"
+      ],
+      "dont": [
+        "Bring a phone as your stills or clip camera"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "before-04",
+      "phase": "before",
+      "title": "Check the airspace",
+      "body": "For drone jobs, check the airspace and record any authorization in the app before you leave.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Mark drone clips \"not possible\" early if authorization is not in place",
+        "Tell Bricks before the shoot"
+      ],
+      "dont": [
+        "Fly in controlled airspace without permission"
+      ],
+      "applies_to": [
+        "drone"
+      ]
+    },
+    {
+      "id": "before-05",
+      "phase": "before",
+      "title": "Confirm the prep",
+      "body": "The app sends the homeowner a prep guide. Message or call if access, parking or prep is unclear.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Confirm pets, cars and access",
+        "Confirm building permission for amenities and drone"
+      ],
+      "dont": [
+        "Assume the home will be ready"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "setup-01",
+      "phase": "setup",
+      "title": "Walk the home first",
+      "body": "Walk every room before you shoot. Plan your order around the light.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Start with rooms that have the best light now",
+        "Note issues before you start"
+      ],
+      "dont": [
+        "Start shooting in the first room you see"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "setup-02",
+      "phase": "setup",
+      "title": "Prepare each room",
+      "body": "Tidy each room before you shoot it. Clear, calm and lived-in, not empty.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Clear counters to one or two objects",
+        "Toilet seats down, beds made, cords hidden",
+        "Bins, shoes and pet bowls out of shot"
+      ],
+      "dont": [
+        "Move heavy furniture",
+        "Handle valuables"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "setup-03",
+      "phase": "setup",
+      "title": "Set lights and blinds",
+      "body": "Turn on lights that match in colour. Open blinds to the same height.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Lights on and matched",
+        "Fans off, TVs off or black"
+      ],
+      "dont": [
+        "Mix warm and cool bulbs in one frame"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "setup-04",
+      "phase": "setup",
+      "title": "Set camera height",
+      "body": "Put the lens between 1.2 and 1.4 m for most rooms. Kitchens about 1.2 m.",
+      "diagram": "svg/camera-height.svg",
+      "diagram_alt": "Camera height: lens at 1.2 to 1.4 metres, camera level",
+      "do": [
+        "Measure once and mark your tripod",
+        "Counter and table details at 1.0–1.1 m"
+      ],
+      "dont": [
+        "Shoot from eye level above 1.5 m indoors",
+        "Shoot from the floor"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "setup-05",
+      "phase": "setup",
+      "title": "Level the camera",
+      "body": "Keep the camera level, with no tilt up or down. Walls must stand straight.",
+      "diagram": "svg/verticals.svg",
+      "diagram_alt": "Keeping verticals straight: tilted versus level camera",
+      "do": [
+        "Use the level in your camera",
+        "Keep verticals within 0.5°"
+      ],
+      "dont": [
+        "Tilt down to show more floor",
+        "Plan to fix verticals in the edit"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "stills-01",
+      "phase": "stills",
+      "title": "Choose your positions",
+      "body": "Shoot most rooms from a corner. Shoot symmetrical spaces from the doorway or the centre.",
+      "diagram": "svg/room-positions.svg",
+      "diagram_alt": "Camera positions in a room: two corners and the doorway",
+      "do": [
+        "Two corners for living, kitchen and primary bedroom",
+        "Doorway or centre for bathrooms and halls"
+      ],
+      "dont": [
+        "Shoot from behind a door or in a tight corner"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "stills-02",
+      "phase": "stills",
+      "title": "One-point or two-point",
+      "body": "One-point: square to the back wall, centred. Two-point: from a corner, two walls in view.",
+      "diagram": "svg/perspective.svg",
+      "diagram_alt": "One-point versus two-point perspective",
+      "do": [
+        "Choose one on purpose for each frame"
+      ],
+      "dont": [
+        "Stand almost square to a wall, so it looks like a mistake"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "stills-03",
+      "phase": "stills",
+      "title": "Use the right lens",
+      "body": "Use 16–24 mm (full-frame equivalent) for rooms. Use 35–85 mm for details.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Small rooms: shoot from the doorway at 16 mm"
+      ],
+      "dont": [
+        "Go wider than 16 mm",
+        "Stretch rooms to look bigger"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "stills-04",
+      "phase": "stills",
+      "title": "Bracket every frame",
+      "body": "Tripod always. Shoot 5 frames at 2 EV apart, plus one frame for the window view.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "f/7.1–f/11, base ISO",
+        "Add a bounced flash frame where light is mixed"
+      ],
+      "dont": [
+        "Shoot handheld",
+        "Move the tripod between brackets"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "stills-05",
+      "phase": "stills",
+      "title": "Check windows and reflections",
+      "body": "Views should show detail. Check every mirror and glass surface for you or your gear.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Look at the window frame at 100% after a test shot"
+      ],
+      "dont": [
+        "Leave yourself in a mirror",
+        "Blow out a view that matters"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "stills-06",
+      "phase": "stills",
+      "title": "Shoot the details",
+      "body": "Shoot 3–6 detail images per job: hardware, materials, light on a surface.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Use 35–85 mm",
+        "Keep details simple and clean"
+      ],
+      "dont": [
+        "Shoot clutter close up"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "stills-07",
+      "phase": "stills",
+      "title": "Shoot the hero exterior",
+      "body": "The hero is the first image. Two-point, whole building, sun on the facade.",
+      "diagram": "svg/window-light.svg",
+      "diagram_alt": "Window light and time of day",
+      "do": [
+        "Sky about one third of the frame",
+        "Cars out, garage closed, bins away"
+      ],
+      "dont": [
+        "Shoot it against the sun",
+        "Leave people or cars in frame"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "stills-08",
+      "phase": "stills",
+      "title": "Capture for the edit",
+      "body": "You capture, Bricks edits. Give the editor everything: full brackets, a window pull and the room as it truly is.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Move bins, hoses and cords out of frame on site",
+        "Keep every frame of each set"
+      ],
+      "dont": [
+        "Edit, apply a preset or merge brackets",
+        "Hide damage, neighbours or permanent features",
+        "Stage a fake view, fire or TV image"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "clips-01",
+      "phase": "clips",
+      "title": "Shoot only the clip list",
+      "body": "Capture the clip IDs in the app. Bricks does all editing, grading, music and titles.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Follow the framing note for each clip ID"
+      ],
+      "dont": [
+        "Edit, grade or add music",
+        "Add extra moves that are not on the list"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "clips-02",
+      "phase": "clips",
+      "title": "Set capture settings",
+      "body": "23.976p, shutter 1/48 or 1/50, UHD or higher, 10-bit log, ProRes 422 or 10-bit H.265.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Use ND filters to keep the shutter in daylight",
+        "59.94p at 1/120 only on clips marked \"slow allowed\""
+      ],
+      "dont": [
+        "Shoot 25p or 50p",
+        "Use phones for clips"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "clips-03",
+      "phase": "clips",
+      "title": "Lock everything",
+      "body": "Set white balance, exposure and focus by hand, then lock them. Shoot a 3-second grey card clip in each lighting zone.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Manual Kelvin, same value for the same light",
+        "Name the grey card clip REF-WB"
+      ],
+      "dont": [
+        "Use auto white balance, auto exposure or autofocus",
+        "Zoom during a clip"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "clips-04",
+      "phase": "clips",
+      "title": "Locked-off clips",
+      "body": "Tripod. Frame it like a still. Record 10 seconds with nothing moving.",
+      "diagram": "svg/locked-off.svg",
+      "diagram_alt": "Locked-off frame held for 10 seconds",
+      "do": [
+        "Keep verticals straight",
+        "Wait for light changes to finish"
+      ],
+      "dont": [
+        "Touch the camera while recording"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "clips-05",
+      "phase": "clips",
+      "title": "Push-in and slide",
+      "body": "Move in a straight line at an even speed, no faster than 15 cm per second. Travel 0.6–1.2 m.",
+      "diagram": "svg/push-in.svg",
+      "diagram_alt": "Slow push-in path, 0.6 to 1.2 metres at 15 cm/s maximum",
+      "do": [
+        "Use a slider or gimbal",
+        "Ease in and ease out"
+      ],
+      "dont": [
+        "Walk with the camera",
+        "Push past the subject"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "clips-06",
+      "phase": "clips",
+      "title": "Slow pan",
+      "body": "Pan no faster than 5° per second, 15–40° in total. A 30° pan takes at least 6 seconds.",
+      "diagram": "svg/pan-arc.svg",
+      "diagram_alt": "Pan arc of 15 to 40 degrees at 5 degrees per second maximum",
+      "do": [
+        "Use a fluid head or gimbal",
+        "Pan toward the light or the view"
+      ],
+      "dont": [
+        "Whip pan",
+        "Pan back and forth"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "clips-07",
+      "phase": "clips",
+      "title": "Hold before and after",
+      "body": "Hold still for 2 seconds, move, then hold still for 2 seconds. Moving clips run 10–12 seconds.",
+      "diagram": "svg/clip-duration.svg",
+      "diagram_alt": "Clip duration bar: hold 2 s, move, hold 2 s",
+      "do": [
+        "Count the holds out loud"
+      ],
+      "dont": [
+        "Cut the recording as the move ends"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "clips-08",
+      "phase": "clips",
+      "title": "Shoot the vertical clips",
+      "body": "Some clips are also needed in 9:16. Rotate the camera and shoot them natively.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Add _V to the clip ID",
+        "Keep the subject centred"
+      ],
+      "dont": [
+        "Crop a horizontal clip and call it vertical"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "clips-09",
+      "phase": "clips",
+      "title": "Record room tone",
+      "body": "Record 30 seconds of silence in the main living space. Name it REF-TONE.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Ask everyone to stay still and quiet"
+      ],
+      "dont": [
+        "Talk, walk or run appliances you can turn off"
+      ],
+      "applies_to": [
+        "film"
+      ]
+    },
+    {
+      "id": "drone-01",
+      "phase": "drone",
+      "title": "Pre-flight",
+      "body": "Carry your certificate and registration. Survey the site and check wind and weather.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Stay in visual line of sight",
+        "Stay below 122 m above ground"
+      ],
+      "dont": [
+        "Fly over people unless your certificate and drone allow it"
+      ],
+      "applies_to": [
+        "drone"
+      ]
+    },
+    {
+      "id": "drone-02",
+      "phase": "drone",
+      "title": "Top-down",
+      "body": "Hover at 40–60 m with the camera pointing straight down. Keep the whole lot in frame.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Square the lot lines to the frame",
+        "Record 10 seconds"
+      ],
+      "dont": [
+        "Drift or rotate while recording"
+      ],
+      "applies_to": [
+        "drone_film"
+      ]
+    },
+    {
+      "id": "drone-03",
+      "phase": "drone",
+      "title": "Rise",
+      "body": "Face the home and rise straight up from 3 m to 30–45 m. No faster than 1 m per second.",
+      "diagram": "svg/drone-rise.svg",
+      "diagram_alt": "Drone rise from 3 m to 30 to 45 m at 1 m/s maximum",
+      "do": [
+        "Keep the camera level",
+        "Hold 2 seconds at the start and end"
+      ],
+      "dont": [
+        "Descend",
+        "Dive toward the home"
+      ],
+      "applies_to": [
+        "drone_film"
+      ]
+    },
+    {
+      "id": "drone-04",
+      "phase": "drone",
+      "title": "Orbit",
+      "body": "Circle the home at a constant 20–30 m height. No faster than 5° per second and 2 m per second.",
+      "diagram": "svg/drone-orbit.svg",
+      "diagram_alt": "Drone orbit, 45 to 90 degrees at 5 degrees per second maximum",
+      "do": [
+        "Keep the home centred",
+        "Cover 45–90°"
+      ],
+      "dont": [
+        "Spin fast",
+        "Change height during the orbit"
+      ],
+      "applies_to": [
+        "drone_film"
+      ]
+    },
+    {
+      "id": "drone-05",
+      "phase": "drone",
+      "title": "Context push",
+      "body": "Fly slowly toward the home from the neighbourhood, no faster than 2 m per second. Stop short of it.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Start 30–60 m high"
+      ],
+      "dont": [
+        "Fly through gaps or under trees",
+        "Linger on neighbouring yards"
+      ],
+      "applies_to": [
+        "drone_film"
+      ]
+    },
+    {
+      "id": "drone-06",
+      "phase": "drone",
+      "title": "Abort if unsure",
+      "body": "If anything feels wrong, land. A safe abort never lowers your score.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Mark the clip \"not possible\" with a reason"
+      ],
+      "dont": [
+        "Push on in high wind or poor visibility"
+      ],
+      "applies_to": [
+        "drone"
+      ]
+    },
+    {
+      "id": "vv-01",
+      "phase": "virtual-visit",
+      "title": "Open guided capture",
+      "body": "Use an approved phone and open guided capture in the app. Follow the on-screen steps.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Let the app lock exposure, focus and white balance",
+        "Shoot after stills, while the home is styled"
+      ],
+      "dont": [
+        "Use the phone's own camera app",
+        "Zoom in"
+      ],
+      "applies_to": [
+        "virtual_visit"
+      ]
+    },
+    {
+      "id": "vv-02",
+      "phase": "virtual-visit",
+      "title": "Hold the phone right",
+      "body": "Follow the on-screen steps. Hold the phone upright at chest height, about 1.3–1.4 m, on the 0.5× lens.",
+      "diagram": "svg/vv-phone-height.svg",
+      "diagram_alt": "Virtual Visit phone height, 1.3 to 1.4 m, ultra-wide",
+      "do": [
+        "Keep it level",
+        "Turn your body, not your wrist"
+      ],
+      "dont": [
+        "Tilt the phone up or down",
+        "Lift it overhead"
+      ],
+      "applies_to": [
+        "virtual_visit"
+      ]
+    },
+    {
+      "id": "vv-03",
+      "phase": "virtual-visit",
+      "title": "Walk the set path",
+      "body": "Follow the on-screen path. Loop each room about 1 m from the walls, then cross the doorway into the next room.",
+      "diagram": "svg/vv-walk-path.svg",
+      "diagram_alt": "Virtual Visit walking path: loop each room, cross doorways twice",
+      "do": [
+        "Cross every doorway twice",
+        "Keep doors open"
+      ],
+      "dont": [
+        "Skip corners",
+        "Walk in front of mirrors"
+      ],
+      "applies_to": [
+        "virtual_visit"
+      ]
+    },
+    {
+      "id": "vv-04",
+      "phase": "virtual-visit",
+      "title": "Walk slowly",
+      "body": "Follow the on-screen pace: about 0.5 m per second, or 1 m every 2 seconds.",
+      "diagram": "svg/vv-walk-speed.svg",
+      "diagram_alt": "Virtual Visit walking speed, about 0.5 m/s",
+      "do": [
+        "Keep a steady pace"
+      ],
+      "dont": [
+        "Stop and start",
+        "Turn quickly"
+      ],
+      "applies_to": [
+        "virtual_visit"
+      ]
+    },
+    {
+      "id": "wrap-01",
+      "phase": "wrap",
+      "title": "Reset the home",
+      "body": "Put back anything you moved. Leave lights and blinds as you found them.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Lock up as agreed"
+      ],
+      "dont": [
+        "Leave gear marks or moved items"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "wrap-02",
+      "phase": "wrap",
+      "title": "Check your lists",
+      "body": "Every shot and clip ID must be done or marked \"not possible\" with a reason.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Review the hero exterior and key clips on site"
+      ],
+      "dont": [
+        "Leave without checking"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "wrap-03",
+      "phase": "wrap",
+      "title": "Name your files",
+      "body": "Clips: JobID_ClipID_T1.mov. Stills: keep the camera's file names. The app groups each set from its exposure data.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Add _V before the take for vertical clips",
+        "Name by hand only as stem_-2, stem_0, stem_+2"
+      ],
+      "dont": [
+        "Rename with tools that strip metadata"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
+    {
+      "id": "wrap-04",
+      "phase": "wrap",
+      "title": "Upload clips",
+      "body": "Upload original camera files in the app within 6 hours of wrap. Mark the best take.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "One best take, one alternate at most"
+      ],
+      "dont": [
+        "Transcode, compress or send proxies"
+      ],
+      "applies_to": [
+        "film",
+        "drone_film"
+      ]
+    },
+    {
+      "id": "wrap-05",
+      "phase": "wrap",
+      "title": "Upload stills unedited",
+      "body": "Upload every bracket frame straight out of camera within 6 hours of wrap. Bricks edits, reviews and exports every still.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "JPEG or HEIC, full resolution, EXIF intact",
+        "Include the window pull and any flash frame",
+        "Keep your RAWs until the job is approved"
+      ],
+      "dont": [
+        "Edit, merge or apply a preset",
+        "Make MLS sizes or add watermarks"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "id": "photos",
+      "name": "Photos only",
+      "includes": [
+        "stills"
+      ],
+      "clips": false,
+      "services": []
+    },
+    {
+      "id": "essentials",
+      "name": "Essentials",
+      "includes": [
+        "stills",
+        "drone stills",
+        "floor plan"
+      ],
+      "clips": false,
+      "services": [
+        "drone"
+      ]
+    },
+    {
+      "id": "story",
+      "name": "Story",
+      "includes": [
+        "Essentials",
+        "film and reel"
+      ],
+      "clips": true,
+      "services": [
+        "drone",
+        "film",
+        "drone_film"
+      ]
+    },
+    {
+      "id": "showcase",
+      "name": "Showcase",
+      "includes": [
+        "Story",
+        "Virtual Visit"
+      ],
+      "clips": true,
+      "services": [
+        "drone",
+        "film",
+        "drone_film",
+        "virtual_visit"
+      ]
+    },
+    {
+      "id": "suite",
+      "name": "Full suite",
+      "includes": [
+        "Showcase",
+        "twilight"
+      ],
+      "clips": true,
+      "services": [
+        "drone",
+        "film",
+        "drone_film",
+        "virtual_visit",
+        "twilight"
+      ]
+    }
+  ],
+  "services": {
+    "all": "Every job",
+    "drone": "Any drone work: drone stills or drone clips",
+    "film": "Film and reel clip capture",
+    "drone_film": "Drone clips (Story and up)",
+    "virtual_visit": "Virtual Visit capture",
+    "twilight": "Twilight capture"
+  },
+  "clips": [
+    {
+      "id": "REF-WB",
+      "name": "Grey card",
+      "group": "reference",
+      "movement": "locked-off",
+      "capture_s": [
+        3,
+        3
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": null,
+      "height": null,
+      "framing": "Grey card fills the centre",
+      "when": "Start of each lighting zone"
+    },
+    {
+      "id": "REF-TONE",
+      "name": "Room tone",
+      "group": "reference",
+      "movement": "locked-off",
+      "capture_s": [
+        30,
+        30
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": null,
+      "height": null,
+      "framing": "Any, main living space",
+      "when": "Everyone silent, nothing moving"
+    },
+    {
+      "id": "EXT-01",
+      "name": "Hero exterior",
+      "group": "exterior",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "24–35",
+      "height": "1.5–1.8 m",
+      "framing": "Two-point, full facade, sky about one third",
+      "when": "Sun on the facade"
+    },
+    {
+      "id": "EXT-02",
+      "name": "Approach",
+      "group": "exterior",
+      "movement": "slow push-in",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "15 cm/s",
+      "travel_or_arc": "0.6–1.2 m",
+      "lens_ff_mm": "24",
+      "height": "1.4 m",
+      "framing": "Walkway or entrance centred, stop before the door fills frame",
+      "when": "Sun on the facade"
+    },
+    {
+      "id": "EXT-03",
+      "name": "Facade slide",
+      "group": "exterior",
+      "movement": "slide",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "15 cm/s",
+      "travel_or_arc": "0.6–1.2 m",
+      "lens_ff_mm": "24–35",
+      "height": "1.4 m",
+      "framing": "Parallel to the facade, verticals true",
+      "when": "Sun on the facade"
+    },
+    {
+      "id": "EXT-04",
+      "name": "Exterior detail",
+      "group": "exterior",
+      "movement": "locked-off",
+      "capture_s": [
+        8,
+        8
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "35–50",
+      "height": null,
+      "framing": "House number, hardware, stone, landscaping",
+      "when": null
+    },
+    {
+      "id": "INT-01",
+      "name": "Entry reveal",
+      "group": "interior",
+      "movement": "slow push-in",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "15 cm/s",
+      "travel_or_arc": "0.6–1.2 m",
+      "lens_ff_mm": "16–20",
+      "height": "1.3 m",
+      "framing": "From the doorway into the main space",
+      "when": null
+    },
+    {
+      "id": "INT-02",
+      "name": "Living wide",
+      "group": "interior",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "16–24",
+      "height": "1.3 m",
+      "framing": "Two-point from a corner, windows holding detail",
+      "when": null
+    },
+    {
+      "id": "INT-03",
+      "name": "Living pan",
+      "group": "interior",
+      "movement": "slow pan",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "5°/s",
+      "travel_or_arc": "20–40°",
+      "lens_ff_mm": "20–24",
+      "height": "1.3 m",
+      "framing": "Pan toward the windows or main view",
+      "when": null
+    },
+    {
+      "id": "INT-04",
+      "name": "Kitchen slide",
+      "group": "interior",
+      "movement": "slide",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "15 cm/s",
+      "travel_or_arc": "0.6–1.2 m",
+      "lens_ff_mm": "20–24",
+      "height": "1.2 m",
+      "framing": "Along the island or counter, parallel",
+      "when": null
+    },
+    {
+      "id": "INT-05",
+      "name": "Kitchen detail",
+      "group": "interior",
+      "movement": "locked-off",
+      "capture_s": [
+        8,
+        8
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "35–50",
+      "height": "1.1 m",
+      "framing": "Tap, counter edge, range, hardware",
+      "when": null
+    },
+    {
+      "id": "INT-06",
+      "name": "Dining",
+      "group": "interior",
+      "movement": "locked-off or slow push-in",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "15 cm/s",
+      "travel_or_arc": "0.6–1.2 m",
+      "lens_ff_mm": "20–24",
+      "height": "1.2 m",
+      "framing": "Table centred, one-point",
+      "when": null
+    },
+    {
+      "id": "INT-07",
+      "name": "Primary bedroom",
+      "group": "interior",
+      "movement": "slow push-in",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "15 cm/s",
+      "travel_or_arc": "0.6–1.2 m",
+      "lens_ff_mm": "16–24",
+      "height": "1.2 m",
+      "framing": "Toward the bed or window, one-point",
+      "when": null
+    },
+    {
+      "id": "INT-08",
+      "name": "Primary ensuite",
+      "group": "interior",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "16–24",
+      "height": "1.3 m",
+      "framing": "One-point on vanity or tub, check mirrors",
+      "when": null
+    },
+    {
+      "id": "INT-09",
+      "name": "Bedroom",
+      "group": "interior",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "16–24",
+      "height": "1.2 m",
+      "framing": "One per secondary bedroom, up to three",
+      "when": null
+    },
+    {
+      "id": "INT-10",
+      "name": "Light study",
+      "group": "interior",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "35–50",
+      "height": null,
+      "framing": "Sun on a wall, sheer curtain, light across a floor",
+      "when": "When direct light enters"
+    },
+    {
+      "id": "INT-11",
+      "name": "Feature",
+      "group": "interior",
+      "movement": "slide",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "15 cm/s",
+      "travel_or_arc": "0.6–1.2 m",
+      "lens_ff_mm": "24–35",
+      "height": "1.3 m",
+      "framing": "Stair, fireplace, millwork, wine room",
+      "when": null
+    },
+    {
+      "id": "INT-12",
+      "name": "Bathroom",
+      "group": "interior",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "16–24",
+      "height": "1.3 m",
+      "framing": "Secondary bathrooms, one-point",
+      "when": null
+    },
+    {
+      "id": "OUT-01",
+      "name": "Outdoor living",
+      "group": "outdoor",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "16–24",
+      "height": "1.4 m",
+      "framing": "Yard, terrace, pool, deck",
+      "when": null
+    },
+    {
+      "id": "OUT-02",
+      "name": "View",
+      "group": "outdoor",
+      "movement": "slow pan",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "5°/s",
+      "travel_or_arc": "15–30°",
+      "lens_ff_mm": "24–35",
+      "height": "1.4 m",
+      "framing": "Balcony or terrace view, horizon level",
+      "when": null
+    },
+    {
+      "id": "AMN-01",
+      "name": "Lobby",
+      "group": "amenity",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "16–24",
+      "height": "1.4 m",
+      "framing": "Building permission first",
+      "when": null
+    },
+    {
+      "id": "AMN-02",
+      "name": "Amenity",
+      "group": "amenity",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "16–24",
+      "height": "1.4 m",
+      "framing": "Gym, rooftop, pool, lounge",
+      "when": null
+    },
+    {
+      "id": "DRN-01",
+      "name": "Top-down",
+      "group": "drone",
+      "movement": "top-down hover",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": null,
+      "height": "40–60 m AGL",
+      "framing": "Whole lot in frame, lot lines square",
+      "when": null
+    },
+    {
+      "id": "DRN-02",
+      "name": "Front rise",
+      "group": "drone",
+      "movement": "drone rise",
+      "capture_s": [
+        12,
+        15
+      ],
+      "speed_limit": "1 m/s vertical",
+      "travel_or_arc": "15–40 m gain",
+      "lens_ff_mm": null,
+      "height": "3 m to 30–45 m",
+      "framing": "Facing the facade, camera level",
+      "when": null
+    },
+    {
+      "id": "DRN-03",
+      "name": "Orbit",
+      "group": "drone",
+      "movement": "drone orbit",
+      "capture_s": [
+        12,
+        15
+      ],
+      "speed_limit": "5°/s and 2 m/s",
+      "travel_or_arc": "45–90°",
+      "lens_ff_mm": null,
+      "height": "20–30 m, radius 25–40 m",
+      "framing": "Home centred, constant height",
+      "when": null
+    },
+    {
+      "id": "DRN-04",
+      "name": "Context push",
+      "group": "drone",
+      "movement": "drone push",
+      "capture_s": [
+        12,
+        15
+      ],
+      "speed_limit": "2 m/s",
+      "travel_or_arc": null,
+      "lens_ff_mm": null,
+      "height": "30–60 m",
+      "framing": "From neighbourhood toward the home, stop short",
+      "when": null
+    },
+    {
+      "id": "DRN-05",
+      "name": "Top-down rise",
+      "group": "drone",
+      "movement": "top-down rise",
+      "capture_s": [
+        12,
+        15
+      ],
+      "speed_limit": "1 m/s vertical",
+      "travel_or_arc": "10–20 m gain",
+      "lens_ff_mm": null,
+      "height": "20 m to 40–60 m",
+      "framing": "Lot centred, ends with context",
+      "when": null
+    },
+    {
+      "id": "TWI-01",
+      "name": "Twilight hero",
+      "group": "twilight",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "24–35",
+      "height": "1.5–1.8 m",
+      "framing": "Same position as EXT-01",
+      "when": "Sunset +10 to +30 min"
+    },
+    {
+      "id": "TWI-02",
+      "name": "Twilight approach",
+      "group": "twilight",
+      "movement": "slow push-in",
+      "capture_s": [
+        10,
+        12
+      ],
+      "speed_limit": "15 cm/s",
+      "travel_or_arc": "0.6–1.2 m",
+      "lens_ff_mm": "24",
+      "height": "1.4 m",
+      "framing": "Same path as EXT-02",
+      "when": "Sunset +10 to +30 min"
+    },
+    {
+      "id": "TWI-03",
+      "name": "Twilight drone",
+      "group": "twilight",
+      "movement": "drone rise or orbit",
+      "capture_s": [
+        12,
+        15
+      ],
+      "speed_limit": "As DRN-02 or DRN-03",
+      "travel_or_arc": null,
+      "lens_ff_mm": null,
+      "height": "As DRN-02 or DRN-03",
+      "framing": "As DRN-02 or DRN-03",
+      "when": "Sunset +10 to +30 min"
+    },
+    {
+      "id": "TWI-04",
+      "name": "Window glow",
+      "group": "twilight",
+      "movement": "locked-off",
+      "capture_s": [
+        10,
+        10
+      ],
+      "speed_limit": null,
+      "travel_or_arc": null,
+      "lens_ff_mm": "24–35",
+      "height": "1.4 m",
+      "framing": "From outside, looking in at a lit room",
+      "when": "Sunset +10 to +30 min"
+    }
+  ],
+  "clip_lists": {
+    "story": {
+      "condo": {
+        "horizontal": [
+          "EXT-01",
+          "EXT-02",
+          "AMN-01",
+          "INT-01",
+          "INT-02",
+          "INT-03",
+          "INT-04",
+          "INT-05",
+          "INT-07",
+          "INT-08",
+          "INT-10",
+          "OUT-02",
+          "AMN-02"
+        ],
+        "vertical": [
+          "EXT-01",
+          "INT-01",
+          "INT-02",
+          "INT-04",
+          "INT-07",
+          "OUT-02"
+        ],
+        "drone": [
+          "DRN-02",
+          "DRN-04"
+        ],
+        "drone_note": "Only where the building and airspace allow. Otherwise none."
+      },
+      "house": {
+        "horizontal": [
+          "EXT-01",
+          "EXT-02",
+          "EXT-03",
+          "EXT-04",
+          "INT-01",
+          "INT-02",
+          "INT-03",
+          "INT-04",
+          "INT-05",
+          "INT-06",
+          "INT-07",
+          "INT-08",
+          "INT-09",
+          "INT-10",
+          "INT-11",
+          "OUT-01"
+        ],
+        "vertical": [
+          "EXT-01",
+          "INT-01",
+          "INT-02",
+          "INT-04",
+          "INT-07",
+          "INT-10",
+          "OUT-01"
+        ],
+        "drone": [
+          "DRN-01",
+          "DRN-02",
+          "DRN-03",
+          "DRN-04"
+        ],
+        "repeat": {
+          "INT-09": "each secondary bedroom, up to 3"
+        }
+      },
+      "luxury": {
+        "extends": "house",
+        "add_horizontal": [
+          "INT-11",
+          "INT-11",
+          "INT-12",
+          "OUT-01"
+        ],
+        "add_vertical": [
+          "INT-11",
+          "INT-05"
+        ],
+        "drone": [
+          "DRN-01",
+          "DRN-02",
+          "DRN-03",
+          "DRN-04",
+          "DRN-05"
+        ],
+        "repeat": {
+          "INT-11": "up to 3 features",
+          "INT-12": "each secondary bathroom",
+          "OUT-01": "up to 2"
+        },
+        "applies_to_bands": [
+          "large",
+          "xl"
+        ]
+      },
+      "commercial": {
+        "horizontal": [
+          "EXT-01",
+          "EXT-02",
+          "EXT-04",
+          "AMN-01",
+          "INT-02",
+          "INT-03",
+          "INT-11",
+          "OUT-01"
+        ],
+        "vertical": [
+          "EXT-01",
+          "AMN-01",
+          "INT-02"
+        ],
+        "drone": [
+          "DRN-02",
+          "DRN-03",
+          "DRN-04"
+        ],
+        "notes": {
+          "EXT-04": "signage",
+          "INT-02": "main floor plate",
+          "INT-11": "key feature",
+          "OUT-01": "parking or loading"
+        }
+      },
+      "always": [
+        "REF-WB (each lighting zone)",
+        "REF-TONE"
+      ]
+    },
+    "showcase": {
+      "extends": "story",
+      "add_horizontal": [
+        "INT-11 (condo: INT-05)",
+        "INT-10 (second time of light, if the schedule allows)"
+      ],
+      "add_vertical": [
+        "OUT-01"
+      ],
+      "plus": "Virtual Visit capture"
+    },
+    "suite": {
+      "extends": "showcase",
+      "add_horizontal": [
+        "TWI-01",
+        "TWI-02",
+        "TWI-03",
+        "TWI-04"
+      ]
+    }
+  },
+  "limits": {
+    "push_in_slide": {
+      "max_speed_cm_s": 15,
+      "travel_m": [
+        0.6,
+        1.2
+      ]
+    },
+    "pan": {
+      "max_deg_s": 5,
+      "arc_deg": [
+        15,
+        40
+      ]
+    },
+    "hold_s": 2,
+    "moving_clip_s": [
+      10,
+      12
+    ],
+    "locked_off_s": 10,
+    "edit_use_s": [
+      4,
+      7
+    ],
+    "drone_rise_max_m_s": 1,
+    "drone_orbit": {
+      "max_deg_s": 5,
+      "max_ground_m_s": 2
+    },
+    "drone_push_max_m_s": 2,
+    "drone_descend": false,
+    "legal_max_agl_m": 122,
+    "camera_height_m": [
+      1.2,
+      1.4
+    ],
+    "lens_ff_mm_rooms": [
+      16,
+      24
+    ],
+    "verticals_tolerance_deg": 0.5,
+    "frame_rate": "23.976p",
+    "slow_allowed_rate": "59.94p",
+    "shutter": {
+      "23.976p": "1/48 or 1/50",
+      "59.94p": "1/120"
+    },
+    "stills_upload": "Unedited out-of-camera JPEG or HEIC bracket frames, EXIF intact. Keep RAWs until approval.",
+    "stills_brackets": {
+      "frames": 5,
+      "ev_step": 2,
+      "plus": [
+        "window pull",
+        "flash frame where light is mixed"
+      ]
+    },
+    "upload_clips_h": 6,
+    "upload_stills_h": 6,
+    "virtual_visit": {
+      "lens": "0.5x ultra-wide",
+      "video": "4K 30fps",
+      "height_m": [
+        1.3,
+        1.4
+      ],
+      "walk_m_s": 0.5,
+      "wall_offset_m": 1
+    }
+  },
+  "devices": {
+    "stills": "Dedicated camera, 24 MP or more, RAW + JPEG. No phones. Capture only: Bricks edits.",
+    "clips": "Dedicated camera with gimbal, slider or tripod. No phones.",
+    "virtual_visit": {
+      "approved": [
+        "iPhone 13 Pro or newer Pro models",
+        "Any iPhone 15, 16 or 17",
+        "Google Pixel 8 or newer",
+        "Samsung Galaxy S23 or newer"
+      ],
+      "capture_app": "Bricks guided capture camera only"
+    }
+  },
+  "naming": {
+    "clip": "{JobID}_{ClipID}[_V]_T{take}.{ext}",
+    "clip_example": "BRX-24817_INT-04_V_T1.mov",
+    "still_bracket_manual": "{stem}_-2.jpg, {stem}_0.jpg, {stem}_+2.jpg",
+    "still_note": "Keep camera file names; the app groups sets from EXIF exposure data."
+  },
+  "banned": [
+    "Speed ramps",
+    "Whip pans",
+    "Zooming during a clip",
+    "Handheld shake",
+    "Fast hyperlapse",
+    "Drone dives or descents",
+    "Flash transitions",
+    "Beat-cut montages",
+    "Text animations",
+    "Stock epic music",
+    "HDR halos",
+    "Oversaturated skies",
+    "Phones for stills or clips",
+    "25p or 50p",
+    "Edited, merged or exported stills"
+  ]
+}

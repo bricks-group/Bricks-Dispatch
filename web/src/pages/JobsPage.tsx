@@ -20,6 +20,7 @@ import BricksLoader from '../components/BricksLoader';
 import { DayCell } from '../components/DayCell';
 import { Button, ButtonLink } from '../components/Button';
 import { captureLinks } from '../components/CaptureLinks';
+import { JobGuide } from '../guide/JobGuide';
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -196,6 +197,7 @@ export function JobsPage() {
           onPatched={onJobPatched}
         />
       )}
+      {selected && <JobGuide job={selected} />}
     </div>
   );
 }
