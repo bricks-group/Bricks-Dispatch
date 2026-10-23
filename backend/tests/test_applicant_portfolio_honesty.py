@@ -343,7 +343,7 @@ async def test_notify_sends_only_to_admin_with_honest_bullets():
             equipment=["Canon R6"], drone=False,
         )
     kwargs = email.await_args.kwargs
-    assert kwargs["to"] == "admin@brxs.ca"
+    assert kwargs["to"] == "raphael@brxs.ca"
     html = kwargs["html"]
     assert "Portfolio couldn&#x27;t be opened" in html or "Portfolio couldn't be opened" in html
     assert "Location unclear / may not be in the GTA" in html
