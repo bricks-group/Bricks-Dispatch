@@ -31,7 +31,7 @@ from .shoot_duration import (
 
 logger = logging.getLogger(__name__)
 
-OPS_EMAIL = "ops@brxs.ca"
+OPS_EMAIL = "raphael@brxs.ca"
 
 
 async def _mark_dispatch_failed(job_id: str) -> None:
@@ -114,7 +114,7 @@ async def _notify_owner_no_vendor(job: Job, error_message: str) -> None:
         logger.error(f"Owner no-vendor in-app notify failed for job {job.id}: {e}")
 
 
-HOLD_ADMIN_EMAIL = "admin@brxs.ca"
+HOLD_ADMIN_EMAIL = "raphael@brxs.ca"
 
 
 def jev_hold_sms_body(address: str, scheduled_date: str, yes_probability) -> str:
@@ -157,7 +157,7 @@ def jev_hold_email_body(job: dict, yes_probability) -> str:
 
 
 async def notify_owner_jev_hold(db, job: dict, yes_probability) -> None:
-    """SMS the owner profile phone and email admin@brxs.ca. Never raises.
+    """SMS the owner profile phone and email raphael@brxs.ca. Never raises.
 
     A failed lookup, SMS, or email must not assign the held job.
     """
@@ -479,7 +479,7 @@ async def notify_owner_vendor_application(
     source=None,
     source_detail=None,
 ) -> None:
-    """SMS the owner profile phone and email admin@brxs.ca. Never raises.
+    """SMS the owner profile phone and email raphael@brxs.ca. Never raises.
 
     A failed lookup, SMS, or email leaves the application pending. This does
     not approve or reject.
@@ -535,7 +535,7 @@ async def notify_owner_vendor_application(
             source=source, source_detail=source_detail,
         )
         # Kam alone. No cc, no bcc, no applicant, no hiring@, no personal Gmail.
-        if HOLD_ADMIN_EMAIL != "admin@brxs.ca":
+        if HOLD_ADMIN_EMAIL != "raphael@brxs.ca":
             raise RuntimeError("vendor application email recipient drifted")
         await send_email_via_resend(
             to=HOLD_ADMIN_EMAIL,
@@ -879,7 +879,7 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
     Retries up to _MAX_ASSIGNMENT_ATTEMPTS times; on final failure writes an
-    ops_escalation, marks status=dispatch_failed, emails ops@brxs.ca, and SMS/notifies owner.
+    ops_escalation, marks status=dispatch_failed, emails raphael@brxs.ca, and SMS/notifies owner.
 
     exclude_member_id: skip this vendor member on all attempts (e.g. contractor who no-showed).
     """
