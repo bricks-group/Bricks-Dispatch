@@ -1,6 +1,6 @@
 """Load an applicant, run the automatic review, store it, notify Kam.
 
-Kam alone gets the notification (admin@brxs.ca + his profile phone). The
+Kam alone gets the notification (raphael@brxs.ca + his profile phone). The
 applicant is never emailed from here. Approve / reject stays manual in OS.
 """
 
@@ -16,7 +16,7 @@ from .applicant_review import review_input_from_member, run_review
 
 logger = logging.getLogger(__name__)
 
-OWNER_EMAIL = "admin@brxs.ca"
+OWNER_EMAIL = "raphael@brxs.ca"
 THUMB_LINK_TTL = 7 * 24 * 3600
 
 
@@ -150,7 +150,7 @@ def render_all(member: dict, result: dict, thumb_urls: list) -> dict:
 
 
 async def notify_owner(member: dict, result: dict) -> None:
-    """Text Kam's profile phone and email admin@brxs.ca. Never raises."""
+    """Text Kam's profile phone and email raphael@brxs.ca. Never raises."""
     try:
         rendered = render_all(member, result, await signed_thumb_urls(result))
     except Exception as e:
@@ -167,7 +167,7 @@ async def notify_owner(member: dict, result: dict) -> None:
     try:
         from .notifications import send_email_via_resend
 
-        if OWNER_EMAIL != "admin@brxs.ca":
+        if OWNER_EMAIL != "raphael@brxs.ca":
             raise RuntimeError("applicant email recipient drifted")
         await send_email_via_resend(to=OWNER_EMAIL, subject=rendered["subject"], html=rendered["html"], text=rendered["text"])
     except Exception as e:
