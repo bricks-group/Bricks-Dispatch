@@ -390,7 +390,7 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     background_tasks.add_task(review_application, result["member_id"], notify=True, trigger="apply")
 
     found = found_us_line(getattr(application, "source", None), getattr(application, "source_detail", None))
-    # In-app record only. Kam's text and admin@brxs.ca email are the notify above.
+    # In-app record only. Kam's text and raphael@brxs.ca email are the notify above.
     # Do not email ADMIN_NOTIFICATION_EMAIL — that env is unset, and this path
     # must not fall through to a personal mailbox.
     background_tasks.add_task(
