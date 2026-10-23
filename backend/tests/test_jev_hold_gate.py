@@ -202,7 +202,7 @@ async def test_high_hold_probability_skips_auto_assign(monkeypatch):
         "Jev yes-probability 0.91. It is unassigned."
     )
     assert db.email.await_count == 1
-    assert db.email.await_args.kwargs["to"] == "admin@brxs.ca"
+    assert db.email.await_args.kwargs["to"] == "raphael@brxs.ca"
     assert db.email.await_args.kwargs["to"] != "akashorter@gmail.com"
     assert db.email.await_args.kwargs["subject"] == "Bricks held a booking"
     html = db.email.await_args.kwargs["html"]
