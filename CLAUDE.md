@@ -138,7 +138,7 @@ pick_vendor_rule_based(job, vendors)
 
 ## Vendor Model: Snappr/Homejab IC Model
 - IC agreement **v1.8** (effective 2026-10-03) — source of truth is `_IC_AGREEMENT_TEXT` in `backend/app/routers/onboarding.py` (matches www.brxs.ca/legal/ic-agreement.txt). Rate-card language matches www à-la-carte media (Photos only / Essentials / Story / Showcase / Full suite), not Standard–Estate. Virtual Visit is always a paid add-on. Do not restore older clauses or % of rack add-on language.
-- Contracting party: **Bricks Group**. Contact: `booking@brxs.ca` (no legal@ mailbox).
+- Contracting party: **Bricks Group**. Contact: `raphael@brxs.ca` (agreement questions and payout disputes; no legal@ mailbox).
 - Insurance/WSIB proof is **not a gate** for apply, approval, assignment, or dispatch. Optional COI/WSIB uploads may still be stored (`coi_expires_on` / `wsib_expires_on` are historical only). Missing, expired, or unverified proof must not suspend, reject, or hold a job. RPAS/drone legal duty is unchanged. IC v1.8 Clause 6 states COI/WSIB are not required for apply or first dispatch.
 - Payouts are a **fixed vendor rate card** by media package / sqft band / tier, not a % of what the client was charged. www catalog ids alias to existing `vendor_payout_rates` cells (no invented dollars). Add-ons (including Virtual Visit) are fixed published dollar amounts by tier (never % of rack).
 - No binding arbitration; Ontario courts. Either party may terminate on written notice (email is enough).
