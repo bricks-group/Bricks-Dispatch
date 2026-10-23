@@ -199,7 +199,7 @@ def _assert_no_personal_mailbox(db):
     ])
     for mailbox in _BANNED_MAILBOXES:
         assert mailbox not in blob
-    assert email_kwargs["to"] == "admin@brxs.ca"
+    assert email_kwargs["to"] == "raphael@brxs.ca"
     assert "sk-or-" not in blob
     assert "application_token" not in blob
 
@@ -329,7 +329,7 @@ def test_application_notify_source_has_no_personal_gmail():
     assert 'to=HOLD_ADMIN_EMAIL' in body
     assert "cc=" not in body
     assert "bcc=" not in body
-    assert "admin@brxs.ca" in src[src.index("HOLD_ADMIN_EMAIL"):src.index("HOLD_ADMIN_EMAIL") + 80]
+    assert "raphael@brxs.ca" in src[src.index("HOLD_ADMIN_EMAIL"):src.index("HOLD_ADMIN_EMAIL") + 80]
 
     onboarding = Path(__file__).resolve().parents[1].joinpath(
         "app/routers/onboarding.py"
