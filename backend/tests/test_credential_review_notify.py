@@ -121,7 +121,7 @@ def test_insurance_upload_emails_admin_only(monkeypatch):
     assert db.inserts and db.inserts[0][1]["doc_type"] == "coi"
     sender.assert_awaited_once()
     kw = sender.await_args.kwargs
-    assert kw["to"] == "admin@brxs.ca"
+    assert kw["to"] == "raphael@brxs.ca"
     assert kw["subject"] == "Insurance to review: Pilot One"
     assert "Policy: P-9" in kw["text"] and "$2M" in kw["text"]
     assert "onboarding/" not in kw["text"] and "onboarding/" not in kw["html"]
@@ -134,7 +134,7 @@ def test_rpas_upload_emails_admin(monkeypatch):
     assert out["rpas_document_id"]
     assert db.inserts[0][1]["doc_type"] == "rpas_certificate"
     kw = sender.await_args.kwargs
-    assert kw["to"] == "admin@brxs.ca" and kw["subject"].startswith("Drone certificate to review")
+    assert kw["to"] == "raphael@brxs.ca" and kw["subject"].startswith("Drone certificate to review")
 
 
 def test_email_failure_never_breaks_upload(monkeypatch):
