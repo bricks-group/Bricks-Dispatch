@@ -1,4 +1,4 @@
-"""Owner hears about QC holds: SMS + admin@brxs.ca email with held files."""
+"""Owner hears about QC holds: SMS + raphael@brxs.ca email with held files."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -83,7 +83,7 @@ async def test_notify_sends_sms_and_admin_email():
     assert ok is True
     sms.assert_called_once()
     assert sms.call_args[0][0] == "+15555550100"
-    assert email.await_args.kwargs["to"] == QC_HOLD_ADMIN_EMAIL == "admin@brxs.ca"
+    assert email.await_args.kwargs["to"] == QC_HOLD_ADMIN_EMAIL == "raphael@brxs.ca"
     assert "2 listing photos" in email.await_args.kwargs["subject"]
 
 
