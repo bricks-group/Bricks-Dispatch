@@ -478,7 +478,7 @@ async def test_runner_notifies_only_kam_and_never_raises(monkeypatch):
         await runner.notify_owner(member, r)
     assert sms.call_args.args[0] == "+14165550100"
     kw = email.await_args.kwargs
-    assert kw["to"] == "admin@brxs.ca" and kw["text"] and kw["html"]
+    assert kw["to"] == "raphael@brxs.ca" and kw["text"] and kw["html"]
     assert "alex.rivera" not in kw["to"]
 
 
