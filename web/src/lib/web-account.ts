@@ -6,7 +6,7 @@
  * No React here so node --test can exercise it with a mocked client.
  */
 
-export const SUPPORT_EMAIL = 'help@brxs.ca';
+export const SUPPORT_EMAIL = 'privacy@brxs.ca';
 export const DELETION_INFO_URL = 'https://www.brxs.ca/account-deletion';
 export const GOOGLE_UNAVAILABLE_MESSAGE =
   'Google sign-in is not switched on for Bricks yet. Use email and password, or email me a code.';

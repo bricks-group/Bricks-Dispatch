@@ -19,7 +19,7 @@ export default function DeleteAccountRow() {
       return;
     }
     if (r.via === 'email') {
-      Alert.alert('Finish in your email app', 'Send the pre-filled email to help@brxs.ca to confirm the deletion.');
+      Alert.alert('Finish in your email app', 'Send the pre-filled email to privacy@brxs.ca to confirm the deletion.');
       return;
     }
     Alert.alert(

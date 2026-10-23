@@ -365,7 +365,7 @@ Deno.serve(async (req: Request) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "Bricks Ops <bookings@brxs.ca>",
+            from: "Bricks Ops <hello@brxs.ca>",
             to: [contractor.email],
             subject: `Assigned Bricks shoot — ${booking.property_address}`,
             html:
@@ -467,7 +467,7 @@ Deno.serve(async (req: Request) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: "Bricks Ops <bookings@brxs.ca>",
+            from: "Bricks Ops <hello@brxs.ca>",
             to: [contractor.email],
             subject: `New Bricks shoot offer — ${booking.property_address}`,
             html: buildOfferHtml({

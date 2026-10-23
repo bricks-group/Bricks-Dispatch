@@ -7,12 +7,12 @@
 //   supabase/migrations/20261011140000_account_deletion_requests.sql
 //
 // If the table is not reachable (migration not applied yet, offline), we fall back to a
-// pre-filled email to help@brxs.ca so the user is never left without a path.
+// pre-filled email to privacy@brxs.ca so the user is never left without a path.
 import { Linking, Platform } from 'react-native';
 import { supabase } from './supabase';
 
 export const DELETION_INFO_URL = 'https://www.brxs.ca/account-deletion';
-export const SUPPORT_EMAIL = 'help@brxs.ca';
+export const SUPPORT_EMAIL = 'privacy@brxs.ca';
 
 export type DeletionResult = { ok: true; via: 'request' } | { ok: true; via: 'email' } | { ok: false; error: string };
 

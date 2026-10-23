@@ -38,7 +38,7 @@ def test_ic_agreement_constants_are_v18():
     assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.8")
     assert "Effective: October 3, 2026" in text
     assert 'Contracting party: Bricks Group ("Bricks")' in text
-    assert "Questions: booking@brxs.ca" in text
+    assert "Questions: raphael@brxs.ca" in text
     assert text.endswith("Bricks Group · Ontario, Canada")
 
     # Clause 6 honesty — not a dispatch gate (PR #26 / IC v1.8).

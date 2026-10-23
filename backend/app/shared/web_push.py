@@ -5,7 +5,7 @@ every Bricks API already ships, so no new dependency lands on Vercel.
 Config (same values on bricks-os-api, bricks-dispatch-api, bricks-companion-api):
   VAPID_PUBLIC_KEY   base64url uncompressed P-256 point (65 bytes)
   VAPID_PRIVATE_KEY  base64url raw private scalar (32 bytes)
-  VAPID_SUBJECT      mailto: contact for push services (default booking@brxs.ca)
+  VAPID_SUBJECT      mailto: contact for push services (default hello@brxs.ca)
 
 Subscriptions live in public.push_subscriptions (created by Bricks OS when a
 seat turns push on in Settings). Senders look devices up by the agent's email.
@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-DEFAULT_SUBJECT = "mailto:booking@brxs.ca"
+DEFAULT_SUBJECT = "mailto:hello@brxs.ca"
 RECORD_SIZE = 4096
 # Push services browsers actually hand out. Anything else is refused so the
 # API never POSTs to an arbitrary URL a client supplied.
