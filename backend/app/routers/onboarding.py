@@ -121,7 +121,7 @@ Ontario law and applicable Canadian federal law govern. Courts of Ontario have e
 18. CHANGES; ENTIRE AGREEMENT
 This agreement, the Shoot Standards Guide, and the booking details for each job are the entire agreement for contractor services. Bricks may issue a revised version on at least 14 days' notice. Continued acceptance of jobs after the effective date is acceptance of the revision. You may stop accepting jobs and terminate if you do not agree. Amendments other than a posted revision require written agreement of both parties.
 
-Questions: raphael@brxs.ca
+Questions: booking@brxs.ca
 Bricks Group · Ontario, Canada
 """.strip()
 
