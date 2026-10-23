@@ -2,7 +2,7 @@
 
 Kam rule: QC can hold a file back from client delivery. A hold nobody hears
 about is a silent short delivery, so text the owner profile phone and email
-admin@brxs.ca with the held filenames and reasons. Never raises.
+raphael@brxs.ca with the held filenames and reasons. Never raises.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-QC_HOLD_ADMIN_EMAIL = "admin@brxs.ca"
+QC_HOLD_ADMIN_EMAIL = "raphael@brxs.ca"
 _MAX_LISTED = 12
 _MAX_REASON = 140
 
@@ -160,7 +160,7 @@ async def notify_owner_qc_hold(
     qc_counts: Optional[dict],
     only_ids: Optional[Iterable[str]] = None,
 ) -> bool:
-    """SMS owner + email admin@brxs.ca when QC rejected listing stills.
+    """SMS owner + email raphael@brxs.ca when QC rejected listing stills.
 
     only_ids limits the notice to uploads that just ran QC (late-fold), so a
     re-run does not repeat an earlier hold. Returns True when a notice went
