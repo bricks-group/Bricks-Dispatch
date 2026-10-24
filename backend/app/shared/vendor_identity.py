@@ -34,6 +34,18 @@ def is_owner_member(member: Optional[dict]) -> bool:
     return title == "owner" or role == "owner"
 
 
+def needs_terms(member: Optional[dict]) -> bool:
+    """A contractor who reached GO without accepting the IC agreement and privacy policy.
+
+    Applicants accept on the www application. Members an owner added from the
+    team screen (and older rows) never did, so GO asks them once before the app
+    opens. Owners are not contractors and are never asked.
+    """
+    if not member or is_owner_member(member):
+        return False
+    return not member.get("terms_accepted_at")
+
+
 def member_title(member: Optional[dict]) -> str:
     if is_owner_member(member):
         return OWNER_TITLE

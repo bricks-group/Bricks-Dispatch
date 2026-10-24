@@ -82,6 +82,9 @@ async def vendor_os_verify(payload: dict):
 async def vendor_os_me(authorization: str | None = Header(default=None, alias="Authorization")):
     actor_id = await resolve_vendor_actor_id(authorization, None)
     member = await get_vendor_member(actor_id)
+    if isinstance(member, dict):
+        from ..shared.vendor_identity import needs_terms
+        return {**member, "needs_terms": needs_terms(member)}
     return member
 
 @router.post("/vendor-os/auth/logout")

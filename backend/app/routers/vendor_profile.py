@@ -622,3 +622,91 @@ async def os_upload_photo(
 ):
     return await upload_photo_impl(authorization, x_user_id, file)
 
+
+
+# ── Contractor agreement for members added without an application ────────────
+
+class AcceptTermsBody(BaseModel):
+    ic_agreement_version: str
+    read: List[str] = []
+
+
+REQUIRED_READS = ("ic", "privacy")
+
+
+async def accept_terms_impl(
+    payload: AcceptTermsBody,
+    authorization: Optional[str],
+    x_user_id: Optional[str],
+) -> dict:
+    """Record that the signed-in contractor read and accepted the current IC
+    agreement and the privacy policy. Applicants do this on the www form; team
+    members an owner added get the same step in GO before the app opens."""
+    from .onboarding import _IC_AGREEMENT_VERSION
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_vendor_member_fields
+
+    member = await _actor_member(authorization, x_user_id)
+    if not member or not member.get("id"):
+        api_error(403, "Vendor member not found", "vendor_member_not_found")
+    if (payload.ic_agreement_version or "").strip() != _IC_AGREEMENT_VERSION:
+        api_error(409, "The agreement was updated. Reload to read the current version.", "ic_agreement_outdated")
+    missing = [k for k in REQUIRED_READS if k not in set(payload.read or [])]
+    if missing:
+        api_error(422, "Read the contractor agreement and privacy policy to the end first.", "terms_not_read")
+
+    if member.get("terms_accepted_at") and member.get("ic_agreement_version") == _IC_AGREEMENT_VERSION:
+        return {
+            "terms_accepted_at": member["terms_accepted_at"],
+            "ic_agreement_version": _IC_AGREEMENT_VERSION,
+            "needs_terms": False,
+        }
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    note = f"IC agreement v{_IC_AGREEMENT_VERSION} and privacy policy accepted in GO on {now_iso}"
+    prior = (member.get("internal_notes") or "").strip()
+    fields = {
+        "terms_accepted_at": now_iso,
+        "ic_agreement_version": _IC_AGREEMENT_VERSION,
+        "internal_notes": f"{prior}\n{note}".strip(),
+        "updated_at": now_iso,
+    }
+    saved = False
+    db = await get_db()
+    try:
+        res = await db.table("vendor_members").update(fields).eq("id", member["id"]).execute()
+        saved = bool(res is not None and getattr(res, "data", None))
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        saved = pg_update_vendor_member_fields(member["id"], fields)
+    if not saved:
+        api_error(503, "Couldn't save your agreement. Try again.", "terms_not_saved")
+
+    try:
+        from ..shared.audit import write_audit_event
+        await write_audit_event(
+            member["id"], "vendor_member", member["id"], "terms_accepted",
+            vendor_id=member.get("vendor_id") or "default_vendor",
+            details={"ic_agreement_version": _IC_AGREEMENT_VERSION, "read": list(REQUIRED_READS), "surface": "go"},
+        )
+    except Exception:
+        pass
+    return {"terms_accepted_at": now_iso, "ic_agreement_version": _IC_AGREEMENT_VERSION, "needs_terms": False}
+
+
+@router.post("/api/profile/accept-terms")
+async def accept_terms(
+    payload: AcceptTermsBody,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await accept_terms_impl(payload, authorization, x_user_id)
+
+
+@os_router.post("/profile/accept-terms")
+async def os_accept_terms(
+    payload: AcceptTermsBody,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await accept_terms_impl(payload, authorization, x_user_id)

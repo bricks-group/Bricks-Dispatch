@@ -114,6 +114,8 @@ export type AuthMember = {
   terms_accepted_at?: string | null;
   application_submitted?: boolean;
   app_access?: boolean;
+  /** Server: a contractor in GO who never accepted the IC agreement and privacy policy. */
+  needs_terms?: boolean;
   portfolio_samples?: Array<{ media_type: string; url?: string; link?: string; label?: string }>;
 };
 
@@ -369,6 +371,14 @@ export async function isPhoneUser(): Promise<boolean> {
 
 export async function me(): Promise<AuthMember> {
   return api.get<AuthMember>('/api/vendor-os/auth/me');
+}
+
+/** Record the contractor agreement and privacy policy as read and accepted. */
+export async function acceptTerms(icAgreementVersion: string, read: string[]) {
+  return api.post<{ terms_accepted_at: string; ic_agreement_version: string; needs_terms: boolean }>(
+    '/api/vendor-os/profile/accept-terms',
+    { ic_agreement_version: icAgreementVersion, read },
+  );
 }
 
 export async function logout() {
