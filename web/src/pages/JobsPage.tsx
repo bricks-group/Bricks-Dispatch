@@ -34,10 +34,10 @@ import { JobGuide } from '../guide/JobGuide';
 
 const JOB_STATUS_TABS: [string, string][] = [
   ['', 'All'],
-  ['pending_assignment', 'Unassigned'],
+  ['pending_assignment', 'Open'],
   ['assigned', 'Assigned'],
-  ['in_progress', 'In progress'],
-  ['completed', 'Completed'],
+  ['in_progress', 'Active'],
+  ['completed', 'Done'],
 ];
 
 const STATUS_BADGE: Record<string, string> = {

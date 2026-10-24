@@ -1027,6 +1027,7 @@ select {
 
 /* Underline status filter (sentence case) */
 .tabs { display: flex; gap: 18px; padding: 4px 20px 0; border-bottom: 1px solid var(--c-hair); overflow-x: auto; scrollbar-width: none; }
+@media (max-width: 480px) { .tabs { gap: 16px; padding: 4px 16px 0; } }
 .tabs::-webkit-scrollbar { display: none; }
 button.tab { all: unset; cursor: pointer; flex: none; padding: 12px 0 10px; font-size: 14px; color: var(--c-ink-mute); border-bottom: 2px solid transparent; white-space: nowrap; }
 button.tab:hover { color: var(--c-ink-soft); }
