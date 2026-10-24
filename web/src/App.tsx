@@ -50,7 +50,7 @@ function OfflineBar() {
 
 function TopBar({ name, onLogout }: { name: string; onLogout: () => void }) {
   const now = new Date();
-  const dateStr = now.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase();
+  const dateStr = now.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
   return (
     <div className="topbar">
       <span className="topbar-date">{dateStr}</span>

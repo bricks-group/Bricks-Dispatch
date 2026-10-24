@@ -45,7 +45,7 @@ export function TeamPage() {
       <div className="page-header">
         <div>
           <h1>Team</h1>
-          <p>Identity, title, skills, RPAS, assignable — same fields the Office assigner reads</p>
+          <p>Who the office can assign shoots to</p>
         </div>
       </div>
 
@@ -81,7 +81,7 @@ export function TeamPage() {
                 <td data-label="Skills" className="muted">{(m.skills || []).join(', ') || '—'}</td>
                 <td data-label="RPAS" className="muted">{m.rpas_certificate_level || '—'}</td>
                 <td data-label="Assignable">
-                  <span className={`badge ${m.assignable ? 'badge-green' : 'badge-yellow'}`}>
+                  <span className={`badge ${m.assignable ? 'badge-green' : 'badge-attn'}`}>
                     {m.assignable ? 'Yes' : (m.assignable_reason || 'No')}
                   </span>
                 </td>

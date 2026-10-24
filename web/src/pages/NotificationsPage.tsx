@@ -108,7 +108,7 @@ export function NotificationsPage() {
                   <p className="muted" style={{ margin: '6px 0 0', padding: 0 }}>
                     {n.message || n.body || ''}
                   </p>
-                  {!n.read ? <span className="badge badge-yellow" style={{ marginTop: 8 }}>Unread</span> : null}
+                  {!n.read ? <span className="badge badge-attn" style={{ marginTop: 6 }}>Unread</span> : null}
                 </button>
               </li>
             ))}

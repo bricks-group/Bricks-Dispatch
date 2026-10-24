@@ -158,9 +158,9 @@ export function AvailabilityPage() {
 
       <section className="card full">
         <h3>How auto-assign uses your calendar</h3>
-        <p style={{ margin: '8px 0 0', maxWidth: 640 }}>
+        <p className="muted" style={{ margin: 0, padding: '14px 20px 18px', maxWidth: 680, fontSize: 13 }}>
           {cals?.copy ||
-            'Connecting a calendar tells Bricks when you’re free so auto-assign only offers jobs that fit your real schedule. Busy on any connected calendar = you won’t get that slot. Manual hours still apply if no calendar is connected.'}
+            'Connecting a calendar tells Bricks when you’re free so auto-assign only offers jobs that fit your real schedule. If you’re busy on any connected calendar, you won’t be offered that slot. Manual hours still apply if no calendar is connected.'}
         </p>
       </section>
 

@@ -70,11 +70,9 @@ body {
 .brand-sub {
   display: block;
   margin-top: 6px;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+  font-family: 'General Sans', ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
   color: var(--c-ink-faint);
 }
 
@@ -114,10 +112,8 @@ body {
 }
 
 .topbar-date {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  color: var(--c-ink-faint);
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  color: var(--c-ink-mute);
 }
 
 .topbar-right {
@@ -392,21 +388,23 @@ label {
 
 /* ── Badges ── */
 .badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  border-radius: var(--radius);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  /* Plain status text, sentence case. Colour only when something needs attention. */
+  display: inline-block;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--c-ink-soft);
+  white-space: nowrap;
 }
+.badge::first-letter { text-transform: uppercase; }
 
-.badge-green  { background: rgba(68, 115, 68, 0.2);    color: #7EC87E; }
-.badge-yellow { background: rgba(170, 120, 30, 0.18);  color: #C8954C; }
-.badge-blue   { background: rgba(60, 100, 170, 0.2);   color: #7EB0D8; }
-.badge-gray   { background: var(--c-bg-deep); color: var(--c-ink-mute); border: 1px solid var(--c-hair); }
+.badge-green  { color: var(--c-ink-soft); }
+.badge-yellow { color: var(--c-ink-soft); }
+.badge-blue   { color: var(--c-ink-soft); }
+.badge-gray   { color: var(--c-ink-mute); }
+.badge-attn   { color: #C86A4A; }
 
 /* ── Status toggle ── */
 .status-toggle { display: flex; gap: 4px; }
@@ -416,11 +414,8 @@ label {
   border-radius: var(--radius);
   border: 1px solid var(--c-hair);
   background: transparent;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   cursor: pointer;
   color: var(--c-ink-faint);
   transition: background 0.1s, color 0.1s, border-color 0.1s;
@@ -509,10 +504,7 @@ label {
 }
 
 .login-divider span {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 12px;
   color: var(--c-ink-faint);
 }
 
@@ -597,9 +589,9 @@ label {
   font-size: 13px;
 }
 .chip.chip-on {
-  background: rgba(210, 84, 43, 0.16);
+  background: var(--c-bg-deep);
   color: var(--c-ink);
-  border-color: var(--c-brick);
+  border-color: var(--c-ink-soft);
 }
 input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
 
@@ -664,9 +656,7 @@ input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
 }
 .capture-addr { font-size: 13px; font-weight: 600; }
 .capture-room {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-size: 12px;
   color: var(--c-brick);
   margin-top: 2px;
 }
@@ -711,10 +701,7 @@ input[type="file"] { font-size: 12px; color: var(--c-ink-mute); }
   font-size: 30px;
 }
 .capture-dome-label {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 9px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 11px;
   color: #F4F1EBAA;
 }
 .capture-guidance {
@@ -1012,3 +999,51 @@ select {
 .gc-shutter.is-rec .gc-shutter-core { width: 28px; height: 28px; border-radius: 3px; }
 .gc-shutter:disabled { border-color: rgba(244, 241, 235, 0.3); background: transparent; }
 .gc-shutter:disabled .gc-shutter-core { background: rgba(244, 241, 235, 0.18); }
+
+/* ── Calm stats: at most three plain figures on one line, no tiles ── */
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 4px 0 2px; }
+.stat { min-width: 0; }
+.stat-label { margin: 0; font-size: 13px; color: var(--c-ink-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-value { margin: 4px 0 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 26px; line-height: 1.1; letter-spacing: -0.03em; color: var(--c-ink); white-space: nowrap; }
+.stat-note { margin: 4px 0 0; font-size: 12px; color: var(--c-ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stats-foot { margin: -4px 0 0; font-size: 13px; color: var(--c-ink-mute); }
+@media (max-width: 560px) { .stats { gap: 12px; } .stat-value { font-size: 22px; } }
+
+/* Two-line rows: title, quiet meta, plain status */
+.row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.row-title { color: var(--c-ink); font-size: 14px; font-weight: 500; }
+.row-meta { color: var(--c-ink-mute); font-size: 13px; }
+.row-end { flex: none; margin-left: 12px; text-align: right; }
+
+/* Profile meta line */
+.meta-line { margin: 0; font-size: 14px; color: var(--c-ink-soft); }
+.meta-line .attn { color: #C86A4A; }
+
+/* Today rows: details on top, capture actions or note underneath at full width */
+.list-row.today-row { flex-wrap: wrap; align-items: flex-start; row-gap: 10px; }
+.list-row.today-row > .today-job-main { flex: 1 1 100%; }
+.list-row.today-row > .today-capture { flex: 1 1 100%; margin-top: 0; }
+.list-row.today-row > .today-capture.capture-none { border: 0; padding: 0; background: none; }
+
+/* Underline status filter (sentence case) */
+.tabs { display: flex; gap: 18px; padding: 4px 20px 0; border-bottom: 1px solid var(--c-hair); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+button.tab { all: unset; cursor: pointer; flex: none; padding: 12px 0 10px; font-size: 14px; color: var(--c-ink-mute); border-bottom: 2px solid transparent; white-space: nowrap; }
+button.tab:hover { color: var(--c-ink-soft); }
+button.tab.tab-on { color: var(--c-ink); border-bottom-color: var(--c-ink); }
+button.tab:focus-visible { outline: 2px solid var(--c-ink-soft); outline-offset: 2px; }
+.card > .tabs + .row { padding-top: 14px; }
+input.jobs-search { flex: 1 1 260px; min-width: 0; max-width: 420px; }
+
+/* Fixed-width fields never run past the card edge on phones */
+.card .stack label > input, .card .stack label > select { max-width: 100%; }
+.card .stack input[type="file"] { max-width: 100%; }
+@media (max-width: 860px) {
+  /* Short pages: the tab strip keeps its height; spare space goes to the page, not the header */
+  .app-shell { grid-template-rows: auto 1fr; align-content: start; }
+}
+
+@media (min-width: 861px) {
+  .stats { max-width: 640px; }
+  .list-row.today-row > .today-capture.actions { max-width: 440px; }
+}

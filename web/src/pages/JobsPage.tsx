@@ -32,6 +32,14 @@ import { Button, ButtonLink } from '../components/Button';
 import { captureLinks } from '../components/CaptureLinks';
 import { JobGuide } from '../guide/JobGuide';
 
+const JOB_STATUS_TABS: [string, string][] = [
+  ['', 'All'],
+  ['pending_assignment', 'Unassigned'],
+  ['assigned', 'Assigned'],
+  ['in_progress', 'In progress'],
+  ['completed', 'Completed'],
+];
+
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
   unassigned: 'badge-gray',
@@ -130,19 +138,27 @@ export function JobsPage() {
       {error && <p className="error">{error}</p>}
 
       <section className="card full">
+        <div className="tabs" role="tablist" aria-label="Status">
+          {JOB_STATUS_TABS.map(([v, label]) => (
+            <button
+              key={v || 'all'}
+              type="button"
+              role="tab"
+              aria-selected={status === v}
+              className={`tab${status === v ? ' tab-on' : ''}`}
+              onClick={() => { setPage(1); setStatus(v); }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="row" style={{ paddingBottom: 16 }}>
           <input
+            className="jobs-search"
             value={search}
             onChange={(e) => { setPage(1); setSearch(e.target.value); }}
             placeholder="Search address or city"
           />
-          <select value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
-            <option value="">All statuses</option>
-            <option value="pending_assignment">Unassigned</option>
-            <option value="assigned">Assigned</option>
-            <option value="in_progress">In Progress</option>
-            <option value="completed">Completed</option>
-          </select>
           {admin ? (
             <select value={assigneeFilter} onChange={(e) => { setPage(1); setAssigneeFilter(e.target.value); }}>
               <option value="all">All</option>

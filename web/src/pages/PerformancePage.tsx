@@ -27,24 +27,22 @@ export function PerformancePage() {
       {!data && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
 
       {data && (
-        <div className="page-grid">
-          <section className="card">
-            <h3>Completion rate</h3>
-            <p className="metric">{data.completion_rate}%</p>
-            <div className="bar-track"><div className="bar-fill" style={{ width: `${data.completion_rate}%` }} /></div>
-            <p className="muted">of assigned jobs</p>
-          </section>
-          <section className="card">
-            <h3>On-time rate</h3>
-            <p className="metric">{data.on_time_rate}%</p>
-            <div className="bar-track"><div className="bar-fill" style={{ width: `${data.on_time_rate}%` }} /></div>
-            <p className="muted">on-time arrivals</p>
-          </section>
-          <section className="card">
-            <h3>Job volume · week</h3>
-            <p className="metric">{data.job_volume_week}</p>
-            <p className="muted">jobs completed</p>
-          </section>
+        <div className="stats">
+          <div className="stat">
+            <p className="stat-label">Completion</p>
+            <p className="stat-value">{data.completion_rate}%</p>
+            <p className="stat-note">of assigned jobs</p>
+          </div>
+          <div className="stat">
+            <p className="stat-label">On time</p>
+            <p className="stat-value">{data.on_time_rate}%</p>
+            <p className="stat-note">arrivals</p>
+          </div>
+          <div className="stat">
+            <p className="stat-label">This week</p>
+            <p className="stat-value">{data.job_volume_week}</p>
+            <p className="stat-note">jobs completed</p>
+          </div>
         </div>
       )}
     </div>

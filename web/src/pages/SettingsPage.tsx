@@ -53,7 +53,7 @@ function StripeConnectSection() {
         {!status && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
         {status && (
           <div className="row">
-            <span className={`badge ${status.connected ? 'badge-green' : 'badge-gray'}`}>
+            <span className={`badge ${status.connected ? 'badge-green' : 'badge-attn'}`}>
               {status.connected
                 ? 'Connected'
                 : status.connect_status === 'pending' || status.connect_status === 'restricted'
@@ -62,11 +62,11 @@ function StripeConnectSection() {
             </span>
             <span className="muted">
               {status.connected
-                ? 'Connected = payout-ready. Job payouts go to this Stripe account.'
+                ? 'Payouts for your jobs go to this Stripe account.'
                 : status.connect_status === 'pending'
-                  ? 'Pending — finish Stripe setup. Connected only after payouts are enabled.'
+                  ? 'Finish Stripe setup to turn on payouts.'
                   : status.connect_status === 'restricted'
-                    ? 'Stripe restricted this account — open Stripe to fix requirements before payouts.'
+                    ? 'Stripe needs more details before it can pay out. Open Stripe to finish.'
                     : 'Connect a Stripe account to receive job payouts. Owner payouts are the full package with $0 deduction.'}
             </span>
           </div>

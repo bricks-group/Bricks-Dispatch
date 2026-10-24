@@ -99,7 +99,7 @@ export function ProfilePage() {
       <div className="page-header">
         <div>
           <h1>Profile</h1>
-          <p>Identity, skills, RPAS, service area — the same fields the Office assigner reads</p>
+          <p>What the office sees when it assigns shoots</p>
         </div>
       </div>
 
@@ -108,30 +108,13 @@ export function ProfilePage() {
 
       {data && (
         <>
-          <div className="page-grid">
-            <section className="card">
-              <h3>Title</h3>
-              <p className="metric" style={{ fontSize: 22 }}>{data.title}</p>
-              <p className="muted">{data.name}</p>
-            </section>
-            <section className="card">
-              <h3>Tier</h3>
-              <p className="metric">{data.tier_label}</p>
-              <p className="muted">{data.title === 'Owner' ? 'Highest · Owner' : `Tier ${data.tier_label}`}</p>
-            </section>
-            <section className="card">
-              <h3>Payouts</h3>
-              <p className="metric" style={{ fontSize: 18 }}>{data.payout_label}</p>
-              <p className="muted">
-                {data.payout_model === 'owner_full' ? '$0 deduction' : 'Fixed rate card — not % of rack'}
-              </p>
-            </section>
-            <section className="card">
-              <h3>Assignable</h3>
-              <p className="metric" style={{ fontSize: 18 }}>{data.assignable ? 'Yes' : 'No'}</p>
-              <p className="muted">{data.assignable_reason || 'Approved and active'}</p>
-            </section>
-          </div>
+          <p className="meta-line">
+            {[data.title, data.title === 'Owner' ? 'Owner tier' : `${data.tier_label} tier`, data.payout_model === 'owner_full' ? 'Full package payouts' : data.payout_label].filter(Boolean).join(' · ')}
+            {' · '}
+            {data.assignable
+              ? <span>Assignable</span>
+              : <span className="attn">Not assignable{data.assignable_reason ? `: ${data.assignable_reason}` : ''}</span>}
+          </p>
 
           <section className="card full">
             <h3>Identity</h3>

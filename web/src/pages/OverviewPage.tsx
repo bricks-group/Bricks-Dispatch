@@ -52,7 +52,7 @@ export function OverviewPage() {
       <div className="page-header">
         <div>
           <h1>Today</h1>
-          <p>Your jobs and capacity for today</p>
+          <p>Your shoots and the week ahead</p>
         </div>
       </div>
 
@@ -60,29 +60,21 @@ export function OverviewPage() {
 
       {data && (
         <>
-          <div className="page-grid">
-            <section className="card">
-              <h3>Assigned today</h3>
-              <p className="metric">{data.jobs_assigned_today || todayJobs.length}</p>
-              <p className="muted">jobs</p>
-            </section>
-            <section className="card">
-              <h3>Assigned · week</h3>
-              <p className="metric">{data.jobs_assigned_week}</p>
-              <p className="muted">jobs</p>
-            </section>
-            <section className="card">
-              <h3>Completed · week</h3>
-              <p className="metric">{data.jobs_completed_week}</p>
-              <p className="muted">jobs</p>
-            </section>
-            <section className="card">
-              <h3>Capacity</h3>
-              <p className="metric">{data.capacity_utilization_pct}%</p>
-              <div className="bar-track"><div className="bar-fill" style={{ width: `${Math.min(data.capacity_utilization_pct, 100)}%` }} /></div>
-              <p className="muted">utilization</p>
-            </section>
+          <div className="stats">
+            <div className="stat">
+              <p className="stat-label">Today</p>
+              <p className="stat-value">{data.jobs_assigned_today || todayJobs.length}</p>
+            </div>
+            <div className="stat">
+              <p className="stat-label">This week</p>
+              <p className="stat-value">{data.jobs_assigned_week}</p>
+            </div>
+            <div className="stat">
+              <p className="stat-label">Done this week</p>
+              <p className="stat-value">{data.jobs_completed_week}</p>
+            </div>
           </div>
+          <p className="stats-foot">{data.capacity_utilization_pct}% of this week's capacity booked</p>
 
           <section className="card full">
             <h3>Today</h3>
@@ -91,15 +83,18 @@ export function OverviewPage() {
               : (
                 <ul className="list">
                   {todayJobs.map((job) => (
-                    <li key={job.id} className="list-row">
+                    <li key={job.id} className="list-row today-row">
                       <button
                         type="button"
                         className="row-click today-job-main"
                         onClick={() => navigate(`/jobs?id=${encodeURIComponent(job.id)}`)}
                         style={{ all: 'unset', cursor: 'pointer', display: 'flex', width: '100%', justifyContent: 'space-between', gap: 12 }}
                       >
-                        <span>{job.address}</span>
-                        <span className="muted">{formatShootWindow(job)} · {job.status?.replace('_', ' ')}</span>
+                        <span className="row-main">
+                          <span className="row-title">{job.address}</span>
+                          <span className="row-meta">{[formatShootWindow(job), job.package_name].filter(Boolean).join(' · ')}</span>
+                        </span>
+                        <span className="badge row-end">{(job.status || '').replace('_', ' ')}</span>
                       </button>
                       {['assigned', 'in_progress'].includes(job.status || '') ? (
                         <TodayCaptureEntry job={job} />
@@ -123,8 +118,10 @@ export function OverviewPage() {
                       className="list-row row-click"
                       onClick={() => navigate(`/jobs?id=${encodeURIComponent(job.id)}`)}
                     >
-                      <span>{job.address}</span>
-                      <span className="muted">{formatShootWhen(job)}</span>
+                      <span className="row-main">
+                        <span className="row-title">{job.address}</span>
+                        <span className="row-meta">{[formatShootWhen(job), job.package_name].filter(Boolean).join(' · ')}</span>
+                      </span>
                     </li>
                   ))}
                 </ul>
