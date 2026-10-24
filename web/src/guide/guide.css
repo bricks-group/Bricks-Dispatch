@@ -103,3 +103,16 @@
   .gd-dodont { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { .gd-chev { transition: none; } }
+
+/* Phone: package and section pickers as two selects side by side, no sideways scroll. */
+.gd-phonebar { display: none; }
+@media (max-width: 860px) {
+  .gd-filter, .gd-toc { display: none; }
+  .gd-phonebar {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px;
+    margin: 0 0 4px; padding: 0 0 16px; border-bottom: 1px solid var(--c-hair);
+  }
+  .gd-field { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; text-align: left; }
+  .gd-field > span { font-size: 12px; font-weight: 500; color: var(--c-ink-mute); }
+  .gd-field > select { width: 100%; min-width: 0; }
+}

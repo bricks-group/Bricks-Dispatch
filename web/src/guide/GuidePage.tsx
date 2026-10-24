@@ -48,6 +48,23 @@ export function GuidePage() {
         </div>
       </div>
 
+      <div className="gd-phonebar">
+        <label className="gd-field">
+          <span>Package</span>
+          <select value={pkg} onChange={(e) => choose(e.target.value as PackageId | '')} aria-label="Package">
+            <option value="">All packages</option>
+            {guide.packages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
+        <label className="gd-field">
+          <span>Jump to</span>
+          <select value="" onChange={(e) => { if (e.target.value) jump(e.target.value); e.target.value = ''; }} aria-label="Jump to section">
+            <option value="">Section</option>
+            {phases.map(({ ph, items }) => <option key={ph.id} value={ph.id}>{ph.title} ({items.length})</option>)}
+          </select>
+        </label>
+      </div>
+
       <div className="gd-layout">
         <nav className="gd-toc" aria-label="Phases">
           {phases.map(({ ph, items }) => (
