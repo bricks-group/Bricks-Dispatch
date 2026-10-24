@@ -1,4 +1,7 @@
-"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.8 verbatim.
+"""IC agreement served by GET /api/onboarding/ic-agreement must be v1.9 verbatim.
+
+v1.9 (2026-10-23): same terms as v1.8, one contact (booking@brxs.ca) for payout
+disputes and questions. The v1.8 text stays in docs/legal/ for existing signers.
 
 v1.8 Clause 6: insurance/WSIB are not required for apply or first dispatch,
 and missing/lapsed coverage is not suspension. Matches dispatch eligibility
@@ -28,17 +31,19 @@ def _assignment_value(path: Path, name: str):
     raise AssertionError(f"{name} not found in {path}")
 
 
-def test_ic_agreement_constants_are_v18():
+def test_ic_agreement_constants_are_v19():
     version = _assignment_value(ONBOARDING, "_IC_AGREEMENT_VERSION")
     effective = _assignment_value(ONBOARDING, "_IC_AGREEMENT_EFFECTIVE_DATE")
     text = _assignment_value(ONBOARDING, "_IC_AGREEMENT_TEXT")
 
-    assert version == "1.8"
-    assert effective == "2026-10-03"
-    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.8")
-    assert "Effective: October 3, 2026" in text
+    assert version == "1.9"
+    assert effective == "2026-10-23"
+    assert text.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.9")
+    assert "Effective: October 23, 2026" in text
     assert 'Contracting party: Bricks Group ("Bricks")' in text
-    assert "Questions: raphael@brxs.ca" in text
+    assert "Questions: booking@brxs.ca" in text
+    assert "Raise payout disputes in writing to booking@brxs.ca" in text
+    assert "raphael@" not in text
     assert text.endswith("Bricks Group · Ontario, Canada")
 
     # Clause 6 honesty — not a dispatch gate (PR #26 / IC v1.8).
@@ -83,8 +88,21 @@ def test_get_ic_agreement_returns_version_date_text():
     assert "ic_agreement_version=_IC_AGREEMENT_VERSION" in src
 
 
-def test_application_schema_defaults_to_v18():
+def test_application_schema_defaults_to_v19():
     src = SCHEMAS.read_text()
-    assert 'ic_agreement_version: str = "1.8"' in src
+    assert 'ic_agreement_version: str = "1.9"' in src
+    assert 'ic_agreement_version: str = "1.8"' not in src
     assert 'ic_agreement_version: str = "1.7"' not in src
     assert 'ic_agreement_version: str = "1.1"' not in src
+
+
+def test_v18_text_kept_for_existing_signers():
+    legal = ONBOARDING.parents[3] / "docs" / "legal"
+    v18 = (legal / "ic-agreement-v1.8.txt").read_text()
+    live = _assignment_value(ONBOARDING, "_IC_AGREEMENT_TEXT")
+    assert v18.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.8")
+    assert "Effective: October 3, 2026" in v18
+    # Only the header changes between v1.8 and v1.9.
+    strip = lambda t: "\n".join(t.strip().splitlines()[2:])
+    assert strip(v18) == strip(live)
+    assert (legal / "ic-agreement-v1.8-edited-2026-10-23.txt").exists()

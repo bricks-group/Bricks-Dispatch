@@ -1,0 +1,90 @@
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.8
+Effective: October 3, 2026
+Contracting party: Bricks Group ("Bricks")
+Governing law: Ontario, Canada
+
+By submitting an application, checking the acceptance box, or accepting a booking through the Bricks platform, you ("Contractor") agree to these terms.
+
+This agreement is for independent-contractor services. It is not employment. Nothing in this agreement waives statutory rights that cannot be waived. If a court or tribunal finds employment or dependent-contractor status, those statutory rights apply to that finding and the remaining terms continue.
+
+1. RELATIONSHIP
+You are an independent contractor, not an employee, agent, partner, or joint venturer of Bricks. You control the means, methods, and manner of your work. Bricks may specify deliverable outcomes (shot count, resolution, file formats, turnaround, shoot window) without directing how you achieve them. You set your own availability, use your own equipment, and may work for other clients including competitors. Bricks does not guarantee a minimum volume of work. You have no authority to bind Bricks.
+
+2. RIGHT TO REFUSE
+You may decline any job offer for any reason. Declining a job is not a breach. Routing may still consider your availability and history. You are not required to accept a minimum number of jobs.
+
+3. ASSISTANTS AND SUBCONTRACTORS
+You may hire assistants or second shooters at your own expense. You remain fully responsible for their work, insurance, taxes, conduct on site, and any claim arising from them. You may not assign this agreement without Bricks' written consent.
+
+4. EQUIPMENT
+You provide and maintain your own camera, lenses, drone, lighting, vehicle, editing tools, and all other equipment. Bricks provides no equipment and is not responsible for loss, damage, theft, or repair.
+
+5. TAXES
+Fees are exclusive of HST/GST. You are solely responsible for income tax, HST/GST (if you are required to register), and any CPP that applies to you as self-employed. If your taxable supplies exceed the CRA small-supplier threshold, you must register, give Bricks your HST number, and Bricks will pay HST on your fees. Bricks will issue a T4A (Box 048) when required. Bricks does not remit EI or employer CPP for you and does not provide employment benefits.
+
+6. INSURANCE AND WSIB
+Insurance and WSIB proof are not required to apply, and are not required before a first dispatched job. Bricks does not require a certificate of insurance, additional-insured status, a renewal certificate, commercial general liability, aviation liability, automobile liability, or a WSIB clearance or exemption. Missing or lapsed coverage is not suspension, refusal, or cancellation of dispatch.
+
+You remain an independent contractor, responsible for your own equipment (section 4) and your own taxes (section 5). Drone and RPAS duties in section 7 are unchanged.
+
+7. DRONE
+If you operate a drone you represent that you hold a valid Transport Canada RPAS certificate at the level required for that operation (Advanced for controlled airspace, including proximity to CYYZ and CYTZ). You comply with the Aeronautics Act, Canadian Aviation Regulations, and any NAV CANADA or site restriction. You are solely responsible for the operation, including fines, incidents, and third-party claims. If airspace, weather, or regulation prevents aerial capture, you still complete the ground package and note the miss in the job.
+
+8. PAYOUTS
+You are paid a fixed amount per accepted booking, set by Bricks' vendor rate card for the media package, client footprint band, and your vendor tier at the time you accept the job. That amount does not change based on what the client was charged or any client discount. Client media on www.brxs.ca is sold à la carte as Photos only, Essentials, Story, Showcase, and Full suite. Virtual Visit (free-roam Gaussian splat) is always a paid add-on — never packaged into a suite and never treated as included deliverable pay. Path-confined Virtual Tour may be included in Showcase and Full suite or sold as an add-on. Add-ons (drone, cinematic reel, Virtual Tour, twilight, Virtual Visit, and similar) are paid at the published add-on rate card for your tier — fixed dollars, not % of rack. Bricks may change the rate card prospectively on 14 days' notice; changes do not apply to jobs already accepted.
+
+Current media rate card (CAD, exclusive of HST), shown as Tier C / Tier B / Tier A. Footprint bands: Small ≤1,200 sqft; Mid 1,201–2,500; Large 2,501–4,000; XL 4,001+.
+
+Photos only — Small (≤1,200 sqft) $55.15 / $62.60 / $71.50; Mid (1,201–2,500 sqft) $73.65 / $83.60 / $95.50; Large (2,501–4,000 sqft) $92.15 / $104.60 / $119.50; XL (4,001+ sqft) $110.65 / $125.60 / $143.50
+Essentials — Small (≤1,200 sqft) $91.75 / $104.15 / $119.05; Mid (1,201–2,500 sqft) $117.65 / $133.55 / $152.65; Large (2,501–4,000 sqft) $143.55 / $162.95 / $186.25; XL (4,001+ sqft) $169.45 / $192.35 / $219.85
+Story — Small (≤1,200 sqft) $146.90 / $166.75 / $190.55; Mid (1,201–2,500 sqft) $183.90 / $208.75 / $238.55; Large (2,501–4,000 sqft) $220.90 / $250.75 / $286.55; XL (4,001+ sqft) $261.60 / $296.95 / $339.35
+Showcase — Small (≤1,200 sqft) $202.00 / $229.30 / $262.10; Mid (1,201–2,500 sqft) $257.50 / $292.30 / $334.10; Large (2,501–4,000 sqft) $313.00 / $355.30 / $406.10; XL (4,001+ sqft) $372.20 / $422.50 / $482.90
+Full suite — Small (≤1,200 sqft) $257.50 / $292.30 / $334.10; Mid (1,201–2,500 sqft) $320.40 / $363.70 / $415.70; Large (2,501–4,000 sqft) $381.45 / $433.00 / $494.90; XL (4,001+ sqft) $446.20 / $506.50 / $578.90
+
+Add-on payouts are fixed published dollar amounts from the add-on rate card for your tier — fixed dollars, not a percentage of rack.
+
+Virtual Visit — Small (≤1,200 sqft) $92.15 / $104.60 / $119.50; Mid (1,201–2,500 sqft) $110.65 / $125.60 / $143.50; Large (2,501–4,000 sqft) $129.15 / $146.60 / $167.50; XL (4,001+ sqft) $147.65 / $167.60 / $191.50
+Virtual staging — $12.95 / $14.70 / $16.80 per image (Tier C / Tier B / Tier A). Not banded by footprint.
+
+Tier is assigned by Bricks based on quality, reliability, volume, and compliance. Tier C is the starting tier. Bricks may change your tier on notice. Payouts are via Stripe Connect within 7 business days of client acceptance of deliverables, or within 14 days of shoot completion if the client has not acted. Raise payout disputes in writing to raphael@brxs.ca within 30 days of the payment date.
+
+9. INTELLECTUAL PROPERTY
+Upon creation (and in any event upon submission) you assign to Bricks all right, title, and interest, including copyright, in the photos, video, floor plans, 3D captures, and other deliverables produced for each Bricks booking (the "Deliverables"). This assignment does not cover your pre-existing portfolio, presets, or work made outside Bricks bookings.
+
+You waive all moral rights in the Deliverables in favour of Bricks and its licensees, to the extent permitted by the Copyright Act (Canada), including the rights of paternity and integrity.
+
+You keep your RAW / unedited source files. For 90 days after delivery you will provide copies to Bricks on request if needed for a re-edit, dispute, or client delivery.
+
+Bricks licenses Deliverables to the booking client for real estate marketing of that property (MLS, web, social, print, brokerage materials). Bricks may also use Deliverables for Bricks' own portfolio, training, and marketing unless the client has asked in writing that the property be kept confidential.
+
+You warrant that the Deliverables are your original work (except stock or tools Bricks supplied), do not infringe third-party rights, and that you have model releases or equivalent permission for any identifiable person you include. You will not photograph occupants, children, documents, or personal effects except as needed for empty-room listing media, and you will not publish shoot-day content without Bricks' or the client's go-ahead.
+
+10. ACCESS, PROPERTY, AND CONDUCT
+You represent Bricks on site. You will arrive in the shoot window, use access devices (lockbox codes, keys, fobs) only for the booking, not copy them, and leave the property secured as you found it. You will not enter areas you do not need. You will not use client or occupant personal information except to perform the job. Report damage, injury, safety issues, or denied access to Bricks immediately. Inaccessible property or a client no-show reported in-app may qualify for the published trip fee then in effect.
+
+11. CONFIDENTIALITY AND PERSONAL INFORMATION
+Client names, addresses, contact details, access codes, booking notes, payout rates, and Bricks' non-public processes are confidential. You will not use them to market yourself to that client off-platform, except as section 12 allows. You will handle personal information only as needed to perform the job and in line with PIPEDA. This section survives termination.
+
+12. NON-SOLICIT (CLIENTS INTRODUCED BY BRICKS)
+For 12 months after your last Bricks job with a client, you will not solicit that client for listing-media services competing with Bricks, where Bricks introduced you to them. This does not stop you working for clients who reach you on their own, or from working for other platforms. There is no non-compete. You may work anywhere in photography and related fields.
+
+13. QUALITY
+Deliverables go through the Bricks app within the booking turnaround (standard 24–48 hour target from shoot end unless the booking says otherwise; times are targets, not guarantees) and must meet the Shoot Standards Guide. Bricks may require a complimentary re-shoot if work does not meet those standards. Repeated failures, fraud, or serious complaints may mean suspension, tier change, or termination.
+
+14. INDEMNITY
+You will indemnify, defend, and hold harmless Bricks Group and its officers, directors, contractors, and agents from claims, losses, damages, and reasonable legal fees arising out of: (a) your services or those of your assistants; (b) injury or property damage at a job; (c) drone operations; (d) your breach of this agreement or law; (e) alleged infringement by the Deliverables; (f) your tax, WSIB, or employment-status claims against Bricks to the extent they arise from your holding yourself out as an employee contrary to this agreement. Bricks may control the defence of a third-party claim.
+
+15. LIMITATION OF LIABILITY
+Bricks is not liable to you for lost jobs, lost profit, or equipment damage. Bricks' total liability to you for a booking is the payout for that booking. Nothing excludes liability that Ontario or Canadian law does not allow to be excluded (including fraud or bodily injury Bricks caused).
+
+16. TERM AND TERMINATION
+This agreement starts when you accept it and continues until terminated. Either party may terminate for any reason on written notice (email is enough). Bricks may suspend or terminate immediately for safety or legal risk, fraud, material quality failure, or material breach. Outstanding accepted jobs should be finished or handed off. Earned payouts for completed, accepted work are paid on the normal cycle. Sections 9–15 and 17 survive.
+
+17. DISPUTES AND LAW
+Ontario law and applicable Canadian federal law govern. Courts of Ontario have exclusive jurisdiction. Before filing, the parties will try to resolve a dispute in writing within 30 days. You may still make a complaint to the Ministry of Labour or the CRA. Binding arbitration is not required.
+
+18. CHANGES; ENTIRE AGREEMENT
+This agreement, the Shoot Standards Guide, and the booking details for each job are the entire agreement for contractor services. Bricks may issue a revised version on at least 14 days' notice. Continued acceptance of jobs after the effective date is acceptance of the revision. You may stop accepting jobs and terminate if you do not agree. Amendments other than a posted revision require written agreement of both parties.
+
+Questions: booking@brxs.ca
+Bricks Group · Ontario, Canada

@@ -30,11 +30,15 @@ ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 # Version tracks the text revision so we can re-prompt if terms materially change.
-_IC_AGREEMENT_VERSION = "1.8"
-_IC_AGREEMENT_EFFECTIVE_DATE = "2026-10-03"
+# v1.9 (2026-10-23): same terms as v1.8; payout disputes and questions both go to
+# booking@brxs.ca. v1.8 was edited in place on 2026-10-23 (disputes -> raphael@)
+# without a bump, so this new version keeps existing v1.8 signers tied to the
+# v1.8 text. Prior texts: docs/legal/ic-agreement-v1.8.txt.
+_IC_AGREEMENT_VERSION = "1.9"
+_IC_AGREEMENT_EFFECTIVE_DATE = "2026-10-23"
 _IC_AGREEMENT_TEXT = """
-BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.8
-Effective: October 3, 2026
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.9
+Effective: October 23, 2026
 Contracting party: Bricks Group ("Bricks")
 Governing law: Ontario, Canada
 
@@ -81,7 +85,7 @@ Add-on payouts are fixed published dollar amounts from the add-on rate card for 
 Virtual Visit — Small (≤1,200 sqft) $92.15 / $104.60 / $119.50; Mid (1,201–2,500 sqft) $110.65 / $125.60 / $143.50; Large (2,501–4,000 sqft) $129.15 / $146.60 / $167.50; XL (4,001+ sqft) $147.65 / $167.60 / $191.50
 Virtual staging — $12.95 / $14.70 / $16.80 per image (Tier C / Tier B / Tier A). Not banded by footprint.
 
-Tier is assigned by Bricks based on quality, reliability, volume, and compliance. Tier C is the starting tier. Bricks may change your tier on notice. Payouts are via Stripe Connect within 7 business days of client acceptance of deliverables, or within 14 days of shoot completion if the client has not acted. Raise payout disputes in writing to raphael@brxs.ca within 30 days of the payment date.
+Tier is assigned by Bricks based on quality, reliability, volume, and compliance. Tier C is the starting tier. Bricks may change your tier on notice. Payouts are via Stripe Connect within 7 business days of client acceptance of deliverables, or within 14 days of shoot completion if the client has not acted. Raise payout disputes in writing to booking@brxs.ca within 30 days of the payment date.
 
 9. INTELLECTUAL PROPERTY
 Upon creation (and in any event upon submission) you assign to Bricks all right, title, and interest, including copyright, in the photos, video, floor plans, 3D captures, and other deliverables produced for each Bricks booking (the "Deliverables"). This assignment does not cover your pre-existing portfolio, presets, or work made outside Bricks bookings.
@@ -360,7 +364,7 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     """
     Wave A vendor application (photographer | stager | cleaner).
     Requires acceptance of the current IC agreement.
-    Records ic_agreement_version as the live server version (currently 1.8).
+    Records ic_agreement_version as the live server version (currently 1.9).
     photographers.html posts vendor_type=photographer; drone remains an RPAS capability.
     """
     if not application.accepted_terms:
