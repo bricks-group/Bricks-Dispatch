@@ -529,25 +529,18 @@ label {
 @media (max-width: 860px) {
   .app-shell { grid-template-columns: minmax(0, 1fr); }
   .main { min-width: 0; }
-  /* Phone: sidebar collapses to brand row + one scrolling tab strip (was a 9-row list
-     pushing every page ~450px down). Active tab = 2px brick underline, no pills. */
+  /* Phone: sidebar collapses to the brand row. */
   .sidebar {
     position: sticky; top: 0; z-index: 20; height: auto; padding: 10px 0 0;
     border-right: 0; border-bottom: 1px solid var(--c-hair);
   }
   .brand { display: flex; align-items: baseline; gap: 10px; padding: 0 16px 8px; margin: 0; border-bottom: 0; }
   .brand-sub { margin-top: 0; }
-  .nav {
-    flex-direction: row; gap: 0; overflow-x: auto; flex-wrap: nowrap;
-    scrollbar-width: none; -webkit-overflow-scrolling: touch; padding: 0 8px;
-  }
-  .nav::-webkit-scrollbar { display: none; }
-  .nav-link {
-    flex: 0 0 auto; padding: 10px 10px 9px; border-radius: 0; white-space: nowrap;
-    border-bottom: 2px solid transparent; font-size: 13px; min-height: 44px; box-sizing: border-box;
-  }
-  .nav-link:hover, .nav-link.active { background: transparent; }
-  .nav-link.active { color: var(--c-ink); border-bottom-color: var(--c-brick); }
+  /* Phone: no sideways tab strip. Brand row on top, bottom tab bar (Today, Jobs, Guide,
+     Earnings, More); the rest opens from More. */
+  .sidebar .nav { display: none; }
+  .brand { padding-bottom: 10px; }
+  .main { padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
   .topbar { padding: 0 16px; }
   .page-grid { grid-template-columns: 1fr; }
   /* Wide tables (Jobs, Earnings) scroll inside their card instead of clipping STATUS/actions. */
@@ -811,7 +804,6 @@ button.btn-danger:hover { background: rgba(192, 67, 39, 0.12); color: #F4F1EB; }
 /* ── Phone pass (≤640px): stacked table rows, 16px inputs (no iOS zoom), styled selects ── */
 @media (max-width: 860px) {
   input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px !important; }
-  .nav { -webkit-mask-image: linear-gradient(to right, #000 85%, transparent); mask-image: linear-gradient(to right, #000 85%, transparent); }
 }
 select {
   -webkit-appearance: none; appearance: none; min-height: 44px; padding-right: 34px;
@@ -1047,4 +1039,35 @@ input.jobs-search { flex: 1 1 260px; min-width: 0; max-width: 420px; }
 @media (min-width: 861px) {
   .stats { max-width: 640px; }
   .list-row.today-row > .today-capture.actions { max-width: 440px; }
+}
+
+/* ── Phone bottom tab bar + More sheet ── */
+.tabbar, .more-sheet, .more-scrim { display: none; }
+@media (max-width: 860px) {
+  .tabbar {
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    background: var(--c-bg); border-top: 1px solid var(--c-hair);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tabbar-link {
+    display: flex; align-items: center; justify-content: center; min-height: 56px; min-width: 0;
+    font: inherit; font-size: 13px; font-weight: 500; color: var(--c-ink-mute); text-decoration: none;
+    background: transparent; border: 0; border-top: 2px solid transparent; margin-top: -1px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tabbar-link:hover, .tabbar-link:focus, .tabbar-link:active { background: transparent; box-shadow: none; }
+  .tabbar-link:focus-visible { outline: 2px solid var(--c-brick); outline-offset: -4px; }
+  .tabbar-link.active { color: var(--c-ink); border-top-color: var(--c-brick); }
+  .more-scrim { display: block; position: fixed; inset: 0; z-index: 38; background: rgba(28, 24, 20, 0.32); }
+  .more-sheet {
+    display: flex; flex-direction: column; position: fixed; left: 0; right: 0;
+    bottom: calc(56px + env(safe-area-inset-bottom)); z-index: 39;
+    background: var(--c-bg); border-top: 1px solid var(--c-hair); padding: 8px 0;
+  }
+  .more-link {
+    display: flex; align-items: center; min-height: 48px; padding: 0 20px;
+    font-size: 15px; color: var(--c-ink-soft); text-decoration: none;
+  }
+  .more-link.active { color: var(--c-ink); font-weight: 500; }
 }
