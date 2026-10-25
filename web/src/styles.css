@@ -305,6 +305,12 @@ button.btn-primary, .btn.btn-primary, button[type="submit"].btn-primary {
 button.btn-primary:hover, .btn.btn-primary:hover { background: #FFFFFF; border-color: #FFFFFF; }
 button.btn-primary:active, .btn.btn-primary:active { background: var(--c-ink-soft); border-color: var(--c-ink-soft); }
 
+/* .btn-brick: the one orange main action on a screen (sign-in screens). */
+button.btn-primary.btn-brick, .btn.btn-primary.btn-brick { background: var(--c-brick); color: #FFFFFF; border-color: var(--c-brick); }
+button.btn-primary.btn-brick:hover, .btn.btn-primary.btn-brick:hover { background: #BC4A25; border-color: #BC4A25; }
+button.btn-primary.btn-brick:active, .btn.btn-primary.btn-brick:active { background: #A84221; border-color: #A84221; }
+button.btn-primary.btn-brick:disabled { background: var(--c-brick); border-color: var(--c-brick); color: #FFFFFF; opacity: 0.55; }
+
 button.btn-tertiary, .btn.btn-tertiary { border-color: transparent; color: var(--c-ink-soft); padding: 0 10px; }
 button.btn-tertiary:hover, .btn.btn-tertiary:hover { color: var(--c-ink); background: var(--c-bg-deep); }
 
