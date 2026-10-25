@@ -23,11 +23,13 @@ Hard gates for every commercial kind (``commercial_gate_failures``):
 Payout: fixed per visit, tier-independent (only Tier A can hold the job),
 never indexed to a client-side plan discount. Kam's standing rule (payout scan
 2026-09-27): Bricks always keeps the larger cut, vendor <= 50% of rack, bands
-C 35-40% / B 40-45% / A 45-50%. Commercial pays the top of Tier A, ~49% of the
-one-off rack (Kam, 2026-10-17 correction of the earlier 63% draft):
-  $185 of $375 visual · $735 of $1,499 mapped · +$315 of $650 first setup.
-Client rack = median of published Canadian per-visit prices, see
-/workspace/ship/commercial/commercial-pricing-payout-20261017.md.
+C 35-40% / B 40-45% / A 45-50%. Payouts were set 2026-10-17 at the top of
+Tier A (~49% of the then one-off rack). Kam's pricing v2 (2026-10-24) raised the
+visual visit to $495 and left payouts unchanged:
+  $185 of $495 visual (~37%) · $735 of $1,499 mapped (~49%) · +$315 of $650 first setup (~48%).
+Plans (per site per month): visual $450/$850/$1,600, mapped $1,400/$2,600/$3,900
+for 1/2/4 visits. Prior rack: /workspace/ship/commercial/commercial-pricing-payout-20261017.md;
+v2: /workspace/ship/features/builder-pricing-v2/EVIDENCE.md.
 
 In-house staff (worker_type="employee", Kam: "the goal is to have in house
 employees handling these jobs later"): eligible for commercial jobs when the
@@ -69,7 +71,7 @@ _KIND_ALIASES = {
 }
 
 # Client rack (CAD, pre-tax) for one-off visits; used for margin display only.
-COMMERCIAL_RACK_CAD = {VISUAL: 375.0, MAPPED: 1499.0, "mapped_setup": 650.0}
+COMMERCIAL_RACK_CAD = {VISUAL: 495.0, MAPPED: 1499.0, "mapped_setup": 650.0}  # pricing v2, 2026-10-24
 # Top of the Tier A band (45-50%); Bricks keeps the larger share.
 COMMERCIAL_VENDOR_SHARE = 0.49
 VENDOR_MAX_SHARE = 0.50

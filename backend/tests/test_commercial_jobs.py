@@ -135,18 +135,21 @@ def test_commercial_payout_table():
     assert commercial_payout_cents(_job("site_mapped_capture", add_ons=["mapped_setup"])) == 73500 + 31500
     assert commercial_payout_cents(Job(address="1", time_window_start="09:00", job_type="photo")) is None
     rows = {r["kind"]: r for r in payout_table()}
-    # Kam rule: Bricks keeps the larger cut; commercial = top of Tier A (45-50%).
+    # Pricing v2 (2026-10-24): rack visit $495, capture $1,499, setup $650; payouts unchanged.
+    assert {k: rows[k]["client_rack_cad"] for k in rows} == {VISUAL: 495.0, MAPPED: 1499.0, "mapped_setup": 650.0}
+    assert rows[VISUAL]["bricks_keeps_cad"] == 310.0
+    # Kam rule: Bricks keeps the larger cut; vendor <= 50% of rack.
     for kind in (VISUAL, MAPPED, "mapped_setup"):
         share = rows[kind]["vendor_payout_cad"] / rows[kind]["client_rack_cad"]
-        assert 0.45 <= share < 0.50
+        assert share < 0.50
         assert rows[kind]["bricks_keeps_cad"] > rows[kind]["vendor_payout_cad"]
 
 
 def test_every_monthly_plan_keeps_positive_per_visit_margin():
     # (price per site per month, visits) for each plan; payout is fixed per visit.
     plans = {
-        "visual_monthly": (300, 1, VISUAL), "visual_biweekly": (600, 2, VISUAL), "visual_weekly": (1200, 4, VISUAL),
-        "mapped_monthly": (1200, 1, MAPPED), "mapped_biweekly": (2400, 2, MAPPED), "mapped_weekly": (4500, 4, MAPPED),
+        "visual_monthly": (450, 1, VISUAL), "visual_biweekly": (850, 2, VISUAL), "visual_weekly": (1600, 4, VISUAL),
+        "mapped_monthly": (1400, 1, MAPPED), "mapped_biweekly": (2600, 2, MAPPED), "mapped_weekly": (3900, 4, MAPPED),
     }
     for key, (price, visits, kind) in plans.items():
         per_visit = price / visits
