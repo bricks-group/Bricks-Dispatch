@@ -16,6 +16,9 @@ IC_TITLES = {
     "photographer": "Photographer IC",
     "stager": "Stager IC",
     "cleaner": "Cleaner IC",
+    "inspector": "Inspector IC",
+    "measurer": "Measurer IC",
+    "handyman": "Repairs IC",
 }
 VENDOR_SKILLS = ("photo", "drone", "reel", "tour", "twilight")
 TIER_LABELS = {1: "C", 2: "B", 3: "A"}
@@ -58,6 +61,14 @@ def member_title(member: Optional[dict]) -> str:
     except Exception:
         vtype = "photographer"
     return IC_TITLES.get(vtype, IC_TITLE)
+
+
+def _vendor_type_of(member: dict) -> str:
+    try:
+        from ..services.vendor_profile import member_vendor_type
+        return member_vendor_type(member)
+    except Exception:
+        return (member.get("vendor_type") or "photographer").strip().lower() or "photographer"
 
 
 def is_assignable(member: Optional[dict]) -> bool:
@@ -178,14 +189,7 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "phone": member.get("phone") or "",
         "role": title,
         "title": title,
-        "vendor_type": (
-            "photographer" if owner else (
-                (member.get("vendor_type") or "").strip().lower()
-                or ("stager" if "stager" in (member.get("role") or "").lower()
-                    else "cleaner" if "cleaner" in (member.get("role") or "").lower()
-                    else "photographer")
-            )
-        ),
+        "vendor_type": "photographer" if owner else _vendor_type_of(member),
         "availability": (member.get("status") or "") == "available",
         "status": member.get("status") or "offline",
         "skills": member_skills(member),

@@ -127,7 +127,7 @@ async def update_applicant_status(
         update_data["is_active"] = True
         # Preserve Owner; otherwise set role from vendor_type (Wave A).
         existing = await (await get_db()).table("vendor_members").select(
-            "vendor_type,role,title"
+            "vendor_type,role,title,application_profile"
         ).eq("id", member_id).maybe_single().execute()
         row = _maybe_single_row(existing)
         from ..services.vendor_profile import (
@@ -135,14 +135,15 @@ async def update_applicant_status(
             member_vendor_type,
             normalize_vendor_type,
             role_for_vendor_type,
+            storage_vendor_type,
         )
         if is_platform_owner({**row, "id": member_id}):
             update_data["role"] = "Owner"
         else:
-            vtype = normalize_vendor_type(
-                update_data.get("vendor_type") or row.get("vendor_type") or member_vendor_type(row)
-            )
-            update_data["vendor_type"] = vtype
+            # Trade comes from application_profile.trade when the column can't
+            # hold it yet (inspector / measurer / handyman).
+            vtype = normalize_vendor_type(update_data.get("vendor_type") or member_vendor_type(row or {}))
+            update_data["vendor_type"] = storage_vendor_type(vtype)
             update_data["role"] = role_for_vendor_type(vtype)
     
     res = await (await get_db()).table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()

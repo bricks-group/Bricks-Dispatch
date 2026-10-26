@@ -447,6 +447,16 @@ class ReviewInput:
     availability: Optional[dict] = None
     source: Optional[str] = None
     source_detail: Optional[str] = None
+    # Non-media trades: self-reported credentials from application_profile.
+    credentials: dict = field(default_factory=dict)
+
+
+def _member_trade(member: dict) -> str:
+    from .vendor_profile import member_vendor_type
+    try:
+        return member_vendor_type(member)
+    except Exception:
+        return member.get("vendor_type") or "photographer"
 
 
 async def run_review(
@@ -784,6 +794,11 @@ async def run_review(
         missing.append("pilot certificate number (PC-…), not a drone registration")
     if wants_drone and not inp.drone_claimed and inp.equipment.get("drone_model"):
         missing.append("RPAS certificate number, level and photo (if they want drone jobs)")
+    from .vendor_profile import CGL_REQUIRED_TYPES
+    if inp.vendor_type in CGL_REQUIRED_TYPES:
+        if not (inp.credentials or {}).get("cgl_confirmed"):
+            missing.append("$2M commercial general liability confirmation")
+        missing.append("certificate of insurance checked by a person (COI upload, $2M CGL)")
 
     cost = round(sum(costs), 5)
     return {
@@ -838,7 +853,7 @@ def review_input_from_member(member: dict, availability: Optional[dict] = None) 
         member_id=str(member.get("id") or ""),
         name=member.get("name") or "",
         city=loc.get("city") or member.get("home_city") or "",
-        vendor_type=member.get("vendor_type") or "photographer",
+        vendor_type=_member_trade(member),
         specialties=list(member.get("skills") or prof.get("specialties") or ([member.get("specialty")] if member.get("specialty") else [])),
         equipment=eq,
         equipment_structured=structured,
@@ -851,4 +866,5 @@ def review_input_from_member(member: dict, availability: Optional[dict] = None) 
         availability=av,
         source=member.get("source"),
         source_detail=member.get("source_detail"),
+        credentials=prof.get("credentials") if isinstance(prof.get("credentials"), dict) else {},
     )

@@ -225,10 +225,11 @@ async def pending_without_review(limit: int = 5) -> list:
     """Pending photographer ids with no row in vendor_applicant_reviews (oldest first)."""
     try:
         db = await get_db()
-        pend = await db.table("vendor_members").select("id,vendor_type,created_at").eq(
+        pend = await db.table("vendor_members").select("id,vendor_type,role,title,application_profile,created_at").eq(
             "onboarding_status", "pending"
         ).order("created_at").limit(200).execute()
-        ids = [r["id"] for r in (pend.data or []) if (r.get("vendor_type") or "photographer") == "photographer"]
+        from .vendor_profile import member_vendor_type
+        ids = [r["id"] for r in (pend.data or []) if member_vendor_type(r) == "photographer"]
         if not ids:
             return []
         done = await db.table("vendor_applicant_reviews").select("member_id").in_("member_id", ids).execute()

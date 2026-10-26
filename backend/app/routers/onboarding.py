@@ -282,9 +282,15 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     from ..services.vendor_profile import normalize_vendor_type
     vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
     application.vendor_type = vtype
-    # Stager / cleaner may not have a media portfolio yet.
-    if vtype in ("stager", "cleaner"):
+    # Non-media trades don't send photo samples or a media portfolio.
+    if vtype != "photographer":
         errs = [e for e in errs if "portfolio" not in e.lower() and "sample" not in e.lower()]
+        try:
+            application.trade_credentials = _clean_trade_credentials(vtype, application.trade_credentials)
+        except ValueError as exc:
+            errs.append(str(exc))
+    else:
+        application.trade_credentials = None
 
     try:
         application.source, application.source_detail = normalize_applicant_source(
@@ -297,6 +303,45 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         raise HTTPException(status_code=400, detail=" ".join(errs))
 
 
+
+
+_CREDENTIAL_TEXT_KEYS = ("insurer", "policy_number", "wsib_number", "licences", "service_notes", "business_name")
+
+
+def _clean_trade_credentials(vtype: str, raw) -> dict:
+    """Self-reported trade credentials for non-media applicants.
+
+    Repairs (handyman) and inspections must confirm $2M commercial general
+    liability; the certificate itself is uploaded to /documents (doc_type=coi)
+    and verified by a person before any job. WSIB is optional for repairs.
+    Raises ValueError with an applicant-facing message.
+    """
+    from ..services.vendor_profile import CGL_MIN_CENTS, CGL_REQUIRED_TYPES
+
+    data = raw if isinstance(raw, dict) else {}
+    out: dict = {}
+    for key in _CREDENTIAL_TEXT_KEYS:
+        val = " ".join(str(data.get(key) or "").split())[:200]
+        if val:
+            out[key] = val
+    for key in ("years_experience", "team_size"):
+        try:
+            num = int(data.get(key))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= num <= 500:
+            out[key] = num
+    out["cgl_confirmed"] = bool(data.get("cgl_confirmed"))
+    try:
+        limit = int(data.get("cgl_limit_cents") or 0)
+    except (TypeError, ValueError):
+        limit = 0
+    if out["cgl_confirmed"]:
+        out["cgl_limit_cents"] = max(limit, CGL_MIN_CENTS)
+    out["coi_required"] = vtype in CGL_REQUIRED_TYPES
+    if vtype in CGL_REQUIRED_TYPES and not out["cgl_confirmed"]:
+        raise ValueError("Confirm you carry at least $2M commercial general liability insurance.")
+    return out
 
 
 def _application_portfolio_links(application: "VendorApplicationCreate") -> list:
@@ -384,7 +429,10 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     existing_notes = result.pop("_internal_notes", "")
     from ..services.vendor_profile import normalize_vendor_type
     vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
-    type_label = {"photographer": "photographer", "stager": "stager", "cleaner": "cleaner"}.get(vtype, "vendor")
+    type_label = {
+        "photographer": "photographer", "stager": "stager", "cleaner": "cleaner",
+        "inspector": "inspector", "measurer": "measurer", "handyman": "repairs",
+    }.get(vtype, "vendor")
 
     # Evidence-based review (samples through the vision rubric, link checks,
     # hashes, gear / location / availability / RPAS rules), stored on
@@ -448,17 +496,16 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         if extra not in links:
             links.append(extra)
 
-    from ..services.vendor_profile import normalize_vendor_type
+    from ..services.vendor_profile import TRADE_SKILL, normalize_vendor_type, storage_vendor_type
     vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
-    # Photographer apply may omit specialties for stager/cleaner; keep a sensible default.
-    default_specialty = {
-        "photographer": "photo",
-        "stager": "staging",
-        "cleaner": "cleaning",
-    }.get(vtype, "photo")
+    # Column value the DB check accepts today; the real trade rides on
+    # application_profile.trade (inspector / measurer / handyman).
+    stored_vtype = storage_vendor_type(vtype)
+    # Non-media apply may omit specialties; keep a sensible default.
+    default_specialty = TRADE_SKILL.get(vtype, "photo")
     from ..services import applicant_evidence as ev
     application_profile = None
-    if vtype == "photographer" or application.sample_paths or application.equipment:
+    if vtype != "photographer" or application.sample_paths or application.equipment:
         application_profile = {
             "version": 1,
             "location": {"city": application.city, "in_gta": ev.city_in_gta(application.city)},
@@ -474,6 +521,9 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
             "samples": [{"path": p} for p in (application.sample_paths or [])],
             "upload_session": application.sample_upload_session or None,
         }
+        if vtype != "photographer":
+            application_profile["trade"] = vtype
+            application_profile["credentials"] = getattr(application, "trade_credentials", None) or {}
     member = VendorMember(
         id=str(uuid.uuid4()),
         application_token=application_token,
@@ -481,8 +531,11 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         email=email_l,
         phone=application.phone,
         role="Applicant",
-        vendor_type=vtype,
-        specialty=(application.specialties[0] if application.specialties else default_specialty),
+        vendor_type=stored_vtype,
+        specialty=(
+            default_specialty if vtype != "photographer"
+            else (application.specialties[0] if application.specialties else default_specialty)
+        ),
         onboarding_status="pending",
         is_active=False,
         portfolio_links=links,
@@ -504,7 +557,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         source_detail=getattr(application, "source_detail", None),
         application_profile=application_profile,
         rpas_certificate_url=application.rpas_cert_path if vtype == "photographer" else None,
-        internal_notes=f"IC agreement v{_IC_AGREEMENT_VERSION} accepted on {now_iso}; vendor_type={vtype}",
+        internal_notes=f"IC agreement v{_IC_AGREEMENT_VERSION} accepted on {now_iso}; vendor_type={vtype}"
+        + (f" (stored as {stored_vtype} until vendor_type migration)" if stored_vtype != vtype else ""),
     )
 
     member_dict = member.dict()

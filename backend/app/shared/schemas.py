@@ -337,7 +337,9 @@ class VendorMember(BaseModel):
     phone: str = ""
     role: str = "Photographer IC"
     title: str = "Photographer IC"
-    # Wave A: photographer | stager | cleaner. Drone/RPAS is a photographer capability.
+    # photographer | stager | cleaner (DB check). inspector | measurer | handyman
+    # are stored in application_profile.trade until the widening migration.
+    # Drone/RPAS is a photographer capability.
     vendor_type: str = "photographer"
     specialty: str = "photo"
     skills: List[str] = []
@@ -456,6 +458,11 @@ class VendorApplicationCreate(BaseModel):
     # {days_of_week, time_windows, weekends, earliest_start_date,
     #  shoots_per_week, max_shoots_per_day, notice_hours, has_car, has_licence}
     availability: Optional[Dict[str, Any]] = None
+    # Non-media trades (2026-10-26). {cgl_confirmed, cgl_limit_cents,
+    # insurer, wsib_number, years_experience, licences, team_size, service_notes}.
+    # Repairs and inspections must confirm $2M CGL; the COI file goes to
+    # POST /api/onboarding/documents (doc_type=coi) after /apply.
+    trade_credentials: Optional[Dict[str, Any]] = None
 
 
 class SampleUploadFile(BaseModel):
