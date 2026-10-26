@@ -31,6 +31,8 @@ function BrickMark({ size = 18 }: { size?: number }) {
   );
 }
 
+const HELP_URL = 'https://www.brxs.ca/help/photographers';
+
 const linkClass = (base: string) => ({ isActive }: { isActive: boolean }) => `${base}${isActive ? ' active' : ''}`;
 
 export function Sidebar() {
@@ -60,6 +62,9 @@ export function Sidebar() {
             {item.label}
           </NavLink>
         ))}
+        <a className="nav-link" href={HELP_URL} target="_blank" rel="noopener noreferrer" aria-label="Help centre (opens in a new tab)">
+          Help centre
+        </a>
       </nav>
 
       <nav className="tabbar" aria-label="Main">
@@ -88,6 +93,9 @@ export function Sidebar() {
                 {item.label}
               </NavLink>
             ))}
+            <a className="more-link" href={HELP_URL} target="_blank" rel="noopener noreferrer" aria-label="Help centre (opens in a new tab)">
+              Help centre
+            </a>
           </div>
         </>
       )}

@@ -393,6 +393,13 @@ export function LoginPage() {
           </button>
         )}
         {/* Apple stays OFF until Apple Developer / Supabase Apple is connected — same honesty as OS. */}
+        <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }} data-testid="login-help">
+          New to Bricks or stuck?{' '}
+          <a href="https://www.brxs.ca/help/photographers" target="_blank" rel="noopener noreferrer"
+            style={{ color: 'var(--c-ink)', textDecoration: 'underline', textUnderlineOffset: 3 }}>
+            Read the help centre
+          </a>
+        </p>
       </form>
     </LoginShell>
   );
