@@ -295,7 +295,7 @@ async def notify_booking_confirmed(job_id: str) -> None:
   Open this listing on your desk: <a href="{_listing_desk_url(job_id)}" style="color:#d2542b">{_listing_desk_url(job_id)}</a>
 </p>
 <p style="font-size:13px;color:#888;line-height:1.5">
-  Need to reschedule? Reply to this email or write support@brxs.ca.
+  Need to reschedule? Reply to this email or write help@brxs.ca.
 </p>
 """
         await _push_agent_new_booking(agent_email, address, when, photographer_name, job_id)
@@ -358,7 +358,7 @@ async def notify_photographer_en_route(job_id: str) -> None:
 </p>
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">Scheduled: {_html.escape(when or "see GO")}</p>
 <p style="font-size:13px;color:#888;line-height:1.5">
-  Please keep the property accessible. Questions → support@brxs.ca.
+  Please keep the property accessible. Questions → help@brxs.ca.
 </p>
 """
         sent = await _email_agent_direct(

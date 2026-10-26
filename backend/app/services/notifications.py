@@ -408,7 +408,7 @@ async def send_email_via_resend(to: str, subject: str, html: str, text: str | No
                 },
                 json={
                     "from": "BRICKS <notifications@brxs.ca>",
-                    "reply_to": "support@brxs.ca",
+                    "reply_to": "help@brxs.ca",
                     "to": [to],
                     "subject": subject,
                     "html": html,

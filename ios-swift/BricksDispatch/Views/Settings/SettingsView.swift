@@ -47,7 +47,7 @@ struct SettingsView: View {
 
             Section("SUPPORT") {
                 Button {
-                    if let url = URL(string: "mailto:support@brxs.ca") {
+                    if let url = URL(string: "mailto:help@brxs.ca") {
                         UIApplication.shared.open(url)
                     }
                 } label: {
