@@ -6,8 +6,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { EnterFadeDown, PressScale, SheetEnter } from '../../components/motion';
-import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home } from 'lucide-react-native';
-import * as Location from 'expo-location';
+import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, X, Home } from 'lucide-react-native';
+import { useNoShow, LOCATION_REQUIRED_COPY, NOSHOW_RULE_COPY, NOSHOW_REVIEW_COPY, formatCountdown } from '../../lib/noshow';
 import { actorHeaders } from '../../lib/api';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
 import { getCaptureSession } from '../../lib/capture-api';
@@ -19,8 +19,6 @@ import {
   validateHdrUploadsForComplete,
 } from '../../lib/bracket-require';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
-
-const NOSHOW_GEOFENCE_METERS = 150;
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
@@ -51,15 +49,6 @@ type Job = {
   assignee_name?: string | null;
 };
 
-function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2
-    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.asin(Math.sqrt(a));
-}
-
 function fmtDate(s: string) {
   if (!s) return '—';
   const d = new Date(s + 'T00:00:00');
@@ -89,11 +78,10 @@ export default function JobDetailScreen() {
   const [confirmingArrive, setConfirmingArrive] = useState(false);
   const [escalating, setEscalating] = useState(false);
   const [escalationSentAt, setEscalationSentAt] = useState<number | null>(null);
-  const [escalationWaitSecs, setEscalationWaitSecs] = useState(0);
   const [noShowVisible, setNoShowVisible] = useState(false);
   const [noShowNotes, setNoShowNotes] = useState('');
   const [submittingNoShow, setSubmittingNoShow] = useState(false);
-  const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
+  const noShow = useNoShow(id, job?.status);
   const [listingQuery, setListingQuery] = useState('');
   const [listingHits, setListingHits] = useState<ListingHit[]>([]);
   const [listingSearching, setListingSearching] = useState(false);
@@ -137,29 +125,6 @@ export default function JobDetailScreen() {
       }
     })();
   }, [id]);
-
-  // Update distance to job when job loads and photographer is active, to enforce geofence.
-  useEffect(() => {
-    if (!job || !['assigned', 'in_progress'].includes(job.status)) return;
-    if (job.lat == null || job.lng == null) return;
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
-        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        setDistanceMeters(haversineMeters(pos.coords.latitude, pos.coords.longitude, job.lat!, job.lng!));
-      } catch {}
-    })();
-  }, [job?.id, job?.status]);
-
-  useEffect(() => {
-    if (!escalationSentAt) return;
-    const WAIT_MS = 15 * 60 * 1000;
-    const tick = () => setEscalationWaitSecs(Math.ceil(Math.max(0, WAIT_MS - (Date.now() - escalationSentAt)) / 1000));
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [escalationSentAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -392,40 +357,42 @@ export default function JobDetailScreen() {
     }
   };
 
+  const checkIn = async () => {
+    if (!job) return;
+    try {
+      await noShow.checkIn();
+      setJob(prev => prev ? { ...prev, status: 'in_progress' } : prev);
+    } catch (e: any) {
+      Alert.alert('Could not check in', e?.message || 'Try again.');
+    }
+  };
+
+  const callClient = async () => {
+    try { await noShow.callClient(); } catch (e: any) {
+      Alert.alert('Could not log the call', e?.message || 'Try again.');
+    }
+  };
+
+  const takeNoShowPhoto = async () => {
+    try { await noShow.takePhoto(); } catch (e: any) {
+      Alert.alert('Could not save the photo', e?.message || 'Try again.');
+    }
+  };
+
   const submitNoShow = async () => {
     if (!job || submittingNoShow) return;
     setSubmittingNoShow(true);
     try {
-      let lat: number | undefined, lng: number | undefined;
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-          lat = pos.coords.latitude; lng = pos.coords.longitude;
-        }
-      } catch {}
-
-      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
-      const body: any = {};
-      if (noShowNotes.trim()) body.notes = noShowNotes.trim();
-      if (lat !== undefined) { body.photographer_lat = lat; body.photographer_lng = lng; }
-
-      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/agent-no-show`, {
-        method: 'POST', headers, body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-
+      const data = await noShow.report(noShowNotes);
       setNoShowVisible(false);
       setNoShowNotes('');
-      if (data.hold_for_review) {
-        Alert.alert('Held for Review', 'Your claim has been flagged for location verification. Our team will review within 2 business days.');
-      } else {
-        Alert.alert('Recorded', 'No-show filed. A $60 trip fee will be added to your next payout.');
-        setJob(prev => prev ? { ...prev, status: 'agent_no_show' } : prev);
-      }
+      setJob(prev => prev ? { ...prev, status: 'agent_no_show' } : prev);
+      Alert.alert(
+        data?.hold_for_review ? 'Sent for review' : 'No-show reported',
+        `You’ll be paid half the job’s payout if it’s approved. ${NOSHOW_REVIEW_COPY}`,
+      );
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Could not file claim. Try again.');
+      Alert.alert('Could not report the no-show', e.message || 'Try again.');
     } finally {
       setSubmittingNoShow(false);
     }
@@ -482,19 +449,25 @@ export default function JobDetailScreen() {
       : captureFlags.tour
         ? 'Start Capture'
         : 'Start Capture · Floor plan';
-  const canReportNoShow = isActive && (() => {
-    // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
-    // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
-    if (job.lat != null && job.lng != null && distanceMeters !== null && distanceMeters > NOSHOW_GEOFENCE_METERS) return false;
-    if (!job.scheduled_date || !job.time_window_start) return false;
-    try {
-      const time24 = (job.time_window_start || '').slice(0, 5);
-      const shootMs = new Date(`${job.scheduled_date}T${time24}:00`).getTime();
-      if (isNaN(shootMs)) return false;
-      const now = Date.now();
-      return now >= shootMs - 15 * 60 * 1000 && now <= shootMs + 90 * 60 * 1000;
-    } catch { return false; }
-  })();
+  const ns = noShow.ns;
+  const checkedIn = !!ns?.checked_in;
+  const showCheckIn = (job.status === 'assigned' || (job.status === 'in_progress' && !!ns)) && !checkedIn;
+  const showNoShow = job.status === 'in_progress' && checkedIn;
+  const distanceLine = ns?.check_in_distance_m != null
+    ? `Checked in ${Math.round(ns.check_in_distance_m)} m from the property`
+    : 'Checked in';
+  const waitLine = noShow.waitDone
+    ? `Waited ${ns?.wait_minutes ?? 20} minutes`
+    : Number.isFinite(noShow.leftSecs)
+      ? `Wait ${formatCountdown(noShow.leftSecs)} more`
+      : `Wait ${ns?.wait_minutes ?? 20} minutes`;
+  const noShowChecks: { done: boolean; label: string }[] = [
+    { done: checkedIn, label: distanceLine },
+    { done: noShow.waitDone, label: waitLine },
+    { done: !!ns?.has_photo, label: ns?.has_photo ? 'Photo of the property taken' : 'Take a photo of the property' },
+    { done: !!ns?.has_call, label: ns?.has_call ? 'Call attempt logged' : 'Try to call the client' },
+  ];
+  const canReportNoShow = !!ns?.can_report || (noShow.waitDone && checkedIn && !!ns?.has_photo && !!ns?.has_call && !ns?.expired);
 
   return (
     <SafeAreaView style={s.safe}>
@@ -726,37 +699,67 @@ export default function JobDetailScreen() {
           </View>
         ) : null}
 
-        {canReportNoShow && (
+        {showCheckIn && (
           <View style={s.noShowCard}>
-            <Text style={s.sectionEye}>NO-SHOW PROCEDURE</Text>
-            {!escalationSentAt ? (
-              <>
-                <Text style={s.noShowDesc}>
-                  If the agent or client is not present, notify them by SMS first. You may file a claim 15 minutes after notification.
-                </Text>
-                <TouchableOpacity style={s.notifyBtn} onPress={notifyAgent} disabled={escalating} activeOpacity={0.7}>
-                  {escalating
-                    ? <ActivityIndicator size="small" color={TOKENS.warn} />
-                    : <><BellRing size={14} color={TOKENS.warn} strokeWidth={1.5} /><Text style={s.notifyBtnText}>Notify Agent</Text></>
-                  }
-                </TouchableOpacity>
-              </>
-            ) : escalationWaitSecs > 0 ? (
-              <>
-                <Text style={s.noShowDesc}>SMS sent to agent. File your claim in:</Text>
-                <Text style={s.countdown}>
-                  {String(Math.floor(escalationWaitSecs / 60)).padStart(2, '0')}:{String(escalationWaitSecs % 60).padStart(2, '0')}
-                </Text>
-              </>
-            ) : (
-              <>
-                <Text style={s.noShowDesc}>Wait complete. You may now file a no-show claim.</Text>
-                <TouchableOpacity style={s.reportBtn} onPress={() => setNoShowVisible(true)} activeOpacity={0.7}>
-                  <AlertTriangle size={14} color={TOKENS.bad} strokeWidth={1.5} />
-                  <Text style={s.reportBtnText}>Report No-Show</Text>
-                </TouchableOpacity>
-              </>
-            )}
+            <Text style={s.sectionEye}>CHECK IN</Text>
+            <Text style={s.noShowDesc}>Check in when you’re at the property. {LOCATION_REQUIRED_COPY}</Text>
+            <TouchableOpacity style={s.notifyBtn} onPress={checkIn} disabled={noShow.busy === 'checkin'} activeOpacity={0.7}>
+              {noShow.busy === 'checkin'
+                ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                : <><MapPin size={14} color={TOKENS.moon} strokeWidth={1.5} /><Text style={s.notifyBtnText}>Check in</Text></>
+              }
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {showNoShow && (
+          <View style={s.noShowCard}>
+            <Text style={s.sectionEye}>CLIENT ISN’T HERE?</Text>
+            <Text style={s.noShowDesc}>{NOSHOW_RULE_COPY(ns?.wait_minutes ?? 20)}</Text>
+            {!noShow.waitDone && Number.isFinite(noShow.leftSecs) ? (
+              <Text style={s.countdown}>{formatCountdown(noShow.leftSecs)}</Text>
+            ) : null}
+            {noShowChecks.map((c) => (
+              <View key={c.label} style={s.checkRow}>
+                <CheckCircle size={16} color={c.done ? TOKENS.ok : TOKENS.moonMute} strokeWidth={1.5} />
+                <Text style={[s.checkLabel, c.done && { color: TOKENS.moon }]}>{c.label}</Text>
+              </View>
+            ))}
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 10 }}>
+              <TouchableOpacity style={[s.notifyBtn, { flex: 1 }]} onPress={callClient} disabled={noShow.busy === 'call'} activeOpacity={0.7}>
+                {noShow.busy === 'call'
+                  ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                  : <><Phone size={14} color={TOKENS.moon} strokeWidth={1.5} /><Text style={s.notifyBtnText}>Call client</Text></>
+                }
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.notifyBtn, { flex: 1 }]} onPress={takeNoShowPhoto} disabled={noShow.busy === 'photo'} activeOpacity={0.7}>
+                {noShow.busy === 'photo'
+                  ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                  : <><Camera size={14} color={TOKENS.moon} strokeWidth={1.5} /><Text style={s.notifyBtnText}>{ns?.has_photo ? 'Retake photo' : 'Take photo'}</Text></>
+                }
+              </TouchableOpacity>
+            </View>
+            {ns && !ns.client_phone ? (
+              <Text style={s.noShowDesc}>There’s no phone number for this client. Tap Call client to note that you tried, and Bricks will see it.</Text>
+            ) : null}
+            <TouchableOpacity onPress={notifyAgent} disabled={escalating || !!escalationSentAt} activeOpacity={0.7} style={{ marginBottom: 12 }}>
+              <Text style={[s.noShowDesc, { marginBottom: 0, textDecorationLine: 'underline' }]}>
+                {escalationSentAt ? 'Text sent to the client' : escalating ? 'Sending text…' : 'Text the client too'}
+              </Text>
+            </TouchableOpacity>
+            {noShow.missing.length > 0 ? (
+              <Text style={[s.noShowDesc, { color: TOKENS.warn }]}>Still needed: {noShow.missing.join(' ')}</Text>
+            ) : null}
+            <TouchableOpacity
+              style={[s.reportBtn, !canReportNoShow && { opacity: 0.4 }]}
+              onPress={() => setNoShowVisible(true)}
+              disabled={!canReportNoShow}
+              activeOpacity={0.7}
+            >
+              <AlertTriangle size={14} color={TOKENS.bad} strokeWidth={1.5} />
+              <Text style={s.reportBtnText}>Report no-show</Text>
+            </TouchableOpacity>
+            <Text style={[s.noShowDesc, { marginTop: 12, marginBottom: 0 }]}>{NOSHOW_REVIEW_COPY}</Text>
           </View>
         )}
 
@@ -868,11 +871,11 @@ export default function JobDetailScreen() {
                 </TouchableOpacity>
               </View>
               <Text style={s.noShowDesc}>
-                GPS location will be recorded. A $60 trip fee will be added to your next payout cycle.
+                Bricks will review your check-in, photo and call attempt. If it’s approved, you’re paid half the job’s payout.
               </Text>
               <TextInput
                 style={s.notesInput}
-                placeholder="Optional: describe what happened..."
+                placeholder="What happened? (optional)"
                 placeholderTextColor={TOKENS.moonFaint}
                 multiline
                 numberOfLines={4}
@@ -887,7 +890,7 @@ export default function JobDetailScreen() {
               >
                 {submittingNoShow
                   ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                  : <Text style={s.submitBtnText}>Confirm No-Show</Text>
+                  : <Text style={s.submitBtnText}>Confirm no-show</Text>
                 }
               </PressScale>
             </SheetEnter>
@@ -1003,11 +1006,11 @@ const s = StyleSheet.create({
   noShowDesc: { fontSize: 13, color: TOKENS.moonSoft, lineHeight: 20, marginBottom: 14 },
   notifyBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    borderWidth: 1, borderColor: TOKENS.warn + '66',
-    backgroundColor: TOKENS.warn + '11', borderRadius: TOKENS.radius,
+    justifyContent: 'center',
+    borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: TOKENS.radius,
     paddingVertical: 11, paddingHorizontal: 14,
   },
-  notifyBtnText: { fontSize: 14, color: TOKENS.warn, fontWeight: '500' as const },
+  notifyBtnText: { fontSize: 14, color: TOKENS.moon, fontWeight: '500' as const },
   countdown: {
     fontFamily: TYPOGRAPHY.mono, fontSize: 28, color: TOKENS.moon,
     letterSpacing: 2, textAlign: 'center' as const, marginBottom: 4,
