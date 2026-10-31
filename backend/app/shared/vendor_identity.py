@@ -156,16 +156,17 @@ async def photographer_payout_cents(db, job: dict, member: Optional[dict]) -> in
     if is_owner_member(member):
         return int(round(rack_dollars(job) * 100))
 
-    from ..services.commercial_jobs import commercial_payout_cents, is_employee
+    from ..services.commercial_jobs import is_employee
+    from ..services.client_service_payouts import set_payout_cents
     if is_employee(member):
         return 0  # in-house staff: salary handled outside Dispatch
-    commercial = commercial_payout_cents(job)
-    if commercial is not None:
-        return int(commercial)
+    tier = (member or {}).get("tier") or job.get("vendor_tier") or 1
+    fixed = set_payout_cents(job, tier)
+    if fixed is not None:
+        return int(fixed)
 
     package_id = job.get("package_id")
     sqft = job.get("sqft")
-    tier = (member or {}).get("tier") or job.get("vendor_tier") or 1
     amount = await get_fixed_payout_amount(db, package_id, sqft, tier)
     if amount is None:
         amount = calculate_payout_amount(

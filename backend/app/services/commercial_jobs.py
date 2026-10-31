@@ -332,14 +332,23 @@ def commercial_gate_failures(member: Any, job: Any, *, has_skills: Optional[set]
 
 
 def commercial_payout_cents(job: Any) -> Optional[int]:
-    """Fixed vendor payout for a commercial visit, or None for non-commercial jobs."""
+    """Fixed vendor payout for a commercial visit, or None for non-commercial jobs.
+
+    Plan visits pay the plan's set amount (mapped $685 / $635 / $475 for
+    monthly / biweekly / weekly, Kam 2026-10-30); one-offs pay $185 / $735.
+    Always capped at 50% of what the client paid for the visit."""
+    from .client_service_payouts import ONE_OFF, PLAN, cap_cents, client_service_payout_cents
+    j = _as_dict(job)
+    key = str(j.get("package_id") or "").strip().lower()
+    if key in ONE_OFF:  # a client service on a commercial job type (mapped acquisition)
+        return client_service_payout_cents(j)
     kind = deliverable_kind(job)
     if kind is None:
         return None
-    cents = COMMERCIAL_PAYOUT_CENTS[kind]
-    if kind == MAPPED and "mapped_setup" in _add_on_keys(_as_dict(job).get("add_ons")):
+    cents = PLAN[key][1] if key in PLAN else COMMERCIAL_PAYOUT_CENTS[kind]
+    if kind == MAPPED and "mapped_setup" in _add_on_keys(j.get("add_ons")):
         cents += MAPPED_SETUP_PAYOUT_CENTS
-    return cents
+    return cap_cents(j, cents)
 
 
 def member_commercial_payout_cents(member: Any, job: Any) -> Optional[int]:
@@ -367,4 +376,17 @@ def payout_table() -> list[dict]:
         "vendor_payout_cad": MAPPED_SETUP_PAYOUT_CENTS / 100,
         "bricks_keeps_cad": COMMERCIAL_RACK_CAD["mapped_setup"] - MAPPED_SETUP_PAYOUT_CENTS / 100,
     })
+    from .client_service_payouts import PLAN
+    labels = {"visual": "Site progress plan — visual visit", "mapped": "Site progress plan — mapped visit"}
+    for key, (price, base) in PLAN.items():
+        fam, _, cadence = key.partition("_")
+        if fam not in labels:
+            continue
+        rows.append({
+            "kind": key,
+            "label": f"{labels[fam]} ({cadence})",
+            "client_rack_cad": price / 100,
+            "vendor_payout_cad": base / 100,
+            "bricks_keeps_cad": (price - base) / 100,
+        })
     return rows

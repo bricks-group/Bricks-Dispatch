@@ -136,10 +136,11 @@ def test_commercial_payout_table():
     assert commercial_payout_cents(Job(address="1", time_window_start="09:00", job_type="photo")) is None
     rows = {r["kind"]: r for r in payout_table()}
     # Pricing v2 (2026-10-24): rack visit $495, capture $1,499, setup $650; payouts unchanged.
-    assert {k: rows[k]["client_rack_cad"] for k in rows} == {VISUAL: 495.0, MAPPED: 1499.0, "mapped_setup": 650.0}
+    one_offs = (VISUAL, MAPPED, "mapped_setup")
+    assert {k: rows[k]["client_rack_cad"] for k in one_offs} == {VISUAL: 495.0, MAPPED: 1499.0, "mapped_setup": 650.0}
     assert rows[VISUAL]["bricks_keeps_cad"] == 310.0
     # Kam rule: Bricks keeps the larger cut; vendor <= 50% of rack.
-    for kind in (VISUAL, MAPPED, "mapped_setup"):
+    for kind in rows:
         share = rows[kind]["vendor_payout_cad"] / rows[kind]["client_rack_cad"]
         assert share < 0.50
         assert rows[kind]["bricks_keeps_cad"] > rows[kind]["vendor_payout_cad"]
