@@ -39,6 +39,40 @@ def _listing_desk_url(job_id: str | None) -> str:
     return f"{_OS_DESK_URL}/properties/{jid}"
 
 
+# Gap audit X3 (2026-10-26): property managers, commercial, investor, REIT and
+# builder clients were getting agent emails ("Open this listing on your desk",
+# "share it with your seller") with a link to the agent-only /properties route.
+_CLIENT_PACKAGE_PREFIXES = ("pm_", "cre_", "inv_", "reit_", "mapped_", "visual_", "site_")
+
+
+def is_client_account_job(job: dict | None) -> bool:
+    """True for PM / commercial / investor / REIT / builder jobs (not a realtor listing)."""
+    j = job or {}
+    if str(j.get("booking_id") or "").startswith("cb_"):
+        return True
+    if str(j.get("billing_type") or "").strip().lower() in (
+        "commercial_plan", "client_plan", "client_plan_credit", "client_one_off",
+    ):
+        return True
+    pkg = str(j.get("package_id") or "").strip().lower()
+    if pkg.startswith(_CLIENT_PACKAGE_PREFIXES):
+        return True
+    try:
+        from .commercial_jobs import commercial_kind
+        return commercial_kind(j) is not None
+    except Exception:  # noqa: BLE001 - wording only; never block an email
+        return False
+
+
+def _client_home_url() -> str:
+    """Client accounts' home in the app (agents use the listing file instead)."""
+    return f"{_OS_DESK_URL}/developer/overview"
+
+
+def _desk_url_for(job: dict | None, job_id: str | None) -> str:
+    return _client_home_url() if is_client_account_job(job) else _listing_desk_url(job_id)
+
+
 
 
 def _branded_card(title: str, body_inner: str) -> str:
@@ -229,7 +263,10 @@ def _when_line(job: dict) -> str:
     return format_when_line(job)
 
 
-async def _push_agent_new_booking(agent_email: str, address: str, when: str, photographer: str, job_id: str) -> dict:
+async def _push_agent_new_booking(
+    agent_email: str, address: str, when: str, photographer: str, job_id: str,
+    *, title_word: str = "Shoot confirmed", url: str | None = None,
+) -> dict:
     """"New booking: push" from Bricks OS Settings → Notifications. Web Push to every
     device the agent turned on; gated by notification_prefs.new_booking_push (fails
     open like the email). Never raises: a push problem must not block the booking."""
@@ -240,9 +277,9 @@ async def _push_agent_new_booking(agent_email: str, address: str, when: str, pho
         from ..shared.pg_fallback import _pg_connect
         parts = [p for p in (when, photographer) if p]
         msg = web_push.notification(
-            f"Shoot confirmed · {address}",
-            " · ".join(parts) or "Your Bricks shoot is confirmed.",
-            _listing_desk_url(job_id),
+            f"{title_word} · {address}",
+            " · ".join(parts) or f"{title_word}.",
+            url or _listing_desk_url(job_id),
             f"booking-{job_id}",
         )
         res = await web_push.push_to_email(_pg_connect, agent_email, msg)
@@ -261,13 +298,15 @@ async def notify_booking_confirmed(job_id: str) -> None:
     job = await _load_job(
         job_id,
         "id, booking_id, address, scheduled_date, time_window_start, time_window_end, "
-        "preferred_window, package_name, assignee_id, agent_email, agent_name",
+        "preferred_window, package_name, assignee_id, agent_email, agent_name, "
+        "package_id, job_type",
     )
     if not job:
         return
 
+    client = is_client_account_job(job)
     photographer_name = await _resolve_photographer_name(
-        job.get("assignee_id"), "your Bricks photographer"
+        job.get("assignee_id"), "your Bricks vendor" if client else "your Bricks photographer"
     )
     address = (job.get("address") or "").strip() or "your property"
     package_name = (job.get("package_name") or "").strip() or "Listing media"
@@ -284,28 +323,39 @@ async def notify_booking_confirmed(job_id: str) -> None:
             f'<td style="padding:6px 0">{_html.escape(when or "TBD")}</td></tr>'
             f'<tr><td style="padding:6px 0;color:#888">Package</td>'
             f'<td style="padding:6px 0">{_html.escape(package_name)}</td></tr>'
-            f'<tr><td style="padding:6px 0;color:#888">Photographer</td>'
+            f'<tr><td style="padding:6px 0;color:#888">{"Assigned to" if client else "Photographer"}</td>'
             f'<td style="padding:6px 0">{_html.escape(photographer_name)}</td></tr>'
         )
+        desk = _desk_url_for(job, job_id)
+        if client:
+            lead = "Your visit is confirmed and a Bricks vendor is assigned."
+            open_line = "Open it in your Bricks account"
+        else:
+            lead = "Your shoot is confirmed. A photographer is on it."
+            open_line = "Open this listing on your desk"
         body = f"""
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {who},</p>
-<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Your shoot is confirmed. A photographer is on it in Bricks GO.</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">{lead}</p>
 <table style="border-collapse:collapse;font-size:14px;width:100%">{rows}</table>
 <p style="margin-top:16px;font-size:13px;color:#888;line-height:1.5">
-  Open this listing on your desk: <a href="{_listing_desk_url(job_id)}" style="color:#d2542b">{_listing_desk_url(job_id)}</a>
+  {open_line}: <a href="{desk}" style="color:#d2542b">{desk}</a>
 </p>
 <p style="font-size:13px;color:#888;line-height:1.5">
   Need to reschedule? Reply to this email or write help@brxs.ca.
 </p>
 """
-        await _push_agent_new_booking(agent_email, address, when, photographer_name, job_id)
+        await _push_agent_new_booking(
+            agent_email, address, when, photographer_name, job_id,
+            title_word="Visit confirmed" if client else "Shoot confirmed", url=desk,
+        )
         if not _agent_allows(agent_email, "new_booking_email"):
             logger.info("Booking confirmed email muted by agent's notification settings for job %s", job_id)
             return
+        title = "Visit confirmed" if client else "Shoot confirmed"
         sent = await _email_agent_direct(
             agent_email,
-            f"Shoot confirmed — {address}",
-            _branded_card("Shoot confirmed", body),
+            f"{title} — {address}",
+            _branded_card(title, body),
         )
         logger.info(
             "Booking confirmed email %s for job %s (agent_email)",
@@ -336,13 +386,14 @@ async def notify_photographer_en_route(job_id: str) -> None:
     job = await _load_job(
         job_id,
         "id, booking_id, address, scheduled_date, time_window_start, time_window_end, "
-        "preferred_window, assignee_id, agent_email, agent_name",
+        "preferred_window, assignee_id, agent_email, agent_name, package_id, job_type",
     )
     if not job:
         return
 
+    client = is_client_account_job(job)
     photographer_name = await _resolve_photographer_name(
-        job.get("assignee_id"), "Your Bricks photographer"
+        job.get("assignee_id"), "Your Bricks vendor" if client else "Your Bricks photographer"
     )
     address = (job.get("address") or "").strip() or "your property"
     when = _when_line(job)
@@ -356,15 +407,16 @@ async def notify_photographer_en_route(job_id: str) -> None:
   <strong>{_html.escape(photographer_name)}</strong> is on the way to
   <strong>{_html.escape(address)}</strong>.
 </p>
-<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Scheduled: {_html.escape(when or "see GO")}</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Scheduled: {_html.escape(when or "see your booking")}</p>
 <p style="font-size:13px;color:#888;line-height:1.5">
   Please keep the property accessible. Questions → help@brxs.ca.
 </p>
 """
+        title = "Vendor on the way" if client else "Photographer en route"
         sent = await _email_agent_direct(
             agent_email,
-            f"Photographer en route — {address}",
-            _branded_card("Photographer en route", body),
+            f"{title} — {address}",
+            _branded_card(title, body),
         )
         logger.info(
             "En-route email %s for job %s (agent_email)",
@@ -407,7 +459,7 @@ async def notify_capture_delivered(
 
     job = await _load_job(
         job_id,
-        "booking_id, address, agent_email, agent_name, agent_user_id",
+        "booking_id, address, agent_email, agent_name, agent_user_id, package_id, job_type",
     )
     if not job and not (booking_id or "").strip():
         logger.warning(f"Job {job_id}: missing job — skipping capture delivery notification")
@@ -452,14 +504,23 @@ async def notify_capture_delivered(
         return False
 
     if agent_email:
-        desk = _listing_desk_url(job_id)
+        client = is_client_account_job({**(job or {}), "booking_id": bid})
+        desk = _desk_url_for({**(job or {}), "booking_id": bid}, job_id)
+        if client:
+            ready_line = (
+                f"{ready_phrase} for <strong>{_html.escape(addr)}</strong> {verb} in your Bricks account. "
+                f"{open_it} there{' or with the link(s) below' if links else ''}."
+            )
+        else:
+            ready_line = (
+                f"{ready_phrase} for <strong>{_html.escape(addr)}</strong> {verb} on the listing file. "
+                f"{open_it} on your desk{' or via the link(s) below' if links else ''}. "
+                "From the listing, use <strong>Copy client link</strong> to share with your seller."
+            )
         body = f"""
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {_html.escape(agent_name)},</p>
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">
-  {ready_phrase} for <strong>{_html.escape(addr)}</strong> {verb} on the listing file.
-  {open_it} on your desk
-  {'or via the link(s) below' if links else ''}.
-  From the listing, use <strong>Copy client link</strong> to share with your seller.
+  {ready_line}
 </p>
 {links}
 <p style="margin-top:16px;font-size:13px;color:#888;line-height:1.5">
@@ -537,16 +598,21 @@ def _delivery_has_video(delivery_urls: list | None) -> bool:
 
 
 def photos_delivered_email(
-    *, agent_name: str, address: str, share_url: str, desk_url: str, has_video: bool
+    *, agent_name: str, address: str, share_url: str, desk_url: str, has_video: bool,
+    client: bool = False,
 ) -> tuple[str, str]:
     """(subject, html) for the delivery email. Links never expire."""
     what = "media" if has_video else "photos"
-    addr = (address or "").strip() or "your listing"
+    addr = (address or "").strip() or ("your property" if client else "your listing")
     subject = f"Your photos are ready · {addr}" if what == "photos" else f"Your media is ready · {addr}"
     verb = "are" if what == "photos" else "is"
     primary = share_url or desk_url
     note = (
-        "This link doesn't expire. You can share it with your seller as is."
+        (
+            "This link doesn't expire. You can share it with your team as is."
+            if client
+            else "This link doesn't expire. You can share it with your seller as is."
+        )
         if share_url
         else "Sign in to view and download everything."
     )
@@ -563,7 +629,8 @@ def photos_delivered_email(
     if share_url and desk_url:
         body += (
             f'<p style="color:#888;font-size:13px;line-height:1.5;margin:0">'
-            f'Or open the listing file: <a href="{_html.escape(desk_url)}" style="color:#d2542b">'
+            f'{"Or open your Bricks account" if client else "Or open the listing file"}: '
+            f'<a href="{_html.escape(desk_url)}" style="color:#d2542b">'
             f"{_html.escape(desk_url)}</a></p>"
         )
     title = "Media ready" if has_video else "Photos ready"
@@ -617,7 +684,7 @@ async def notify_photos_delivered(
     link to the never-expiring share page instead of 1h signed URLs.
     to_override: ops test sends only (the agent is never contacted).
     """
-    job = await _load_job(job_id, "id, booking_id, address, agent_email, agent_name")
+    job = await _load_job(job_id, "id, booking_id, address, agent_email, agent_name, package_id, job_type")
     if not job:
         logger.warning(f"Job {job_id}: missing job — skipping delivery email")
         return "skipped"
@@ -625,7 +692,8 @@ async def notify_photos_delivered(
     agent_email = (to_override or job.get("agent_email") or "").strip()
     agent_name = (job.get("agent_name") or "").strip() if not to_override else "there"
     share_url = await _client_share_link(job_id)
-    desk_url = _listing_desk_url(job_id)
+    client = is_client_account_job(job)
+    desk_url = _desk_url_for(job, job_id)
     has_video = _delivery_has_video(delivery_urls)
 
     if agent_email:
@@ -634,7 +702,7 @@ async def notify_photos_delivered(
             return "muted"
         subject, html = photos_delivered_email(
             agent_name=agent_name, address=address, share_url=share_url,
-            desk_url=desk_url, has_video=has_video,
+            desk_url=desk_url, has_video=has_video, client=client,
         )
         ok = await _email_agent_direct(agent_email, subject, html)
         logger.info(
