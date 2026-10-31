@@ -26,6 +26,8 @@ type Job = {
   scheduled_date: string; package_name: string | null; package_price: number | null;
   agent_name: string | null; client_instructions: string | null;
   checklist: ChecklistItem[];
+  checklist_title?: string | null;
+  trade_job?: boolean;
   package_id?: string | null;
   add_ons?: unknown;
   capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
@@ -48,6 +50,7 @@ function initials(name: string | null) {
 function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' | 'floorplan' | 'visit' | 'mode') => void }) {
   const flags = jobCaptureModes(job);
   const hasMode = flags.tour || flags.floorplan || flags.visit;
+  if (job.trade_job) return null;
   if (!hasMode) {
     return (
       <View style={s.todayCaptureNone}>
@@ -244,7 +247,7 @@ export default function TodayScreen() {
             {/* Pre-shoot checklist for next job */}
             {nextJob && (nextJob.checklist?.length ?? 0) > 0 && (
               <View style={s.section}>
-                <Text style={s.sectionLabel}>SHOOT CHECKLIST · ONE VISIT</Text>
+                <Text style={s.sectionLabel}>{nextJob.checklist_title ? nextJob.checklist_title.toUpperCase() : 'SHOOT CHECKLIST · ONE VISIT'}</Text>
                 <View style={s.checkCard}>
                   {(nextJob.checklist || []).slice(0, 12).map((item, i, arr) => (
                     <View key={item.id} style={[s.checkRow, i < arr.length - 1 && s.checkRowBorder]}>

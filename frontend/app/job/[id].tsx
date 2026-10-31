@@ -19,8 +19,21 @@ import {
   validateHdrUploadsForComplete,
 } from '../../lib/bracket-require';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { TradeChecklist, ChecklistPalette } from '../../components/TradeChecklist';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+
+const CHECKLIST_PALETTE: ChecklistPalette = {
+  text: TOKENS.moon,
+  muted: TOKENS.moonMute,
+  faint: TOKENS.moonFaint,
+  line: TOKENS.nightHairS,
+  surface: TOKENS.nightDeep,
+  accent: TOKENS.brick,
+  accentText: TOKENS.moon,
+  ok: TOKENS.ok,
+  error: TOKENS.warn,
+};
 
 type ChecklistItem = { id: string; label: string; completed: boolean };
 type ListingHit = { id: string; address: string; city?: string; deal_type?: string | null };
@@ -36,6 +49,8 @@ type Job = {
   agent_name: string | null; agent_phone: string | null;
   client_instructions: string | null;
   checklist: ChecklistItem[];
+  checklist_title?: string | null;
+  trade_job?: boolean;
   package_id?: string | null;
   add_ons?: unknown;
   capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
@@ -290,12 +305,12 @@ export default function JobDetailScreen() {
       } catch {
         // Fall through — API will still reject incomplete brackets.
       }
-      const bracketBlock = validateHdrUploadsForComplete(uploads);
+      const bracketBlock = job.trade_job ? null : validateHdrUploadsForComplete(uploads);
       if (bracketBlock) {
         Alert.alert('Incomplete HDR brackets', bracketBlock.message || BRACKET_HINT);
         return;
       }
-      Alert.alert('Mark Complete', 'Confirm that this shoot is finished?', [
+      Alert.alert('Mark complete', job.trade_job ? 'Is this job finished?' : 'Confirm that this shoot is finished?', [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Mark Complete',
@@ -681,9 +696,14 @@ export default function JobDetailScreen() {
           </View>
         ) : null}
 
-        {job.checklist?.length > 0 ? (
+        {job.trade_job ? (
           <View style={s.card}>
-            <Text style={s.sectionEye}>SHOOT CHECKLIST · ONE VISIT</Text>
+            <Text style={s.sectionEye}>{(job.checklist_title || 'Job checklist').toUpperCase()}</Text>
+            <TradeChecklist jobId={job.id} status={job.status} palette={CHECKLIST_PALETTE} />
+          </View>
+        ) : job.checklist?.length > 0 ? (
+          <View style={s.card}>
+            <Text style={s.sectionEye}>{job.checklist_title ? `${job.checklist_title.toUpperCase()} · ONE VISIT` : 'SHOOT CHECKLIST · ONE VISIT'}</Text>
             {job.checklist.map((item) => (
               <View key={item.id} style={s.checkRow}>
                 <CheckCircle
@@ -782,7 +802,7 @@ export default function JobDetailScreen() {
             ) : null}
           </View>
         ) : null}
-        {['in_progress', 'completed', 'processing'].includes(job.status) ? (
+        {!job.trade_job && ['in_progress', 'completed', 'processing'].includes(job.status) ? (
           <PressScale
             style={s.captureStartChip}
             onPress={() => router.push('/(tabs)/uploads' as any)}
@@ -851,7 +871,7 @@ export default function JobDetailScreen() {
                   : <Text style={s.captureBtnText}>{captureStartLabel}</Text>
                 }
               </PressScale>
-            ) : (
+            ) : job.trade_job ? null : (
               <View style={s.captureNone}>
                 <Text style={s.captureNoneText}>{captureNeitherCopy(captureFlags)}</Text>
               </View>
