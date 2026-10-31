@@ -407,6 +407,24 @@ def _add_on_keys(add_ons: Iterable) -> set[str]:
     return keys
 
 
+# Client-service add-ons that need their own capture skill on top of the
+# job_type's. inv_acquisition (drone) sells interior stills and a Virtual
+# Visit; inv_acquisition_mapped (site_mapped_capture) sells the same, so a
+# drone-only vendor must not be auto-assigned work they can't deliver.
+_ADD_ON_SKILLS = {
+    "interior": "photo",
+    "interior_stills": "photo",
+    "virtual_visit": "tour",
+    "tour": "tour",
+    "virtual": "tour",
+}
+
+
+def _add_on_skills(job: Any) -> set[str]:
+    keys = _add_on_keys(_as_dict(job).get("add_ons") or [])
+    return {_ADD_ON_SKILLS[k] for k in keys if k in _ADD_ON_SKILLS}
+
+
 def job_required_skills(job: Any) -> set[str]:
     j = _as_dict(job)
     # Commercial (builder/developer) kinds: drone (+ mapping for mapped work).
@@ -414,7 +432,7 @@ def job_required_skills(job: Any) -> set[str]:
     # a skill no vendor can hold, so OS progress visits never auto-assigned.
     from .commercial_jobs import is_commercial_job, required_skills as _commercial_skills
     if is_commercial_job(j):
-        return _commercial_skills(j)
+        return _commercial_skills(j) | _add_on_skills(j)
     needed_type = job_required_vendor_type(j)
     # Non-media Wave A jobs: type match is the hard gate; skills are soft labels.
     if needed_type in TRADE_SKILL and needed_type != "photographer":
@@ -453,6 +471,7 @@ def job_required_skills(job: Any) -> set[str]:
         skills.add("tour")
     if "twilight" in blob:
         skills.add("twilight")
+    skills |= _add_on_skills(j)
     if not skills:
         skills.add("photo")
     return skills
