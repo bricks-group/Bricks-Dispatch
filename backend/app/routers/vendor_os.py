@@ -2087,10 +2087,13 @@ async def watch_job_action(
 # ---------------------------------------------------------------------------
 # No-show policy
 # ---------------------------------------------------------------------------
-# There is no photographer no-show fee (Kam, 2026-10-30). A no-show claim is a
-# record for ops and the client cancellation policy only; it never adds money to
-# a payout. Claims still live in agent_noshow_trip_fees (legacy table name) with
-# amount_cents = 0, set explicitly because the column default is the old 6000.
+# Client no-show (Kam, 2026-10-30): the vendor waits 20 minutes on site, checks in,
+# takes a photo and tries to call the client, then files a report. Bricks reviews it;
+# once an admin approves it the vendor is paid half the job's normal base payout,
+# HST on top as usual (payout_service.trigger_payout_for_job(noshow_claim_id=...)).
+# Claims live in agent_noshow_trip_fees (legacy table name). amount_cents starts at
+# 0 (set explicitly: the column default is the old 6000) and is set to the half
+# payout on approval.
 AGENT_NOSHOW_CLAIM_AMOUNT_CENTS = 0
 _NOSHOW_WINDOW_BEFORE_MIN = 15
 _NOSHOW_WINDOW_AFTER_MIN = 90
@@ -2098,7 +2101,7 @@ _NOSHOW_RATE_LIMIT_DAYS = 30
 _NOSHOW_RATE_LIMIT_THRESHOLD = 1
 _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 3
 _GPS_MAX_DISTANCE_KM = 0.5            # 500m — flag if photographer is further away
-_ESCALATION_MIN_WAIT_MIN = 15         # must wait 15 min after first SMS before filing
+_ESCALATION_MIN_WAIT_MIN = 20         # must wait 20 min after first SMS before filing
 
 
 async def _validate_noshow_claim(
@@ -2127,6 +2130,9 @@ async def _validate_noshow_claim(
     current_status = job.get("status", "")
     if current_status in ("completed", "delivered", "processing", "qc_failed", "agent_no_show", "cancelled"):
         return {"ok": False, "reason": f"Cannot report no-show on a job with status '{current_status}'"}
+    # Gate 2.5: the vendor must have checked in through the app (job in_progress).
+    if current_status != "in_progress":
+        return {"ok": False, "reason": "Check in on the job in the app before reporting a no-show"}
 
     # Gate 3: idempotency
     existing = await db.table("agent_noshow_trip_fees").select("id, status").eq(
@@ -2217,7 +2223,7 @@ async def _validate_noshow_claim(
                     "ok": False,
                     "reason": (
                         "Tap \"Notify Agent\" first — an SMS alert will be sent to the agent. "
-                        "You may file a no-show claim 15 minutes after notification."
+                        "You may file a no-show claim 20 minutes after notification."
                     ),
                 }
             first_sent = min(
@@ -2343,7 +2349,7 @@ async def escalate_absent_agent(
 
     Must be called before report_agent_no_show when Twilio is configured.
     Two SMS attempts allowed per job (attempt 1 at arrival, attempt 2 if still absent).
-    After first SMS, photographer must wait 15 minutes before filing the no-show claim.
+    After first SMS, photographer must wait 20 minutes before filing the no-show claim.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     db = await get_db()
@@ -2447,17 +2453,18 @@ async def report_agent_no_show(
     """
     Photographer reports that the agent/client was not home.
 
-    Records the claim for ops review. There is no no-show fee: nothing is added to
-    the photographer's payout and the client pays no fee beyond the booking amount
-    retained under the cancellation policy.
+    Records the claim for ops review. Once an admin approves it, the vendor is paid
+    half the job's base payout (HST on top as usual); see admin_ops.review_noshow_claim.
+    The client pays no fee beyond the booking amount retained under the cancellation
+    policy (no refund on a no-show).
 
     Validation gates:
     - Assigned photographer only
-    - Active job state
+    - Active job state, and the vendor has checked in (job in_progress)
     - No duplicate claim
     - T-15min → T+90min window
     - GPS proximity check: if coordinates supplied and >500m, holds for review
-    - Escalation check: if Twilio configured, must have notified agent + waited 15 min
+    - Escalation check: if Twilio configured, must have notified agent + waited 20 min
     - Booking not pre-cancelled
     - Rate limit (photographer): 2nd+ claim in 30 days → held for review
     - Rate limit (agent): 3+ claims against same agent in 30 days → held for review

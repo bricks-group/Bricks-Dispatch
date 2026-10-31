@@ -557,7 +557,7 @@ function JobListingPanel({
             >Mark complete</Button>
           ) : null}
         </div>
-        {['assigned', 'in_progress'].includes(job.status) ? (
+        {job.status === 'in_progress' ? (
           <div>
             <Button variant="tertiary" disabled={busy} onClick={() => setNoShowOpen((v) => !v)}>
               {noShowOpen ? 'Cancel no-show' : 'Report no-show'}
@@ -567,7 +567,10 @@ function JobListingPanel({
         {noShowOpen ? (
           <div className="stack" style={{ border: '1px solid var(--c-hair, #333)', padding: 12, borderRadius: 8 }}>
             <p className="muted" style={{ margin: 0, padding: 0 }}>
-              Bricks reviews every no-show report.
+              If the client doesn't show, you're paid half the job's payout. Wait 20 minutes on site, check in through the app, take a photo and try to call the client before you report it.
+            </p>
+            <p className="muted" style={{ margin: 0, padding: 0 }}>
+              Bricks reviews the report within 2 business days. You can appeal within 7 days by emailing help@brxs.ca.
             </p>
             <textarea
               value={noShowNotes}

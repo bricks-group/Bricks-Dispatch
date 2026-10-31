@@ -5,7 +5,7 @@ Covers:
   - Live test-mode transfer to a Stripe Express account
   - Idempotency: duplicate booking_id returns same transfer, not a double-pay
   - Webhook duplicate handling
-  - No-show claims never change the payout (no photographer no-show fee since 2026-10-30)
+  - A normal payout never reads no-show claims (no flat no-show fee since 2026-10-30)
 
 Run with:
     STRIPE_SECRET_KEY=sk_test_... pytest tests/test_stripe_connect_e2e.py -v
@@ -183,10 +183,11 @@ class TestNoshowValidation:
         assert "Rate limit" in result["reason"]
 
 
-# ── Unit: no-show claims never change a payout ───────────────────────────────
-# There is no photographer no-show fee (removed 2026-10-30). A pending claim row
-# in agent_noshow_trip_fees (legacy table name) must not add to the transfer, and
-# the payout path must not read that table at all.
+# ── Unit: a normal payout never reads no-show claims ─────────────────────────
+# There is no flat no-show fee (removed 2026-10-30). A claim row in
+# agent_noshow_trip_fees (legacy table name) must not add to a normal transfer.
+# An approved client no-show pays half the base instead: see
+# tests/test_noshow_half_payout.py.
 
 @pytest.mark.asyncio
 async def test_payout_ignores_noshow_claims():

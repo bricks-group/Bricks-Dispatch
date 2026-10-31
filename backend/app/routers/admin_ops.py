@@ -385,9 +385,11 @@ async def review_noshow_claim(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    Approve or reject a flagged no-show claim.
-    approve → status='pending' (paid on next payout cycle)
-    reject  → status='rejected', claim voided
+    Approve or reject a no-show claim that no admin has reviewed yet: a flagged
+    claim (pending_review) or an auto-recorded one (pending, reviewed_at unset).
+    approve → status='pending', then the vendor is paid half the job's base payout
+              (HST on top as usual) and the claim becomes 'paid_out'
+    reject  → status='rejected', claim voided, nothing is paid
     """
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
@@ -406,10 +408,12 @@ async def review_noshow_claim(
     claim = _maybe_single_row(res_claim)
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
-    if claim.get("status") != "pending_review":
+    prev_status = claim.get("status")
+    unreviewed_auto = prev_status == "pending" and not claim.get("reviewed_at")
+    if prev_status != "pending_review" and not unreviewed_auto:
         raise HTTPException(
             status_code=409,
-            detail=f"Claim is not pending review (current status: {claim.get('status')})"
+            detail=f"Claim is not pending review (current status: {prev_status})"
         )
 
     new_status = "rejected" if action == "reject" else "pending"
@@ -426,7 +430,7 @@ async def review_noshow_claim(
     job_id = claim.get("job_id")
     booking_id = claim.get("booking_id")
 
-    if action == "approve" and booking_id and job_id:
+    if action == "approve" and booking_id and job_id and prev_status == "pending_review":
         # Booking webhook was deferred at claim time for pending_review holds.
         # Fire it now that admin has confirmed the no-show is valid.
         # previous_status="pending_review" signals this is the deferred notification
@@ -458,10 +462,21 @@ async def review_noshow_claim(
         except Exception as e:
             logger.warning(f"Booking reversal webhook failed for {booking_id} (claim {claim_id}): {e}")
 
+    payout = None
+    if action == "approve" and job_id:
+        # Approved no-show: pay the vendor half the job's base payout (Kam, 2026-10-30).
+        from ..services.payout_service import trigger_payout_for_job
+        try:
+            payout = await trigger_payout_for_job(db, job_id, noshow_claim_id=claim_id)
+        except Exception as e:
+            logger.error(f"No-show payout failed for job {job_id} (claim {claim_id}): {e}")
+            payout = {"error": str(e), "job_id": job_id}
+
     return {
         "claim_id": claim_id,
         "status": new_status,
         "reviewed_by": actor_id,
+        "payout": payout,
         "note": "No-show confirmed." if action == "approve" else "Claim voided.",
     }
 

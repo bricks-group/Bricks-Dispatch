@@ -638,7 +638,7 @@ export default function JobDetailScreen() {
             <Section label="No-show">
               <Notice tone="warn">
                 {!escalationSentAt
-                  ? 'Agent not here? Text them first. You can file a claim 15 min later.'
+                  ? 'Client not here? Text them first. You can file a claim 20 min later.'
                   : escalationWaitSecs > 0
                     ? `Text sent to the agent. You can file a claim in ${fmtWait}.`
                     : 'You can file a no-show claim now.'}
@@ -746,7 +746,7 @@ export default function JobDetailScreen() {
                   <IconButton icon={X} label="Close" tint={color.textMuted} onPress={() => { setNoShowVisible(false); setNoShowNotes(''); }} />
                 </View>
                 <Text style={[T.bodySm, { color: color.textBody }]}>
-                  Your location is recorded so Bricks can review the no-show.
+                  If the client doesn't show, you're paid half the job's payout. Bricks reviews the report within 2 business days. You can appeal within 7 days by emailing help@brxs.ca.
                 </Text>
                 <View style={s.blockGapSm}>
                   <Field

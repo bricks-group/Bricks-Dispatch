@@ -236,9 +236,22 @@ async def _db_update_job_payout_amount(db, job_id: str, payout_amount: int) -> N
         raise
 
 
-async def trigger_payout_for_job(db, job_id: str) -> dict:
+def noshow_payout_cents(base_cents: int) -> int:
+    """Half the job's base payout, rounded to the nearest cent (half-cent up)."""
+    return (int(base_cents or 0) + 1) // 2
+
+
+async def _db_update_noshow_claim(db, claim_id: str, fields: dict) -> None:
+    await db.table("agent_noshow_trip_fees").update(fields).eq("id", claim_id).execute()
+
+
+async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = None) -> dict:
     """
     Trigger a payout for a completed job.
+
+    noshow_claim_id: set for an approved client no-show claim on this job. The vendor
+    is paid half the job's normal base payout (HST on top as usual) and the claim's
+    amount_cents is set to that half. Kam, 2026-10-30.
     Looks up the job, calculates the payout amount, calls Stripe Connect,
     and records the payout in the payouts table.
 
@@ -303,6 +316,14 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         payout_amount = int(payout_amount or 0) + addon_payout_cents(
             job.get("add_ons"), job.get("sqft"), vendor_tier
         )
+    if noshow_claim_id:
+        base_full = payout_amount
+        payout_amount = noshow_payout_cents(base_full)
+        logger.info(
+            f"No-show payout for job {job_id} (claim {noshow_claim_id}): "
+            f"half of base {base_full} = {payout_amount} cents"
+        )
+        await _db_update_noshow_claim(db, noshow_claim_id, {"amount_cents": payout_amount})
     if payout_amount <= 0:
         logger.warning(
             f"Payout amount is 0 for job {job_id} "
@@ -362,7 +383,16 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             existing_status == "pending" and not existing_transfer_id
         )
         if not is_retriable:
-            # Already paid — idempotent return.
+            # Already paid — idempotent return (close out the no-show claim if a prior
+            # post-Stripe update was lost).
+            if existing_status == "paid" and noshow_claim_id:
+                try:
+                    await _db_update_noshow_claim(db, noshow_claim_id, {
+                        "status": "paid_out",
+                        "paid_via_payout_id": existing_payout_id,
+                    })
+                except Exception as e:
+                    logger.error(f"No-show claim close-out failed for {noshow_claim_id}: {e}")
             return {
                 "payout_id": existing_payout_id,
                 "status": existing_status,
@@ -378,8 +408,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         reuse_payout_id = existing_payout_id
         retry_created_at = existing_data.get("created_at", "")
 
-    # No-show claims never add money to a payout (no photographer no-show fee).
-    # net_payout = base fee + HST (if registered)
+    # net_payout = base fee (half of it for an approved no-show) + HST (if registered)
     net_payout = payout_amount + hst_paid_cents
 
     # Create or reset the payout record
@@ -445,6 +474,12 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             "net_amount": net_payout,
             "paid_at": now,
         })
+        if noshow_claim_id:
+            await _db_update_noshow_claim(db, noshow_claim_id, {
+                "status": "paid_out",
+                "paid_via_payout_id": payout_id,
+                "paid_at": now,
+            })
 
     except Exception as e:
         # Transfer cleared — log for manual reconciliation; do NOT revert payout status

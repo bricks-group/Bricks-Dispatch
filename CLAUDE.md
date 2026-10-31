@@ -26,7 +26,7 @@ All schema migrations live in `ruletheworld/bricks-os/supabase/migrations/` — 
 - `jobs` — create, assign, all status transitions. **Corrected 2026-07-27, then corrected again (date unknown): `services/qc_agent.py`'s `dispatch_jobs` lookup was already fixed to `jobs` by the time this session checked** (`qc_agent.py:152`: `db.table("jobs").select("package_name")...`) — a repo-wide grep for `dispatch_jobs` now hits nothing outside this file's own history. The "one exception" this line used to describe no longer exists in code; don't re-apply this fix.
 - Assignment is **not** a separate table — it's an `assignee_id` update directly on the `jobs` row (`services/vendor_selection.py:127-131`). No `vendor_assignments` table exists or is ever queried; corrected 2026-07-27.
 - Payout records live on the `jobs`/`payouts` tables (`services/payout_service.py` writes to a table literally called `payouts`, not `payout_records`); corrected 2026-07-27.
-- `agent_noshow_trip_fees` — no-show claim record (legacy name; `amount_cents` always 0 — there is no no-show fee since 2026-10-30)
+- `agent_noshow_trip_fees` — no-show claim record (legacy name; `amount_cents` is 0 until an admin approves the claim, then half the job's base payout)
 - `agent_noshow_escalations` — Twilio SMS attempt log
 - `reconciliation_events` — fee vs booking mismatch log
 - `media_delivery` — signed delivery URLs + Resend trigger
@@ -86,7 +86,7 @@ API base: `https://dispatch-api.brxs.ca`
 - `backend/app/services/qc_agent.py` — Gemini vision QC agent (scores uploaded photos 0-100)
 - `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration
 - `backend/app/services/payout_service.py` — Stripe Connect transfers, tier percentages
-- `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (T+15 before claim)
+- `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (20-min wait after first SMS before claim)
 - `backend/app/shared/schemas.py` — Pydantic models
 - `backend/migrations/20260601_agent_noshow_escalations.sql` — new tables: agent_noshow_escalations, reconciliation_events
 
@@ -209,13 +209,15 @@ The other half of the developer/REIT vertical alongside CGI rendering above — 
 - Never hardcode secrets as default values in `os.environ.get()`
 - Storage is Supabase Storage (`db.storage.from_(STORAGE_BUCKET)`), bucket `brxs-deliverables` — NOT AWS S3
 - `time_window_start` is stored as `"HH:MM"` string — **always combine with `scheduled_date` before datetime math**. `datetime.fromisoformat("HH:MM")` raises ValueError. Gate 4 is fail-closed.
-- No photographer no-show fee (removed 2026-10-30, Kam). No-show claims never add to a payout; `payout_service.py` does not read `agent_noshow_trip_fees`.
+- No flat no-show fee (the $60 was removed 2026-10-30, Kam). An approved client no-show pays the vendor half the job's base payout, HST on top as usual: `trigger_payout_for_job(db, job_id, noshow_claim_id=...)`, called from the admin approve endpoint. A normal payout does not read `agent_noshow_trip_fees`.
 - `assign_vendor_for_job(job_id)` has an internal 3-attempt retry loop — callers do not need to retry
 - IC Clause 8 lists Bricks' platform FEE (45%/55%/65% for A/B/C, corrected 2026-07-20), not vendor payout — intentionally inverse of TIER_PERCENTAGES (35%/45%/55% for C/B/A)
 
 ## No-Show Policy
 
-**Agent/client no-show** → claim recorded for ops review; no fee to anyone (removed 2026-10-30). The client cancellation policy is unchanged: no refund on a no-show.
+**Agent/client no-show** (Kam, 2026-10-30) → the vendor waits 20 minutes on site, checks in through the app, takes a photo and tries to call the client, then reports it. Bricks reviews the report within 2 business days; the vendor can appeal via help@brxs.ca within 7 days. When an admin approves the claim, the vendor is paid half the job's base payout (HST on top as usual); a rejected claim pays nothing. Vendor copy: "If the client doesn't show, you're paid half the job's payout." The client cancellation policy is unchanged: no refund on a no-show, no callout fee.
+
+Server-side today: the report requires check-in (job `in_progress`), the T-15/T+90 window and GPS (soft hold). The call attempt and the 20-minute wait are only enforced through the SMS escalation gate when Twilio is configured (it is not set on the prod API), and no photo is captured by the report endpoint. Those are open gaps.
 
 - `POST /api/vendor-os/jobs/{job_id}/escalate-absent-agent` — sends Twilio SMS to agent (attempt 1 + 2); must be called before claiming when Twilio is configured
 - `POST /api/vendor-os/jobs/{job_id}/agent-no-show` — files the claim (accepts JSON body: notes, photographer_lat, photographer_lng)
@@ -223,7 +225,8 @@ The other half of the developer/REIT vertical alongside CGI rendering above — 
 - GPS gate: if photographer submits lat/lng and is >500m from property → held for review (not hard rejected)
 - Escalation gate: if `TWILIO_ACCOUNT_SID` set, must have called `escalate-absent-agent` + waited 15 min; gracefully degrades if Twilio not configured
 - Rate limit: 2nd+ claim in 30 days → `pending_review` (held for admin review)
-- On pass: `agent_noshow_trip_fees` claim record created (`amount_cents` 0), Booking notified via status webhook
+- On pass: `agent_noshow_trip_fees` claim record created (`amount_cents` 0), Booking notified via status webhook (held claims: on approval)
+- Admin approve (flagged `pending_review` claims, or auto-recorded `pending` claims not yet reviewed) → half-base payout, claim `paid_out`
 - Booking applies 100% retention penalty (no refund, no credit returned); sends agent email
 - Estate/high-value cap: max $500 retention on no-shows (chargeback protection)
 - Nothing is added to the photographer's payout. Earnings endpoint still returns `pending_trip_fees: []` / `pending_trip_fees_total: 0` for old app builds.
@@ -260,13 +263,13 @@ The other half of the developer/REIT vertical alongside CGI rendering above — 
 - **Snappr/Homejab IC model: IC agreement v1.8 (Bricks Group, Ontario; www à-la-carte rate card; Virtual Visit paid add-on). Insurance/WSIB proof does not block apply or first dispatch.** ✅
 - **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅
 - **Agent no-show: claim validation gates + admin review queue + Booking penalty callback** ✅
-- **Payout service: no no-show trip fee (removed 2026-10-30); correct table name** ✅
-- **Stripe Connect E2E test suite (idempotency, zero-amount, no-show claims never change payout)** ✅
+- **Payout service: no flat no-show fee (removed 2026-10-30); approved no-show pays half the base (2026-10-30)** ✅
+- **Stripe Connect E2E test suite (idempotency, zero-amount, normal payouts ignore no-show claims); tests/test_noshow_half_payout.py** ✅
 - **Weather context: Open-Meteo API for outdoor/drone jobs** ✅
 - **BoxBrownie virtual staging: fully active (photo editing, retouching, day-to-dusk, item removal, virtual staging)** ✅
 - app.json bundle IDs + EAS project ID configured (`com.bricks.go`) ✅
 - **GPS geofence gate: >500m from property → hold_for_review (soft gate, coordinates optional)** ✅
-- **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; gate in no-show claim flow (15-min wait after first SMS); graceful no-op if Twilio not configured** ✅
+- **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; gate in no-show claim flow (20-min wait after first SMS); graceful no-op if Twilio not configured** ✅
 - **Reconcile-noshow: GET /api/admin/reconcile-noshow detects fee/booking mismatches; writes reconciliation_events on dry_run=false** ✅
 - **PR #2 bug fixes (2026-06-01)** ✅
   - Gate 4 fail-closed: `time_window_start` ("HH:MM") combined with `scheduled_date` before fromisoformat; missing/invalid → 400 (not silent pass)
