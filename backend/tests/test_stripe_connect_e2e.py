@@ -64,16 +64,24 @@ def _now_utc():
     return datetime.now(timezone.utc)
 
 
-def _job(assignee_id="member_1", status="in_progress", shoot_offset_min=0):
+def _job(assignee_id="member_1", status="in_progress", shoot_offset_min=0,
+         checked_in_min_ago=None, photo=True, call=True, distance_m=40.0):
     """Return a minimal job dict. shoot_offset_min: negative = future, positive = past.
 
     Uses the canonical DB format: scheduled_date (YYYY-MM-DD) + time_window_start (HH:MM).
     time_window_start is stored as a property-local HH:MM (province timezone).
+    Evidence defaults: checked in at the booked start (or now if the start is in the
+    future), photo and call logged right after check-in.
     """
     from zoneinfo import ZoneInfo
     _tz = ZoneInfo("America/Toronto")
-    shoot_utc = _now_utc() - timedelta(minutes=shoot_offset_min)
+    now = _now_utc()
+    shoot_utc = now - timedelta(minutes=shoot_offset_min)
     shoot_et = shoot_utc.astimezone(_tz)
+    if checked_in_min_ago is None:
+        checked_in_min_ago = max(shoot_offset_min, 0)
+    checked_in = now - timedelta(minutes=checked_in_min_ago)
+    after = (checked_in + timedelta(seconds=30)).isoformat()
     return {
         "id": str(uuid.uuid4()),
         "assignee_id": assignee_id,
@@ -82,6 +90,12 @@ def _job(assignee_id="member_1", status="in_progress", shoot_offset_min=0):
         "status": status,
         "scheduled_date": shoot_et.strftime("%Y-%m-%d"),
         "time_window_start": shoot_et.strftime("%H:%M"),
+        "checked_in_at": checked_in.isoformat(),
+        "check_in_distance_m": distance_m,
+        "noshow_photo_path": "job/photo.jpg" if photo else None,
+        "noshow_photo_uploaded_at": after if photo else None,
+        "noshow_call_attempted_at": after if call else None,
+        "noshow_call_method": "dialer" if call else None,
     }
 
 
@@ -119,25 +133,25 @@ class TestNoshowValidation:
     async def test_too_early_rejected(self):
         db = _make_db_mock()
         db.execute = AsyncMock(return_value=MagicMock(data=None))
-        # Shoot is 30 min in the FUTURE — too early to claim (window opens at T-15min)
+        # Checked in now, shoot 30 min in the FUTURE — the 20-min wait starts at the booked start
         job = _job(shoot_offset_min=-30)
         result = await _validate_noshow_claim(db, job, reporter_id="member_1")
         assert not result["ok"]
-        assert "Too early" in result["reason"]
+        assert "Wait" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_too_late_rejected(self):
         db = _make_db_mock()
         db.execute = AsyncMock(return_value=MagicMock(data=None))
-        # Shoot was 120 min AGO — outside 90-min window
+        # Shoot was 120 min AGO and check-in then — outside the 90-min window
         job = _job(shoot_offset_min=120)
         result = await _validate_noshow_claim(db, job, reporter_id="member_1")
         assert not result["ok"]
-        assert "expired" in result["reason"]
+        assert "help@brxs.ca" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_within_window_approved(self):
-        # Shoot started 20 min ago — within T+90min window, no prior claims
+        # Shoot started 30 min ago, checked in then — waited 20 min, no prior claims
         execute_calls = [
             MagicMock(data=None),   # no existing claim
             MagicMock(data=None),   # booking lookup (skipped for rate limit)
@@ -153,7 +167,7 @@ class TestNoshowValidation:
         db.table = db.select = db.eq = db.in_ = db.gte = db.maybe_single = MagicMock(return_value=db)
         db.execute = AsyncMock(side_effect=_seq)
 
-        job = _job(shoot_offset_min=20)
+        job = _job(shoot_offset_min=30)
         result = await _validate_noshow_claim(db, job, reporter_id="member_1")
         assert result["ok"]
         assert not result.get("hold_for_review")

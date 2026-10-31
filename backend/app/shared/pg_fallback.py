@@ -688,6 +688,17 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
         "selected_slot_end",
         "payout_amount",
         "payout_status",
+        # Client no-show evidence (noshow_policy)
+        "checked_in_at",
+        "check_in_lat",
+        "check_in_lng",
+        "check_in_accuracy_m",
+        "check_in_distance_m",
+        "noshow_photo_path",
+        "noshow_photo_taken_at",
+        "noshow_photo_uploaded_at",
+        "noshow_call_attempted_at",
+        "noshow_call_method",
     }
     json_cols = {"checklist"}
     cols: list[tuple[str, Any]] = []

@@ -373,7 +373,27 @@ async def list_noshow_claims(
         query = query.eq("status", status)
 
     res = await query.order("created_at", ascending=False).range(skip, skip + page_size - 1).execute()
-    return paginated_response(res.data or [], res.count or 0, page, page_size)
+    rows = [await _with_noshow_evidence(r) for r in (res.data or [])]
+    return paginated_response(rows, res.count or 0, page, page_size)
+
+
+async def _with_noshow_evidence(claim: dict) -> dict:
+    """Add what the reviewer needs: a short signed photo URL and check-in facts."""
+    from ..services.storage import signed_url_in_bucket
+    from ..shared import noshow_policy
+
+    out = dict(claim or {})
+    path = out.get("photo_path")
+    out["photo_url"] = (
+        await signed_url_in_bucket(noshow_policy.EVIDENCE_BUCKET, path, 3600) if path else None
+    )
+    dist = out.get("check_in_distance_m")
+    out["checkin_radius_m"] = noshow_policy.CHECKIN_RADIUS_M
+    out["check_in_distance_label"] = (
+        f"{int(round(float(dist)))} m from the property" if dist is not None
+        else ("Distance unknown (job has no map location)" if out.get("checked_in_at") else "No check-in")
+    )
+    return out
 
 
 @router.post("/noshow-claims/{claim_id}/review")

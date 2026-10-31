@@ -31,6 +31,8 @@ import { DayCell } from '../components/DayCell';
 import { Button, ButtonLink } from '../components/Button';
 import { captureLinks } from '../components/CaptureLinks';
 import { JobGuide } from '../guide/JobGuide';
+import { NoShowPanel } from '../components/NoShowPanel';
+import { getCheckInFix, LOCATION_REQUIRED_COPY } from '../lib/noshow';
 
 const JOB_STATUS_TABS: [string, string][] = [
   ['', 'All'],
@@ -255,14 +257,10 @@ function JobListingPanel({
   const [allowIncompleteBrackets, setAllowIncompleteBrackets] = useState(false);
   const [pick, setPick] = useState(job.assignee_id || '');
   const [arriveAt, setArriveAt] = useState((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
-  const [noShowOpen, setNoShowOpen] = useState(false);
-  const [noShowNotes, setNoShowNotes] = useState('');
 
   useEffect(() => {
     setPick(job.assignee_id || '');
     setArriveAt((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
-    setNoShowOpen(false);
-    setNoShowNotes('');
   }, [job.id, job.assignee_id, job.confirmed_arrive_at, job.time_window_start]);
 
   useEffect(() => {
@@ -279,7 +277,8 @@ function JobListingPanel({
     setBusy(true);
     setErr('');
     try {
-      await api.post(`/api/vendor-os/jobs/${job.id}/check-in`);
+      const fix = await getCheckInFix();
+      await api.post(`/api/vendor-os/jobs/${job.id}/check-in`, fix);
       onPatched({ ...job, status: 'in_progress' });
     } catch (e) {
       setErr((e as Error).message);
@@ -557,47 +556,10 @@ function JobListingPanel({
             >Mark complete</Button>
           ) : null}
         </div>
-        {job.status === 'in_progress' ? (
-          <div>
-            <Button variant="tertiary" disabled={busy} onClick={() => setNoShowOpen((v) => !v)}>
-              {noShowOpen ? 'Cancel no-show' : 'Report no-show'}
-            </Button>
-          </div>
+        {job.status === 'assigned' ? (
+          <p className="muted" style={{ margin: 0, padding: 0, fontSize: 12 }}>{LOCATION_REQUIRED_COPY}</p>
         ) : null}
-        {noShowOpen ? (
-          <div className="stack" style={{ border: '1px solid var(--c-hair, #333)', padding: 12, borderRadius: 8 }}>
-            <p className="muted" style={{ margin: 0, padding: 0 }}>
-              If the client doesn't show, you're paid half the job's payout. Wait 20 minutes on site, check in through the app, take a photo and try to call the client before you report it.
-            </p>
-            <p className="muted" style={{ margin: 0, padding: 0 }}>
-              Bricks reviews the report within 2 business days. You can appeal within 7 days by emailing help@brxs.ca.
-            </p>
-            <textarea
-              value={noShowNotes}
-              onChange={(e) => setNoShowNotes(e.target.value)}
-              placeholder="What happened? (optional)"
-              rows={3}
-              maxLength={500}
-              style={{ width: '100%' }}
-            />
-            <Button
-              variant="danger"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true); setErr('');
-                try {
-                  const body: { notes?: string } = {};
-                  if (noShowNotes.trim()) body.notes = noShowNotes.trim();
-                  await api.post(`/api/vendor-os/jobs/${job.id}/agent-no-show`, body);
-                  onPatched({ ...job, status: 'agent_no_show' });
-                  setNoShowOpen(false);
-                  setNoShowNotes('');
-                } catch (e) { setErr((e as Error).message); }
-                finally { setBusy(false); }
-              }}
-            >Confirm no-show</Button>
-          </div>
-        ) : null}
+        {job.status === 'in_progress' ? <NoShowPanel job={job} onPatched={onPatched} /> : null}
         {['assigned', 'in_progress'].includes(job.status) ? (
           <CaptureNone job={job} />
         ) : null}

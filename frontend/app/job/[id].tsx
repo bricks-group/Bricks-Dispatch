@@ -9,8 +9,8 @@ import {
   NavBar, Footer, Section, Group, Row, Button, IconButton, TextLink, Field, Pill, Notice, StatGrid,
   Overline, EmptyState, LoadingState, Check,
 } from '../../components/ui';
-import { User, CheckCircle, Navigation, Phone, AlertTriangle, BellRing, X, Home, Box, LayoutGrid, Video, Camera, Upload as UploadIcon } from 'lucide-react-native';
-import * as Location from 'expo-location';
+import { User, MapPin, CheckCircle, Navigation, Phone, AlertTriangle, X, Home, Box, LayoutGrid, Video, Camera, Upload as UploadIcon } from 'lucide-react-native';
+import { useNoShow, formatCountdown, LOCATION_REQUIRED_COPY, NOSHOW_RULE_COPY, NOSHOW_REVIEW_COPY } from '../../lib/noshow';
 import { actorHeaders } from '../../lib/api';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
 import { getCaptureSession } from '../../lib/capture-api';
@@ -23,7 +23,6 @@ import {
 } from '../../lib/bracket-require';
 import { color, type as T, space, radius, layout, hairline, type Tone } from '../../theme';
 
-const NOSHOW_GEOFENCE_METERS = 150;
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
@@ -54,15 +53,6 @@ type Job = {
   assignee_name?: string | null;
 };
 
-function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2
-    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.asin(Math.sqrt(a));
-}
-
 function fmtDate(s: string) {
   if (!s) return '—';
   const d = new Date(s + 'T00:00:00');
@@ -92,11 +82,8 @@ export default function JobDetailScreen() {
   const [confirmingArrive, setConfirmingArrive] = useState(false);
   const [escalating, setEscalating] = useState(false);
   const [escalationSentAt, setEscalationSentAt] = useState<number | null>(null);
-  const [escalationWaitSecs, setEscalationWaitSecs] = useState(0);
   const [noShowVisible, setNoShowVisible] = useState(false);
   const [noShowNotes, setNoShowNotes] = useState('');
-  const [submittingNoShow, setSubmittingNoShow] = useState(false);
-  const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [listingQuery, setListingQuery] = useState('');
   const [listingHits, setListingHits] = useState<ListingHit[]>([]);
   const [listingSearching, setListingSearching] = useState(false);
@@ -141,28 +128,8 @@ export default function JobDetailScreen() {
     })();
   }, [id]);
 
-  // Update distance to job when job loads and photographer is active, to enforce geofence.
-  useEffect(() => {
-    if (!job || !['assigned', 'in_progress'].includes(job.status)) return;
-    if (job.lat == null || job.lng == null) return;
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
-        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        setDistanceMeters(haversineMeters(pos.coords.latitude, pos.coords.longitude, job.lat!, job.lng!));
-      } catch {}
-    })();
-  }, [job?.id, job?.status]);
-
-  useEffect(() => {
-    if (!escalationSentAt) return;
-    const WAIT_MS = 15 * 60 * 1000;
-    const tick = () => setEscalationWaitSecs(Math.ceil(Math.max(0, WAIT_MS - (Date.now() - escalationSentAt)) / 1000));
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [escalationSentAt]);
+  const noShow = useNoShow(job?.id, job?.status);
+  const ns = noShow.ns;
 
   useEffect(() => {
     let cancelled = false;
@@ -386,51 +353,50 @@ export default function JobDetailScreen() {
     try {
       const headers = await actorHeaders();
       const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/escalate-absent-agent`, { method: 'POST', headers });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${res.status}`); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data.detail && data.detail.message) || (typeof data.detail === 'string' ? data.detail : '') || `HTTP ${res.status}`);
       setEscalationSentAt(Date.now());
+      void noShow.refresh();
+      Alert.alert(data.agent_notified ? 'Text sent' : 'No text sent', data.agent_notified ? 'We texted the client that you’re on site.' : 'We don’t have a number for this client.');
     } catch (e: any) {
-      Alert.alert('Could not notify agent', e.message || 'Try again.');
+      Alert.alert('Could not text the client', e.message || 'Try again.');
     } finally {
       setEscalating(false);
     }
   };
 
-  const submitNoShow = async () => {
-    if (!job || submittingNoShow) return;
-    setSubmittingNoShow(true);
+  const checkIn = async () => {
+    if (!job) return;
     try {
-      let lat: number | undefined, lng: number | undefined;
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-          lat = pos.coords.latitude; lng = pos.coords.longitude;
-        }
-      } catch {}
+      await noShow.checkIn();
+      setJob(prev => prev ? { ...prev, status: 'in_progress' } : prev);
+    } catch (e: any) {
+      Alert.alert('Could not check in', e?.message || 'Try again.');
+    }
+  };
 
-      const headers = await actorHeaders({ 'Content-Type': 'application/json' });
-      const body: any = {};
-      if (noShowNotes.trim()) body.notes = noShowNotes.trim();
-      if (lat !== undefined) { body.photographer_lat = lat; body.photographer_lng = lng; }
+  const callClient = async () => {
+    try { await noShow.callClient(); } catch (e: any) { Alert.alert('Could not log the call', e?.message || 'Try again.'); }
+  };
 
-      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/agent-no-show`, {
-        method: 'POST', headers, body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  const takeNoShowPhoto = async () => {
+    try { await noShow.takePhoto(); } catch (e: any) { Alert.alert('Photo not saved', e?.message || 'Try again.'); }
+  };
 
+  const submitNoShow = async () => {
+    if (!job || noShow.busy === 'report') return;
+    try {
+      const data = await noShow.report(noShowNotes);
       setNoShowVisible(false);
       setNoShowNotes('');
-      if (data.hold_for_review) {
-        Alert.alert('Held for Review', 'Your claim has been flagged for location verification. Our team will review within 2 business days.');
+      if (data?.hold_for_review) {
+        Alert.alert('Held for review', 'Bricks will check the location and review it within 2 business days.');
       } else {
-        Alert.alert('Recorded', 'No-show filed. Bricks will review it.');
-        setJob(prev => prev ? { ...prev, status: 'agent_no_show' } : prev);
+        Alert.alert('Reported', 'No-show reported. Bricks will review it within 2 business days.');
       }
+      setJob(prev => prev ? { ...prev, status: 'agent_no_show' } : prev);
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Could not file claim. Try again.');
-    } finally {
-      setSubmittingNoShow(false);
+      Alert.alert('Can’t report yet', e.message || 'Try again.');
     }
   };
 
@@ -488,23 +454,16 @@ export default function JobDetailScreen() {
     : captureFlags.visit && !captureFlags.tour && !captureFlags.floorplan
       ? Video
       : captureFlags.tour ? Box : LayoutGrid;
-  const canReportNoShow = isActive && (() => {
-    // Geofence gate: block if we have both job coordinates and a measured distance exceeding 150m.
-    // If location is unavailable (null), allow through — backend GPS gate handles the soft-hold.
-    if (job.lat != null && job.lng != null && distanceMeters !== null && distanceMeters > NOSHOW_GEOFENCE_METERS) return false;
-    if (!job.scheduled_date || !job.time_window_start) return false;
-    try {
-      const time24 = (job.time_window_start || '').slice(0, 5);
-      const shootMs = new Date(`${job.scheduled_date}T${time24}:00`).getTime();
-      if (isNaN(shootMs)) return false;
-      const now = Date.now();
-      return now >= shootMs - 15 * 60 * 1000 && now <= shootMs + 90 * 60 * 1000;
-    } catch { return false; }
-  })();
+  const checkedIn = !!ns?.checked_in;
+  const noShowRows = ns && checkedIn ? [
+    { done: true, label: ns.check_in_distance_m != null ? `Checked in, about ${Math.round(ns.check_in_distance_m)} m from the property` : 'Checked in' },
+    { done: noShow.waitDone, label: noShow.waitDone ? `Waited ${ns.wait_minutes} min` : Number.isFinite(noShow.leftSecs) ? `Wait ${formatCountdown(noShow.leftSecs)} more` : `Wait ${ns.wait_minutes} min` },
+    { done: ns.has_photo, label: ns.has_photo ? 'Photo taken' : 'Take a photo of the property' },
+    { done: ns.has_call, label: ns.has_call ? (ns.call_method === 'no_number' ? 'Call attempt logged (no number on file)' : 'Call attempt logged') : 'Call the client' },
+  ] : [];
 
   const multiMode = [captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1;
   const showArrive = ['assigned', 'in_progress', 'pending_assignment'].includes(job.status);
-  const fmtWait = `${String(Math.floor(escalationWaitSecs / 60)).padStart(2, '0')}:${String(escalationWaitSecs % 60).padStart(2, '0')}`;
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
@@ -634,24 +593,49 @@ export default function JobDetailScreen() {
             </Section>
           ) : null}
 
-          {canReportNoShow && (
-            <Section label="No-show">
-              <Notice tone="warn">
-                {!escalationSentAt
-                  ? 'Client not here? Text them first. You can file a claim 20 min later.'
-                  : escalationWaitSecs > 0
-                    ? `Text sent to the agent. You can file a claim in ${fmtWait}.`
-                    : 'You can file a no-show claim now.'}
-              </Notice>
+          {(job.status === 'assigned' || (job.status === 'in_progress' && !!ns)) && !checkedIn ? (
+            <Section label="Check in">
+              <Text style={[T.bodySm, { color: color.textBody }]}>{LOCATION_REQUIRED_COPY}</Text>
               <View style={s.blockGapSm}>
-                {!escalationSentAt ? (
-                  <Button variant="secondary" icon={BellRing} title="Notify agent" onPress={notifyAgent} loading={escalating} />
-                ) : escalationWaitSecs > 0 ? null : (
-                  <Button variant="danger" icon={AlertTriangle} title="Report no-show" onPress={() => setNoShowVisible(true)} />
-                )}
+                <Button variant="secondary" icon={MapPin} title="Check in" onPress={checkIn} loading={noShow.busy === 'checkin'} />
               </View>
             </Section>
-          )}
+          ) : null}
+
+          {job.status === 'in_progress' && checkedIn && ns ? (
+            <Section label="Client isn’t here?">
+              <Text style={[T.bodySm, { color: color.textBody }]}>{NOSHOW_RULE_COPY(ns.wait_minutes)}</Text>
+              <Group style={s.blockGapSm}>
+                {noShowRows.map((r) => (
+                  <View key={r.label} style={s.checkRow}>
+                    <CheckCircle size={layout.icon} color={r.done ? color.ok : color.textFaint} strokeWidth={layout.iconStroke} />
+                    <Text style={[T.body, s.flex, { color: r.done ? color.text : color.textMuted }]}>{r.label}</Text>
+                  </View>
+                ))}
+              </Group>
+              <View style={s.buttonRow}>
+                <Button style={s.flex} variant="secondary" icon={Phone} title="Call client" onPress={callClient} loading={noShow.busy === 'call'} disabled={!!noShow.busy && noShow.busy !== 'call'} />
+                <Button style={s.flex} variant="secondary" icon={Camera} title={ns.has_photo ? 'Retake photo' : 'Take photo'} onPress={takeNoShowPhoto} loading={noShow.busy === 'photo'} disabled={!!noShow.busy && noShow.busy !== 'photo'} />
+              </View>
+              {!ns.client_phone ? (
+                <Text style={[T.caption, s.hint]}>We don’t have a number for this client. Tapping Call client logs that you tried.</Text>
+              ) : null}
+              {!escalationSentAt ? (
+                <TextLink title="Text the client too" onPress={notifyAgent} />
+              ) : null}
+              {!ns.can_report && noShow.missing.length ? (
+                <View style={s.blockGapSm}>
+                  <Notice tone="warn" title="Before you can report a no-show">
+                    {noShow.missing.join('\n')}
+                  </Notice>
+                </View>
+              ) : null}
+              <View style={s.blockGapSm}>
+                <Button variant="danger" icon={AlertTriangle} title="Report no-show" onPress={() => setNoShowVisible(true)} disabled={!ns.can_report} />
+              </View>
+              <Text style={[T.caption, s.hint]}>{NOSHOW_REVIEW_COPY}</Text>
+            </Section>
+          ) : null}
 
           <Section label="Assigned to">
             <Group>
@@ -746,7 +730,7 @@ export default function JobDetailScreen() {
                   <IconButton icon={X} label="Close" tint={color.textMuted} onPress={() => { setNoShowVisible(false); setNoShowNotes(''); }} />
                 </View>
                 <Text style={[T.bodySm, { color: color.textBody }]}>
-                  If the client doesn't show, you're paid half the job's payout. Bricks reviews the report within 2 business days. You can appeal within 7 days by emailing help@brxs.ca.
+                  If the client doesn’t show, you’re paid half the job’s payout. {NOSHOW_REVIEW_COPY}
                 </Text>
                 <View style={s.blockGapSm}>
                   <Field
@@ -759,7 +743,7 @@ export default function JobDetailScreen() {
                     style={s.notes}
                   />
                 </View>
-                <Button style={s.blockGapSm} variant="danger" title="Confirm no-show" onPress={submitNoShow} loading={submittingNoShow} />
+                <Button style={s.blockGapSm} variant="danger" title="Confirm no-show" onPress={submitNoShow} loading={noShow.busy === 'report'} />
               </SafeAreaView>
             </SheetEnter>
           </View>

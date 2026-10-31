@@ -35,7 +35,7 @@ The Dispatch photographer web experience is built into the Bricks OS React app (
 3. **Navigate**: MapKit turn-by-turn to property
 4. **Shoot + upload**: Photos → Fotello AI edit → QC score → delivery to agent
 5. **Payout**: Stripe Connect transfer, tier-based % (C=35%, B=45%, A=55%)
-6. **No-show**: Client absent → vendor waits 20 min on site, checks in, takes a photo, tries to call → files claim → Bricks reviews within 2 business days (appeal via help@brxs.ca within 7 days) → on approval the vendor is paid half the job's base payout, HST as usual
+6. **No-show**: Client absent → vendor checks in through the app at the property (location required, within 250 m), waits 20 min from check-in or the booked start (whichever is later), takes a photo, taps Call client → files claim → Bricks reviews within 2 business days (appeal via help@brxs.ca within 7 days) → on approval the vendor is paid half the job's base payout, HST as usual
 
 ## Backend API Base: `https://dispatch-api.brxs.ca`
 

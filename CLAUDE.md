@@ -86,7 +86,7 @@ API base: `https://dispatch-api.brxs.ca`
 - `backend/app/services/qc_agent.py` — Gemini vision QC agent (scores uploaded photos 0-100)
 - `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration
 - `backend/app/services/payout_service.py` — Stripe Connect transfers, tier percentages
-- `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (20-min wait after first SMS before claim)
+- `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (a sent SMS counts as the call attempt)
 - `backend/app/shared/schemas.py` — Pydantic models
 - `backend/migrations/20260601_agent_noshow_escalations.sql` — new tables: agent_noshow_escalations, reconciliation_events
 
@@ -215,15 +215,19 @@ The other half of the developer/REIT vertical alongside CGI rendering above — 
 
 ## No-Show Policy
 
-**Agent/client no-show** (Kam, 2026-10-30) → the vendor waits 20 minutes on site, checks in through the app, takes a photo and tries to call the client, then reports it. Bricks reviews the report within 2 business days; the vendor can appeal via help@brxs.ca within 7 days. When an admin approves the claim, the vendor is paid half the job's base payout (HST on top as usual); a rejected claim pays nothing. Vendor copy: "If the client doesn't show, you're paid half the job's payout." The client cancellation policy is unchanged: no refund on a no-show, no callout fee.
+**Agent/client no-show** (Kam, 2026-10-30) → the vendor checks in through the app at the property, waits 20 minutes, takes a photo and tries to call the client, then reports it. The 20-minute wait starts at check-in or the booked start, whichever is later. Bricks reviews the report within 2 business days; the vendor can appeal via help@brxs.ca within 7 days. When an admin approves the claim, the vendor is paid half the job's base payout (HST on top as usual); a rejected claim pays nothing. Vendor copy: "If the client doesn't show, you're paid half the job's payout." The client cancellation policy is unchanged: no refund on a no-show, no callout fee.
 
-Server-side today: the report requires check-in (job `in_progress`), the T-15/T+90 window and GPS (soft hold). The call attempt and the 20-minute wait are only enforced through the SMS escalation gate when Twilio is configured (it is not set on the prod API), and no photo is captured by the report endpoint. Those are open gaps.
+All four conditions are enforced server-side; the rules live in one place, `backend/app/shared/noshow_policy.py` (`readiness(job)`), and both apps read them from `GET /noshow-status`:
+1. **Check-in** — `POST /api/vendor-os/jobs/{id}/check-in` with `{lat, lng, accuracy_m}`. Location is required to check in (used only to confirm the vendor is at the property). Rejected (422 `checkin_too_far`) beyond `CHECKIN_RADIUS_M` of the job's geocoded address — ONE config value, env `NOSHOW_CHECKIN_RADIUS_M` on the API, default 250 m. Jobs without coords record the GPS with no distance and the report is held for review. Stored on `jobs.checked_in_at / check_in_lat / check_in_lng / check_in_accuracy_m / check_in_distance_m` (first check-in only).
+2. **Wait** — 20 min from max(check-in, booked start). Report window closes 90 min after the wait starts (then: email help@brxs.ca).
+3. **Photo** — `POST /jobs/{id}/noshow-photo` (multipart `photo`, ≤4 MB; clients compress) → private Storage bucket `noshow-evidence` (service role only). Must be uploaded after check-in.
+4. **Call attempt** — `POST /jobs/{id}/call-attempt` `{method: dialer|no_number}`; the in-app Call client button opens the dialer and logs it (no Twilio needed). A sent Twilio SMS from escalate-absent-agent also counts (`sms`). `GET /noshow-status` returns `client_phone` to the assigned vendor after check-in.
 
-- `POST /api/vendor-os/jobs/{job_id}/escalate-absent-agent` — sends Twilio SMS to agent (attempt 1 + 2); must be called before claiming when Twilio is configured
-- `POST /api/vendor-os/jobs/{job_id}/agent-no-show` — files the claim (accepts JSON body: notes, photographer_lat, photographer_lng)
-- 8 validation gates: ownership, active state, idempotency, time window (T-15→T+90), GPS proximity (>500m → hold), escalation check (15 min wait after SMS), booking not pre-cancelled, rate limits
-- GPS gate: if photographer submits lat/lng and is >500m from property → held for review (not hard rejected)
-- Escalation gate: if `TWILIO_ACCOUNT_SID` set, must have called `escalate-absent-agent` + waited 15 min; gracefully degrades if Twilio not configured
+The claim row copies the evidence (`checked_in_at`, `check_in_*`, `wait_started_at`, `photo_*`, `call_*`). `GET /api/admin/noshow-claims` adds `photo_url` (1 h signed URL), `check_in_distance_label` and `checkin_radius_m` for the reviewer. Migration: `supabase/migrations/0019_noshow_checkin_evidence.sql`.
+
+- `POST /api/vendor-os/jobs/{job_id}/escalate-absent-agent` — sends Twilio SMS to agent (attempt 1 + 2); optional, a sent SMS counts as the call attempt
+- `POST /api/vendor-os/jobs/{job_id}/agent-no-show` — files the claim (JSON body: notes; photographer_lat/lng optional, the check-in GPS is the proof)
+- Validation gates: ownership, active state, checked in, idempotency, the four no-show conditions (check-in, 20-min wait, photo, call), GPS proximity hold (report GPS >500 m, or no verified check-in distance), booking not pre-cancelled, rate limits
 - Rate limit: 2nd+ claim in 30 days → `pending_review` (held for admin review)
 - On pass: `agent_noshow_trip_fees` claim record created (`amount_cents` 0), Booking notified via status webhook (held claims: on approval)
 - Admin approve (flagged `pending_review` claims, or auto-recorded `pending` claims not yet reviewed) → half-base payout, claim `paid_out`
@@ -268,8 +272,8 @@ Server-side today: the report requires check-in (job `in_progress`), the T-15/T+
 - **Weather context: Open-Meteo API for outdoor/drone jobs** ✅
 - **BoxBrownie virtual staging: fully active (photo editing, retouching, day-to-dusk, item removal, virtual staging)** ✅
 - app.json bundle IDs + EAS project ID configured (`com.bricks.go`) ✅
-- **GPS geofence gate: >500m from property → hold_for_review (soft gate, coordinates optional)** ✅
-- **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; gate in no-show claim flow (20-min wait after first SMS); graceful no-op if Twilio not configured** ✅
+- **Check-in geofence: location required to check in, rejected beyond NOSHOW_CHECKIN_RADIUS_M (250 m) of the property** ✅
+- **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; a sent SMS counts as the no-show call attempt; graceful no-op if Twilio not configured** ✅
 - **Reconcile-noshow: GET /api/admin/reconcile-noshow detects fee/booking mismatches; writes reconciliation_events on dry_run=false** ✅
 - **PR #2 bug fixes (2026-06-01)** ✅
   - Gate 4 fail-closed: `time_window_start` ("HH:MM") combined with `scheduled_date` before fromisoformat; missing/invalid → 400 (not silent pass)

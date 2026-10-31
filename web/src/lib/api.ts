@@ -55,9 +55,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       });
     }
     const detail = body.detail;
+    const detailMsg = detail && typeof detail === 'object' && typeof (detail as { message?: unknown }).message === 'string'
+      ? (detail as { message: string }).message
+      : '';
     const message = typeof detail === 'string' && detail
       ? detail
-      : `Request failed with ${res.status}`;
+      : detailMsg || `Request failed with ${res.status}`;
     throw new ApiError(message, { status: res.status, code });
   }
   return res.json();

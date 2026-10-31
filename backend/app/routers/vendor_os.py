@@ -7,7 +7,7 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -32,6 +32,7 @@ from ..routers.vendor_profile import earnings_impl
 from ..shared.database import get_db
 from ..services.webhooks import send_dispatch_status_update_webhook
 from ..shared.job_timezone import tz_abbrev, zoneinfo_for_job
+from ..shared import noshow_policy
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import (
@@ -61,6 +62,17 @@ class AgentNoShowReport(BaseModel):
     notes: Optional[str] = None
     photographer_lat: Optional[float] = None
     photographer_lng: Optional[float] = None
+
+
+class CheckInRequest(BaseModel):
+    """Device GPS at check-in. Required when the job has a geocoded address."""
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    accuracy_m: Optional[float] = None
+
+
+class CallAttemptRequest(BaseModel):
+    method: Optional[str] = "dialer"
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -150,14 +162,227 @@ async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, 
     return job
 
 
+async def _update_job_fields(db, job_id: str, fields: dict) -> None:
+    """jobs UPDATE with the Postgres fallback for Fair-Use 402s."""
+    try:
+        await db.table("jobs").update(fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, fields):
+            raise HTTPException(status_code=503, detail="Saving is unavailable right now; try again shortly")
+
+
+def _valid_coord(lat, lng) -> bool:
+    try:
+        return lat is not None and lng is not None and -90 <= float(lat) <= 90 and -180 <= float(lng) <= 180
+    except (TypeError, ValueError):
+        return False
+
+
 @router.post("/jobs/{job_id}/check-in")
 async def check_in_job(
+    job_id: str,
+    payload: Optional[CheckInRequest] = Body(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Vendor checks in at the property. Records the time and device GPS.
+
+    Location is required to check in when the job has a geocoded address, and the
+    device must be within noshow_policy.CHECKIN_RADIUS_M of it. Jobs without
+    coordinates record the GPS with no distance; a no-show on such a job is held
+    for review. The first check-in time is kept; later calls do not move it.
+    """
+    payload = payload or CheckInRequest()
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    ensure_assigned_to_actor(job, actor_id, actor_member)
+
+    has_gps = _valid_coord(payload.lat, payload.lng)
+    radius = noshow_policy.CHECKIN_RADIUS_M
+    distance_m = noshow_policy.checkin_distance_m(job, payload.lat, payload.lng) if has_gps else None
+    if noshow_policy.job_has_coords(job):
+        if not has_gps:
+            api_error(
+                422,
+                "Location is required to check in. Turn on location for Bricks and try again.",
+                "checkin_location_required",
+            )
+        if distance_m is not None and distance_m > radius:
+            api_error(
+                422,
+                f"You're about {int(round(distance_m))} m from the property. Check in when you're there (within {radius} m).",
+                "checkin_too_far",
+            )
+
+    result: dict = {"status": "updated", "job_id": job_id, "new_status": job.get("status")}
+    if job.get("status") != "in_progress":
+        result = await update_vendor_job_status(
+            job_id, JobStatusUpdate(status="in_progress"), authorization, x_user_id
+        )
+
+    now = datetime.now(timezone.utc)
+    if not job.get("checked_in_at"):
+        fields = {
+            "checked_in_at": now.isoformat(),
+            "check_in_lat": float(payload.lat) if has_gps else None,
+            "check_in_lng": float(payload.lng) if has_gps else None,
+            "check_in_accuracy_m": float(payload.accuracy_m) if payload.accuracy_m is not None else None,
+            "check_in_distance_m": distance_m,
+            "updated_at": now.isoformat(),
+        }
+        await _update_job_fields(db, job_id, fields)
+        job.update(fields)
+    job["status"] = "in_progress"
+    out = dict(result or {})
+    out["checked_in_at"] = job.get("checked_in_at")
+    out["check_in_distance_m"] = job.get("check_in_distance_m")
+    out["noshow"] = noshow_policy.readiness(job, now)
+    return out
+
+
+@router.get("/jobs/{job_id}/noshow-status")
+async def get_noshow_status(
     job_id: str,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    payload = JobStatusUpdate(status="in_progress")
-    return await update_vendor_job_status(job_id, payload, authorization, x_user_id)
+    """The four no-show conditions for this job, plus the wait and radius rules."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    out = noshow_policy.readiness(job)
+    # The client's number is shared with the assigned vendor once they've checked in,
+    # so the in-app Call client button can open the dialer.
+    out["client_phone"] = None
+    if job.get("checked_in_at"):
+        try:
+            ensure_assigned_to_actor(job, actor_id, actor_member)
+            out["client_phone"] = await _client_phone(db, job)
+        except HTTPException:
+            pass
+    return out
+
+
+async def _client_phone(db, job: dict) -> Optional[str]:
+    """Booking contact phone, then guest phone, then the booking user's phone."""
+    booking_id = job.get("booking_id")
+    user_id = job.get("agent_user_id")
+    try:
+        if booking_id:
+            res = await db.table("bookings").select("contact_phone, guest_phone, user_id").eq(
+                "id", booking_id
+            ).maybe_single().execute()
+            bk = _maybe_single_row(res)
+            for key in ("contact_phone", "guest_phone"):
+                if str(bk.get(key) or "").strip():
+                    return str(bk[key]).strip()
+            user_id = bk.get("user_id") or user_id
+        if user_id:
+            res_u = await db.table("users").select("phone").eq("id", user_id).maybe_single().execute()
+            phone = str(_maybe_single_row(res_u).get("phone") or "").strip()
+            return phone or None
+    except Exception as e:
+        logger.warning(f"Client phone lookup failed for job {job.get('id')}: {e}")
+    return None
+
+
+async def _record_call_attempt(db, job: dict, method: str) -> dict:
+    now = datetime.now(timezone.utc)
+    fields = {
+        "noshow_call_attempted_at": now.isoformat(),
+        "noshow_call_method": method,
+        "updated_at": now.isoformat(),
+    }
+    await _update_job_fields(db, job["id"], fields)
+    job.update(fields)
+    return job
+
+
+@router.post("/jobs/{job_id}/call-attempt")
+async def log_call_attempt(
+    job_id: str,
+    payload: Optional[CallAttemptRequest] = Body(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Log that the vendor tried to call the client (the in-app Call client button).
+
+    Works without Twilio: the app opens the phone dialer and logs the attempt here.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    ensure_assigned_to_actor(job, actor_id, actor_member)
+    if not job.get("checked_in_at"):
+        api_error(409, "Check in at the property before calling the client.", "noshow_not_checked_in")
+    method = ((payload.method if payload else None) or "dialer").strip().lower()
+    if method not in noshow_policy.CALL_METHODS or method == "sms":
+        method = "dialer"
+    if method == "no_number" and await _client_phone(db, job):
+        method = "dialer"
+    await _record_call_attempt(db, job, method)
+    return noshow_policy.readiness(job)
+
+
+def _photo_ext(content_type: str) -> str:
+    return {"image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}.get(
+        (content_type or "").lower(), "jpg"
+    )
+
+
+@router.post("/jobs/{job_id}/noshow-photo")
+async def upload_noshow_photo(
+    job_id: str,
+    photo: UploadFile = File(...),
+    taken_at: Optional[str] = Form(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """On-site photo for a no-show report. Stored in the private evidence bucket.
+
+    The server stamps the upload time; `taken_at` (from the camera) is kept for the
+    reviewer. The photo must be uploaded after check-in.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    ensure_assigned_to_actor(job, actor_id, actor_member)
+    if not job.get("checked_in_at"):
+        api_error(409, "Check in at the property before taking the photo.", "noshow_not_checked_in")
+
+    content_type = (photo.content_type or "image/jpeg").lower()
+    if not content_type.startswith("image/"):
+        api_error(400, "That file isn't a photo. Take a photo of the property.", "noshow_photo_not_image")
+    data = await photo.read()
+    if not data:
+        api_error(400, "The photo was empty. Take it again.", "noshow_photo_empty")
+    if len(data) > noshow_policy.PHOTO_MAX_BYTES:
+        api_error(413, "That photo is too large. Take it again.", "noshow_photo_too_large")
+
+    now = datetime.now(timezone.utc)
+    path = f"{job_id}/{now.strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}.{_photo_ext(content_type)}"
+    from ..services.storage import upload_to_bucket
+    if not await upload_to_bucket(noshow_policy.EVIDENCE_BUCKET, path, data, content_type):
+        api_error(503, "Couldn't save the photo. Try again.", "noshow_photo_upload_failed")
+
+    taken = noshow_policy.parse_ts(taken_at)
+    fields = {
+        "noshow_photo_path": path,
+        "noshow_photo_taken_at": taken.isoformat() if taken else None,
+        "noshow_photo_uploaded_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+    await _update_job_fields(db, job_id, fields)
+    job.update(fields)
+    return noshow_policy.readiness(job, now)
 
 
 
@@ -2095,13 +2320,13 @@ async def watch_job_action(
 # 0 (set explicitly: the column default is the old 6000) and is set to the half
 # payout on approval.
 AGENT_NOSHOW_CLAIM_AMOUNT_CENTS = 0
-_NOSHOW_WINDOW_BEFORE_MIN = 15
-_NOSHOW_WINDOW_AFTER_MIN = 90
+# Wait, window and check-in radius live in shared/noshow_policy.py (one place).
+_NOSHOW_WINDOW_AFTER_MIN = noshow_policy.CLAIM_WINDOW_AFTER_MIN
 _NOSHOW_RATE_LIMIT_DAYS = 30
 _NOSHOW_RATE_LIMIT_THRESHOLD = 1
 _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 3
 _GPS_MAX_DISTANCE_KM = 0.5            # 500m — flag if photographer is further away
-_ESCALATION_MIN_WAIT_MIN = 20         # must wait 20 min after first SMS before filing
+_ESCALATION_MIN_WAIT_MIN = noshow_policy.WAIT_MIN
 
 
 async def _validate_noshow_claim(
@@ -2141,45 +2366,26 @@ async def _validate_noshow_claim(
     if _maybe_single_row(existing):
         return {"ok": False, "reason": "A no-show claim already exists for this job"}
 
-    # Gate 4: time window — claim must be filed within T-15 to T+90 of shoot start.
-    # time_window_start is stored as "HH:MM" so we combine it with scheduled_date to
-    # build a full datetime. Fail-closed: if we cannot determine the window, reject.
-    scheduled_date_str = job.get("scheduled_date", "")
-    time_window_str = job.get("time_window_start") or ""
-    if time_window_str and not scheduled_date_str:
-        # Legacy: scheduled_at may be a full ISO datetime
-        scheduled_at_str = job.get("scheduled_at", "")
-        try:
-            shoot_start = datetime.fromisoformat(scheduled_at_str.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
-    elif scheduled_date_str and time_window_str:
-        try:
-            # time_window_start is "HH:MM" in the property timezone — localize before UTC math
-            shoot_start = datetime.fromisoformat(
-                f"{scheduled_date_str}T{time_window_str[:5]}:00"
-            ).replace(tzinfo=zoneinfo_for_job(job))
-        except (ValueError, TypeError):
-            return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
-    else:
-        return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
-
-    now_utc = datetime.now(timezone.utc)
-    earliest = shoot_start - timedelta(minutes=_NOSHOW_WINDOW_BEFORE_MIN)
-    latest = shoot_start + timedelta(minutes=_NOSHOW_WINDOW_AFTER_MIN)
-    if now_utc < earliest:
-        return {
-            "ok": False,
-            "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M')} {tz_abbrev(job)}"
-        }
-    if now_utc > latest:
-        return {
-            "ok": False,
-            "reason": (
-                f"Claim window expired — must be filed within "
-                f"{_NOSHOW_WINDOW_AFTER_MIN} minutes of scheduled shoot time"
-            )
-        }
+    # Gate 4: the four no-show conditions (shared/noshow_policy.py). The vendor
+    # checked in near the property, waited WAIT_MIN minutes from the later of
+    # check-in and the booked start, took a photo after check-in and tried to call
+    # the client. Fail closed on each one.
+    ready = noshow_policy.readiness(job)
+    if not ready["checked_in"]:
+        return {"ok": False, "reason": "Check in at the property in the app before reporting a no-show"}
+    if ready["expired"]:
+        return {"ok": False, "reason": ready["missing"][0]}
+    if not ready["waited"]:
+        return {"ok": False, "reason": ready["missing"][0]}
+    if not ready["has_photo"]:
+        return {"ok": False, "reason": "Take a photo of the property before reporting a no-show"}
+    if not ready["has_call"]:
+        return {"ok": False, "reason": "Tap Call client to try reaching the client before reporting a no-show"}
+    shoot_start = (
+        noshow_policy.booked_start(job)
+        or noshow_policy.parse_ts(ready["wait_started_at"])
+        or datetime.now(timezone.utc)
+    )
 
     # Gate 4.5: GPS proximity — soft hold if photographer is far from property.
     # Also hold when the job has known coordinates but the photographer omits their GPS:
@@ -2204,46 +2410,20 @@ async def _validate_noshow_claim(
                     )
             except (TypeError, ValueError):
                 pass
-    elif job_lat is not None and job_lng is not None:
-        # Job has a known location but photographer omitted coordinates — hold for review
-        # so proximity cannot be bypassed by calling the API directly without GPS.
+    elif job_lat is not None and job_lng is not None and job.get("check_in_distance_m") is None:
+        # Job has a known location but there's no GPS on the report and no verified
+        # check-in distance — hold for review so proximity can't be bypassed.
+        # A check-in within the radius (Gate 4) already proves the vendor was there.
         gps_hold = True
         gps_hold_reason = "GPS coordinates required for property-located jobs — held for location verification"
 
-    # Gate 4.6: escalation required — photographer must have attempted to notify agent via SMS
-    # (only enforced when Twilio is configured; gracefully degrades otherwise)
-    if os.environ.get("TWILIO_ACCOUNT_SID"):
-        try:
-            res_esc = await db.table("agent_noshow_escalations").select(
-                "id, sent_at"
-            ).eq("job_id", job_id).execute()
-            escalations = res_esc.data or []
-            if not escalations:
-                return {
-                    "ok": False,
-                    "reason": (
-                        "Tap \"Notify Agent\" first — an SMS alert will be sent to the agent. "
-                        "You may file a no-show claim 20 minutes after notification."
-                    ),
-                }
-            first_sent = min(
-                datetime.fromisoformat(e["sent_at"].replace("Z", "+00:00"))
-                for e in escalations
-            )
-            elapsed_min = (datetime.now(timezone.utc) - first_sent).total_seconds() / 60
-            if elapsed_min < _ESCALATION_MIN_WAIT_MIN:
-                wait = int(_ESCALATION_MIN_WAIT_MIN - elapsed_min) + 1
-                return {
-                    "ok": False,
-                    "reason": (
-                        f"Agent was notified — please wait {wait} more minute(s) "
-                        f"before filing a no-show claim."
-                    ),
-                }
-        except Exception as e:
-            # Twilio is configured — fail closed so the gate isn't bypassed by a transient error.
-            logger.error(f"Escalation gate check failed for job {job_id}: {e}")
-            return {"ok": False, "reason": "Escalation check unavailable — please retry in a moment"}
+    # Gate 4.6 (call attempt) is enforced in Gate 4. The Twilio SMS path
+    # (escalate-absent-agent) logs a call attempt too, so either one counts.
+    if job.get("check_in_distance_m") is None:
+        gps_hold = True
+        gps_hold_reason = "; ".join(
+            r for r in [gps_hold_reason, "Check-in distance unknown (job has no map location) — held for location verification"] if r
+        )
 
     # Gate 5: booking must not have been cancelled before shoot start
     if booking_id:
@@ -2333,9 +2513,10 @@ async def _validate_noshow_claim(
 
     # Combine all soft-hold flags — include all reasons in the review note.
     hold_reasons = [r for r in [rate_hold_reason, collusion_hold_reason, gps_hold_reason] if r]
+    wait_started_at = ready.get("wait_started_at")
     if rate_hold or collusion_hold or gps_hold:
-        return {"ok": True, "hold_for_review": True, "reason": "; ".join(hold_reasons)}
-    return {"ok": True, "hold_for_review": False}
+        return {"ok": True, "hold_for_review": True, "reason": "; ".join(hold_reasons), "wait_started_at": wait_started_at}
+    return {"ok": True, "hold_for_review": False, "wait_started_at": wait_started_at}
 
 
 @router.post("/jobs/{job_id}/escalate-absent-agent")
@@ -2426,20 +2607,28 @@ async def escalate_absent_agent(
         "delivery_status": "sent" if sms_sent else ("no_phone" if not agent_phone else "failed"),
     }).execute()
 
-    can_file_after = (datetime.now(timezone.utc) + timedelta(minutes=_ESCALATION_MIN_WAIT_MIN)).isoformat()
+    # A sent SMS counts as the call attempt (Twilio path). Dialer calls are logged
+    # by POST /jobs/{id}/call-attempt instead.
+    if sms_sent and job.get("checked_in_at"):
+        try:
+            await _record_call_attempt(db, job, "sms")
+        except Exception as e:
+            logger.warning(f"Could not log SMS call attempt for job {job_id}: {e}")
+    ready = noshow_policy.readiness(job)
+    rule = (
+        f"You can report a no-show {noshow_policy.WAIT_MIN} minutes after you check in "
+        f"or the booked start, whichever is later."
+    )
 
     return {
         "attempt_number": attempt_number,
         "sms_sent": sms_sent,
         "agent_notified": bool(agent_phone),
-        "can_file_now": False,
-        "wait_minutes": _ESCALATION_MIN_WAIT_MIN,
-        "can_file_noshow_after": can_file_after,
-        "note": (
-            f"Agent notified by SMS. You may file a no-show claim after {_ESCALATION_MIN_WAIT_MIN} minutes."
-            if sms_sent else
-            f"Escalation recorded (no phone on file). You may file a no-show claim after {_ESCALATION_MIN_WAIT_MIN} minutes."
-        ),
+        "can_file_now": bool(ready["can_report"]),
+        "wait_minutes": noshow_policy.WAIT_MIN,
+        "can_file_noshow_after": ready["ready_at"],
+        "noshow": ready,
+        "note": (f"Client notified by text. {rule}" if sms_sent else f"No text sent (no phone on file). {rule}"),
     }
 
 
@@ -2462,9 +2651,11 @@ async def report_agent_no_show(
     - Assigned photographer only
     - Active job state, and the vendor has checked in (job in_progress)
     - No duplicate claim
-    - T-15min → T+90min window
+    - Checked in through the app, waited 20 min from the later of check-in and the
+      booked start, photo uploaded after check-in, call attempt logged (dialer or SMS);
+      filed within 90 min of the wait starting
     - GPS proximity check: if coordinates supplied and >500m, holds for review
-    - Escalation check: if Twilio configured, must have notified agent + waited 20 min
+    - Check-in distance unknown (job has no coordinates): holds for review
     - Booking not pre-cancelled
     - Rate limit (photographer): 2nd+ claim in 30 days → held for review
     - Rate limit (agent): 3+ claims against same agent in 30 days → held for review
@@ -2508,6 +2699,18 @@ async def report_agent_no_show(
             "status": claim_status,
             "review_reason": review_reason or None,
             "created_at": now,
+            # Evidence the reviewer sees (copied from the job at report time).
+            "checked_in_at": job.get("checked_in_at"),
+            "check_in_lat": job.get("check_in_lat"),
+            "check_in_lng": job.get("check_in_lng"),
+            "check_in_accuracy_m": job.get("check_in_accuracy_m"),
+            "check_in_distance_m": job.get("check_in_distance_m"),
+            "wait_started_at": validation.get("wait_started_at"),
+            "photo_path": job.get("noshow_photo_path"),
+            "photo_taken_at": job.get("noshow_photo_taken_at"),
+            "photo_uploaded_at": job.get("noshow_photo_uploaded_at"),
+            "call_attempted_at": job.get("noshow_call_attempted_at"),
+            "call_method": job.get("noshow_call_method"),
         }).execute()
 
     await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()

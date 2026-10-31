@@ -574,3 +574,37 @@ async def upload_bytes(
     if blob_fallback_enabled():
         return await _blob_put(storage_path, data, content_type=content_type, upsert=upsert)
     return False
+
+
+async def upload_to_bucket(bucket_id: str, storage_path: str, data: bytes, content_type: str) -> bool:
+    """Upload bytes to a named private bucket (no Blob fallback). True on success.
+
+    Used for evidence that must stay in Supabase under service-role-only access,
+    e.g. the no-show photo bucket.
+    """
+    if not bucket_id or not storage_path or not data:
+        return False
+    try:
+        db = await get_db()
+        await db.storage.from_(bucket_id).upload(
+            path=storage_path,
+            file=data,
+            file_options={"content-type": content_type or "image/jpeg", "upsert": "false"},
+        )
+        return True
+    except Exception as e:
+        _logger.warning("upload to %s failed for %s: %s", bucket_id, storage_path, e)
+        return False
+
+
+async def signed_url_in_bucket(bucket_id: str, storage_path: str, expiry: int = 3600) -> Optional[str]:
+    """Short-lived signed GET URL for an object in a named private bucket."""
+    if not bucket_id or not storage_path:
+        return None
+    try:
+        db = await get_db()
+        result = await db.storage.from_(bucket_id).create_signed_url(storage_path, expiry)
+        return result.get("signedURL") or result.get("signedUrl") or result.get("signed_url")
+    except Exception as e:
+        _logger.warning("signed url in %s failed for %s: %s", bucket_id, storage_path, e)
+        return None

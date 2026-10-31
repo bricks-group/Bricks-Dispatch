@@ -13,11 +13,11 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.bricks.go",
       "infoPlist": {
-        "NSCameraUsageDescription": "Bricks GO uses the camera to take listing photos, 360° tour stations, floor plan scans and Virtual Visit walk-through videos on the jobs you are assigned. Videos record without sound.",
-        "NSPhotoLibraryUsageDescription": "Bricks GO opens your photo library so you can pick listing photos, floor plans, and a profile photo to upload for a job.",
-        "NSLocationWhenInUseUsageDescription": "Bricks GO uses your location while the app is open to show how far you are from the job, to record that you were on site if you report an agent no-show, and to read the compass so 360° tour stations line up.",
+        "NSCameraUsageDescription": "Bricks uses the camera to take listing photos, 360° tour stations, floor plan scans and Virtual Visit walk-through videos on the jobs you are assigned. Videos record without sound.",
+        "NSPhotoLibraryUsageDescription": "Bricks opens your photo library so you can pick listing photos, floor plans, and a profile photo to upload for a job.",
+        "NSLocationWhenInUseUsageDescription": "Location is required to check in to a job. Bricks uses it only to confirm you’re at the property, and reads the compass so 360° tour stations line up.",
         "ITSAppUsesNonExemptEncryption": false,
-        "NSMotionUsageDescription": "Bricks GO reads motion while you record a Virtual Visit walk-through, to tell you when you are turning or walking too fast. Motion data stays on the phone."
+        "NSMotionUsageDescription": "Bricks reads motion while you record a Virtual Visit walk-through, to tell you when you are turning or walking too fast. Motion data stays on the phone."
       },
       "buildNumber": "1",
       "usesAppleSignIn": true,
@@ -164,7 +164,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Bricks GO uses your location while the app is open to show how far you are from the job, to record that you were on site if you report an agent no-show, and to read the compass so 360° tour stations line up.",
+          "locationWhenInUsePermission": "Location is required to check in to a job. Bricks uses it only to confirm you’re at the property, and reads the compass so 360° tour stations line up.",
           "isIosBackgroundLocationEnabled": false,
           "isAndroidBackgroundLocationEnabled": false,
           "locationAlwaysAndWhenInUsePermission": false,
@@ -174,7 +174,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Bricks GO uses the camera to take listing photos, 360° tour stations, floor plan scans and Virtual Visit walk-through videos on the jobs you are assigned. Videos record without sound.",
+          "cameraPermission": "Bricks uses the camera to take listing photos, 360° tour stations, floor plan scans and Virtual Visit walk-through videos on the jobs you are assigned. Videos record without sound.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
@@ -182,8 +182,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Bricks GO opens your photo library so you can pick listing photos, floor plans, and a profile photo to upload for a job.",
-          "cameraPermission": "Bricks GO uses the camera to take listing photos, 360° tour stations, and floor plan scans on the jobs you are assigned.",
+          "photosPermission": "Bricks opens your photo library so you can pick listing photos, floor plans, and a profile photo to upload for a job.",
+          "cameraPermission": "Bricks uses the camera to take listing photos, 360° tour stations, and floor plan scans on the jobs you are assigned.",
           "microphonePermission": false
         }
       ],
@@ -202,7 +202,7 @@
       [
         "expo-sensors",
         {
-          "motionPermission": "Bricks GO reads motion while you record a Virtual Visit walk-through, to tell you when you are turning or walking too fast. Motion data stays on the phone."
+          "motionPermission": "Bricks reads motion while you record a Virtual Visit walk-through, to tell you when you are turning or walking too fast. Motion data stays on the phone."
         }
       ]
     ],
@@ -221,6 +221,6 @@
     "updates": {
       "url": "https://u.expo.dev/73175818-4388-41fd-82fa-0b2e48a666ed"
     },
-    "description": "Bricks GO is the field app for Bricks photographers and vendors: jobs, schedule, capture, uploads, and payouts."
+    "description": "Bricks is the field app for Bricks photographers and vendors: jobs, schedule, capture, uploads, and payouts."
   }
 }
