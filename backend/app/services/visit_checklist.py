@@ -79,7 +79,75 @@ def client_service_key(job: Any) -> str | None:
 
 
 def _client_checklist(key: str) -> list[dict]:
-    labels = ["Arrive & confirm property access", *CLIENT_SERVICE_STEPS[key], "Submit / deliver"]
+    return _numbered(["Arrive & confirm property access", *CLIENT_SERVICE_STEPS[key], "Submit / deliver"])
+
+
+# Non-media vendor trades: short proof-of-work lists, not how-to lessons.
+# Inspectors and measurers follow their own professional standards, so their
+# list is only the report upload and access / lock-up notes.
+_ACCESS_LOCKUP = "Confirm access and lock-up notes"
+TRADE_STEPS: dict[str, list[str]] = {
+    "cleaner": [
+        "After photos of each room",
+        "Keys left or returned as instructed",
+        "Lights off",
+        "Doors and windows locked",
+        "Garbage out",
+        "Note any damage or issues, with a photo",
+    ],
+    "stager": [
+        "Before photos of each room you stage",
+        "After photos of each staged room",
+        "Inventory of pieces placed: item and room",
+    ],
+    "destage": [
+        "After photos of each room",
+        "Inventory check against the install list, with any damage noted",
+    ],
+    "handyman": [
+        "Before photo of each fix",
+        "After photo of each fix",
+        "Note anything else you found",
+    ],
+    "inspector": ["Upload your report", _ACCESS_LOCKUP],
+    "measurer": ["Upload your report: measurements and plan", _ACCESS_LOCKUP],
+}
+TRADE_CHECKLIST_TITLE = "Job checklist"
+MEDIA_CHECKLIST_TITLE = "Shoot checklist"
+
+_DESTAGE_WORDS = ("destag", "de_stag", "de-stag", "de stag", "pickup", "pick_up", "pick-up", "pick up", "removal")
+
+
+def _is_destage(j: dict) -> bool:
+    blob = " ".join(
+        str(j.get(k) or "") for k in ("job_type", "package_id", "package_name")
+    ).lower()
+    return any(w in blob for w in _DESTAGE_WORDS)
+
+
+def trade_checklist_key(job: Any) -> str | None:
+    """TRADE_STEPS key for a non-media trade job, else None (media keeps its lists)."""
+    j = _as_dict(job)
+    jt = str(j.get("job_type") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if jt in ("destage", "destaging", "de_stage", "de_staging", "staging_pickup", "staging_removal"):
+        return "destage"
+    try:
+        from .vendor_profile import job_required_vendor_type
+        vtype = job_required_vendor_type(j)
+    except Exception:
+        vtype = None
+    if not vtype or vtype == "photographer" or vtype not in TRADE_STEPS:
+        return None
+    if vtype == "stager" and _is_destage(j):
+        return "destage"
+    return vtype
+
+
+def checklist_title(job: Any) -> str:
+    return TRADE_CHECKLIST_TITLE if trade_checklist_key(job) else MEDIA_CHECKLIST_TITLE
+
+
+def _numbered(labels: list[str]) -> list[dict]:
     return [
         {"id": str(uuid.uuid4()), "label": f"{n}. {label}", "completed": False}
         for n, label in enumerate(labels, 1)
@@ -92,6 +160,9 @@ def seed_visit_checklist(job: Any) -> list[dict]:
     Never labels return visits or twilight-as-second-appointment.
     """
     j = _as_dict(job)
+    trade = trade_checklist_key(j)
+    if trade:
+        return _numbered(TRADE_STEPS[trade])
     key = client_service_key(j)
     if key:
         return _client_checklist(key)
@@ -145,18 +216,48 @@ def ensure_visit_checklist(job: Any) -> list[dict]:
         # A client-service job seeded with the generic listing checklist before
         # it had its own: reseed while nothing is ticked yet.
         untouched = not any(isinstance(i, dict) and i.get("completed") for i in existing)
-        if client_service_key(j) and _GENERIC_STILLS in labels and untouched:
+        if (client_service_key(j) or trade_checklist_key(j)) and _GENERIC_STILLS in labels and untouched:
             return seed_visit_checklist(j)
+        if trade_checklist_key(j):
+            # Trade lists have no "arrive" / "hdr" step; keep them (and any ticks).
+            return _normalized(existing)
         if "arrive" in labels or "hdr" in labels or "one visit" in labels or "same visit" in labels:
-            # Normalize ids
-            out = []
-            for item in existing:
-                if isinstance(item, dict):
-                    row = dict(item)
-                    if not row.get("id"):
-                        row["id"] = str(uuid.uuid4())
-                    out.append(row)
-                else:
-                    out.append({"id": str(uuid.uuid4()), "label": str(item), "completed": False})
-            return out
+            return _normalized(existing)
     return seed_visit_checklist(j)
+
+
+def _normalized(existing: list) -> list[dict]:
+    out = []
+    for item in existing:
+        if isinstance(item, dict):
+            row = dict(item)
+            if not row.get("id"):
+                row["id"] = str(uuid.uuid4())
+            out.append(row)
+        else:
+            out.append({"id": str(uuid.uuid4()), "label": str(item), "completed": False})
+    return out
+
+
+def swap_untouched_checklist(job: Any) -> list[dict] | None:
+    """Same rule as job creation, for jobs read back later: a client-service or
+    trade job still holding the generic listing checklist gets its own list,
+    but only while nothing on it is ticked. Returns None to keep the existing one.
+    """
+    j = _as_dict(job)
+    existing = j.get("checklist") or []
+    if not isinstance(existing, list) or not existing:
+        return None
+    if not (client_service_key(j) or trade_checklist_key(j)):
+        return None
+    labels = " ".join(str(i.get("label") if isinstance(i, dict) else i).lower() for i in existing)
+    untouched = not any(isinstance(i, dict) and i.get("completed") for i in existing)
+    if _GENERIC_STILLS in labels and untouched:
+        fresh = seed_visit_checklist(j)
+        job_id = str(j.get("id") or "").strip()
+        if job_id:
+            # Read-time swap isn't stored, so keep ids stable across reads.
+            for n, item in enumerate(fresh, 1):
+                item["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"bricks-checklist:{job_id}:{n}"))
+        return fresh
+    return None

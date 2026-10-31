@@ -449,6 +449,8 @@ export type Job = {
   package_name?: string | null;
   add_ons?: unknown;
   checklist?: unknown;
+  /** 'Shoot checklist' for media jobs, 'Job checklist' for other trades (set by the API). */
+  checklist_title?: string | null;
   client_instructions?: string | null;
   property_details?: string | null;
   capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;

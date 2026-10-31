@@ -705,7 +705,7 @@ function JobShootChecklist({ job }: { job: Job }) {
   if (!items.length) return null;
   return (
     <div>
-      <p className="label">Shoot checklist</p>
+      <p className="label">{job.checklist_title || 'Shoot checklist'}</p>
       <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
         {items.map((item: any) => (
           <li key={item.id} className={item.completed ? 'muted' : undefined}>{item.label}</li>

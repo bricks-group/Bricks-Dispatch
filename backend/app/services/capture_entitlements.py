@@ -393,6 +393,17 @@ def stamp_capture(job: dict | None) -> dict:
             )
             if "return visit" in labels or "twilight return" in labels or "second appointment" in labels:
                 row["checklist"] = ensure_visit_checklist(row)
+            else:
+                # Client-service and trade jobs: swap an untouched generic list.
+                from .visit_checklist import swap_untouched_checklist
+                swapped = swap_untouched_checklist(row)
+                if swapped is not None:
+                    row["checklist"] = swapped
     except Exception:
         pass
+    try:
+        from .visit_checklist import checklist_title
+        row["checklist_title"] = checklist_title(row)
+    except Exception:
+        row["checklist_title"] = "Shoot checklist"
     return row

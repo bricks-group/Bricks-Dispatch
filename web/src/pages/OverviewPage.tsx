@@ -151,7 +151,7 @@ function ShootChecklist({ job }: { job: Job }) {
   if (!items.length) return null;
   return (
     <div className="today-checklist" style={{ width: '100%', marginTop: 8 }}>
-      <p className="label">Shoot checklist</p>
+      <p className="label">{job.checklist_title || 'Shoot checklist'}</p>
       <ol style={{ margin: '6px 0 0', paddingLeft: 18 }}>
         {items.map((item) => (
           <li key={item.id} className={item.completed ? 'muted' : undefined} style={{ marginBottom: 2 }}>
