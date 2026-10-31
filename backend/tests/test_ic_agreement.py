@@ -78,6 +78,8 @@ def test_ic_agreement_constants_are_v19():
     assert "submitted to binding arbitration in Toronto" not in text
     assert "two (2) weeks for every year" not in text
     assert "legal@" not in text.lower()
+    assert "trip fee" not in text.lower()
+    assert "$60" not in text
 
 
 def test_get_ic_agreement_returns_version_date_text():
@@ -102,7 +104,14 @@ def test_v18_text_kept_for_existing_signers():
     live = _assignment_value(ONBOARDING, "_IC_AGREEMENT_TEXT")
     assert v18.startswith("BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.8")
     assert "Effective: October 3, 2026" in v18
-    # Only the header changes between v1.8 and v1.9.
+    # Between v1.8 and v1.9 only the header changes, plus the 2026-10-30
+    # removal of the no-show trip fee sentence (Kam ruling; no version bump —
+    # counsel owns the legal text). docs/legal v1.8 stays as signed.
+    trip_fee = (
+        " Inaccessible property or a client no-show reported in-app may qualify"
+        " for the published trip fee then in effect."
+    )
     strip = lambda t: "\n".join(t.strip().splitlines()[2:])
-    assert strip(v18) == strip(live)
+    assert trip_fee in v18
+    assert strip(v18).replace(trip_fee, "") == strip(live)
     assert (legal / "ic-agreement-v1.8-edited-2026-10-23.txt").exists()

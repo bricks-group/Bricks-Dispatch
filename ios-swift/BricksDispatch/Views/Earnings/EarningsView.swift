@@ -52,15 +52,6 @@ struct EarningsView: View {
                             }
                             .padding(.vertical, 4)
 
-                            if r.pendingTripFeesTotal > 0 {
-                                Label {
-                                    Text("Trip fees: \(r.pendingTripFeesTotal, format: .currency(code: "CAD"))")
-                                        .font(.subheadline)
-                                } icon: {
-                                    Image(systemName: "car.fill")
-                                        .foregroundStyle(BricksColors.brick)
-                                }
-                            }
                         }
 
                         Section("Recent Jobs") {

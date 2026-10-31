@@ -2085,9 +2085,13 @@ async def watch_job_action(
 
 
 # ---------------------------------------------------------------------------
-# No-show policy (Snappr model)
+# No-show policy
 # ---------------------------------------------------------------------------
-AGENT_NOSHOW_TRIP_FEE_CENTS = 6000   # $60 CAD
+# There is no photographer no-show fee (Kam, 2026-10-30). A no-show claim is a
+# record for ops and the client cancellation policy only; it never adds money to
+# a payout. Claims still live in agent_noshow_trip_fees (legacy table name) with
+# amount_cents = 0, set explicitly because the column default is the old 6000.
+AGENT_NOSHOW_CLAIM_AMOUNT_CENTS = 0
 _NOSHOW_WINDOW_BEFORE_MIN = 15
 _NOSHOW_WINDOW_AFTER_MIN = 90
 _NOSHOW_RATE_LIMIT_DAYS = 30
@@ -2106,8 +2110,8 @@ async def _validate_noshow_claim(
 ) -> dict:
     """
     Run all anti-abuse checks. Returns:
-      {"ok": True, "hold_for_review": False}                  → record claim, paid on next payout
-      {"ok": True, "hold_for_review": True, "reason": "..."}  → hold for admin review before payout
+      {"ok": True, "hold_for_review": False}                  → record claim
+      {"ok": True, "hold_for_review": True, "reason": "..."}  → hold for admin review
       {"ok": False, "reason": "..."}                          → reject outright (HTTP 422)
     """
     assignee_id = job.get("assignee_id")
@@ -2251,7 +2255,7 @@ async def _validate_noshow_claim(
                         if cancel_dt < shoot_start:
                             return {
                                 "ok": False,
-                                "reason": "Booking was cancelled before the shoot — no trip fee applies"
+                                "reason": "Booking was cancelled before the shoot — a no-show does not apply"
                             }
                     except (ValueError, TypeError):
                         pass
@@ -2286,7 +2290,7 @@ async def _validate_noshow_claim(
     if booking_id:
         try:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
-            # Find bookings by this agent that had no-show trip fees in the window
+            # Find bookings by this agent that had no-show claims in the window
             res_this_bk = await db.table("bookings").select("user_id").eq(
                 "id", booking_id
             ).maybe_single().execute()
@@ -2443,7 +2447,9 @@ async def report_agent_no_show(
     """
     Photographer reports that the agent/client was not home.
 
-    Trip fee ($60) paid to the photographer from Bricks margin.
+    Records the claim for ops review. There is no no-show fee: nothing is added to
+    the photographer's payout and the client pays no fee beyond the booking amount
+    retained under the cancellation policy.
 
     Validation gates:
     - Assigned photographer only
@@ -2481,7 +2487,7 @@ async def report_agent_no_show(
     review_reason = validation.get("reason", "")
     claim_status = "pending_review" if hold_for_review else "pending"
 
-    # Insert trip fee BEFORE updating job status.
+    # Insert the claim record BEFORE updating job status.
     # If the insert fails we return an error and the job is still in its prior state (retryable).
     # If status were updated first and the insert then failed, Gate 2 would block any retry.
     if assignee_id and assignee_id != "default_user":
@@ -2489,7 +2495,7 @@ async def report_agent_no_show(
             "job_id": job_id,
             "member_id": assignee_id,
             "vendor_id": vendor_id,
-            "amount_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
+            "amount_cents": AGENT_NOSHOW_CLAIM_AMOUNT_CENTS,
             "booking_id": booking_id,
             "notes": payload.notes or "",
             "status": claim_status,
@@ -2518,7 +2524,6 @@ async def report_agent_no_show(
         actor_id, "job", job_id, "agent_no_show", vendor_id=vendor_id,
         details={
             "assignee_id": assignee_id,
-            "trip_fee_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
             "claim_status": claim_status,
             "hold_for_review": hold_for_review,
             "review_reason": review_reason,
@@ -2531,7 +2536,6 @@ async def report_agent_no_show(
         return {
             "job_id": job_id,
             "photographer_id": assignee_id,
-            "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
             "claim_status": "pending_review",
             "hold_for_review": True,
             "note": review_reason,
@@ -2540,9 +2544,8 @@ async def report_agent_no_show(
     return {
         "job_id": job_id,
         "photographer_id": assignee_id,
-        "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
         "claim_status": "pending",
-        "note": "Trip fee will be included in photographer's next payout. Client booking retained.",
+        "note": "No-show recorded. Client booking retained.",
     }
 
 

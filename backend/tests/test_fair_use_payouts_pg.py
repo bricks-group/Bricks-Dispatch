@@ -229,10 +229,6 @@ def test_trigger_payout_for_job_pg_on_402(monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        "app.shared.pg_fallback.pg_select_trip_fees",
-        lambda *a, **k: [],
-    )
-    monkeypatch.setattr(
         "app.shared.pg_fallback.pg_insert_payout",
         lambda row: pg_calls.__setitem__("insert", pg_calls["insert"] + 1)
         or {**row, "id": "pay-fu-1"},
@@ -244,10 +240,6 @@ def test_trigger_payout_for_job_pg_on_402(monkeypatch):
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_update_payout",
         lambda pid, fields: pg_calls["payout_upd"].append((pid, fields)) or True,
-    )
-    monkeypatch.setattr(
-        "app.shared.pg_fallback.pg_update_trip_fees_by_ids",
-        lambda *a, **k: True,
     )
 
     async def _xfer(**kwargs):

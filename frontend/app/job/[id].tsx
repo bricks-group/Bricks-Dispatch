@@ -424,7 +424,7 @@ export default function JobDetailScreen() {
       if (data.hold_for_review) {
         Alert.alert('Held for Review', 'Your claim has been flagged for location verification. Our team will review within 2 business days.');
       } else {
-        Alert.alert('Recorded', 'No-show filed. A $60 trip fee will be added to your next payout.');
+        Alert.alert('Recorded', 'No-show filed. Bricks will review it.');
         setJob(prev => prev ? { ...prev, status: 'agent_no_show' } : prev);
       }
     } catch (e: any) {
@@ -746,7 +746,7 @@ export default function JobDetailScreen() {
                   <IconButton icon={X} label="Close" tint={color.textMuted} onPress={() => { setNoShowVisible(false); setNoShowNotes(''); }} />
                 </View>
                 <Text style={[T.bodySm, { color: color.textBody }]}>
-                  Your location is recorded. A $60 trip fee is added to your next payout.
+                  Your location is recorded so Bricks can review the no-show.
                 </Text>
                 <View style={s.blockGapSm}>
                   <Field

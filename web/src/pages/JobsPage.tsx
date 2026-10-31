@@ -567,7 +567,7 @@ function JobListingPanel({
         {noShowOpen ? (
           <div className="stack" style={{ border: '1px solid var(--c-hair, #333)', padding: 12, borderRadius: 8 }}>
             <p className="muted" style={{ margin: 0, padding: 0 }}>
-              A $60 trip fee is added to your next payout if the claim is approved.
+              Bricks reviews every no-show report.
             </p>
             <textarea
               value={noShowNotes}

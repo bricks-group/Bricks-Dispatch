@@ -357,7 +357,7 @@ async def list_noshow_claims(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    List no-show trip fee claims. Defaults to pending_review (admin work queue).
+    List no-show claims. Defaults to pending_review (admin work queue).
     Pass status=all to see every claim regardless of state.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
@@ -444,7 +444,7 @@ async def review_noshow_claim(
             logger.warning(f"Booking no-show webhook failed for {booking_id} (claim {claim_id}): {e}")
 
     elif action == "reject" and booking_id and job_id:
-        # Trip fee voided — notify Booking to reverse the agent retention penalty.
+        # Claim voided — notify Booking to reverse the agent retention penalty.
         # Job stays in agent_no_show; only the financial consequence is reversed.
         try:
             await send_dispatch_status_update_webhook(
@@ -462,7 +462,7 @@ async def review_noshow_claim(
         "claim_id": claim_id,
         "status": new_status,
         "reviewed_by": actor_id,
-        "note": "Photographer will receive $60 on next payout cycle." if action == "approve" else "Claim voided.",
+        "note": "No-show confirmed." if action == "approve" else "Claim voided.",
     }
 
 
@@ -480,9 +480,9 @@ async def reconcile_noshow_claims(
     Match agent_noshow_trip_fees against bookings.status to surface discrepancies.
 
     Detects:
-    - fee_without_retention: trip fee exists but booking not marked as retained
-    - retention_without_fee: booking shows no-show but no trip fee record (photographer did not file)
-    - booking_missing: trip fee references a booking that no longer exists
+    - fee_without_retention: no-show claim exists but booking not marked as retained
+    - retention_without_fee: booking shows no-show but no claim record (photographer did not file)
+    - booking_missing: claim references a booking that no longer exists
 
     dry_run=true (default): report mismatches, write nothing.
     dry_run=false: write reconciliation_events rows for each mismatch.
@@ -494,7 +494,7 @@ async def reconcile_noshow_claims(
 
     db = await get_db()
 
-    # All active (non-rejected) trip fee claims
+    # All active (non-rejected) no-show claims
     res_fees = await db.table("agent_noshow_trip_fees").select(
         "id, job_id, booking_id, member_id, status, amount_cents, created_at"
     ).in_("status", ["pending", "paid_out", "pending_review"]).execute()
@@ -534,7 +534,7 @@ async def reconcile_noshow_claims(
                     "booking_status": bk_status,
                     "fee_status": fee["status"],
                     "amount_cents": fee["amount_cents"],
-                    "note": "Trip fee exists but booking not marked as retained — Booking webhook may need retry",
+                    "note": "No-show claim exists but booking not marked as retained — Booking webhook may need retry",
                 })
         except Exception as e:
             mismatches.append({
@@ -544,7 +544,7 @@ async def reconcile_noshow_claims(
                 "note": str(e),
             })
 
-    # Reverse check: retained bookings with no trip fee
+    # Reverse check: retained bookings with no no-show claim
     try:
         res_bk_noshow = await db.table("bookings").select(
             "id, status"
@@ -556,7 +556,7 @@ async def reconcile_noshow_claims(
                     "type": "retention_without_fee",
                     "booking_id": bk["id"],
                     "booking_status": bk["status"],
-                    "note": "Booking retained but no photographer trip fee — photographer may not have filed",
+                    "note": "Booking retained but no photographer no-show claim — photographer may not have filed",
                 })
     except Exception as e:
         logger.warning(f"Reverse reconciliation check failed: {e}")
