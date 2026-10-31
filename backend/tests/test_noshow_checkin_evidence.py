@@ -64,6 +64,7 @@ class _Q:
     def __init__(self, db, name):
         self.db, self.name = db, name
         self.op, self.payload, self.filters, self.single = "select", None, [], False
+        self.in_filters, self.null_filters = [], []
 
     def select(self, *a, **k):
         return self
@@ -80,7 +81,12 @@ class _Q:
         self.filters.append((col, val))
         return self
 
-    def in_(self, *a):
+    def in_(self, col, vals):
+        self.in_filters.append((col, [str(v) for v in vals]))
+        return self
+
+    def is_(self, col, val):
+        self.null_filters.append(col)
         return self
 
     def gte(self, *a):
@@ -98,7 +104,9 @@ class _Q:
 
     def _rows(self):
         return [r for r in self.db.tables.setdefault(self.name, [])
-                if all(str(r.get(c)) == str(v) for c, v in self.filters)]
+                if all(str(r.get(c)) == str(v) for c, v in self.filters)
+                and all(str(r.get(c)) in vs for c, vs in self.in_filters)
+                and all(r.get(c) is None for c in self.null_filters)]
 
     async def execute(self):
         if self.op == "insert":
@@ -389,3 +397,36 @@ def test_admin_claim_list_includes_photo_url_and_distance(monkeypatch):
     assert out["photo_url"] == "https://signed.example/p.jpg"
     assert out["check_in_distance_label"] == "37 m from the property"
     signed.assert_awaited_once_with("noshow-evidence", f"{JOB_ID}/p.jpg", 3600)
+
+
+def test_admin_queue_lists_unreviewed_clean_and_held_claims(monkeypatch):
+    """A clean claim is recorded as pending; Bricks still reviews it, so the queue shows it."""
+    db = _Db(_job(0))
+    db.tables["agent_noshow_trip_fees"] = [
+        {"id": "clean", "status": "pending", "reviewed_at": None, "created_at": "3"},
+        {"id": "held", "status": "pending_review", "reviewed_at": None, "created_at": "2"},
+        {"id": "approved", "status": "pending", "reviewed_at": "2026-10-30T12:00:00Z", "created_at": "1"},
+        {"id": "rejected", "status": "rejected", "reviewed_at": "2026-10-30T12:00:00Z", "created_at": "0"},
+    ]
+
+    async def fake_get_db():
+        return db
+
+    monkeypatch.setattr(admin_ops, "get_db", fake_get_db)
+    monkeypatch.setattr(admin_ops, "resolve_vendor_actor_id", AsyncMock(return_value="admin"))
+    monkeypatch.setattr(admin_ops, "get_vendor_member", AsyncMock(return_value={"id": "admin", "role": "admin"}))
+
+    async def no_url(*_a, **_k):
+        return None
+
+    import app.services.storage as storage
+    monkeypatch.setattr(storage, "signed_url_in_bucket", no_url)
+
+    def ids(**kw):
+        out = _run(admin_ops.list_noshow_claims(**kw, authorization=None, x_user_id=None))
+        items = out.get("items") or out.get("data") or out.get("results") or []
+        return sorted(r["id"] for r in items)
+
+    assert ids() == ["clean", "held"]
+    assert ids(status="pending_review") == ["held"]
+    assert ids(status="all") == ["approved", "clean", "held", "rejected"]

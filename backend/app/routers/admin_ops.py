@@ -350,15 +350,17 @@ async def validate_rpas_batch(
 
 @router.get("/noshow-claims")
 async def list_noshow_claims(
-    status: Optional[str] = "pending_review",
+    status: Optional[str] = "open",
     page: int = 1,
     page_size: int = 50,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    List no-show claims. Defaults to pending_review (admin work queue).
-    Pass status=all to see every claim regardless of state.
+    List no-show claims. Defaults to "open": every claim Bricks still has to review,
+    i.e. held claims (pending_review) and clean claims that were recorded but not yet
+    reviewed (pending, reviewed_at unset). Pass a status to filter on it exactly, or
+    status=all to see every claim regardless of state.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
@@ -369,7 +371,9 @@ async def list_noshow_claims(
     page, page_size, skip = normalize_pagination(page, page_size)
 
     query = db.table("agent_noshow_trip_fees").select("*", count="exact")
-    if status and status != "all":
+    if not status or status == "open":
+        query = query.in_("status", ["pending_review", "pending"]).is_("reviewed_at", "null")
+    elif status != "all":
         query = query.eq("status", status)
 
     res = await query.order("created_at", ascending=False).range(skip, skip + page_size - 1).execute()

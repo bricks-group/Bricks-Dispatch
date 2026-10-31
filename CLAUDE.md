@@ -236,7 +236,7 @@ The claim row copies the evidence (`checked_in_at`, `check_in_*`, `wait_started_
 - Nothing is added to the photographer's payout. Earnings endpoint still returns `pending_trip_fees: []` / `pending_trip_fees_total: 0` for old app builds.
 
 **Admin review queue:**
-- `GET /api/admin/noshow-claims?status=pending_review`
+- `GET /api/admin/noshow-claims` (default `status=open`: held `pending_review` plus clean `pending` claims not yet reviewed; `status=all` for everything)
 - `POST /api/admin/noshow-claims/{id}/review?action=approve|reject`
 - `GET /api/admin/reconcile-noshow?dry_run=true` — matches no-show claims vs booking retention status
 
