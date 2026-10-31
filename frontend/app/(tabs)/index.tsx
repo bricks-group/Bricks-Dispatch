@@ -25,6 +25,7 @@ type Job = {
   scheduled_date: string; package_name: string | null; package_price: number | null;
   agent_name: string | null; agent_phone?: string | null; client_instructions: string | null;
   checklist: ChecklistItem[];
+  checklist_title?: string | null;
   package_id?: string | null;
   add_ons?: unknown;
   capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
@@ -189,7 +190,7 @@ export default function TodayScreen() {
             )}
 
             {nextJob && (nextJob.checklist?.length ?? 0) > 0 && (
-              <Section label="Shoot checklist">
+              <Section label={nextJob.checklist_title || 'Shoot checklist'}>
                 <Group>
                   {(nextJob.checklist || []).slice(0, 12).map((item) => (
                     <View key={item.id} style={s.checkRow}>

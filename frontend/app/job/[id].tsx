@@ -40,6 +40,7 @@ type Job = {
   agent_name: string | null; agent_phone: string | null;
   client_instructions: string | null;
   checklist: ChecklistItem[];
+  checklist_title?: string | null;
   package_id?: string | null;
   add_ons?: unknown;
   capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
@@ -544,7 +545,7 @@ export default function JobDetailScreen() {
           ) : null}
 
           {job.checklist?.length > 0 ? (
-            <Section label="Shoot checklist">
+            <Section label={job.checklist_title || 'Shoot checklist'}>
               <Group>
                 {job.checklist.map((item) => (
                   <View key={item.id} style={s.checkRow}>
