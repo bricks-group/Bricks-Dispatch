@@ -70,6 +70,39 @@ CLIENT_SERVICE_STEPS: dict[str, list[str]] = {
     "inv_watch_monthly": _WATCH,
 }
 
+# Builder site visits (Site Progress). The generic listing list asked for
+# full-property HDR stills and had no aerial step (gap audit, builders 5c).
+_SITE_ANGLES = "Aerial stills from the site's fixed angles, matching the last visit"
+SITE_STEPS: dict[str, list[str]] = {
+    "visual": [_SITE_ANGLES, "Flyover video"],
+    "mapped": [
+        "Mapping flight on the site's mission, for the orthomosaic and 3D model",
+        "Check coverage before you leave: no gaps or blurred passes",
+        _SITE_ANGLES,
+    ],
+}
+_SITE_SETUP = "First visit: set ground control points and build the site's flight mission"
+
+
+def site_checklist_key(job: Any) -> str | None:
+    """'visual' or 'mapped' for a builder site visit, else None."""
+    try:
+        from .commercial_jobs import MAPPED, deliverable_kind
+    except Exception:
+        return None
+    kind = deliverable_kind(_as_dict(job))
+    if kind is None:
+        return None
+    return "mapped" if kind == MAPPED else "visual"
+
+
+def _site_checklist(job: dict, key: str) -> list[dict]:
+    steps = list(SITE_STEPS[key])
+    if key == "mapped" and "mapped_setup" in _addon_blob(job):
+        steps.insert(0, _SITE_SETUP)
+    return _numbered(["Arrive and confirm site access and the flight plan", *steps, "Submit / deliver"])
+
+
 _GENERIC_STILLS = "hdr / stills (full property)"
 
 
@@ -166,6 +199,9 @@ def seed_visit_checklist(job: Any) -> list[dict]:
     key = client_service_key(j)
     if key:
         return _client_checklist(key)
+    site = site_checklist_key(j)
+    if site:
+        return _site_checklist(j, site)
     flags = job_capture_entitlements(j)
     blob = _addon_blob(j)
     jt = str(j.get("job_type") or "photo").lower()
@@ -216,7 +252,7 @@ def ensure_visit_checklist(job: Any) -> list[dict]:
         # A client-service job seeded with the generic listing checklist before
         # it had its own: reseed while nothing is ticked yet.
         untouched = not any(isinstance(i, dict) and i.get("completed") for i in existing)
-        if (client_service_key(j) or trade_checklist_key(j)) and _GENERIC_STILLS in labels and untouched:
+        if (client_service_key(j) or trade_checklist_key(j) or site_checklist_key(j)) and _GENERIC_STILLS in labels and untouched:
             return seed_visit_checklist(j)
         if trade_checklist_key(j):
             # Trade lists have no "arrive" / "hdr" step; keep them (and any ticks).
@@ -248,7 +284,7 @@ def swap_untouched_checklist(job: Any) -> list[dict] | None:
     existing = j.get("checklist") or []
     if not isinstance(existing, list) or not existing:
         return None
-    if not (client_service_key(j) or trade_checklist_key(j)):
+    if not (client_service_key(j) or trade_checklist_key(j) or site_checklist_key(j)):
         return None
     labels = " ".join(str(i.get("label") if isinstance(i, dict) else i).lower() for i in existing)
     untouched = not any(isinstance(i, dict) and i.get("completed") for i in existing)
