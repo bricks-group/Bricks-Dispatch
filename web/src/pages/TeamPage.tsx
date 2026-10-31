@@ -1,3 +1,4 @@
+import { TRADES, tradeById, tradeOf } from '../lib/trades';
 import { useEffect, useState } from 'react';
 import { api, PaginatedTeamResponse, TeamMember } from '../lib/api';
 
@@ -77,7 +78,7 @@ export function TeamPage() {
             {members.map((m) => (
               <tr key={m.id}>
                 <td data-label="Name" style={{ fontWeight: 500 }}>{m.name}</td>
-                <td data-label="Title" className="muted">{(m as any).vendor_type ? `${(m as any).vendor_type} · ${m.title || m.role}` : (m.title || m.role)}</td>
+                <td data-label="Title" className="muted">{`${tradeOf(m as any).label} · ${m.title || m.role}`}</td>
                 <td data-label="Skills" className="muted">{(m.skills || []).join(', ') || '—'}</td>
                 <td data-label="RPAS" className="muted">{m.rpas_certificate_level || '—'}</td>
                 <td data-label="Assignable">
@@ -116,10 +117,8 @@ export function TeamPage() {
           <input value={name}  onChange={(e) => setName(e.target.value)}  placeholder="Full name" />
           <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" />
           <input value={role}  onChange={(e) => setRole(e.target.value)}  placeholder="Role" />
-          <select value={vendorType} onChange={(e) => setVendorType(e.target.value)} aria-label="Vendor type">
-            <option value="photographer">Photographer</option>
-            <option value="stager">Stager</option>
-            <option value="cleaner">Cleaner</option>
+          <select value={vendorType} onChange={(e) => { const t = tradeById(e.target.value); setVendorType(e.target.value); if (t) setRole(t.role); }} aria-label="Trade">
+            {TRADES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
           <button type="submit" className="btn-primary" onClick={addMember}>Add</button>
         </div>

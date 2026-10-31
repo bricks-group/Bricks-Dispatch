@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { api, VendorProfile } from '../lib/api';
 import BricksLoader from '../components/BricksLoader';
 import { InsuranceCard } from '../components/InsuranceCard';
+import { TradeCard } from '../components/TradeCard';
+import { tradeOf } from '../lib/trades';
 
 const SKILLS: { id: string; label: string }[] = [
   { id: 'photo', label: 'Photo' },
@@ -158,6 +160,10 @@ export function ProfilePage() {
             </div>
           </section>
 
+          <TradeCard profile={data} />
+
+          {tradeOf(data).id === 'photographer' && (
+            <>
           <section className="card full">
             <h3>Advanced RPAS</h3>
             <div className="stack">
@@ -178,6 +184,8 @@ export function ProfilePage() {
           </section>
 
           <InsuranceCard profile={data} onSaved={setData} />
+            </>
+          )}
 
           <section className="card full">
             <h3>Service area &amp; availability</h3>

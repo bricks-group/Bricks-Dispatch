@@ -116,3 +116,13 @@
   .gd-field > span { font-size: 12px; font-weight: 500; color: var(--c-ink-mute); }
   .gd-field > select { width: 100%; min-width: 0; }
 }
+
+/* Home services trades (quote-request jobs) */
+.gd-trades { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--c-hair); }
+.gd-trade-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.gd-trade { border: 1px solid var(--c-hair); border-radius: 2px; padding: 16px; font-size: 13.5px; line-height: 1.5; }
+.gd-trade h3 { margin: 0 0 6px; font-size: 15px; font-weight: 500; }
+.gd-trade p { margin: 0 0 6px; color: var(--c-ink-soft, inherit); }
+.gd-trade strong { font-weight: 500; }
+.gd-trade ol { margin: 6px 0; padding-left: 18px; }
+.gd-trade-coi { color: var(--c-ink-mute) !important; font-size: 12.5px; }

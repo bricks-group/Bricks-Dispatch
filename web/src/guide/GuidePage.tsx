@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { guide } from './guide-data';
 import { jobServices, stepsForServices, type PackageId } from './guide-model';
 import { StepCard } from './StepCard';
+import { COI_LINE, TRADES } from '../lib/trades';
 import './guide.css';
 
 /** Guide tab: every phase and step of the Bricks Standard vendor guide, one card per step. */
@@ -89,6 +90,22 @@ export function GuidePage() {
           ))}
         </div>
       </div>
+
+      <section className="gd-trades" id="trades" aria-labelledby="gd-trades-title" data-testid="guide-trades">
+        <h2 id="gd-trades-title" className="gd-phase-title">Home services jobs</h2>
+        <p className="gd-phase-note">Staging, cleaning, inspections, measurement and repairs are quote-request jobs. The steps above are for photography.</p>
+        <div className="gd-trade-grid">
+          {TRADES.filter((t) => t.id !== 'photographer').map((t) => (
+            <article key={t.id} className="gd-trade">
+              <h3>{t.label}</h3>
+              <p>{t.work}</p>
+              {t.limits.map((l) => <p key={l}><strong>{l}</strong></p>)}
+              <ol>{t.steps.map((x) => <li key={x}>{x}</li>)}</ol>
+              <p className="gd-trade-coi">{t.needsCoi ? COI_LINE : 'No certificate of insurance needed.'}</p>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

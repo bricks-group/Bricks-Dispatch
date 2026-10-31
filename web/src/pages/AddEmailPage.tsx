@@ -110,8 +110,8 @@ export function NotOnTeamPage({ onLogout }: { onLogout: () => void }) {
       <div className="login-card">
         <h2>Not on the team yet</h2>
         <p className="muted" style={{ margin: 0 }}>
-          You're signed in, but this account isn't linked to a Bricks photographer. Apply with the same email at{' '}
-          <a href="https://www.brxs.ca/photographers">brxs.ca/photographers</a>, or ask an owner to add you.
+          You're signed in, but this account isn't linked to a Bricks vendor. Apply with the same email at{' '}
+          <a href="https://www.brxs.ca/work-with-bricks">brxs.ca/work-with-bricks</a>, or ask an owner to add you.
         </p>
         <button type="button" className="btn-link" onClick={onLogout}>Sign out</button>
       </div>
