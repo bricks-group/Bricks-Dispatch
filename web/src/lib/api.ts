@@ -451,6 +451,8 @@ export type Job = {
   checklist?: unknown;
   /** 'Shoot checklist' for media jobs, 'Job checklist' for other trades (set by the API). */
   checklist_title?: string | null;
+  /** True for non-media trade jobs (set by the API): their checklist is ticked by the vendor, with proof. */
+  trade_job?: boolean;
   client_instructions?: string | null;
   property_details?: string | null;
   capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;

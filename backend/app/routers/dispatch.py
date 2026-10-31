@@ -399,6 +399,19 @@ async def update_job_status(
     booking_id = job.get("booking_id")
     dev_capture_visit_id = job.get("dev_capture_visit_id")
 
+    # Vendors can't complete a trade job here either until its checklist is
+    # ticked with proof (same gate as /api/vendor-os/jobs/{id}/status).
+    if (
+        x_internal_api_key is None
+        and new_status in ("completed", "delivered")
+        and old_status not in ("completed", "delivered")
+    ):
+        from ..services.job_checklist import completion_block_message
+        from ..shared.errors import api_error
+        blocked = completion_block_message(job)
+        if blocked:
+            api_error(400, blocked, "checklist_incomplete")
+
     now = datetime.now(timezone.utc).isoformat()
     status_fields = {"status": new_status, "updated_at": now}
     try:

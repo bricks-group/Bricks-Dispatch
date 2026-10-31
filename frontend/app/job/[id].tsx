@@ -12,6 +12,7 @@ import {
 import { User, MapPin, CheckCircle, Navigation, Phone, AlertTriangle, X, Home, Box, LayoutGrid, Video, Camera, Upload as UploadIcon } from 'lucide-react-native';
 import { useNoShow, formatCountdown, LOCATION_REQUIRED_COPY, NOSHOW_RULE_COPY, NOSHOW_REVIEW_COPY } from '../../lib/noshow';
 import { actorHeaders } from '../../lib/api';
+import { TradeChecklist, type ChecklistPalette } from '../../components/TradeChecklist';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
 import { getCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind } from '../../lib/capture-api';
@@ -25,6 +26,18 @@ import { color, type as T, space, radius, layout, hairline, type Tone } from '..
 
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+
+const CHECKLIST_PALETTE: ChecklistPalette = {
+  text: color.text,
+  muted: color.textMuted,
+  faint: color.textFaint,
+  line: color.graphite,
+  surface: color.surfaceDeep,
+  accent: color.accent,
+  accentText: color.textOnAccent,
+  ok: color.ok,
+  error: color.bad,
+};
 
 type ChecklistItem = { id: string; label: string; completed: boolean };
 type ListingHit = { id: string; address: string; city?: string; deal_type?: string | null };
@@ -41,6 +54,8 @@ type Job = {
   client_instructions: string | null;
   checklist: ChecklistItem[];
   checklist_title?: string | null;
+  /** Non-media trade job: the vendor ticks the checklist with proof. */
+  trade_job?: boolean;
   package_id?: string | null;
   add_ons?: unknown;
   capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
@@ -301,7 +316,7 @@ export default function JobDetailScreen() {
         Alert.alert('Incomplete brackets', bracketBlock.message || BRACKET_HINT);
         return;
       }
-      Alert.alert('Mark complete', 'Is this shoot finished?', [
+      Alert.alert('Mark complete', job.trade_job ? 'Is this job finished?' : 'Is this shoot finished?', [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Mark complete',
@@ -495,7 +510,7 @@ export default function JobDetailScreen() {
             { label: 'Window', value: formatShootWindow(job) },
           ]} />
 
-          {!isComplete && !hasCaptureMode ? (
+          {!isComplete && !hasCaptureMode && !job.trade_job ? (
             <View style={s.blockGap}><Notice>{captureNeitherCopy(captureFlags)}</Notice></View>
           ) : null}
 
@@ -544,7 +559,11 @@ export default function JobDetailScreen() {
             </Section>
           ) : null}
 
-          {job.checklist?.length > 0 ? (
+          {job.trade_job ? (
+            <Section label={job.checklist_title || 'Job checklist'}>
+              <TradeChecklist jobId={job.id} status={job.status} palette={CHECKLIST_PALETTE} />
+            </Section>
+          ) : job.checklist?.length > 0 ? (
             <Section label={job.checklist_title || 'Shoot checklist'}>
               <Group>
                 {job.checklist.map((item) => (
@@ -559,7 +578,7 @@ export default function JobDetailScreen() {
             </Section>
           ) : null}
 
-          {(isActive && hasCaptureMode && multiMode) || ['in_progress', 'completed', 'processing'].includes(job.status) ? (
+          {!job.trade_job && ((isActive && hasCaptureMode && multiMode) || ['in_progress', 'completed', 'processing'].includes(job.status)) ? (
             <Section label="Capture">
               <Group>
                 {isActive && multiMode && captureFlags.tour ? <Row icon={Box} title="360° tour" subtitle="Stand at stations and pan a full circle" chevron onPress={() => openCapture('splat')} /> : null}

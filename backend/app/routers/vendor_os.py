@@ -386,6 +386,218 @@ async def upload_noshow_photo(
 
 
 
+# ---------------------------------------------------------------------------
+# Trade job checklist: saved ticks and proof (Kam, 2026-10-31).
+# Media jobs keep their read-only shoot checklist; these routes refuse them.
+# ---------------------------------------------------------------------------
+
+
+class ChecklistInventoryRow(BaseModel):
+    item: Optional[str] = None
+    room: Optional[str] = None
+    note: Optional[str] = None
+
+
+class ChecklistItemPatch(BaseModel):
+    completed: Optional[bool] = None
+    note: Optional[str] = None
+    none_found: Optional[bool] = None
+    inventory: Optional[list[ChecklistInventoryRow]] = None
+
+
+async def _checklist_view(job: dict, items: list[dict]) -> dict:
+    from ..services import job_checklist as jc
+    from ..services.storage import signed_url_in_bucket
+
+    signed: dict = {}
+    for path in jc.storage_paths(items):
+        signed[path] = await signed_url_in_bucket(jc.PROOF_BUCKET, path, 3600)
+    return jc.view(job, items, signed)
+
+
+async def _load_trade_checklist_job(job_id: str, authorization, x_user_id, *, edit: bool):
+    from ..services import job_checklist as jc
+
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=not edit)
+    if edit:
+        ensure_assigned_to_actor(job, actor_id, actor_member)
+    if not jc.is_trade_job(job):
+        api_error(409, "This job uses the shoot checklist, which Bricks ticks for you.", "checklist_not_trade_job")
+    if edit and str(job.get("status") or "") not in jc.EDITABLE_STATUSES:
+        api_error(409, "This job is closed, so its checklist can't be changed.", "checklist_locked")
+    return db, job, actor_id, jc.effective_checklist(job)
+
+
+async def _save_checklist(db, job: dict, items: list[dict]) -> None:
+    stored = [{k: v for k, v in item.items() if k not in ("proof", "missing")} for item in items]
+    now = datetime.now(timezone.utc).isoformat()
+    await _update_job_fields(db, job["id"], {"checklist": stored, "updated_at": now})
+    job["checklist"] = stored
+    job["updated_at"] = now
+
+
+def _checklist_item_or_404(items: list[dict], item_id: str) -> dict:
+    from ..services import job_checklist as jc
+
+    item = jc.find_item(items, item_id)
+    if not item:
+        api_error(404, "That checklist item isn't on this job any more. Refresh the job.", "checklist_item_not_found")
+    return item
+
+
+async def _read_proof_file(upload: UploadFile, allowed: set, wrong_type: str) -> tuple[bytes, str]:
+    from ..services import job_checklist as jc
+
+    content_type = (upload.content_type or "").lower().split(";")[0].strip()
+    name = (upload.filename or "").lower()
+    if not content_type or content_type == "application/octet-stream":
+        content_type = "application/pdf" if name.endswith(".pdf") else "image/jpeg"
+    if content_type == "image/jpg":
+        content_type = "image/jpeg"
+    if content_type not in allowed:
+        api_error(400, wrong_type, "checklist_file_type")
+    data = await upload.read()
+    if not data:
+        api_error(400, "That file was empty. Try again.", "checklist_file_empty")
+    if len(data) > jc.MAX_UPLOAD_BYTES:
+        api_error(413, "That file is over 4 MB. Use a smaller photo or file.", "checklist_file_too_large")
+    return data, content_type
+
+
+@router.get("/jobs/{job_id}/checklist")
+async def get_trade_checklist(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Trade job checklist with saved ticks, proof and what's still needed."""
+    _db, job, _actor, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=False)
+    return await _checklist_view(job, items)
+
+
+@router.patch("/jobs/{job_id}/checklist/{item_id}")
+async def patch_trade_checklist_item(
+    job_id: str,
+    item_id: str,
+    payload: ChecklistItemPatch,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Tick or untick an item, or save its note, nothing-found answer or inventory.
+
+    An item can only be ticked once its proof is attached.
+    """
+    from ..services import job_checklist as jc
+
+    db, job, actor_id, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=True)
+    item = _checklist_item_or_404(items, item_id)
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    err = jc.apply_patch(item, patch, actor_id)
+    if err:
+        api_error(400, err, "checklist_proof_missing")
+    await _save_checklist(db, job, items)
+    return await _checklist_view(job, items)
+
+
+@router.post("/jobs/{job_id}/checklist/{item_id}/photos")
+async def add_trade_checklist_photo(
+    job_id: str,
+    item_id: str,
+    photo: UploadFile = File(...),
+    taken_at: Optional[str] = Form(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Add one proof photo to a checklist item (private bucket, 4 MB max)."""
+    from ..services import job_checklist as jc
+    from ..services.storage import upload_to_bucket
+
+    db, job, _actor, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=True)
+    item = _checklist_item_or_404(items, item_id)
+    if jc.proof_kind(item.get("label")) not in (jc.PROOF_PHOTO, jc.PROOF_FINDINGS):
+        api_error(400, "This item doesn't take photos.", "checklist_no_photos")
+    photos = list(item.get("photos") or [])
+    if len(photos) >= jc.MAX_PHOTOS_PER_ITEM:
+        api_error(400, f"This item already has {jc.MAX_PHOTOS_PER_ITEM} photos.", "checklist_photo_limit")
+    allowed = {t for t in jc.REPORT_TYPES if t.startswith("image/")}
+    data, content_type = await _read_proof_file(photo, allowed, "That file isn't a photo. Add a JPG, PNG or HEIC photo.")
+    path = jc.proof_path(job_id, item_id, content_type)
+    if not await upload_to_bucket(jc.PROOF_BUCKET, path, data, content_type):
+        api_error(503, "Couldn't save the photo. Try again.", "checklist_upload_failed")
+    taken = noshow_policy.parse_ts(taken_at)
+    photos.append({
+        "id": uuid.uuid4().hex,
+        "path": path,
+        "content_type": content_type,
+        "uploaded_at": jc.now_iso(),
+        "taken_at": taken.isoformat() if taken else None,
+    })
+    item["photos"] = photos
+    await _save_checklist(db, job, items)
+    return await _checklist_view(job, items)
+
+
+@router.delete("/jobs/{job_id}/checklist/{item_id}/photos/{photo_id}")
+async def delete_trade_checklist_photo(
+    job_id: str,
+    item_id: str,
+    photo_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Remove a proof photo. The item unticks if that leaves it without proof."""
+    from ..services import job_checklist as jc
+    from ..services.storage import remove_from_bucket
+
+    db, job, _actor, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=True)
+    item = _checklist_item_or_404(items, item_id)
+    photos = list(item.get("photos") or [])
+    gone = [p for p in photos if isinstance(p, dict) and str(p.get("id")) == str(photo_id)]
+    if not gone:
+        api_error(404, "That photo is already gone. Refresh the job.", "checklist_photo_not_found")
+    item["photos"] = [p for p in photos if p not in gone]
+    jc.settle_tick(item)
+    await _save_checklist(db, job, items)
+    await remove_from_bucket(jc.PROOF_BUCKET, [p.get("path") for p in gone])
+    return await _checklist_view(job, items)
+
+
+@router.post("/jobs/{job_id}/checklist/{item_id}/report")
+async def upload_trade_checklist_report(
+    job_id: str,
+    item_id: str,
+    report: UploadFile = File(...),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Upload (or replace) the report for a report item. PDF or photo, 4 MB max."""
+    from ..services import job_checklist as jc
+    from ..services.storage import remove_from_bucket, upload_to_bucket
+
+    db, job, _actor, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=True)
+    item = _checklist_item_or_404(items, item_id)
+    if jc.proof_kind(item.get("label")) != jc.PROOF_REPORT:
+        api_error(400, "This item doesn't take a report.", "checklist_no_report")
+    data, content_type = await _read_proof_file(report, jc.REPORT_TYPES, "Upload the report as a PDF or a photo.")
+    path = jc.proof_path(job_id, item_id, content_type)
+    if not await upload_to_bucket(jc.PROOF_BUCKET, path, data, content_type):
+        api_error(503, "Couldn't save the report. Try again.", "checklist_upload_failed")
+    old = item.get("report") if isinstance(item.get("report"), dict) else None
+    item["report"] = {
+        "path": path,
+        "filename": (report.filename or "report")[:200],
+        "content_type": content_type,
+        "uploaded_at": jc.now_iso(),
+    }
+    await _save_checklist(db, job, items)
+    if old and old.get("path"):
+        await remove_from_bucket(jc.PROOF_BUCKET, [old["path"]])
+    return await _checklist_view(job, items)
+
+
 @router.post("/jobs/{job_id}/confirm-arrive")
 async def confirm_job_arrive_time(
     job_id: str,
@@ -2074,6 +2286,14 @@ async def update_vendor_job_status(
             detail=f"Status '{new_status}' cannot be set via this endpoint — it is managed by the system",
         )
 
+
+    # Trade jobs: every checklist item ticked with its proof (Kam, 2026-10-31).
+    # Media jobs return None here and keep their completion rules.
+    if new_status == "completed" and old_status != "completed":
+        from ..services.job_checklist import completion_block_message
+        blocked = completion_block_message(job)
+        if blocked:
+            api_error(400, blocked, "checklist_incomplete")
 
     # Hard gate: HDR stills need full −/0/+ brackets before Mark complete.
     # Mirrors web validateHdrUploadsForComplete; Visit/3D + drone/reel excluded.

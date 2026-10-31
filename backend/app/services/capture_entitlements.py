@@ -382,6 +382,17 @@ def stamp_capture(job: dict | None) -> dict:
     flags = job_capture_entitlements(row)
     row["capture"] = flags
     try:
+        from .job_checklist import effective_checklist, is_trade_job, public_items
+        if is_trade_job(row):
+            # Trade jobs: saved ticks and proof, stable ids, no storage paths.
+            row["checklist"] = public_items(effective_checklist(row))
+            row["checklist_title"] = "Job checklist"
+            row["trade_job"] = True
+            return row
+        row["trade_job"] = False
+    except Exception:
+        pass
+    try:
         from .visit_checklist import ensure_visit_checklist
         existing = row.get("checklist") or []
         if not existing:

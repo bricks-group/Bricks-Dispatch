@@ -109,7 +109,20 @@ VENDOR_TYPE_ALIASES = {
     "repairs": "handyman",
     "handyperson": "handyman",
     "handy": "handyman",
+    # De-staging (pickup / removal of staged furniture) is stager work.
+    "destage": "stager",
+    "destaging": "stager",
+    "de_stage": "stager",
+    "de_staging": "stager",
+    "staging_pickup": "stager",
+    "staging_removal": "stager",
 }
+# Package names / ids that mark a de-staging job when job_type doesn't say.
+_DESTAGE_PACKAGE_WORDS = (
+    "destag", "de_stag", "de-stag", "de stag",
+    "staging_pickup", "staging pickup", "staging-pickup",
+    "staging_removal", "staging removal", "staging-removal",
+)
 ROLE_FOR_VENDOR_TYPE = {
     "photographer": "Photographer",
     "stager": "Stager",
@@ -320,6 +333,11 @@ def job_required_vendor_type(job: Any) -> Optional[str]:
     mapped = _vendor_type_key(jt)
     if mapped in VENDOR_TYPES and mapped != "photographer":
         return mapped
+    # A de-staging package is stager work even on a job_type left at the
+    # photo default.
+    package_blob = " ".join(str(j.get(k) or "") for k in ("package_id", "package_name")).lower()
+    if any(w in package_blob for w in _DESTAGE_PACKAGE_WORDS):
+        return "stager"
     if mapped == "photographer" or _is_media_job_type(jt):
         return "photographer"
     try:

@@ -597,6 +597,20 @@ async def upload_to_bucket(bucket_id: str, storage_path: str, data: bytes, conte
         return False
 
 
+async def remove_from_bucket(bucket_id: str, storage_paths: list[str]) -> bool:
+    """Best-effort delete of objects in a named private bucket. True on success."""
+    paths = [p for p in (storage_paths or []) if p]
+    if not bucket_id or not paths:
+        return True
+    try:
+        db = await get_db()
+        await db.storage.from_(bucket_id).remove(paths)
+        return True
+    except Exception as e:
+        _logger.warning("delete from %s failed for %d object(s): %s", bucket_id, len(paths), e)
+        return False
+
+
 async def signed_url_in_bucket(bucket_id: str, storage_path: str, expiry: int = 3600) -> Optional[str]:
     """Short-lived signed GET URL for an object in a named private bucket."""
     if not bucket_id or not storage_path:

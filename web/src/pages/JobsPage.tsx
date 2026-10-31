@@ -32,6 +32,7 @@ import { Button, ButtonLink } from '../components/Button';
 import { captureLinks } from '../components/CaptureLinks';
 import { JobGuide } from '../guide/JobGuide';
 import { NoShowPanel } from '../components/NoShowPanel';
+import { TradeChecklist } from '../components/TradeChecklist';
 import { getCheckInFix, LOCATION_REQUIRED_COPY } from '../lib/noshow';
 
 const JOB_STATUS_TABS: [string, string][] = [
@@ -133,7 +134,7 @@ export function JobsPage() {
       <div className="page-header">
         <div>
           <h1>Jobs</h1>
-          <p>{admin ? 'All jobs including unassigned. Attach a shoot to an Office listing here.' : 'Assigned jobs. Attach a shoot to an Office listing here.'}</p>
+          <p>{admin ? 'All jobs including unassigned. Attach a job to an Office listing here.' : 'Assigned jobs. Attach a job to an Office listing here.'}</p>
         </div>
       </div>
 
@@ -560,11 +561,23 @@ function JobListingPanel({
           <p className="muted" style={{ margin: 0, padding: 0, fontSize: 12 }}>{LOCATION_REQUIRED_COPY}</p>
         ) : null}
         {job.status === 'in_progress' ? <NoShowPanel job={job} onPatched={onPatched} /> : null}
-        {['assigned', 'in_progress'].includes(job.status) ? (
+        {['assigned', 'in_progress'].includes(job.status) && !job.trade_job ? (
           <CaptureNone job={job} />
         ) : null}
-        <JobShootChecklist job={job} />
-        <CaptureStatusBlock job={job} />
+        {job.trade_job ? <TradeChecklist job={job} /> : <JobShootChecklist job={job} />}
+        {job.trade_job ? null : <CaptureStatusBlock job={job} />}
+        {job.trade_job && uploads.length === 0 ? null : job.trade_job ? (
+          <div>
+            <p className="label">Files on this job</p>
+            <ul className="upload-list">
+              {uploads.map((u) => (
+                <li key={u.id} className="upload-row">
+                  <span className="upload-meta"><span className="upload-name">{u.filename}</span></span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
         <div>
           <p className="label">Uploads</p>
           <p className="muted" style={{ padding: 0, margin: '4px 0 8px', fontSize: 12 }}>
@@ -661,6 +674,7 @@ function JobListingPanel({
             </label>
           ) : null}
         </div>
+        )}
         <form className="row" onSubmit={search}>
           <input
             value={q}

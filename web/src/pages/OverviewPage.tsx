@@ -52,7 +52,7 @@ export function OverviewPage() {
       <div className="page-header">
         <div>
           <h1>Today</h1>
-          <p>Your shoots and the week ahead</p>
+          <p>Your jobs and the week ahead</p>
         </div>
       </div>
 
@@ -79,7 +79,7 @@ export function OverviewPage() {
           <section className="card full">
             <h3>Today</h3>
             {todayJobs.length === 0
-              ? <p className="muted" style={{ padding: '20px' }}>No shoots today.</p>
+              ? <p className="muted" style={{ padding: '20px' }}>No jobs today.</p>
               : (
                 <ul className="list">
                   {todayJobs.map((job) => (
