@@ -78,11 +78,35 @@ def _vendor_type_of(member: dict) -> str:
         return (member.get("vendor_type") or "photographer").strip().lower() or "photographer"
 
 
+def is_vendor_paused(member: Optional[dict]) -> bool:
+    """Paused vendor (expired credential, probation fail, admin) or paused trade.
+
+    Owner is never paused. Trade pause comes from trade_specs.json `enabled`.
+    """
+    if not member or is_owner_member(member):
+        return False
+    if member.get("paused_at"):
+        return True
+    from ..services.trade_specs import trade_enabled
+    return not trade_enabled(member_trade(member))
+
+
+def member_trade(member: Optional[dict]) -> str:
+    try:
+        from ..services.vendor_profile import member_vendor_type
+        return member_vendor_type(member or {})
+    except Exception:
+        return ((member or {}).get("vendor_type") or "photographer").strip().lower() or "photographer"
+
+
 def is_assignable(member: Optional[dict]) -> bool:
-    """Hard gate used by auto-assign. Pending (Aman) is never assignable."""
+    """Hard gate used by auto-assign and manual assign. Pending (Aman) is never
+    assignable; neither is a paused vendor or a vendor in a paused trade."""
     if not member:
         return False
     if not member.get("is_active"):
+        return False
+    if is_vendor_paused(member):
         return False
     return (member.get("onboarding_status") or "") == "approved"
 

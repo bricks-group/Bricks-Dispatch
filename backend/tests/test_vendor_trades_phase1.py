@@ -82,8 +82,9 @@ def test_titles_follow_trade():
 
 
 def test_storage_vendor_type_respects_db_check():
+    # vendor_members_vendor_type_check allows all six (2026-11-01).
     for vt in ("inspector", "measurer", "handyman"):
-        assert storage_vendor_type(vt) == "photographer"
+        assert storage_vendor_type(vt) == vt
     for vt in DB_VENDOR_TYPES:
         assert storage_vendor_type(vt) == vt
 
@@ -96,15 +97,22 @@ def _app(vendor_type, creds=None):
     )
 
 
-def test_repairs_apply_requires_cgl():
-    app = _app("handyman", {})
+def test_paused_repairs_apply_is_refused():
+    app = _app("handyman", {"cgl_confirmed": True})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(onboarding._validate_application(app))
+    assert "isn't taking applications" in exc.value.detail
+
+
+def test_inspector_apply_requires_cgl():
+    app = _app("inspector", {})
     with pytest.raises(HTTPException) as exc:
         asyncio.run(onboarding._validate_application(app))
     assert "$2M" in exc.value.detail
 
 
-def test_repairs_apply_with_cgl_ok_and_no_samples_needed():
-    app = _app("handyman", {"cgl_confirmed": True, "wsib_number": "123", "years_experience": "6"})
+def test_inspector_apply_with_cgl_ok_and_no_samples_needed():
+    app = _app("inspector", {"cgl_confirmed": True, "wsib_number": "123", "years_experience": "6"})
     asyncio.run(onboarding._validate_application(app))
     assert app.trade_credentials["cgl_confirmed"] is True
     assert app.trade_credentials["cgl_limit_cents"] >= 200_000_000

@@ -197,6 +197,10 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     from ..services.vendor_profile import normalize_vendor_type as _nvt
     _vtype_early = _nvt(getattr(application, "vendor_type", None) or "photographer")
     is_photographer = _vtype_early == "photographer"
+    # Paused trade (trade_specs.json enabled=false): no new applications.
+    from ..services.trade_specs import trade_enabled as _trade_enabled
+    if not _trade_enabled(_vtype_early):
+        raise HTTPException(status_code=400, detail="This trade isn't taking applications right now.")
 
     structured = application.equipment if isinstance(application.equipment, dict) else None
     if structured is not None:
