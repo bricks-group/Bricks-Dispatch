@@ -1,4 +1,4 @@
-"""Leftover stills provider: POSTPROD_STILLS_PROVIDER gate; AE opt-in; fail-fast to inhouse."""
+"""Leftover stills provider: POSTPROD_STILLS_PROVIDER gate; AE default; fail-fast to inhouse."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -592,23 +592,27 @@ def test_deliver_single_vendor_photo_inhouse_listing_export_soft_fail(monkeypatc
     assert uploaded == [b"\xff\xd8inhouse"]
 
 
-def test_stills_provider_preference_defaults_inhouse(monkeypatch):
+def test_stills_provider_preference_defaults_autoenhance(monkeypatch):
     monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
-    assert pp.stills_provider_preference() == "inhouse"
-    assert pp.prefer_autoenhance_stills() is False
-    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
     assert pp.stills_provider_preference() == "autoenhance"
     assert pp.prefer_autoenhance_stills() is True
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "")
+    assert pp.stills_provider_preference() == "autoenhance"
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
+    assert pp.stills_provider_preference() == "autoenhance"
     monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "ae")
     assert pp.stills_provider_preference() == "autoenhance"
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "inhouse")
+    assert pp.stills_provider_preference() == "inhouse"
+    assert pp.prefer_autoenhance_stills() is False
     monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "bricks_inhouse")
     assert pp.stills_provider_preference() == "inhouse"
     monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "nope")
-    assert pp.stills_provider_preference() == "inhouse"
+    assert pp.stills_provider_preference() == "autoenhance"
 
 
-def test_bracket_group_default_skips_autoenhance(monkeypatch):
-    """Default POSTPROD_STILLS_PROVIDER=inhouse must not call AE even if available."""
+def test_bracket_group_inhouse_env_skips_autoenhance(monkeypatch):
+    """POSTPROD_STILLS_PROVIDER=inhouse (kill switch) must not call AE even if available."""
     updates = []
     ae_calls = []
 
@@ -646,7 +650,7 @@ def test_bracket_group_default_skips_autoenhance(monkeypatch):
     monkeypatch.setitem(sys.modules, "app.services.storage", fake_storage)
 
     monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
-    monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "inhouse")
     monkeypatch.setattr(ae, "is_available", lambda: True)
 
     def track_ae(*a, **k):
@@ -665,7 +669,7 @@ def test_bracket_group_default_skips_autoenhance(monkeypatch):
     assert uploaded and uploaded[0] == b"\xff\xd8mls_ih"
 
 
-def test_deliver_single_default_skips_autoenhance(monkeypatch):
+def test_deliver_single_inhouse_env_skips_autoenhance(monkeypatch):
     updates = []
     ae_calls = []
 
@@ -707,7 +711,7 @@ def test_deliver_single_default_skips_autoenhance(monkeypatch):
     monkeypatch.setitem(sys.modules, "app.services.media_intake", fake_mi)
 
     monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
-    monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "inhouse")
     monkeypatch.setattr(ae, "is_available", lambda: True)
 
     def track_ae(*a, **k):

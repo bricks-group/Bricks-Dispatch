@@ -203,7 +203,7 @@ def _poll_order(
 def _download_enhanced(client: httpx.Client, key: str, image_id: str) -> bytes:
     url = f"{BASE}/images/{image_id}/enhanced?preview=false"
     r = client.get(url, headers=_headers(key), follow_redirects=True)
-    if r.status_code in (402, 403):
+    if r.status_code in (401, 402, 403):
         # "The user has no plan" / No Plan — fail fast for this worker.
         detail = ""
         try:
@@ -255,7 +255,9 @@ def _raise_http(step: str, r: httpx.Response) -> None:
     except Exception:
         text = ""
     lower = text.lower()
-    if r.status_code in (402, 403) or "no plan" in lower:
+    # 401 = bad/revoked key (Oct 4 batch); 402/403/No Plan = no credits/plan.
+    # Either way AE will keep refusing — block for this worker, go in-house.
+    if r.status_code in (401, 402, 403) or "no plan" in lower or "credit" in lower:
         _mark_plan_blocked(f"{step}: {text or r.status_code}")
         raise AutoenhanceNoPlan(f"{step}: {text or r.status_code}")
     raise AutoenhanceError(f"{step} failed HTTP {r.status_code}: {text}")
