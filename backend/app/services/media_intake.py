@@ -42,10 +42,19 @@ _CAMERA_RAW_MIME_MARKERS = (
 
 # Storage per-file cap. Supabase Free = 50 MB for every object (cannot be
 # raised on Free); R2 defaults to 5 GB. UPLOAD_MAX_FILE_MB overrides.
-def upload_max_file_bytes() -> int:
+def is_video_upload(filename=None, mime_type=None, media_type=None) -> bool:
+    """Reel / video master (gets the larger video cap)."""
+    if _lower(media_type) in ("reel", "video", "cinematic"):
+        return True
+    mime = _lower(mime_type)
+    name = _lower(filename)
+    return mime.startswith("video/") or name.endswith(VIDEO_EXTS)
+
+
+def upload_max_file_bytes(video: bool = False) -> int:
     from .upload_backend import max_file_bytes
 
-    return max_file_bytes()
+    return max_file_bytes(video)
 
 
 FILE_TOO_LARGE_RAW_MESSAGE = (
@@ -54,25 +63,42 @@ FILE_TOO_LARGE_RAW_MESSAGE = (
 FILE_TOO_LARGE_MESSAGE = "This file is over 50 MB. Export a smaller file and try again."
 
 
-def file_too_large_message(filename=None, mime_type=None, limit_bytes=None) -> str:
-    limit = int(limit_bytes or upload_max_file_bytes())
+FILE_TOO_LARGE_VIDEO_MESSAGE = "This video is over 50 MB. Export a smaller file and try again."
+
+
+def _limit_label(limit: int) -> str:
+    mb = limit / (1024 * 1024)
+    if mb >= 1024 and abs(mb / 1024 - round(mb / 1024)) < 0.01:
+        return f"{int(round(mb / 1024))} GB"
+    return f"{int(round(mb))} MB"
+
+
+def file_too_large_message(filename=None, mime_type=None, limit_bytes=None, media_type=None) -> str:
+    video = is_video_upload(filename, mime_type, media_type)
+    limit = int(limit_bytes or upload_max_file_bytes(video))
+    if video:
+        return FILE_TOO_LARGE_VIDEO_MESSAGE.replace("50 MB", _limit_label(limit))
     mb = int(round(limit / (1024 * 1024)))
     if is_camera_raw_file(filename, mime_type):
         return FILE_TOO_LARGE_RAW_MESSAGE.replace("50 MB", f"{mb} MB")
     return FILE_TOO_LARGE_MESSAGE.replace("50 MB", f"{mb} MB")
 
 
-def assert_upload_size(file_size=None, filename=None, mime_type=None) -> None:
+def assert_upload_size(file_size=None, filename=None, mime_type=None, media_type=None) -> None:
     """413 before minting a URL the storage would reject at the end of the PUT."""
     try:
         size = int(file_size or 0)
     except (TypeError, ValueError):
         size = 0
-    limit = upload_max_file_bytes()
+    limit = upload_max_file_bytes(is_video_upload(filename, mime_type, media_type))
     if size > limit:
         from ..shared.errors import api_error
 
-        api_error(413, file_too_large_message(filename, mime_type, limit), "file_too_large")
+        api_error(
+            413,
+            file_too_large_message(filename, mime_type, limit, media_type),
+            "file_too_large",
+        )
 
 
 def upload_content_type(filename=None, mime_type=None) -> str:

@@ -32,13 +32,43 @@ def backend_name() -> str:
     return "supabase"
 
 
-def max_file_bytes() -> int:
-    env = os.getenv("UPLOAD_MAX_FILE_MB")
-    default = R2_SINGLE_PUT_MAX_MB if backend_name() == "r2" else SUPABASE_FREE_MAX_MB
+# Reels / video masters (a 4K reel master is ~80 MB+). Hard cap 2 GB.
+VIDEO_MAX_CAP_MB = 2048
+
+
+def _env_mb(name: str, default: float) -> float:
+    env = os.getenv(name)
     try:
-        mb = float(env) if env else float(default)
+        return float(env) if env else float(default)
     except ValueError:
-        mb = float(default)
+        return float(default)
+
+
+def storage_ceiling_mb() -> float:
+    """Largest single object the active storage accepts.
+
+    Supabase: the project's Global file size limit. Free = 50 MB and cannot be
+    raised; on Pro set SUPABASE_STORAGE_GLOBAL_MAX_MB to the dashboard value.
+    R2: 5 GB single PUT.
+    """
+    if backend_name() == "r2":
+        return float(R2_SINGLE_PUT_MAX_MB)
+    return _env_mb("SUPABASE_STORAGE_GLOBAL_MAX_MB", SUPABASE_FREE_MAX_MB)
+
+
+def max_file_bytes(video: bool = False) -> int:
+    """Per-file cap minted into /api/uploads/sign.
+
+    Stills: UPLOAD_MAX_FILE_MB (default = storage default, 50 MB on Supabase Free).
+    Video (reels): UPLOAD_MAX_VIDEO_MB (default 2 GB) but never above what storage
+    accepts — otherwise the browser uploads 80 MB and storage 413s at the end.
+    """
+    if video:
+        want = min(_env_mb("UPLOAD_MAX_VIDEO_MB", VIDEO_MAX_CAP_MB), float(VIDEO_MAX_CAP_MB))
+        mb = min(want, storage_ceiling_mb())
+        return int(mb * 1024 * 1024)
+    default = R2_SINGLE_PUT_MAX_MB if backend_name() == "r2" else SUPABASE_FREE_MAX_MB
+    mb = _env_mb("UPLOAD_MAX_FILE_MB", default)
     return int(mb * 1024 * 1024)
 
 
@@ -63,7 +93,9 @@ def _is_blob_proxy(url: str) -> bool:
     return "/api/capture/blob-put" in (url or "")
 
 
-async def create_direct_upload(key: str, content_type: str, file_size: int = 0) -> Optional[dict]:
+async def create_direct_upload(
+    key: str, content_type: str, file_size: int = 0, *, video: bool = False
+) -> Optional[dict]:
     """Return the direct upload target for `key`, or None when storage is unavailable.
 
     Shape: {provider, method, signed_url, token?, tus?, storage_path, headers,
@@ -82,7 +114,7 @@ async def create_direct_upload(key: str, content_type: str, file_size: int = 0) 
             "tus": None,
             "storage_path": path,
             "headers": {"Content-Type": content_type},
-            "max_file_bytes": max_file_bytes(),
+            "max_file_bytes": max_file_bytes(video),
             "via_proxy": False,
         }
 
@@ -119,6 +151,6 @@ async def create_direct_upload(key: str, content_type: str, file_size: int = 0) 
         "storage_path": key,
         "path": signed.get("path") or key,
         "headers": {"Content-Type": content_type},
-        "max_file_bytes": BLOB_PROXY_MAX_BYTES if via_proxy else max_file_bytes(),
+        "max_file_bytes": BLOB_PROXY_MAX_BYTES if via_proxy else max_file_bytes(video),
         "via_proxy": via_proxy,
     }

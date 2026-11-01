@@ -20,6 +20,7 @@ from fastapi import APIRouter, Body, Form, Header, HTTPException
 from ..services.media_intake import (
     assert_listing_still_decodable,
     assert_upload_size,
+    is_video_upload,
     durable_media_filename,
     file_too_large_message,
     infer_media_type,
@@ -272,13 +273,16 @@ async def sign_stills_upload(
     assert_listing_still_decodable(filename, mime_type, media_type)
     if not job_id:
         api_error(400, "job_id is required", "missing_job_id")
-    assert_upload_size(file_size, filename, mime_type)
+    assert_upload_size(file_size, filename, mime_type, media_type)
     await _actor_job(authorization, x_user_id, job_id)
     upload_id = str(uuid.uuid4())
     content_type = upload_content_type(filename, mime_type)
     # Keep signed storage_path on the client-provided basename so PUT contract stays stable.
     key = stills_storage_path(job_id, upload_id, filename)
-    target = await create_direct_upload(key, content_type, file_size)
+    target = await create_direct_upload(
+        key, content_type, file_size,
+        video=is_video_upload(filename, mime_type, media_type),
+    )
     if not target or not target.get("signed_url"):
         api_error(502, "Could not mint stills upload URL", "stills_sign_failed")
     if target.get("via_proxy") and file_size > BLOB_PROXY_MAX_BYTES:
