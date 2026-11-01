@@ -109,8 +109,35 @@ def session_dir(session: str) -> str:
     return f"{UPLOAD_PREFIX}/{rand}{sig[:8]}"
 
 
+# Resume (required for photographers, 2026-10-31): PDF, DOC or DOCX, 10 MB.
+RESUME_MIME = {
+    "application/pdf": "pdf",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+}
+MAX_RESUME_BYTES = 10 * 1024 * 1024
+MIN_RESUME_BYTES = 1024
+
+
+def resume_mime_for(name: str, mime: str) -> Optional[str]:
+    """Browsers sometimes send '' or octet-stream for .doc/.docx; trust the extension then."""
+    m = (mime or "").lower().strip()
+    if m in RESUME_MIME:
+        return m
+    ext = (name or "").lower().rsplit(".", 1)[-1] if "." in (name or "") else ""
+    for k, v in RESUME_MIME.items():
+        if v == ext and m in ("", "application/octet-stream", "application/x-msword", "application/zip"):
+            return k
+    return None
+
+
+def is_resume_path(path: str) -> bool:
+    return "/resume-" in str(path or "")
+
+
 def sample_path(session: str, index: int, kind: str, mime: str) -> str:
-    ext = SAMPLE_MIME.get(mime, "jpg")
+    ext = RESUME_MIME.get(mime) if kind == "resume" else None
+    ext = ext or SAMPLE_MIME.get(mime, "jpg")
     return f"{session_dir(session)}/{kind}-{index:02d}-{secrets.token_hex(4)}.{ext}"
 
 

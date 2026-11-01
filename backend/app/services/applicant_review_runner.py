@@ -131,7 +131,30 @@ async def _owner_phone() -> str:
         return ""
 
 
-def render_all(member: dict, result: dict, thumb_urls: list) -> dict:
+def resume_path_of(member: dict) -> str:
+    prof = member.get("application_profile") or {}
+    if isinstance(prof, str):
+        try:
+            import json
+            prof = json.loads(prof)
+        except ValueError:
+            prof = {}
+    r = prof.get("resume") if isinstance(prof, dict) else None
+    return (r or {}).get("path") or "" if isinstance(r, dict) else ""
+
+
+async def signed_resume_url(member: dict, ttl: int = THUMB_LINK_TTL) -> str:
+    path = resume_path_of(member)
+    if not path:
+        return ""
+    try:
+        from .storage import get_signed_download_url
+        return await get_signed_download_url(path, ttl) or ""
+    except Exception:
+        return ""
+
+
+def render_all(member: dict, result: dict, thumb_urls: list, resume_url: str = "") -> dict:
     from ..shared.applicant_source import found_us_line
 
     prof = member.get("application_profile") or {}
@@ -140,7 +163,8 @@ def render_all(member: dict, result: dict, thumb_urls: list) -> dict:
     found = found.replace("Found us via: ", "").strip()
     specs = (prof.get("specialties") if isinstance(prof, dict) else None) or member.get("skills") or ([member.get("specialty")] if member.get("specialty") else [])
     kw = dict(member_id=str(member.get("id")), name=member.get("name") or "", city=city,
-              specialties=specs, found_via=found, review=result, thumb_urls=thumb_urls)
+              specialties=specs, found_via=found, review=result, thumb_urls=thumb_urls,
+              resume_url=resume_url or None)
     return {
         "subject": mail.subject(member.get("name") or "", result),
         "html": mail.render_html(**kw),
@@ -152,7 +176,7 @@ def render_all(member: dict, result: dict, thumb_urls: list) -> dict:
 async def notify_owner(member: dict, result: dict) -> None:
     """Text Kam's profile phone and email raphael@brxs.ca. Never raises."""
     try:
-        rendered = render_all(member, result, await signed_thumb_urls(result))
+        rendered = render_all(member, result, await signed_thumb_urls(result), await signed_resume_url(member))
     except Exception as e:
         logger.error("applicant notify render failed (%s)", type(e).__name__)
         return

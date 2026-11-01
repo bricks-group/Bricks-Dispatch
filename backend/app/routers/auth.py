@@ -84,7 +84,15 @@ async def vendor_os_me(authorization: str | None = Header(default=None, alias="A
     member = await get_vendor_member(actor_id)
     if isinstance(member, dict):
         from ..shared.vendor_identity import needs_terms
-        return {**member, "needs_terms": needs_terms(member)}
+        from ..services.vendor_onboarding import ensure_signed_in
+        onboarding = await ensure_signed_in(member)
+        if onboarding and onboarding.get("complete"):
+            member = {**member, "onboarding_completed_at": onboarding.get("completed_at")}
+        out = {**member, "needs_terms": needs_terms(member)}
+        if onboarding is not None:
+            out["onboarding"] = onboarding
+        out["onboarding_complete"] = bool(member.get("onboarding_completed_at"))
+        return out
     return member
 
 @router.post("/vendor-os/auth/logout")

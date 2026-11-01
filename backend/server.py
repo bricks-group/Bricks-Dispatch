@@ -65,6 +65,7 @@ from app.routers.auth import router as auth_router
 from app.routers.dispatch import router as dispatch_router
 from app.routers.vendor_os import router as vendor_os_router
 from app.routers.stripe_connect_status import router as stripe_connect_status_router
+from app.routers.onboarding_checklist import admin_router as onboarding_admin_router, router as onboarding_checklist_router
 from app.routers.stripe_connect_webhook import router as stripe_connect_webhook_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.admin_ops import router as admin_ops_router
@@ -169,6 +170,8 @@ async def seed_data():
 app.include_router(dispatch_router)
 app.include_router(auth_router)
 app.include_router(stripe_connect_status_router)  # honest Connected (sole status route)
+app.include_router(onboarding_checklist_router)  # GO onboarding checklist
+app.include_router(onboarding_admin_router)
 app.include_router(vendor_os_router)
 # Drop hollow Connected duplicate if still defined in vendor_os (honest router is sole status).
 from fastapi.routing import APIRoute

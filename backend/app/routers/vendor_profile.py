@@ -691,6 +691,12 @@ async def accept_terms_impl(
         )
     except Exception:
         pass
+    if not member.get("onboarding_completed_at"):
+        try:
+            from ..services.vendor_onboarding import refresh_onboarding
+            await refresh_onboarding(member["id"])
+        except Exception:
+            pass
     return {"terms_accepted_at": now_iso, "ic_agreement_version": _IC_AGREEMENT_VERSION, "needs_terms": False}
 
 

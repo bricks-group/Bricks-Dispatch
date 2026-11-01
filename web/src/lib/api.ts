@@ -120,7 +120,42 @@ export type AuthMember = {
   /** Server: a contractor in GO who never accepted the IC agreement and privacy policy. */
   needs_terms?: boolean;
   portfolio_samples?: Array<{ media_type: string; url?: string; link?: string; label?: string }>;
+  /** Onboarding checklist (approved vendors who are not live yet). */
+  onboarding?: OnboardingState | null;
+  /** True once every onboarding step is done (or grandfathered). Jobs come automatically after that. */
+  onboarding_complete?: boolean;
 };
+
+export type OnboardingStepKey = 'signed_in' | 'payouts' | 'availability' | 'guide' | 'agreement';
+
+export type OnboardingStep = {
+  key: OnboardingStepKey;
+  title: string;
+  detail: string;
+  done: boolean;
+  required: boolean;
+};
+
+export type OnboardingState = {
+  state: 'applicant' | 'onboarding' | 'live' | 'paused' | 'rejected';
+  complete: boolean;
+  completed_at?: string | null;
+  all_steps_done: boolean;
+  steps: OnboardingStep[];
+  done: number;
+  total: number;
+};
+
+/** True while an approved vendor still has onboarding steps to finish. */
+export function isOnboarding(m: AuthMember | null | undefined): boolean {
+  return !!m && m.onboarding_complete === false && !!m.onboarding && m.onboarding.state === 'onboarding';
+}
+
+export const getOnboarding = () => api.get<OnboardingState>('/api/vendor-os/onboarding');
+export const acknowledgeGuide = () => api.post<OnboardingState>('/api/vendor-os/onboarding/guide');
+export const confirmAvailability = () => api.post<OnboardingState>('/api/vendor-os/onboarding/availability');
+export const startPayoutSetup = (returnUrl: string) =>
+  api.post<{ url: string }>('/api/vendor-os/stripe-connect/onboard', { return_url: returnUrl });
 
 export function hasAppAccess(m: AuthMember | null | undefined): boolean {
   if (!m) return false;

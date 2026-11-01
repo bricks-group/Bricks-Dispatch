@@ -409,6 +409,13 @@ class VendorMember(BaseModel):
     source_detail: Optional[str] = None
     # Structured application (migration 0017). Null for older applicants.
     application_profile: Optional[Dict[str, Any]] = None
+    # Onboarding gate (migration 20261031_vendor_onboarding_gate). Approval puts a
+    # vendor into onboarding; auto-assign needs onboarding_completed_at.
+    onboarding_completed_at: Optional[str] = None
+    first_signed_in_at: Optional[str] = None
+    guide_acknowledged_at: Optional[str] = None
+    availability_confirmed_at: Optional[str] = None
+    rejected_at: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -453,6 +460,12 @@ class VendorApplicationCreate(BaseModel):
     sample_upload_session: Optional[str] = None
     sample_paths: List[str] = []
     rpas_cert_path: Optional[str] = None
+    # Photographers (2026-10-31): samples must be real estate (interiors and
+    # exteriors of homes) and a resume is required. The resume goes up through
+    # /sample-uploads (kind=resume) in the same session.
+    samples_are_real_estate: bool = False
+    resume_path: Optional[str] = None
+    resume_name: Optional[str] = None
     # {camera_body, lenses, drone_model, lighting, tripod}
     equipment: Optional[Dict[str, Any]] = None
     # {days_of_week, time_windows, weekends, earliest_start_date,
@@ -469,7 +482,7 @@ class SampleUploadFile(BaseModel):
     name: str = ""
     type: str
     size: int
-    kind: str = "sample"  # sample | rpas_cert
+    kind: str = "sample"  # sample | rpas_cert | resume
 
 
 class SampleUploadRequest(BaseModel):

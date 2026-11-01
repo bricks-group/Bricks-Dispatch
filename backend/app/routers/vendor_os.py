@@ -2127,7 +2127,7 @@ async def start_stripe_connect_onboarding(
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     # Active Photographer (post-approval) + Manager/Owner/Admin may start Connect.
-    # Org still shares one contractors row per vendor_id (no multi-member redesign).
+    # Each photographer gets their own Express account (contractors.member_id).
     if not can_access_stripe_connect(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
@@ -2135,7 +2135,7 @@ async def start_stripe_connect_onboarding(
     if not os.environ.get("STRIPE_SECRET_KEY"):
         api_error(503, "Payouts are not configured yet", "stripe_not_configured")
 
-    from ..services.stripe_connect_service import create_connect_account_and_link
+    from ..services.stripe_connect_service import connect_member_key, create_connect_account_and_link
     try:
         url = await create_connect_account_and_link(
             vendor_id=vendor_id,
@@ -2143,6 +2143,7 @@ async def start_stripe_connect_onboarding(
             return_url=payload.return_url,
             full_name=actor_member.get("name", ""),
             email=actor_member.get("email", ""),
+            member_id=connect_member_key(actor_member),
         )
     except ValueError as e:
         api_error(502, str(e), "stripe_connect_failed")

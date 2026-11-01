@@ -46,7 +46,14 @@ def needs_terms(member: Optional[dict]) -> bool:
     """
     if not member or is_owner_member(member):
         return False
-    return not member.get("terms_accepted_at")
+    if not member.get("terms_accepted_at"):
+        return True
+    # Vendors still onboarding accept the current agreement version (one of the
+    # checklist steps). Live vendors on an older version are not re-gated here.
+    if not member.get("onboarding_completed_at"):
+        from ..routers.onboarding import _IC_AGREEMENT_VERSION
+        return str(member.get("ic_agreement_version") or "") != _IC_AGREEMENT_VERSION
+    return False
 
 
 def member_title(member: Optional[dict]) -> str:
@@ -183,6 +190,8 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
     rpas_url = member.get("rpas_certificate_url") or ""
     rpas_level = member.get("rpas_certificate_level") or ("advanced" if owner else None)
     assignable = is_assignable(member)
+    # Approved + active opens the app; jobs need the onboarding checklist too.
+    onboarded = owner or bool(member.get("onboarding_completed_at"))
     out = {
         "id": member.get("id"),
         "name": member.get("name") or "",
@@ -205,12 +214,14 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "rpas_certificate_number": member.get("rpas_certificate_number"),
         "onboarding_status": member.get("onboarding_status") or "pending",
         "is_active": bool(member.get("is_active")),
-        "assignable": assignable,
+        "assignable": assignable and onboarded,
         "assignable_reason": (
-            None if assignable
+            None if (assignable and onboarded)
             else "Pending — not assignable" if (member.get("onboarding_status") or "") == "pending"
+            else "Finish setup to get jobs" if assignable
             else "Not approved"
         ),
+        "onboarding_complete": onboarded,
         "payout_model": payout_model(member),
         "payout_label": (
             "Full package · $0 deduction" if owner else "Fixed rate card"

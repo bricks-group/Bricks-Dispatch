@@ -58,7 +58,7 @@ def notify_job_assigned_to_vendor(vendor_phone: str, job_details: dict) -> bool:
         body += f" on {scheduled}"
     if window:
         body += f" at {window}"
-    body += ". Open GO for details."
+    body += ". Open the Bricks app for details."
     return send_dispatch_sms(to=vendor_phone, body=body)
 
 

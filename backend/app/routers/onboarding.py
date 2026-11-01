@@ -225,21 +225,38 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         if p_ and p_ not in paths:
             paths.append(p_)
     cert_path = (application.rpas_cert_path or "").strip() or None
-    if paths or cert_path:
+    resume_path = (application.resume_path or "").strip() or None
+    if resume_path and not ev.is_resume_path(resume_path):
+        resume_path = None
+    paths = [x for x in paths if not ev.is_resume_path(x)]
+    uploaded = paths + ([cert_path] if cert_path else []) + ([resume_path] if resume_path else [])
+    if uploaded:
         if not ev.verify_upload_session(session):
-            errs.append("Your photo upload expired. Please re-add your sample photos.")
-        elif any(not ev.path_in_session(x, session) for x in paths + ([cert_path] if cert_path else [])):
-            errs.append("Sample photos must be uploaded through this form.")
+            errs.append("Your upload expired. Please re-add your sample photos and resume.")
+        elif any(not ev.path_in_session(x, session) for x in uploaded):
+            errs.append("Sample photos and your resume must be uploaded through this form.")
     application.sample_paths = paths
     application.rpas_cert_path = cert_path
+    application.resume_path = resume_path
+    application.resume_name = " ".join(str(application.resume_name or "").split())[:120] or None
     if is_photographer:
         if len(paths) < ev.MIN_SAMPLES:
             errs.append(
                 f"Upload {ev.MIN_SAMPLES}-{ev.MAX_SAMPLES} sample real estate photos "
-                "(update the Bricks GO app, or apply at brxs.ca/photographers)."
+                "(update the Bricks app, or apply at brxs.ca/photographers)."
             )
         elif len(paths) > ev.MAX_SAMPLES:
             errs.append(f"Upload at most {ev.MAX_SAMPLES} sample photos.")
+        if not application.samples_are_real_estate:
+            errs.append(
+                "Your samples must be real estate photos (interiors and exteriors of homes). "
+                "Confirm they are, then submit again."
+            )
+        if not resume_path:
+            errs.append(
+                "Upload your resume (PDF, DOC or DOCX) "
+                "(update the Bricks app, or apply at brxs.ca/photographers)."
+            )
 
     # Drone: a claim needs the number, the level and a photo of the certificate.
     if is_photographer and application.drone_certified:
@@ -463,6 +480,33 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     return result
 
 
+REAPPLY_COOLDOWN_DAYS = 90
+
+
+def _reapply_target(existing: dict) -> dict:
+    """Rejected applicants may apply again 90 days after the rejection.
+    Returns the row to reuse; raises for pending / approved / too-soon."""
+    status = (existing.get("onboarding_status") or "").lower()
+    if status != "rejected":
+        raise HTTPException(status_code=400, detail="An application with this email already exists.")
+    raw = existing.get("rejected_at") or existing.get("updated_at") or existing.get("created_at")
+    try:
+        when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+    except Exception:
+        when = datetime.now(timezone.utc)
+    from datetime import timedelta
+    opens = when + timedelta(days=REAPPLY_COOLDOWN_DAYS)
+    if datetime.now(timezone.utc) < opens:
+        label = f"{opens.strftime('%B')} {opens.day}, {opens.year}"
+        raise HTTPException(
+            status_code=400,
+            detail=f"You applied recently. You can apply again from {label}.",
+        )
+    return existing
+
+
 async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     from ..shared.pg_fallback import (
         _is_rest_quota_error,
@@ -483,8 +527,9 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
             existing = pg_select_vendor_member(email=email_l)
         else:
             raise
+    reapply_of = None
     if existing:
-        raise HTTPException(status_code=400, detail="An application with this email already exists.")
+        reapply_of = _reapply_target(existing)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     application_token = secrets.token_urlsafe(32)
@@ -519,13 +564,24 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
                 "cert_path": application.rpas_cert_path if vtype == "photographer" else None,
             },
             "samples": [{"path": p} for p in (application.sample_paths or [])],
+            "samples_are_real_estate": bool(application.samples_are_real_estate),
             "upload_session": application.sample_upload_session or None,
         }
+        if application.resume_path:
+            path = application.resume_path
+            ext = path.rsplit(".", 1)[-1].lower()
+            application_profile["resume"] = {
+                "path": path,
+                "name": application.resume_name or f"resume.{ext}",
+                "mime": next((k for k, v in ev.RESUME_MIME.items() if v == ext), None),
+            }
+        if reapply_of:
+            application_profile["reapplied_at"] = now_iso
         if vtype != "photographer":
             application_profile["trade"] = vtype
             application_profile["credentials"] = getattr(application, "trade_credentials", None) or {}
     member = VendorMember(
-        id=str(uuid.uuid4()),
+        id=str(reapply_of["id"]) if reapply_of else str(uuid.uuid4()),
         application_token=application_token,
         name=application.name,
         email=email_l,
@@ -574,49 +630,79 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
 
     db = await get_db()
     inserted_via_pg = False
-    try:
-        await db.table("vendor_members").insert(member_dict).execute()
-    except Exception as e:
-        if _is_rest_quota_error(e):
-            # Canada Fair Use REST often 402 — same PG fallback as payouts/Connect.
-            pg_row = pg_insert_vendor_application(member_dict)
-            if not pg_row:
-                logger.error("apply_to_bricks Fair-Use PG insert failed for %s", email_l)
-                raise HTTPException(
-                    status_code=503,
-                    detail="Could not process application right now. Please try again shortly.",
-                )
-            inserted_via_pg = True
-        else:
-            # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
-            # application_profile is kept: migration 0017 is live on Canada.
-            member_dict.pop("portfolio_samples", None)
-            try:
-                await db.table("vendor_members").insert(member_dict).execute()
-            except Exception as e2:
-                if _is_rest_quota_error(e2):
-                    pg_row = pg_insert_vendor_application(member_dict)
-                    if not pg_row:
-                        raise HTTPException(
-                            status_code=503,
-                            detail="Could not process application right now. Please try again shortly.",
-                        )
-                    inserted_via_pg = True
-                else:
-                    member_dict.pop("vendor_type", None)
-                    try:
-                        await db.table("vendor_members").insert(member_dict).execute()
-                    except Exception as e3:
-                        if _is_rest_quota_error(e3):
-                            pg_row = pg_insert_vendor_application(member_dict)
-                            if not pg_row:
-                                raise HTTPException(
-                                    status_code=503,
-                                    detail="Could not process application right now. Please try again shortly.",
-                                )
-                            inserted_via_pg = True
-                        else:
-                            raise
+    if reapply_of:
+        # Same row, fresh application: back to pending, cooldown cleared, history kept.
+        member_dict.pop("created_at", None)
+        member_dict["rejected_at"] = None
+        prior = (reapply_of.get("internal_notes") or "").strip()
+        member_dict["internal_notes"] = f"{prior}\nReapplied on {now_iso} (90-day cooldown passed). {member.internal_notes}".strip()
+        member.internal_notes = member_dict["internal_notes"]
+        try:
+            await db.table("vendor_members").update(member_dict).eq("id", member.id).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            # The PG fallback can't rewrite a whole application; ask them to retry.
+            raise HTTPException(status_code=503, detail="Could not process application right now. Please try again shortly.")
+    else:
+        try:
+            await db.table("vendor_members").insert(member_dict).execute()
+        except Exception as e:
+            if _is_rest_quota_error(e):
+                # Canada Fair Use REST often 402 — same PG fallback as payouts/Connect.
+                pg_row = pg_insert_vendor_application(member_dict)
+                if not pg_row:
+                    logger.error("apply_to_bricks Fair-Use PG insert failed for %s", email_l)
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Could not process application right now. Please try again shortly.",
+                    )
+                inserted_via_pg = True
+            else:
+                # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
+                # application_profile is kept: migration 0017 is live on Canada.
+                member_dict.pop("portfolio_samples", None)
+                try:
+                    await db.table("vendor_members").insert(member_dict).execute()
+                except Exception as e2:
+                    if _is_rest_quota_error(e2):
+                        pg_row = pg_insert_vendor_application(member_dict)
+                        if not pg_row:
+                            raise HTTPException(
+                                status_code=503,
+                                detail="Could not process application right now. Please try again shortly.",
+                            )
+                        inserted_via_pg = True
+                    else:
+                        member_dict.pop("vendor_type", None)
+                        try:
+                            await db.table("vendor_members").insert(member_dict).execute()
+                        except Exception as e3:
+                            if _is_rest_quota_error(e3):
+                                pg_row = pg_insert_vendor_application(member_dict)
+                                if not pg_row:
+                                    raise HTTPException(
+                                        status_code=503,
+                                        detail="Could not process application right now. Please try again shortly.",
+                                    )
+                                inserted_via_pg = True
+                            else:
+                                raise
+
+    if application.resume_path:
+        # Also list the resume with the applicant's documents (private storage).
+        try:
+            doc = VendorDocument(
+                id=str(uuid.uuid4()),
+                vendor_id=member.vendor_id,
+                member_id=member.id,
+                doc_type="resume",
+                file_url=application.resume_path,
+                status="pending",
+            )
+            await (await get_db()).table("vendor_documents").insert(doc.dict()).execute()
+        except Exception as e:
+            logger.warning("apply_to_bricks: resume document row not stored member=%s (%s)", member.id, type(e).__name__)
 
     availability = AvailabilitySettings(
         member_id=member.id,
@@ -640,7 +726,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
             "has_licence": av["has_licence"],
         })
     try:
-        await (await get_db()).table("vendor_availability").insert(avail_dict).execute()
+        _avail = (await get_db()).table("vendor_availability")
+        await (_avail.upsert(avail_dict) if reapply_of else _avail.insert(avail_dict)).execute()
     except Exception as e:
         if _is_rest_quota_error(e) or inserted_via_pg:
             if not pg_upsert_vendor_availability(avail_dict):
@@ -683,9 +770,20 @@ async def mint_sample_uploads(body: SampleUploadRequest):
         raise HTTPException(status_code=400, detail="No files.")
     samples = [f for f in files if (f.kind or "sample") == "sample"]
     certs = [f for f in files if f.kind == "rpas_cert"]
-    if len(samples) > ev.MAX_SAMPLES or len(certs) > 1 or len(samples) + len(certs) != len(files):
-        raise HTTPException(status_code=400, detail=f"Up to {ev.MAX_SAMPLES} sample photos and one certificate photo.")
+    resumes = [f for f in files if f.kind == "resume"]
+    if (len(samples) > ev.MAX_SAMPLES or len(certs) > 1 or len(resumes) > 1
+            or len(samples) + len(certs) + len(resumes) != len(files)):
+        raise HTTPException(status_code=400, detail=f"Up to {ev.MAX_SAMPLES} sample photos, one certificate photo and one resume.")
+    for f in resumes:
+        mime = ev.resume_mime_for(f.name, f.type)
+        if not mime:
+            raise HTTPException(status_code=400, detail="Your resume must be a PDF, DOC or DOCX file.")
+        if f.size < ev.MIN_RESUME_BYTES or f.size > ev.MAX_RESUME_BYTES:
+            raise HTTPException(status_code=400, detail=f"Your resume must be under {ev.MAX_RESUME_BYTES // (1024 * 1024)} MB.")
+        f.type = mime
     for f in files:
+        if f.kind == "resume":
+            continue
         mime = (f.type or "").lower()
         if mime not in ev.SAMPLE_MIME:
             raise HTTPException(status_code=400, detail=f"{f.name or 'A file'} isn't a JPEG, PNG, WebP or HEIC photo.")
@@ -699,16 +797,17 @@ async def mint_sample_uploads(body: SampleUploadRequest):
         session = ev.mint_upload_session()
     out = []
     for i, f in enumerate(files):
-        kind = "cert" if f.kind == "rpas_cert" else "sample"
+        kind = {"rpas_cert": "cert", "resume": "resume"}.get(f.kind or "sample", "sample")
         path = ev.sample_path(session, i, kind, f.type.lower())
         signed = await create_signed_upload_url(path)
         if not signed or not signed.get("signed_url"):
-            raise HTTPException(status_code=503, detail="Photo upload is unavailable right now. Please try again shortly.")
+            raise HTTPException(status_code=503, detail="Upload is unavailable right now. Please try again shortly.")
         out.append({"name": f.name, "kind": f.kind, "path": signed.get("path") or path,
                     "signed_url": signed["signed_url"], "token": signed.get("token")})
     return {"session": session, "uploads": out,
             "limits": {"min_samples": ev.MIN_SAMPLES, "max_samples": ev.MAX_SAMPLES,
-                       "max_sample_mb": ev.MAX_SAMPLE_BYTES // (1024 * 1024)}}
+                       "max_sample_mb": ev.MAX_SAMPLE_BYTES // (1024 * 1024),
+                       "max_resume_mb": ev.MAX_RESUME_BYTES // (1024 * 1024)}}
 
 
 @router.get("/review-backlog")

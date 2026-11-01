@@ -3157,8 +3157,8 @@ def pg_select_contractor_by_vendor_id(vendor_id: str) -> Optional[dict]:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, stripe_account_id, connect_status, vendor_id, full_name, email "
-                "FROM public.contractors WHERE vendor_id = %s LIMIT 1",
+                "SELECT id, stripe_account_id, connect_status, vendor_id, full_name, email, member_id "
+                "FROM public.contractors WHERE vendor_id = %s AND member_id IS NULL LIMIT 1",
                 (vid,),
             )
             row = _row_from_cursor(cur)
@@ -3187,7 +3187,7 @@ def pg_select_contractor_by_stripe_account_id(stripe_account_id: str) -> Optiona
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, stripe_account_id, connect_status, vendor_id "
+                "SELECT id, stripe_account_id, connect_status, vendor_id, member_id "
                 "FROM public.contractors WHERE stripe_account_id = %s LIMIT 1",
                 (aid,),
             )
@@ -3197,6 +3197,36 @@ def pg_select_contractor_by_stripe_account_id(stripe_account_id: str) -> Optiona
             return row
     except Exception as e:
         logger.error("pg_select_contractor_by_stripe_account_id failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_contractor_by_member_id(member_id: str) -> Optional[dict]:
+    """Fetch one photographer's contractors row (per-member Stripe Connect) via Postgres."""
+    mid = str(member_id or "").strip()
+    if not mid:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_contractor_by_member_id: no Postgres connection")
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, stripe_account_id, connect_status, vendor_id, full_name, email, member_id "
+                "FROM public.contractors WHERE member_id = %s LIMIT 1",
+                (mid,),
+            )
+            row = _row_from_cursor(cur)
+            if row and row.get("id") is not None:
+                row["id"] = str(row["id"])
+            return row
+    except Exception as e:
+        logger.error("pg_select_contractor_by_member_id failed: %s", str(e)[:300])
         return None
     finally:
         try:
@@ -3215,6 +3245,7 @@ def pg_insert_contractor(row: dict) -> Optional[dict]:
     allowed = {
         "id",
         "vendor_id",
+        "member_id",
         "full_name",
         "email",
         "stripe_account_id",

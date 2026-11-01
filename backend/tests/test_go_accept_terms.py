@@ -84,7 +84,12 @@ def _body(version=_IC_AGREEMENT_VERSION, read=("ic", "privacy")):
 
 def test_needs_terms_only_for_contractors_without_acceptance():
     assert needs_terms(MEMBER) is True
-    assert needs_terms({**MEMBER, "terms_accepted_at": "2026-10-01T00:00:00+00:00"}) is False
+    accepted = {**MEMBER, "terms_accepted_at": "2026-10-01T00:00:00+00:00"}
+    # Still onboarding: the current agreement version is required.
+    assert needs_terms({**accepted, "ic_agreement_version": _IC_AGREEMENT_VERSION}) is False
+    assert needs_terms({**accepted, "ic_agreement_version": "0.1"}) is True
+    # Live vendors on an older version are not re-gated.
+    assert needs_terms({**accepted, "onboarding_completed_at": "2026-10-01T00:00:00+00:00"}) is False
     assert needs_terms({**MEMBER, "role": "Owner"}) is False
     assert needs_terms({**MEMBER, "payout_mode": "owner_full"}) is False
     assert needs_terms(None) is False

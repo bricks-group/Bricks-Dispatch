@@ -221,6 +221,11 @@ def is_platform_owner(member: Any) -> bool:
     return str(m.get("id") or "") == KAM_MEMBER_ID
 
 
+def onboarding_complete(member: Any) -> bool:
+    """Checklist done (or grandfathered): vendor_members.onboarding_completed_at set."""
+    return bool(_as_dict(member).get("onboarding_completed_at"))
+
+
 def is_aman_pending(member: Any) -> bool:
     """Aman Sammy (and any unapproved applicant) must never be assigned."""
     m = _as_dict(member)
@@ -693,6 +698,9 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     if not m.get("is_active"):
         return False
     if is_aman_pending(m):
+        return False
+    # Approved vendors finish the onboarding checklist first (Kam, 2026-10-31).
+    if not onboarding_complete(m):
         return False
     needed_type = job_required_vendor_type(job)
     # Unknown job type: fail closed so ops routes it by hand.

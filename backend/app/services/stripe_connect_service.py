@@ -131,6 +131,40 @@ def assert_payout_ready(stripe_account_id: str) -> None:
         )
 
 
+def connect_member_key(member: dict | None) -> str | None:
+    """Per-photographer Stripe Connect: the vendor_members.id that owns the
+    Express account. None = the company row (the owner's own payouts)."""
+    from app.shared.vendor_identity import is_owner_member
+    if not member or is_owner_member(member):
+        return None
+    return str(member.get("id") or "") or None
+
+
+def load_contractor_row(vendor_id: str, member_id: str | None = None) -> dict | None:
+    """contractors row for one photographer (member_id) or the company (member_id NULL)."""
+    from app.shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_contractor_by_member_id,
+        pg_select_contractor_by_vendor_id,
+    )
+    cols = "id, stripe_account_id, connect_status, vendor_id, member_id"
+    try:
+        q = supabase.table("contractors").select(cols)
+        if member_id:
+            q = q.eq("member_id", member_id)
+        else:
+            q = q.eq("vendor_id", vendor_id).is_("member_id", "null")
+        res = q.limit(1).execute()
+        rows = getattr(res, "data", None) or []
+        return rows[0] if rows else None
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            if member_id:
+                return pg_select_contractor_by_member_id(member_id)
+            return pg_select_contractor_by_vendor_id(vendor_id)
+        raise
+
+
 async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, payout_id: str = "", contractor_id: str = "") -> str:
     """
     Transfer funds to the vendor's connected Stripe account.
@@ -142,39 +176,27 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
     When provided it is used to look up the Stripe account directly, avoiding the
     multi-row ambiguity of querying by org-level vendor_id.
     """
-    def _load_contractor(resolved_vendor_id: str):
-        from app.shared.pg_fallback import (
-            _is_rest_quota_error,
-            pg_select_contractor_by_vendor_id,
-        )
-        try:
-            response = supabase.table("contractors").select(
-                "id, stripe_account_id, connect_status"
-            ).eq("vendor_id", resolved_vendor_id).maybe_single().execute()
-            return maybe_single_row(response) or None
-        except Exception as e:
-            if _is_rest_quota_error(e):
-                return pg_select_contractor_by_vendor_id(resolved_vendor_id)
-            raise
-
     if contractor_id:
-        # contractor_id is vendor_members.id (photographer-level); contractors are linked via
-        # vendor_id FK — not a shared PK — so resolve the vendor_id from vendor_members first.
+        # contractor_id is the assignee's vendor_members.id. Each photographer has
+        # their own Express account (contractors.member_id). The company row
+        # (member_id NULL) only pays the owner.
         from app.shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
-        try:
-            member_res = supabase.table("vendor_members").select("vendor_id").eq(
-                "id", contractor_id
-            ).maybe_single().execute()
-            member = maybe_single_row(member_res)
-        except Exception as e:
-            if _is_rest_quota_error(e):
-                member = pg_select_vendor_member(actor_id=contractor_id) or {}
-            else:
-                raise
-        resolved_vendor_id = member.get("vendor_id") or vendor_id
-        contractor = _load_contractor(resolved_vendor_id)
+        contractor = load_contractor_row(vendor_id, contractor_id)
+        if not contractor:
+            try:
+                member_res = supabase.table("vendor_members").select("*").eq(
+                    "id", contractor_id
+                ).maybe_single().execute()
+                member = maybe_single_row(member_res) or {}
+            except Exception as e:
+                if _is_rest_quota_error(e):
+                    member = pg_select_vendor_member(actor_id=contractor_id) or {}
+                else:
+                    raise
+            if member and connect_member_key({**member, "id": contractor_id}) is None:
+                contractor = load_contractor_row(member.get("vendor_id") or vendor_id, None)
     else:
-        contractor = _load_contractor(vendor_id)
+        contractor = load_contractor_row(vendor_id, None)
 
     if not contractor or not contractor.get("stripe_account_id"):
         raise ValueError(f"Stripe account not found for vendor: {vendor_id} contractor: {contractor_id}")
@@ -203,7 +225,8 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
 
 
 async def create_connect_account_and_link(
-    vendor_id: str, refresh_url: str, return_url: str, full_name: str = "", email: str = ""
+    vendor_id: str, refresh_url: str, return_url: str, full_name: str = "", email: str = "",
+    member_id: str | None = None,
 ) -> str:
     """
     Creates a Stripe Connect Express account for a vendor and generates an account link.
@@ -218,16 +241,8 @@ async def create_connect_account_and_link(
         pg_update_contractor,
     )
 
-    try:
-        response = supabase.table("contractors").select("id, stripe_account_id").eq(
-            "vendor_id", vendor_id
-        ).maybe_single().execute()
-        contractor = maybe_single_row(response) or None
-    except Exception as e:
-        if _is_rest_quota_error(e):
-            contractor = pg_select_contractor_by_vendor_id(vendor_id)
-        else:
-            raise
+    # member_id set = this photographer's own Express account; None = company row.
+    contractor = load_contractor_row(vendor_id, member_id)
 
     if not contractor:
         payload = {
@@ -235,6 +250,8 @@ async def create_connect_account_and_link(
             "full_name": full_name or vendor_id,
             "email": email or f"{vendor_id}@bricks.internal",
         }
+        if member_id:
+            payload["member_id"] = member_id
         try:
             insert_res = supabase.table("contractors").insert(payload).execute()
             if not insert_res.data:

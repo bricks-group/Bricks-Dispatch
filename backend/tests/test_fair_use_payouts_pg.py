@@ -198,6 +198,12 @@ def test_trigger_payout_for_job_pg_on_402(monkeypatch):
         def maybe_single(self):
             return self
 
+        def limit(self, *_a, **_k):
+            return self
+
+        def is_(self, *_a, **_k):
+            return self
+
         async def execute(self):
             raise _QuotaErr()
 
@@ -289,6 +295,12 @@ def test_handle_payout_to_vendor_pg_on_402(monkeypatch):
         def maybe_single(self):
             return self
 
+        def limit(self, *_a, **_k):
+            return self
+
+        def is_(self, *_a, **_k):
+            return self
+
         def execute(self):
             raise _QuotaErr()
 
@@ -303,13 +315,13 @@ def test_handle_payout_to_vendor_pg_on_402(monkeypatch):
         or {"id": actor_id, "vendor_id": "default_vendor"},
     )
     monkeypatch.setattr(
-        "app.shared.pg_fallback.pg_select_contractor_by_vendor_id",
-        lambda vid: contractor_calls.append(vid)
+        "app.shared.pg_fallback.pg_select_contractor_by_member_id",
+        lambda mid: contractor_calls.append(mid)
         or {
             "id": "c-1",
             "stripe_account_id": "acct_ready",
             "connect_status": "connected",
-            "vendor_id": vid,
+            "vendor_id": "default_vendor",
         },
     )
     monkeypatch.setattr(
@@ -344,8 +356,10 @@ def test_handle_payout_to_vendor_pg_on_402(monkeypatch):
         )
     )
     assert tid == "tr_pg_1"
-    assert member_calls == ["photog-1"]
-    assert contractor_calls == ["default_vendor"]
+    # Own account found by member_id, so no vendor_members lookup is needed.
+    assert member_calls == []
+    # Per photographer: the assignee's own Express account (contractors.member_id).
+    assert contractor_calls == ["photog-1"]
 
 
 def test_create_connect_account_pg_on_402(monkeypatch):
@@ -365,6 +379,12 @@ def test_create_connect_account_pg_on_402(monkeypatch):
             return self
 
         def maybe_single(self):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def is_(self, *_a, **_k):
             return self
 
         def execute(self):
@@ -512,6 +532,12 @@ def test_stripe_connect_status_pg_on_402(monkeypatch):
         def maybe_single(self):
             return self
 
+        def limit(self, *_a, **_k):
+            return self
+
+        def is_(self, *_a, **_k):
+            return self
+
         async def execute(self):
             raise _QuotaErr()
 
@@ -526,7 +552,6 @@ def test_stripe_connect_status_pg_on_402(monkeypatch):
         AsyncMock(return_value={"id": "owner-1", "vendor_id": "default_vendor", "role": "Owner"}),
     )
     monkeypatch.setattr(sc_status, "can_access_stripe_connect", lambda m: True)
-    monkeypatch.setattr(sc_status, "get_db", AsyncMock(return_value=Db()))
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_select_contractor_by_vendor_id",
         lambda vid: {
@@ -537,6 +562,16 @@ def test_stripe_connect_status_pg_on_402(monkeypatch):
         },
     )
     scs_real = _load_real_scs()
+
+    class SyncChain(Chain):
+        def execute(self):
+            raise _QuotaErr()
+
+    class SyncClient:
+        def table(self, name):
+            return SyncChain()
+
+    monkeypatch.setattr(scs_real, "supabase", SyncClient())
     monkeypatch.setitem(
         __import__("sys").modules,
         "app.services.stripe_connect_service",
@@ -574,6 +609,12 @@ def test_connect_webhook_pg_on_402(monkeypatch):
             return self
 
         def maybe_single(self):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def is_(self, *_a, **_k):
             return self
 
         async def execute(self):

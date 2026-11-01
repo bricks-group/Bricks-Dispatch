@@ -90,7 +90,8 @@ def test_format_shoot_window_is_booked_clock():
 def test_notify_assignment_emails_photographer():
     src = (ROOT / "app/services/notifications.py").read_text()
     assert "_assignment_email_html" in src
-    assert "Open Bricks GO" in src
+    assert "Open the Bricks app" in src
+    assert "Bricks GO" not in src.split("_assignment_email_html", 1)[1].split("\ndef ", 1)[0]
     assert 'result["email"]' in src
     assert "format_when_line" in src
 

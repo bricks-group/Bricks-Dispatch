@@ -109,6 +109,7 @@ SCORE_WEIGHTS = {
     "location": 10,     # in the GTA (from the city picker)
     "portfolio": 5,     # optional links: do they load / could they be reviewed
     "drone": 10,        # only when RPAS is claimed
+    "resume": 5,        # only when a resume was uploaded and could be read
 }
 PART_LABEL = {
     "samples": "Sample photos",
@@ -117,6 +118,7 @@ PART_LABEL = {
     "location": "Location",
     "portfolio": "Portfolio links",
     "drone": "Drone cert",
+    "resume": "Resume",
 }
 INCOMPLETE_SCORE_CAP = 60
 RECOMMEND_MIN_SCORE = 75
@@ -449,6 +451,8 @@ class ReviewInput:
     source_detail: Optional[str] = None
     # Non-media trades: self-reported credentials from application_profile.
     credentials: dict = field(default_factory=dict)
+    # Photographers (2026-10-31): resume in private storage. Older applicants have none.
+    resume_path: str = ""
 
 
 def _member_trade(member: dict) -> str:
@@ -609,6 +613,28 @@ async def run_review(
     if phones:
         flags.append({"key": "phone", "source": ev.VERIFIED, "text": "Some samples were shot on a phone (photo metadata)."})
 
+    # ---- resume -------------------------------------------------------------
+    resume = None
+    if inp.resume_path:
+        from .applicant_resume import check_resume_bytes
+        try:
+            rdata = await fetch_bytes(inp.resume_path)
+        except Exception:
+            rdata = None
+        resume = check_resume_bytes(rdata, inp.resume_path)
+        if resume["value"] is None:
+            evidence.append({"key": "resume", "ok": None, "source": ev.COULDNT_CHECK,
+                             "text": "Resume uploaded but couldn't be read automatically. Open it."})
+        elif resume["value"] >= 1.0:
+            evidence.append({"key": "resume", "ok": True, "source": ev.VERIFIED,
+                             "text": "Resume mentions real estate work (" + ", ".join(resume["terms"][:4]) + ")."})
+        else:
+            evidence.append({"key": "resume", "ok": False, "source": ev.VERIFIED,
+                             "text": "Resume doesn't mention real estate or property work."})
+    elif is_photographer:
+        evidence.append({"key": "resume", "ok": None, "source": ev.COULDNT_CHECK,
+                         "text": "No resume (applied before resumes were required)."})
+
     # ---- samples evidence --------------------------------------------------
     rubric_basis = up_reviewed if up_reviewed else port_reviewed
     criteria = criterion_summary(rubric_basis)
@@ -730,6 +756,9 @@ async def run_review(
         if cert_read and cert_read.get("is_certificate") is False:
             dv = min(dv, 0.5)
         parts["drone"] = {"value": dv, "status": _status_from(dv)}
+    if resume and resume.get("value") is not None:
+        rv = float(resume["value"])
+        parts["resume"] = {"value": rv, "status": GREEN if rv >= 1.0 else YELLOW}
     total_w = sum(SCORE_WEIGHTS[k] for k in parts)
     raw_score = sum(SCORE_WEIGHTS[k] * parts[k]["value"] for k in parts) / total_w * 100 if total_w else 0
     for k in parts:
@@ -764,6 +793,31 @@ async def run_review(
         verdict = RECOMMEND
     else:
         verdict = NEEDS_REVIEW
+    # Real estate samples are required (2026-10-31): say why in plain words.
+    reasons: list = []
+    if rubric_basis:
+        n_re = sum(1 for i in rubric_basis if i.is_real_estate)
+        n = len(rubric_basis)
+        subjects = {(i.subject or "").lower() for i in rubric_basis if i.is_real_estate}
+        if re_share < 0.5:
+            reasons.append(f"Samples aren't real estate: only {n_re} of {n} show a home or property.")
+            if verdict != NOT_A_FIT:
+                verdict = NOT_A_FIT
+        elif re_share < 0.8:
+            reasons.append(f"Some samples aren't real estate: {n_re} of {n} show a home or property.")
+            if verdict == RECOMMEND:
+                verdict = NEEDS_REVIEW
+        if re_share >= 0.5:
+            if "interior" not in subjects:
+                reasons.append("No interior shots in the samples.")
+                if verdict == RECOMMEND:
+                    verdict = NEEDS_REVIEW
+            if not subjects & {"exterior", "aerial", "twilight"}:
+                reasons.append("No exterior shots in the samples.")
+                if verdict == RECOMMEND:
+                    verdict = NEEDS_REVIEW
+    if hard_flag:
+        reasons.insert(0, "Samples look copied or stock." if len(stock) >= 2 else "Samples match another applicant's.")
     colour = {RECOMMEND: GREEN, NEEDS_REVIEW: YELLOW, NOT_A_FIT: RED}[verdict]
     if incomplete and verdict != NOT_A_FIT:
         colour = GREY
@@ -805,6 +859,8 @@ async def run_review(
         "version": 1,
         "verdict": verdict,
         "verdict_label": VERDICT_LABEL[verdict],
+        "verdict_reasons": reasons,
+        "resume": ({k: resume.get(k) for k in ("readable", "terms", "value")} if resume else None),
         "colour": colour,
         "incomplete": incomplete,
         "needs_samples": needs_samples,
@@ -867,4 +923,5 @@ def review_input_from_member(member: dict, availability: Optional[dict] = None) 
         source=member.get("source"),
         source_detail=member.get("source_detail"),
         credentials=prof.get("credentials") if isinstance(prof.get("credentials"), dict) else {},
+        resume_path=((prof.get("resume") or {}).get("path") if isinstance(prof.get("resume"), dict) else "") or "",
     )

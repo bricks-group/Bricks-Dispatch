@@ -70,7 +70,13 @@ def test_stripe_connect_status_allows_photographer(monkeypatch):
     }
     monkeypatch.setattr(sc_status, "resolve_vendor_actor_id", AsyncMock(return_value="photog-1"))
     monkeypatch.setattr(sc_status, "get_vendor_member", AsyncMock(return_value=photog))
-    monkeypatch.setattr(sc_status, "get_db", AsyncMock(return_value=Db()))
+    import sys
+    import types
+    fake_scs = types.SimpleNamespace(
+        connect_member_key=lambda m: m.get("id"),
+        load_contractor_row=lambda vendor_id, member_id=None: None,
+    )
+    monkeypatch.setitem(sys.modules, "app.services.stripe_connect_service", fake_scs)
 
     out = asyncio.run(
         sc_status.get_stripe_connect_status(authorization="Bearer x", x_user_id=None)

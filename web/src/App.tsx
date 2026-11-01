@@ -23,7 +23,8 @@ import { GoogleCalendarCallbackPage } from './pages/GoogleCalendarCallbackPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { UnderReviewPage } from './pages/UnderReviewPage';
 import { AddEmailPage, NotOnTeamPage } from './pages/AddEmailPage';
-import { hasAppAccess, AuthMember } from './lib/api';
+import { hasAppAccess, isOnboarding, AuthMember } from './lib/api';
+import { OnboardingPage } from './pages/OnboardingPage';
 import BricksLoader from './components/BricksLoader';
 import { GuidePage } from './guide/GuidePage';
 
@@ -171,7 +172,8 @@ function ProtectedLayout() {
         <TopBar name={name} onLogout={onLogout} />
         <OfflineBar />
         <Routes>
-          <Route path="/"                element={<OverviewPage />} />
+          <Route path="/"                element={isOnboarding(member) ? <OnboardingPage onLive={refreshSession} /> : <OverviewPage />} />
+          <Route path="/onboarding"     element={<OnboardingPage onLive={() => { refreshSession(); navigate('/', { replace: true }); }} />} />
           <Route path="/jobs"           element={<JobsPage />} />
           <Route path="/notifications"  element={<NotificationsPage />} />
           <Route path="/profile"        element={<ProfilePage />} />

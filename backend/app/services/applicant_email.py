@@ -34,7 +34,7 @@ VERDICT_BAND = {
     "red": "Not a fit",
     "grey": "Incomplete",
 }
-PART_ORDER = ("samples", "gear", "availability", "location", "portfolio", "drone")
+PART_ORDER = ("samples", "gear", "availability", "location", "portfolio", "drone", "resume")
 SPECIALTY_LABEL = {
     "photo": "Photos", "video": "Video", "drone": "Drone", "virtual_tour": "Virtual tour",
     "virtual_visit": "Virtual visit", "floor_plan": "Floor plans", "twilight": "Twilight",
@@ -100,6 +100,7 @@ def render_html(
     found_via: str,
     review: dict,
     thumb_urls: list,
+    resume_url: str | None = None,
 ) -> str:
     colour = review.get("colour") or "yellow"
     st = STATUS.get(colour, STATUS["yellow"])
@@ -193,6 +194,23 @@ def render_html(
         )
         missing_html = _section_label("Still missing") + f'<tr><td style="padding:0 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{items}</table></td></tr>'
 
+    reasons = review.get("verdict_reasons") or []
+    reasons_html = ""
+    if reasons:
+        items = "".join(
+            f'<tr><td valign="top" width="14" style="width:14px;padding:4px 0;font-family:{MONO};font-size:12px;color:{BRICK_DEEP};">–</td>'
+            f'<td style="padding:4px 0;font-family:{SANS};font-size:13px;line-height:19px;color:{INK};">{e(r)}</td></tr>'
+            for r in reasons
+        )
+        reasons_html = _section_label("Why") + f'<tr><td style="padding:0 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{items}</table></td></tr>'
+    resume_html = _section_label("Resume") + (
+        f'<tr><td style="padding:0 24px;font-family:{SANS};font-size:13px;line-height:19px;color:{INK};">'
+        f'<a href="{e(resume_url)}" target="_blank" style="color:{BRICK_DEEP};">Download resume</a>'
+        f' <span style="color:{INK_MUTE};">(link works for 7 days)</span></td></tr>'
+        if resume_url else
+        f'<tr><td style="padding:0 24px;font-family:{SANS};font-size:13px;line-height:19px;color:{INK_MUTE};">No resume on file.</td></tr>'
+    )
+
     os_url, approve_url = os_link(member_id), os_link(member_id, "approve")
     avail = review.get("availability_summary") or "—"
     title = band_title(review)
@@ -240,7 +258,9 @@ def render_html(
   {''.join(f'<tr><td width="104" valign="top" style="width:104px;padding:3px 0;font-family:{MONO};font-size:10px;letter-spacing:1px;color:{INK_MUTE};text-transform:uppercase;">{e(k)}</td><td style="padding:2px 0;font-family:{SANS};font-size:13px;line-height:19px;color:{INK};">{e(v)}</td></tr>' for k, v in (("City", city or "—"), ("Specialty", _specialties(specialties)), ("Found us via", found_via or "—"), ("Availability", avail)))}
   </table>
 </td></tr>
+{reasons_html}
 {thumbs_html}
+{resume_html}
 {rubric_html}
 {_section_label("Evidence")}
 <tr><td style="padding:0 24px;" class="px"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{''.join(ev_rows)}</table></td></tr>
@@ -263,10 +283,13 @@ Tags: <b style="font-weight:600;">Verified</b> = Bricks looked at it. <b style="
 </body></html>"""
 
 
-def render_text(*, member_id: str, name: str, city: str, specialties, found_via: str, review: dict, thumb_urls: list) -> str:
+def render_text(*, member_id: str, name: str, city: str, specialties, found_via: str, review: dict, thumb_urls: list,
+                resume_url: str | None = None) -> str:
     lines = [
         f"{band_title(review)} · {review.get('score', 0)}/100",
     ]
+    for r in review.get("verdict_reasons") or []:
+        lines.append(f"Why: {r}")
     if review.get("incomplete"):
         lines.append(f"Score capped at {review.get('score_cap') or 60} until samples are reviewed.")
     parts = review.get("parts") or {}
@@ -287,6 +310,7 @@ def render_text(*, member_id: str, name: str, city: str, specialties, found_via:
     ]
     if thumb_urls:
         lines += ["", "Sample photos:"] + [f"- {t.get('label')}: {t['url']}" for t in thumb_urls[:3]]
+    lines += ["", f"Resume: {resume_url}" if resume_url else "Resume: none on file."]
     if review.get("vision_ran"):
         lines += ["", "Rubric:"] + [f"- {c['label']}: {c['words']}" for c in (review.get("criteria") or {}).values()]
     else:

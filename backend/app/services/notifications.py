@@ -259,13 +259,13 @@ def _assignment_email_html(name: str, address: str, when_line: str, go_url: str)
 </tr>
 </table>
 <div style="background:#d2542b;padding:16px 24px;margin-top:12px">
-<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">New job on Bricks GO</h1>
+<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">New job on Bricks</h1>
 </div>
 <div style="padding:24px">
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {who},</p>
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">A shoot just landed on your Today list: <strong>{addr}</strong>.</p>
 {when_p}
-<a href="{go_url}" style="display:inline-block;margin-top:8px;padding:12px 24px;background:#d2542b;color:#fff;text-decoration:none;border-radius:2px;font-weight:500">Open Bricks GO</a>
+<a href="{go_url}" style="display:inline-block;margin-top:8px;padding:12px 24px;background:#d2542b;color:#fff;text-decoration:none;border-radius:2px;font-weight:500">Open the Bricks app</a>
 <p style="margin-top:24px;font-size:13px;color:#999;line-height:1.5">Or go to <a href="{go_url}" style="color:#d2542b">{go_url}</a></p>
 </div>
 <div style="padding:12px 24px;border-top:1px solid #eee;font-size:12px;color:#888;font-family:{_EMAIL_FONT_STACK}">
@@ -389,7 +389,9 @@ def _paid_booking_admin_email_html(
 </div></body></html>"""
 
 
-async def send_email_via_resend(to: str, subject: str, html: str, text: str | None = None) -> bool:
+async def send_email_via_resend(
+    to: str, subject: str, html: str, text: str | None = None, from_addr: str | None = None,
+) -> bool:
     """Send transactional email via Resend. Returns True on success.
 
     text: optional plain-text alternative (multipart/alternative)."""
@@ -407,7 +409,7 @@ async def send_email_via_resend(to: str, subject: str, html: str, text: str | No
                     "Content-Type": "application/json",
                 },
                 json={
-                    "from": "BRICKS <notifications@brxs.ca>",
+                    "from": from_addr or "BRICKS <notifications@brxs.ca>",
                     "reply_to": "help@brxs.ca",
                     "to": [to],
                     "subject": subject,
@@ -678,6 +680,7 @@ async def create_notification(
     email_html: str | None = None,
     member_id: str | None = None,
     send_push: bool = True,
+    email_from: str | None = None,
 ):
     notif = NotificationRecord(title=title, body=body, type=ntype, data=data or {})
     try:
@@ -717,6 +720,7 @@ async def create_notification(
             to=email_to,
             subject=email_subject or title,
             html=email_html or _build_html_email(title, body),
+            from_addr=email_from,
         )
     return notif_dict
 
@@ -790,7 +794,7 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
             result["email"] = bool(
                 await send_email_via_resend(
                     to_email,
-                    f"New job on Bricks GO — {address}",
+                    f"New job on Bricks — {address}",
                     html,
                 )
             )
