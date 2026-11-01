@@ -425,6 +425,13 @@ async def _store_applicant_jev_probability(member_id: str, existing_notes: str, 
             )
 
 
+@router.get("/trades")
+async def trade_registry():
+    """Public trade registry (labels, enabled, required uploads). No vendor data."""
+    from ..services.trade_specs import registry
+    return registry()
+
+
 @router.post("/apply")
 async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
