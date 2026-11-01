@@ -25,6 +25,7 @@ import { UnderReviewPage } from './pages/UnderReviewPage';
 import { AddEmailPage, NotOnTeamPage } from './pages/AddEmailPage';
 import { hasAppAccess, isOnboarding, AuthMember } from './lib/api';
 import { OnboardingPage } from './pages/OnboardingPage';
+import PayoutsBanner from './components/PayoutsBanner';
 import BricksLoader from './components/BricksLoader';
 import { GuidePage } from './guide/GuidePage';
 
@@ -171,6 +172,7 @@ function ProtectedLayout() {
       <main className="main">
         <TopBar name={name} onLogout={onLogout} />
         <OfflineBar />
+        <PayoutsBanner />
         <Routes>
           <Route path="/"                element={isOnboarding(member) ? <OnboardingPage onLive={refreshSession} /> : <OverviewPage />} />
           <Route path="/onboarding"     element={<OnboardingPage onLive={() => { refreshSession(); navigate('/', { replace: true }); }} />} />

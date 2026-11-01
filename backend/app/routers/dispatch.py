@@ -254,6 +254,14 @@ async def create_dispatch_job(
         except Exception:
             logger.exception("Admin new-booking notify failed for job %s", job_id)
 
+        # First live (cs_live_) paid booking ever → one-time prompt to Kam to
+        # start the Autoenhance plan. Test-mode bookings never count.
+        try:
+            from ..services.editor_ledger import maybe_prompt_autoenhance_plan
+            await maybe_prompt_autoenhance_plan({**job_data, "id": job_id})
+        except Exception:
+            logger.exception("Autoenhance plan prompt failed for job %s", job_id)
+
         return {
             "job_id": job_id,
             "status": status,
@@ -315,6 +323,11 @@ async def create_dispatch_job(
                     )
                 except Exception:
                     logger.exception("Admin notify after pg fallback failed for %s", pg_id)
+                try:
+                    from ..services.editor_ledger import maybe_prompt_autoenhance_plan
+                    await maybe_prompt_autoenhance_plan({**job_data, "id": pg_id})
+                except Exception:
+                    logger.exception("Autoenhance plan prompt failed for job %s", pg_id)
                 # Best-effort client/vendor notify for preassigned Fair-Use path
                 if preassigned:
                     try:

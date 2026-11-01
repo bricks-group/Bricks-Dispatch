@@ -1008,6 +1008,11 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
     except Exception as e:
         logger.error(f"Job {job_id}: payout trigger failed after delivery: {e}")
 
+    # Job ledger: Autoenhance cost per edited still comes out of Bricks' cut
+    # (never vendor pay or the client price). Best-effort, never raises.
+    from ..services.editor_ledger import record_editor_cost
+    await record_editor_cost(job_id)
+
     # Notify booking agent via Resend (best-effort).
     # visit_bridge: notify_capture_delivered already emailed Virtual Visit —
     # skip the photo-delivery template so agents are not double-messaged.
