@@ -308,7 +308,7 @@ export function LoginPage() {
           <p className="muted" style={{ margin: 0 }}>Sent a verification code to {email}</p>
           <label className="login-field">
             Code
-            <input type="text" value={otp} onChange={(e) => setOtp(e.target.value)} required placeholder="123456" />
+            <input type="text" value={otp} onChange={(e) => setOtp(e.target.value)} required placeholder="12345678" />
           </label>
           {error && <p className="error" style={{ padding: 0 }}>{error}</p>}
           <button type="submit" className="btn-primary btn-brick" disabled={submitting}>{submitting && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{submitting ? 'Verifying…' : 'Verify'}</button>
