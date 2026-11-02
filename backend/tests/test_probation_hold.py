@@ -76,7 +76,7 @@ def _db(**extra):
 
 @pytest.fixture(autouse=True)
 def _secret(monkeypatch):
-    monkeypatch.setenv("PROBATION_ACTION_SECRET", "test-secret")
+    monkeypatch.setenv("OPS_ACTION_SECRET", "test-secret")
 
 
 def test_decide_rules():
@@ -226,12 +226,13 @@ def test_owner_one_tap_release_resumes_and_pays():
     _run(db, lambda: ps.trigger_payout_for_job(db, "j1"))
     db.tables["vendor_reviews"].append({"job_id": "j1", "vendor_id": "m1", "rating": 2})
     _run(db, lambda: ph.run_probation_sweep(db))
-    tok = ph.sign_action("m1", "j1", "release")
-    assert ph.verify_action(tok) == {"member_id": "m1", "job_id": "j1", "action": "release"}
-    assert ph.verify_action(tok[:-2] + "xx") is None
-    assert ph.verify_action(ph.sign_action("m1", "j1", "release", exp=1)) is None
-    stripe, out = _run(db, lambda: ph.apply_action(db, "m1", "j1", "release"))
-    assert out["resumed"] and stripe.await_count == 1
+    from app.services import ops_autopilot as ops
+    url = ph.action_url("m1", "j1", "release")
+    assert "/api/ops/act?t=" in url
+    tok = ops.verify_action(url.split("t=", 1)[1])
+    assert tok and tok.get("a") == "probation_release" and tok.get("p") == {"member_id": "m1", "job_id": "j1"}
+    stripe, out = _run(db, lambda: ops.run_action(db, tok))
+    assert out["ok"] and out["result"]["resumed"] and stripe.await_count == 1
     assert db.tables["vendor_members"][0]["paused_at"] is None
     assert db.tables["payouts"][0]["status"] == "paid"
 
@@ -260,8 +261,3 @@ def test_routes_auth_and_confirm_page(monkeypatch):
         assert e.value.status_code == 401
     assert asyncio.run(onboarding.probation_sweep(Req(Authorization="Bearer cron-x")))["checked"] == 0
     assert asyncio.run(onboarding.probation_sweep(Req(**{"X-Internal-Api-Key": "ik-1"}), job_id="j1"))["ok"]
-    # GET on a one-tap link only shows a confirm form (mail prefetch is harmless).
-    page = asyncio.run(onboarding.probation_action_confirm(ph.sign_action("m1", "j1", "keep")))
-    assert "<form method='post'>" in page.body.decode()
-    assert "expired" in asyncio.run(onboarding.probation_action_confirm("bad")).body.decode()
-    assert "expired" in asyncio.run(onboarding.probation_action_apply("bad")).body.decode()

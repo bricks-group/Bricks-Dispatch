@@ -924,17 +924,6 @@ async def credential_expiry_cron(request: Request, dry_run: bool = False):
     return await run_expiry_sweep(await get_db(), dry_run=bool(dry_run))
 
 
-def _probation_page(title: str, body_html: str):
-    from fastapi.responses import HTMLResponse
-    import html as _h
-
-    return HTMLResponse(
-        "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{_h.escape(title)}</title></head><body style='font-family:system-ui;max-width:520px;"
-        f"margin:48px auto;padding:0 20px;color:#111'><h2>{_h.escape(title)}</h2>{body_html}</body></html>"
-    )
-
-
 @router.api_route("/probation-sweep", methods=["GET", "POST"])
 async def probation_sweep(request: Request, job_id: Optional[str] = None):
     """Probation payout hold sweep. Daily Vercel cron (GET, CRON_SECRET) and the
@@ -950,39 +939,6 @@ async def probation_sweep(request: Request, job_id: Optional[str] = None):
     return await run_probation_sweep(await get_db(), job_id=job_id)
 
 
-@router.get("/probation/action")
-async def probation_action_confirm(t: str = ""):
-    """One-tap link from the owner alert. GET only shows a confirm button so
-    mail scanners that prefetch links never change anything."""
-    import html as _h
-    from ..services.probation_hold import ACTIONS, verify_action
-
-    tok = verify_action(t or "")
-    if not tok:
-        return _probation_page("Link expired", "<p>This link is invalid or has expired.</p>")
-    label = ACTIONS[tok["action"]]
-    return _probation_page(label, (
-        f"<form method='post'><input type='hidden' name='t' value='{_h.escape(t)}'>"
-        f"<button style='padding:12px 18px;font-size:16px;background:#111;color:#fff;border:0;"
-        f"border-radius:6px'>{_h.escape(label)}</button></form>"))
-
-
-@router.post("/probation/action")
-async def probation_action_apply(t: str = Form("")):
-    from ..services.probation_hold import ACTIONS, apply_action, verify_action
-
-    tok = verify_action(t or "")
-    if not tok:
-        return _probation_page("Link expired", "<p>This link is invalid or has expired.</p>")
-    res = await apply_action(await get_db(), tok["member_id"], tok["job_id"], tok["action"])
-    if not res.get("ok"):
-        return _probation_page("Not found", "<p>That probation job no longer exists.</p>")
-    if tok["action"] == "keep":
-        msg = "Vendor stays paused and the payout stays blocked."
-    else:
-        st = ((res.get("payout") or {}).get("status")) or ("already released" if res.get("already_released") else "requested")
-        msg = f"Payout {st}." + (" Vendor resumed." if res.get("resumed") else "")
-    return _probation_page("Done", f"<p>{msg}</p>")
 
 
 @router.post("/review/{member_id}")

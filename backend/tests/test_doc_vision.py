@@ -1,6 +1,7 @@
 """Document content check: blank detection, point rules, verdict impact."""
 import asyncio
 import io
+import pytest
 from datetime import date
 from unittest.mock import AsyncMock, patch
 
@@ -144,3 +145,21 @@ def test_check_member_docs_stores_and_caches():
         assert out[0]["validation_result"]["content_check"]["overall"] == dv.OK and len(db.updates) == 1
         run(dv.check_member_docs(db, _member(), out))  # cached
         assert len(db.updates) == 1
+
+
+def test_pdf_render_blank_and_text(tmp_path):
+    pytest.importorskip("pypdfium2")
+    from PIL import Image, ImageDraw
+    import io
+    blank = Image.new("RGB", (600, 800), "white")
+    b = io.BytesIO(); blank.save(b, "PDF")
+    j = dv.pdf_to_jpeg(b.getvalue())
+    assert j and dv.image_blank(j) is True
+    page = Image.new("RGB", (600, 800), "white")
+    ImageDraw.Draw(page).rectangle([50, 50, 550, 300], fill="black")
+    g = io.BytesIO(); page.save(g, "PDF")
+    j2 = dv.pdf_to_jpeg(g.getvalue())
+    assert j2 and dv.image_blank(j2) is False
+    out = asyncio.run(dv.check_document({"doc_type": "police_check", "file_url": "x/doc.pdf"}, {"name": "Test"},
+                                        data=b.getvalue()))
+    assert out["overall"] == "blank"

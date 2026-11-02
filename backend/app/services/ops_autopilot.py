@@ -191,6 +191,8 @@ ACTION_LABELS = {
     "retry_payout": "Retry the payout now",
     "probation_approve": "Approve this probation job",
     "probation_fail": "Fail this probation job (pauses the vendor)",
+    "probation_release": "Release the payout and resume the vendor",
+    "probation_keep": "Keep paused, payout blocked",
     "resolve_escalation": "Mark resolved",
     "retry_processing": "Retry editing and delivery",
 }
@@ -329,6 +331,10 @@ async def run_action(db, payload: dict) -> dict:
                                          "approved" if a == "probation_approve" else "failed",
                                          reviewed_by="kam-one-tap")
         return {"ok": bool(out), "result": out}
+    if a in ("probation_release", "probation_keep"):
+        from .probation_hold import apply_action
+        out = await apply_action(db, p["member_id"], p["job_id"], a.split("_", 1)[1])
+        return {"ok": bool(out.get("ok")), "result": out}
     if a == "resolve_escalation":
         now = datetime.now(timezone.utc).isoformat()
         await db.table("ops_escalations").update({"status": "resolved", "resolved_at": now, "resolved_by": "kam-one-tap"}).eq("id", p["id"]).execute()

@@ -167,10 +167,43 @@ def to_jpeg(data: bytes, max_side: int = 1600) -> Optional[bytes]:
 
 
 # ------------------------------------------------------------------ model call
+def pdf_to_jpeg(data: bytes, max_pages: int = 2, width: int = 1400) -> Optional[bytes]:
+    """Render the first pages of a PDF to one stacked JPEG (server-side, no model). None on failure."""
+    try:
+        import io
+        import pypdfium2 as pdfium
+        from PIL import Image
+        pdf = pdfium.PdfDocument(data)
+        pages = []
+        for i in range(min(len(pdf), max_pages)):
+            pg = pdf[i]
+            w = pg.get_width() or 612
+            img = pg.render(scale=max(0.5, min(4.0, width / w))).to_pil().convert("RGB")
+            pages.append(img)
+        if not pages:
+            return None
+        W = max(p.width for p in pages)
+        H = sum(p.height for p in pages)
+        sheet = Image.new("RGB", (W, H), "white")
+        y = 0
+        for p in pages:
+            sheet.paste(p, (0, y))
+            y += p.height
+        buf = io.BytesIO()
+        sheet.save(buf, "JPEG", quality=85)
+        return buf.getvalue()
+    except Exception as e:
+        logger.info("pdf render failed (%s); falling back to file part", type(e).__name__)
+        return None
+
+
 async def _call(prompt: str, kind_of_file: str, payload: bytes, filename: str) -> tuple[dict, float]:
     from .applicant_review import call_vision, OPENROUTER_CHAT_URL, vision_model, _parse_json, VISION_TIMEOUT
     if kind_of_file == "image":
         return await call_vision(prompt, payload)
+    jpeg = pdf_to_jpeg(payload)
+    if jpeg:
+        return await call_vision(prompt, jpeg)
     import os
     import httpx
     key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
@@ -189,6 +222,8 @@ async def _call(prompt: str, kind_of_file: str, payload: bytes, filename: str) -
                "HTTP-Referer": "https://brxs.ca", "X-Title": "Bricks document check"}
     async with httpx.AsyncClient(timeout=max(VISION_TIMEOUT, 45)) as client:
         resp = await client.post(OPENROUTER_CHAT_URL, json=body, headers=headers)
+    if resp.status_code >= 400:
+        logger.warning("doc check pdf call http=%s body=%s", resp.status_code, resp.text[:300].replace("\n", " "))
     resp.raise_for_status()
     data = resp.json()
     text = (((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or ""
@@ -370,6 +405,11 @@ async def check_document(doc: dict, member: dict, *, min_limit_cents: Optional[i
             if len(data) > MAX_BYTES:
                 return {**out, "overall": NOT_CHECKED, "points": [_pt("Content", UNVERIFIED, "File too large to check automatically.")]}
             payload = data
+            jpeg = pdf_to_jpeg(data)
+            if jpeg:
+                if image_blank(jpeg):
+                    return {**out, "overall": BLANK, "points": [_pt("Content", MISMATCH, "The PDF pages are blank.")]}
+                ftype, payload = "image", jpeg
         else:
             return {**out, "overall": NOT_CHECKED, "points": [_pt("Content", UNVERIFIED, "File type can't be checked automatically (use PDF or a photo).")]}
         if not vision_configured():

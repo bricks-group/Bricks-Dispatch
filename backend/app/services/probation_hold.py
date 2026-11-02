@@ -12,13 +12,9 @@ Runs entirely server-side, with no bot or box involved:
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import html as _html
 import logging
 import os
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -29,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 PROBATION_PREFIX = "Probation: "
 DEFAULT_RELEASE_HOURS = 72
-ACTION_TTL_SECONDS = 14 * 24 * 3600
 ACTIONS = {
     "release": "Release payout and resume vendor",
     "keep": "Keep vendor paused and payout blocked",
@@ -247,38 +242,12 @@ async def run_probation_sweep(db, job_id: Optional[str] = None, now: Optional[da
 
 
 # ---------------------------------------------------------------------------
-# One-tap owner actions (HMAC-signed, expiring)
+# One-tap owner actions: signed + single-use via the ops autopilot links
+# (/api/ops/act, actions probation_release / probation_keep).
 # ---------------------------------------------------------------------------
-def _secret() -> bytes:
-    raw = (os.environ.get("PROBATION_ACTION_SECRET") or os.environ.get("CRON_SECRET")
-           or os.environ.get("SUPABASE_JWT_SECRET") or "")
-    if not raw:
-        raise RuntimeError("probation action secret not configured")
-    return hashlib.sha256(b"bricks-probation-action|" + raw.encode()).digest()
-
-
-def sign_action(member_id: str, job_id: str, action: str, exp: Optional[int] = None) -> str:
-    exp = exp or int(time.time()) + ACTION_TTL_SECONDS
-    payload = f"{member_id}|{job_id}|{action}|{exp}"
-    sig = hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()[:32]
-    return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode().rstrip("=")
-
-
-def verify_action(token: str) -> Optional[dict]:
-    try:
-        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode()
-        member_id, job_id, action, exp, sig = raw.split("|")
-    except Exception:
-        return None
-    want = hmac.new(_secret(), f"{member_id}|{job_id}|{action}|{exp}".encode(), hashlib.sha256).hexdigest()[:32]
-    if not hmac.compare_digest(want, sig) or action not in ACTIONS or int(exp) < time.time():
-        return None
-    return {"member_id": member_id, "job_id": job_id, "action": action}
-
-
 def action_url(member_id: str, job_id: str, action: str) -> str:
-    base = (os.environ.get("DISPATCH_PUBLIC_URL") or "https://dispatch-api.brxs.ca").rstrip("/")
-    return f"{base}/api/onboarding/probation/action?t={sign_action(member_id, job_id, action)}"
+    from .ops_autopilot import action_url as ops_url
+    return ops_url("probation_" + action, {"member_id": member_id, "job_id": job_id})
 
 
 async def apply_action(db, member_id: str, job_id: str, action: str) -> dict:
@@ -341,7 +310,7 @@ async def alert_owner(db, row: dict, job: dict, reason: str, paused: bool) -> bo
                     f'<p><a href="{_html.escape(release)}" style="display:inline-block;padding:10px 16px;'
                     f'background:#111;color:#fff;border-radius:6px;text-decoration:none">{ACTIONS["release"]}</a></p>'
                     f'<p><a href="{_html.escape(keep)}">{ACTIONS["keep"]}</a></p>'
-                    "<p>Links open a confirm page and expire in 14 days.</p>")
+                    "<p>Links open a confirm page and work once.</p>")
             ok = await send_email_via_resend(to=ADMIN_EMAIL, subject=subject, html=body)
             sent = sent or bool(ok)
         except Exception as e:
