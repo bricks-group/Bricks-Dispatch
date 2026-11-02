@@ -1538,7 +1538,8 @@ def test_listing_still_delivery_urls_skips_unreviewed_qc(monkeypatch):
     ]
     urls = asyncio.run(pp._listing_still_delivery_urls(uploads))
     ids = [u["upload_id"] for u in urls]
-    assert ids == ["up-ok", "up-flag"]
+    # Flagged is held for the owner (E2E BUG 6), like rejected.
+    assert ids == ["up-ok"]
 
 
 def test_finalize_skips_unreviewed_still_when_qc_fails(monkeypatch):
@@ -1690,7 +1691,7 @@ def test_delivery_prune_upload_ids_holds_pending_and_rejected():
         {"qc_status": "pending"},  # no id
     ]
     held = pp._delivery_prune_upload_ids(uploads)
-    assert held == {"c", "d", "e", "f", "g"}
+    assert held == {"b", "c", "d", "e", "f", "g"}  # flagged held too (E2E BUG 6)
 
 
 def test_late_fold_prunes_legacy_pending_still_when_qc_fails(monkeypatch):

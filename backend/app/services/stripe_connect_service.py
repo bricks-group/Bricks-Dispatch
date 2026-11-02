@@ -163,7 +163,16 @@ def load_contractor_row(vendor_id: str, member_id: str | None = None) -> dict | 
             q = q.eq("vendor_id", vendor_id).is_("member_id", "null")
         res = q.limit(1).execute()
         rows = getattr(res, "data", None) or []
-        return rows[0] if rows else None
+        if rows or member_id:
+            return rows[0] if rows else None
+        # Owner/company row: jobs carry vendor_id 'default_vendor', which has no
+        # vendors row, so the company contractors row was saved with vendor_id
+        # NULL. Fall back to it only when it is the single unambiguous one.
+        res = supabase.table("contractors").select(cols).is_("vendor_id", "null").is_(
+            "member_id", "null"
+        ).limit(2).execute()
+        rows = getattr(res, "data", None) or []
+        return rows[0] if len(rows) == 1 else None
     except Exception as e:
         if _is_rest_quota_error(e):
             if member_id:

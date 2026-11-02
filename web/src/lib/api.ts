@@ -195,6 +195,17 @@ export type VendorProfile = {
 };
 
 export async function login(email: string): Promise<void> {
+  // First-time vendors: have Dispatch confirm their Auth user first so Supabase
+  // sends the 6-digit login code, not a 'Confirm your email' link. Best-effort.
+  try {
+    await fetch(`${API_BASE}/api/vendor-os/auth/prepare-email-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    /* login still proceeds */
+  }
   const { error } = await supabase.auth.signInWithOtp({ email });
   if (error) throw error;
 }
@@ -311,7 +322,8 @@ export async function verifyOtp(email: string, token: string): Promise<AuthMembe
   const { data, error } = await supabase.auth.verifyOtp({
     email,
     token,
-    type: 'magiclink'
+    // 'email' accepts both the magic-link and signup codes.
+    type: 'email'
   });
   if (error) throw error;
   if (!data.session) throw new Error('No session');

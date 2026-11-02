@@ -412,6 +412,12 @@ async def update_job_status(
     booking_id = job.get("booking_id")
     dev_capture_visit_id = job.get("dev_capture_visit_id")
 
+    # Delivered is final for the shoot flow: a second "complete" (double tap,
+    # retry, Booking echo) must not drag the job back to completed and re-run
+    # post-production (E2E BUG 7). Cancel / no-show transitions still pass.
+    if old_status == "delivered" and new_status in ("completed", "delivered", "processing"):
+        return {"status": "unchanged", "job_id": job_id, "new_status": old_status}
+
     # Vendors can't complete a trade job here either until its checklist is
     # ticked with proof (same gate as /api/vendor-os/jobs/{id}/status).
     if (

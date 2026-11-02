@@ -455,6 +455,15 @@ async def trigger_fotello_edit(image_url: str) -> Optional[str]:
 
 # --- Pipeline Orchestrator ---
 
+_ALREADY_PROCESSED = ("done", "skipped")
+
+
+def is_already_processed(asset: dict | None) -> bool:
+    """True when an upload already went through post-production (done/skipped)."""
+    row = asset if isinstance(asset, dict) else {}
+    return str(row.get("processing_status") or "").strip().lower() in _ALREADY_PROCESSED
+
+
 async def process_job_assets(job_id: str):
     """
     Main entry point for post-production processing.
@@ -510,7 +519,14 @@ async def process_job_assets(job_id: str):
 
     results = []
     leftover = []
+    already = 0
     for asset in assets or []:
+        if is_already_processed(asset):
+            # Re-complete of a delivered (or partly delivered) job: never send a
+            # finished still back through Autoenhance (E2E BUG 7). Late uploads
+            # are still pending, so they are processed and folded as before.
+            already += 1
+            continue
         route = delivery_route(asset)
         if route == "skip":
             continue
@@ -557,7 +573,10 @@ async def process_job_assets(job_id: str):
     # processing forever — finalize never ran. Deliver them now so the listing
     # file / client share is not a hollow path.
     # Group photo leftovers by bracket stem so +/-EV bursts HDR-merge once.
-    await _deliver_leftovers_with_brackets(db, job_id, leftover)
+    if already:
+        logger.info(f"Job {job_id}: {already} upload(s) already processed — not re-enhanced")
+    if leftover:
+        await _deliver_leftovers_with_brackets(db, job_id, leftover)
 
     if not results:
         try:

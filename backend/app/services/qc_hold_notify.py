@@ -28,11 +28,14 @@ def _clean_reason(note) -> str:
 
 
 def held_rows(uploads, only_ids: Optional[Iterable[str]] = None) -> list[dict]:
-    """Rejected image uploads, optionally limited to ids that just ran QC."""
+    """QC-held uploads (rejected or flagged), optionally limited to ids that just ran QC.
+
+    Flagged is held like rejected (Kam: a flagged image never reaches the client).
+    """
     limit = {str(i) for i in only_ids} if only_ids is not None else None
     out = []
     for u in uploads or []:
-        if not isinstance(u, dict) or u.get("qc_status") != "rejected":
+        if not isinstance(u, dict) or str(u.get("qc_status") or "").strip().lower() not in ("rejected", "flagged"):
             continue
         # One held still is one photo: bracket siblings are not listing stills,
         # so a stale sibling verdict never inflates the notice. Visit/3D files
@@ -167,7 +170,9 @@ async def notify_owner_qc_hold(
     out on at least one channel. Never raises.
     """
     try:
-        if not isinstance(qc_counts, dict) or int(qc_counts.get("rejected") or 0) <= 0:
+        if not isinstance(qc_counts, dict):
+            return False
+        if int(qc_counts.get("rejected") or 0) + int(qc_counts.get("flagged") or 0) <= 0:
             return False
         rows = held_rows(await _uploads(db, job_id), only_ids=only_ids)
         if not rows:

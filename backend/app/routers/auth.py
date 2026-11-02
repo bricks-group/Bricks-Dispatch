@@ -21,12 +21,29 @@ async def vendor_os_login(payload: VendorAuthLogin):
     if not email:
         api_error(400, "Email is required", "email_required")
     
-    # In Supabase, we send OTP
+    # In Supabase, we send OTP. Confirm a known vendor's Auth user first so a
+    # first-time vendor gets the login-code email, not 'Confirm your email'.
+    try:
+        from ..services.email_login_prep import ensure_confirmed_vendor_auth_user
+        await ensure_confirmed_vendor_auth_user(await get_db(), email)
+    except Exception:
+        pass
     try:
         res = await (await get_db()).auth.sign_in_with_otp({"email": email})
         return {"message": "OTP sent to email", "email": email}
     except Exception as e:
         api_error(500, f"Error sending OTP: {str(e)}", "otp_error")
+
+@router.post("/vendor-os/auth/prepare-email-login")
+async def vendor_os_prepare_email_login(payload: VendorAuthLogin):
+    """Called by GO before signInWithOtp({email}). Always 200 with the same body
+    so it cannot be used to probe which emails are vendors."""
+    try:
+        from ..services.email_login_prep import ensure_confirmed_vendor_auth_user
+        await ensure_confirmed_vendor_auth_user(await get_db(), payload.email)
+    except Exception:
+        pass
+    return {"ok": True}
 
 @router.post("/vendor-os/auth/verify")
 async def vendor_os_verify(payload: dict):
@@ -36,7 +53,7 @@ async def vendor_os_verify(payload: dict):
         api_error(400, "Email and token are required", "missing_fields")
     
     try:
-        res = await (await get_db()).auth.verify_otp({"email": email, "token": token, "type": "magiclink"})
+        res = await (await get_db()).auth.verify_otp({"email": email, "token": token, "type": "email"})
         if res.session:
             # We might want to ensure the member exists in our table too
             user = res.user
