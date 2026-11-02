@@ -141,3 +141,13 @@ def test_cron_registered():
     import json, os
     v = json.load(open(os.path.join(os.path.dirname(__file__), "..", "vercel.json")))
     assert any(c["path"] == "/api/onboarding/credential-expiry" for c in v["crons"])
+
+
+def test_upload_names_never_collide():
+    from app.routers.onboarding import _unique_upload_name
+    a = _unique_upload_name("id_verification", "scan.pdf")
+    b = _unique_upload_name("police_check", "scan.pdf")
+    c = _unique_upload_name("police_check", "scan.pdf")
+    assert a != b and b != c
+    assert a.startswith("id_verification-") and a.endswith("-scan.pdf")
+    assert "/" not in _unique_upload_name("coi", "../../etc/x y.pdf")

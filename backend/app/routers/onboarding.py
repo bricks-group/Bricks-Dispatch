@@ -1077,6 +1077,14 @@ async def application_documents_submitted(member_id: str, background_tasks: Back
     return {"ok": True}
 
 
+def _unique_upload_name(prefix: str, filename: str) -> str:
+    """Storage key name that can't collide: two docs both called scan.pdf
+    (ID and police check) used to land on the same path and overwrite."""
+    import re as _re
+    base = _re.sub(r"[^A-Za-z0-9._-]+", "-", (filename or "file").rsplit("/", 1)[-1]).strip("-.") or "file"
+    return f"{_re.sub(r'[^a-z0-9_]+', '_', prefix.lower())}-{uuid.uuid4().hex[:8]}-{base[-80:]}"
+
+
 @router.post("/documents")
 async def upload_compliance_document(
     member_id: str = Form(...),
@@ -1136,7 +1144,7 @@ async def upload_compliance_document(
     mime_type = _ext_mime.get(filename.rsplit(".", 1)[-1].lower(), "application/pdf") if "." in filename else "application/pdf"
 
     file_key, _, _, _ = await upload_file(
-        raw_bytes, "onboarding", member_id, filename, mime_type
+        raw_bytes, "onboarding", member_id, _unique_upload_name(doc_type, filename), mime_type
     )
 
     doc = VendorDocument(
@@ -1307,7 +1315,7 @@ async def upload_portfolio_sample(
     mime_type = _ext_mime.get(ext, "image/jpeg")
 
     file_key, _, _, _ = await upload_file(
-        raw_bytes, "onboarding", member_id, filename, mime_type
+        raw_bytes, "onboarding", member_id, _unique_upload_name(mt, filename), mime_type
     )
 
     doc_type = portfolio_doc_type(mt)
