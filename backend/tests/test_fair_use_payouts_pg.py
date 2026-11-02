@@ -341,6 +341,8 @@ def test_handle_payout_to_vendor_pg_on_402(monkeypatch):
             "details_submitted": True,
             "payouts_enabled": True,
             "charges_enabled": True,
+            "transfers_active": True,
+            "can_receive_transfers": True,
         },
     )
 
@@ -594,6 +596,8 @@ def test_stripe_connect_status_pg_on_402(monkeypatch):
             "details_submitted": True,
             "payouts_enabled": True,
             "charges_enabled": True,
+            "transfers_active": True,
+            "can_receive_transfers": True,
         },
     )
     out = asyncio.run(
