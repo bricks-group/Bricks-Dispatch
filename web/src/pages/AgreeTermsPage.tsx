@@ -1,28 +1,35 @@
 import { useCallback, useState } from 'react';
 import { LegalDocSheet } from '../components/legal/LegalDocSheet';
 import { acceptTerms } from '../lib/api';
-import { LEGAL_DOCS, REQUIRED_DOCS, allRead, lockedReason, type LegalKey, type LoadedDoc } from '../lib/legal-docs';
+import { A1_GUIDE_LINE, LEGAL_DOCS, allRead, lockedReason, requiredDocs, type LegalKey, type LoadedDoc, type TermsMember } from '../lib/legal-docs';
 
 /**
  * Members an owner added from the team screen reach GO without having accepted
  * the contractor agreement or privacy policy (applicants do it on www). They
  * read both here once, each scrolled to the end, before the app opens.
  */
-export function AgreeTermsPage({ name, onAccepted, onLogout }: { name?: string; onAccepted: () => void; onLogout: () => void }) {
+export function AgreeTermsPage({ name, member, onAccepted, onLogout }: { name?: string; member?: TermsMember; onAccepted: () => void; onLogout: () => void }) {
+  const REQUIRED_DOCS = requiredDocs(member);
+  const amendmentOnly = !REQUIRED_DOCS.includes('ic');
   const [read, setRead] = useState<Partial<Record<LegalKey, boolean>>>({});
   const [open, setOpen] = useState<LegalKey | null>(null);
   const [icVersion, setIcVersion] = useState('');
+  const [a1Version, setA1Version] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const done = allRead(REQUIRED_DOCS, read) && !!icVersion;
+  const done = allRead(REQUIRED_DOCS, read) && (amendmentOnly || !!icVersion)
+    && (!REQUIRED_DOCS.includes('ic_a1') || !!a1Version);
   const markRead = useCallback((k: LegalKey) => setRead((r) => (r[k] ? r : { ...r, [k]: true })), []);
-  const onLoaded = useCallback((k: LegalKey, d: LoadedDoc) => { if (k === 'ic' && d.version) setIcVersion(d.version); }, []);
+  const onLoaded = useCallback((k: LegalKey, d: LoadedDoc) => {
+    if (k === 'ic' && d.version) setIcVersion(d.version);
+    if (k === 'ic_a1' && d.version) setA1Version(d.version);
+  }, []);
 
   const agree = async () => {
     if (!done || busy) return;
     setBusy(true); setError('');
     try {
-      await acceptTerms(icVersion, REQUIRED_DOCS.filter((k) => read[k]));
+      await acceptTerms(amendmentOnly ? '' : icVersion, REQUIRED_DOCS.filter((k) => read[k]), a1Version);
       onAccepted();
     } catch (e) {
       const status = (e as { status?: number })?.status;
@@ -38,8 +45,24 @@ export function AgreeTermsPage({ name, onAccepted, onLogout }: { name?: string; 
   return (
     <div className="agree-page" data-testid="agree-terms-page">
       <div className="agree-card">
-        <h1>{first ? `Welcome, ${first}` : 'Before you start'}</h1>
-        <p className="agree-lede">Read the contractor agreement and privacy policy once before your first job.</p>
+        {amendmentOnly ? (
+          <>
+            <h1>Your contractor agreement has changed</h1>
+            <p className="agree-lede">
+              Amendment A1 adds rules for jobs you've accepted. {A1_GUIDE_LINE} Check in within 100 m of the property.
+            </p>
+            <p className="agree-lede">
+              It binds you from 16 November 2026, or from when you accept it here. Questions? Email{' '}
+              <a href="mailto:help@brxs.ca">help@brxs.ca</a>.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1>{first ? `Welcome, ${first}` : 'Before you start'}</h1>
+            <p className="agree-lede">Read the contractor agreement, privacy policy and amendment A1 once before your first job.</p>
+            {REQUIRED_DOCS.includes('ic_a1') ? <p className="agree-lede">{A1_GUIDE_LINE}</p> : null}
+          </>
+        )}
         <div className="agree-rows">
           {REQUIRED_DOCS.map((k) => (
             <button key={k} type="button" className={`agree-row${read[k] ? ' is-read' : ''}`} onClick={() => setOpen(k)} aria-haspopup="dialog" data-testid={`legal-open-${k}`}>
@@ -52,7 +75,7 @@ export function AgreeTermsPage({ name, onAccepted, onLogout }: { name?: string; 
           {busy ? 'Saving…' : 'I agree'}
         </button>
         <p className={`agree-note${error ? ' is-error' : ''}`} role={error ? 'alert' : undefined}>
-          {error || (done ? 'You agree to both documents as written.' : lockedReason(REQUIRED_DOCS, read) || 'Loading the agreement…')}
+          {error || (done ? (REQUIRED_DOCS.length === 1 ? 'You agree to the amendment as written.' : 'You agree to these documents as written.') : lockedReason(REQUIRED_DOCS, read) || 'Loading the agreement…')}
         </p>
         <button type="button" className="agree-out" onClick={onLogout}>Log out</button>
       </div>
@@ -61,7 +84,9 @@ export function AgreeTermsPage({ name, onAccepted, onLogout }: { name?: string; 
         .agree-page{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:32px 20px;background:var(--c-bg,#141210);color:var(--c-ink,#F4F1EB);box-sizing:border-box;}
         .agree-card{width:100%;max-width:420px;min-width:0;}
         .agree-card h1{font-size:28px;font-weight:500;letter-spacing:-.8px;margin:0 0 10px;}
-        .agree-lede{font-size:14px;line-height:1.55;color:var(--c-ink-soft);margin:0 0 24px;}
+        .agree-lede{font-size:14px;line-height:1.55;color:var(--c-ink-soft);margin:0 0 16px;}
+        .agree-lede a{color:var(--c-ink);}
+        .agree-rows{margin-top:8px;}
         .agree-rows{border:1px solid var(--c-hair-s);border-radius:2px;background:var(--c-bg-soft);margin:0 0 20px;}
         .agree-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:52px;padding:12px 16px;border:0;background:transparent;color:var(--c-ink);font:inherit;font-size:14px;text-align:left;cursor:pointer;box-sizing:border-box;}
         .agree-row + .agree-row{border-top:1px solid var(--c-hair);}

@@ -252,6 +252,13 @@ async def review_application(
             docs = await check_member_docs(await get_db(), {**member, "vendor_type": trade}, docs)
         except Exception as e:
             logger.warning("doc content check skipped (%s)", type(e).__name__)
+        terminated_match = None
+        try:  # same ID / email / phone as a terminated vendor (Kam, 2026-11-02)
+            from .vendor_termination import blocked_identity, doc_id_hashes
+            terminated_match = await blocked_identity(await get_db(), email=member.get("email"),
+                                                      phone=member.get("phone"), id_hashes=doc_id_hashes(docs))
+        except Exception:
+            terminated_match = None
         if trade != "photographer":
             # Rules rubric for non-photographer trades (no sample photos to score).
             from .trade_review import run_trade_review
@@ -263,6 +270,13 @@ async def review_application(
             result.setdefault("trade", "photographer")
             result.setdefault("rubric_version", "photo-v1")
             _apply_doc_checks_photographer(member, result, docs)
+        if terminated_match:
+            from .applicant_review import NOT_A_FIT, VERDICT_LABEL as _VL
+            result["verdict"], result["verdict_label"], result["colour"] = NOT_A_FIT, _VL[NOT_A_FIT], "red"
+            result["terminated_match"] = True
+            if isinstance(result.get("flags"), list):
+                result["flags"].insert(0, {"source": "verified",
+                                           "text": "Same email, phone or ID as a vendor Bricks terminated. Don't approve."})
         if store:
             await _store_thumbs(result)
         else:

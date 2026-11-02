@@ -2383,6 +2383,9 @@ async def update_vendor_job_status(
         assignee_id = job.get("assignee_id")
         if assignee_id and assignee_id != "default_user":
             await _refresh_decline_rate(db, assignee_id, now, job_id)
+        from ..services.vendor_termination import on_vendor_drop
+        await on_vendor_drop(db, job, assignee_id, old_status, new_status,  # policy: cancel after accept
+                             reason=getattr(payload, "cancel_reason", None), note=getattr(payload, "cancel_note", None))
         await _auto_reassign_after_decline(db, job, assignee_id)
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
@@ -2480,6 +2483,8 @@ async def update_vendor_job_status(
 
 class WatchActionRequest(BaseModel):
     action: str  # "accept" | "decline" | "on_way" | "arrived"
+    cancel_reason: Optional[str] = None  # on decline: vendor_termination.CANCEL_REASONS key
+    cancel_note: Optional[str] = None
 
 
 _WATCH_ACTION_STATUS_MAP = {
@@ -2533,6 +2538,11 @@ async def watch_job_action(
                 status_code=503,
                 detail="Job status update unavailable (Fair Use); try again shortly",
             )
+    if body.action == "accept":
+        try:  # record explicit acceptance (termination policy); soft-fail if column absent
+            await db.table("jobs").update({"vendor_accepted_at": now}).eq("id", job_id).execute()
+        except Exception as e:
+            logger.warning("vendor_accepted_at not recorded for %s: %s", job_id, type(e).__name__)
 
     if new_status == "in_progress" and old_status != "in_progress":
         try:
@@ -2543,6 +2553,9 @@ async def watch_job_action(
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
         await _refresh_decline_rate(db, actor_id, now, job_id)
+        from ..services.vendor_termination import on_vendor_drop
+        await on_vendor_drop(db, job, actor_id, old_status, new_status,  # policy: cancel after accept
+                             reason=body.cancel_reason, note=body.cancel_note)
         await _auto_reassign_after_decline(db, job, actor_id)
 
     booking_id = job.get("booking_id")

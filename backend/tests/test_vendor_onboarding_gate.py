@@ -34,6 +34,7 @@ def _vendor(**over):
         "onboarding_status": "approved", "is_active": True, "skills": ["photo"], "specialty": "photo",
         "service_areas": ["Toronto"], "home_city": "Toronto",
         "terms_accepted_at": NOW, "ic_agreement_version": vo.current_agreement_version(),
+        "ic_amendment_version": vo.current_amendment_version(), "ic_amendment_accepted_at": NOW,
     }
     m.update(over)
     return m
@@ -73,6 +74,9 @@ def test_needs_terms_regates_old_version_only_while_onboarding():
     assert needs_terms(_vendor(ic_agreement_version="1.8")) is True
     assert needs_terms(_vendor(ic_agreement_version="1.8", onboarding_completed_at=NOW)) is False
     assert needs_terms(_vendor()) is False
+    # Amendment A1: everyone, live or onboarding.
+    assert needs_terms(_vendor(ic_amendment_version=None, onboarding_completed_at=NOW)) is True
+    assert needs_terms(_vendor(ic_amendment_version=None)) is True
 
 
 # ── checklist ───────────────────────────────────────────────────────────────
@@ -87,6 +91,7 @@ def test_checklist_steps_and_completion():
     done = vo.checklist(m, {"connect_status": "connected"})
     assert done["all_steps_done"] and done["done"] == 5
     assert not vo.checklist({**m, "ic_agreement_version": "1.8"}, {"connect_status": "connected"})["all_steps_done"]
+    assert not vo.checklist({**m, "ic_amendment_version": None}, {"connect_status": "connected"})["all_steps_done"]
 
 
 def test_payouts_not_required_for_employees():

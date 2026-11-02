@@ -33,8 +33,9 @@ STEP_COPY = {
     "signed_in": ("Sign in to the Bricks app", "You're in. Nothing else to do here."),
     "payouts": ("Connect payouts", "Set up Stripe so we can pay you after each job."),
     "availability": ("Confirm your availability", "Check the days and hours you can shoot, then confirm."),
-    "guide": ("Read the vendor guide", "How shoots, delivery and pay work at Bricks."),
-    "agreement": ("Accept the contractor agreement", "Read and accept the current version."),
+    "guide": ("Read the vendor guide", "How jobs, delivery and pay work at Bricks. Cancelling an accepted job "
+              "within 48 hours of the start, or checking in late, closes your account."),
+    "agreement": ("Accept the contractor agreement", "Read and accept the current version and amendment A1."),
 }
 
 # Vendor mail comes from help@ so replies reach a person.
@@ -66,6 +67,11 @@ def current_agreement_version() -> str:
     return _IC_AGREEMENT_VERSION
 
 
+def current_amendment_version() -> str:
+    from ..routers.onboarding import _IC_AMENDMENT_VERSION
+    return _IC_AMENDMENT_VERSION
+
+
 def checklist(member: Any, contractor: Optional[dict] = None) -> dict:
     """Pure: {complete, completed_at, state, steps:[{key,title,detail,done,required}], done, total}."""
     m = _as_dict(member)
@@ -77,7 +83,9 @@ def checklist(member: Any, contractor: Optional[dict] = None) -> dict:
         "availability": bool(m.get("availability_confirmed_at")),
         "guide": bool(m.get("guide_acknowledged_at")),
         "agreement": bool(m.get("terms_accepted_at"))
-        and str(m.get("ic_agreement_version") or "") == current_agreement_version(),
+        and str(m.get("ic_agreement_version") or "") == current_agreement_version()
+        # New vendors accept amendment A1 too; vendors already set up get it in the GO gate.
+        and (bool(m.get("onboarding_completed_at")) or str(m.get("ic_amendment_version") or "") == current_amendment_version()),
     }
     steps = []
     for key in STEP_KEYS:
@@ -92,7 +100,7 @@ def checklist(member: Any, contractor: Optional[dict] = None) -> dict:
         })
     status = (m.get("onboarding_status") or "pending").lower()
     completed_at = m.get("onboarding_completed_at")
-    if status == "rejected":
+    if status in ("rejected", "terminated"):
         state = "rejected"
     elif status != "approved":
         state = "applicant"
@@ -276,6 +284,9 @@ def live_email(member: dict) -> tuple[str, str, str]:
             "Your setup is done. Jobs that fit your schedule and area will now come to you automatically, "
             "and we'll let you know each time one is assigned.",
             "Keep your availability up to date so you only get jobs you can take.",
+            "Once a job is yours, show up for it yourself. You can hand a job back free until 48 hours "
+            "before the start. Cancelling inside 48 hours, or not checking in within 30 minutes of the start, "
+            "closes your Bricks account. You can't send someone else in your place.",
         ],
         "Open the Bricks app",
         _go_url(),

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AgreeTermsPage } from './pages/AgreeTermsPage';
-import { needsTermsStep } from './lib/legal-docs';
+import { needsTermsStep, type TermsMember } from './lib/legal-docs';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { logout, me, isRateLimited, retryAfterSeconds, isVendorMemberMissing, needsEmailFirst, isPhoneUser } from './lib/api';
@@ -26,6 +26,7 @@ import { AddEmailPage, NotOnTeamPage } from './pages/AddEmailPage';
 import { hasAppAccess, isOnboarding, AuthMember } from './lib/api';
 import { OnboardingPage } from './pages/OnboardingPage';
 import PayoutsBanner from './components/PayoutsBanner';
+import AmendmentBanner from './components/AmendmentBanner';
 import BricksLoader from './components/BricksLoader';
 import { GuidePage } from './guide/GuidePage';
 
@@ -163,7 +164,7 @@ function ProtectedLayout() {
 
   // Added from the team screen without an application: agreement and privacy policy first.
   if (needsTermsStep(member, true)) {
-    return <AgreeTermsPage name={name} onAccepted={refreshSession} onLogout={onLogout} />;
+    return <AgreeTermsPage name={name} member={member} onAccepted={refreshSession} onLogout={onLogout} />;
   }
 
   return (
@@ -173,6 +174,7 @@ function ProtectedLayout() {
         <TopBar name={name} onLogout={onLogout} />
         <OfflineBar />
         <PayoutsBanner />
+        <AmendmentBanner />
         <Routes>
           <Route path="/"                element={isOnboarding(member) ? <OnboardingPage onLive={refreshSession} /> : <OverviewPage />} />
           <Route path="/onboarding"     element={<OnboardingPage onLive={() => { refreshSession(); navigate('/', { replace: true }); }} />} />
@@ -198,6 +200,7 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
   const [allowed, setAllowed] = useState(false);
   const [needsTerms, setNeedsTerms] = useState(false);
   const [memberName, setMemberName] = useState('');
+  const [termsMember, setTermsMember] = useState<TermsMember>(null);
   const [needsEmail, setNeedsEmail] = useState(false);
   const [rateLimited, setRateLimited] = useState(false);
   const [retryAfter, setRetryAfter] = useState<number | undefined>(undefined);
@@ -216,6 +219,7 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
         const m = await me();
         setAllowed(hasAppAccess(m));
         setNeedsTerms(needsTermsStep(m, hasAppAccess(m)));
+        setTermsMember(m);
         setMemberName(m.name || '');
         setRateLimited(false);
       } catch (err) {
@@ -246,7 +250,7 @@ function CaptureGate({ children }: { children: React.ReactNode }) {
   if (rateLimited) return <RateLimitedNotice retryAfter={retryAfter} onRetry={refreshSession} />;
   if (needsEmail) return <AddEmailPage onConfirmed={refreshSession} />;
   if (!allowed) return <UnderReviewPage />;
-  if (needsTerms) return <AgreeTermsPage name={memberName} onAccepted={refreshSession} onLogout={async () => { await logout(); window.location.href = '/login'; }} />;
+  if (needsTerms) return <AgreeTermsPage name={memberName} member={termsMember} onAccepted={refreshSession} onLogout={async () => { await logout(); window.location.href = '/login'; }} />;
   return <>{children}</>;
 }
 

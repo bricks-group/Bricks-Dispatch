@@ -781,6 +781,8 @@ def pg_update_vendor_member_fields(member_id: str, fields: dict) -> bool:
         "updated_at",
         "terms_accepted_at",
         "ic_agreement_version",
+        "ic_amendment_version",
+        "ic_amendment_accepted_at",
     }
     cols: list[tuple[str, Any]] = []
     for k, v in fields.items():

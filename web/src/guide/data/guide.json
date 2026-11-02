@@ -1,7 +1,7 @@
 {
   "title": "The Bricks Standard: vendor guide",
   "version": "1.1",
-  "updated": "2026-10-18",
+  "updated": "2026-11-02",
   "intro": "Calm, composed and true. Follow these steps on every job. Diagrams use metres and seconds.",
   "phases": [
     {
@@ -99,6 +99,27 @@
     }
   ],
   "steps": [
+    {
+      "id": "before-00",
+      "phase": "before",
+      "title": "Show up for every job you accept",
+      "body": "You can hand back a job up to 48 hours before. After that, or if you don't check in within 30 minutes of the window start, your Bricks account ends. Emergencies are excepted, and completed work is always paid.\n\nOnce a job is yours, you do it yourself. Hand it back in the app at least 48 hours before the start and Bricks will reassign it. Check in on site within 100 m of the property. Checking in more than 30 minutes after the start counts as a no-show, even if you finish the job. You won't get new jobs and can't apply again, but jobs you've completed are still paid.\n\nWhen you cancel, pick the reason. A medical emergency, bereavement, an accident or breakdown on the way, severe weather or unsafe drone conditions, an unsafe site or no access at the property, or a Bricks app or GPS outage goes to Bricks for review instead of closing your account. If your account is closed, you can appeal within 7 days by emailing help@brxs.ca. This is amendment A1 of your contractor agreement (IC-A1 v1.0).",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Accept only the jobs you can do",
+        "Hand a job back at least 48 hours before the start",
+        "Check in in the app within 100 m of the property"
+      ],
+      "dont": [
+        "Cancel inside 48 hours unless it's an emergency",
+        "Send someone else in your place",
+        "Skip the check-in"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
     {
       "id": "before-01",
       "phase": "before",

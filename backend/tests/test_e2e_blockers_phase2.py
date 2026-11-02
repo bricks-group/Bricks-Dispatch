@@ -227,7 +227,9 @@ def test_email_login_prep_only_for_vendor_emails():
 def test_email_login_prep_creates_confirmed_user():
     from app.services import email_login_prep as elp
     db = MagicMock()
-    db.table = lambda t: Q([{"id": "m"}], None, t)
+    db.table = lambda t: Q([{"id": "m", "email": "new@vendor.ca"}], None, t)
     db.auth.admin.create_user = AsyncMock()
-    assert asyncio.run(elp.ensure_confirmed_vendor_auth_user(db, "New@Vendor.ca")) == "created"
+    import unittest.mock as _um
+    with _um.patch.object(elp, "_pg_auth_user", return_value=None):
+        assert asyncio.run(elp.ensure_confirmed_vendor_auth_user(db, "New@Vendor.ca")) == "created"
     db.auth.admin.create_user.assert_awaited_once_with({"email": "new@vendor.ca", "email_confirm": True})

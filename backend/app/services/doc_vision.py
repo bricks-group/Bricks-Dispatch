@@ -105,8 +105,9 @@ def _prompt(kind: str, today: date) -> str:
             '  "holder_name": the full name on the ID, or null,\n'
             '  "id_kind": e.g. "Ontario driver\'s licence", "passport", or null,\n'
             '  "expiry_date": YYYY-MM-DD or null,\n'
-            '  "has_photo": true if a face photo is on the ID.\n'
-            "Do NOT return ID numbers, addresses or dates of birth.\n"
+            '  "has_photo": true if a face photo is on the ID,\n'
+            '  "id_last4": the last 4 letters/digits of the ID or licence number, or null (never the full number).\n'
+            "Do NOT return full ID numbers, addresses or dates of birth.\n"
         )
     else:
         base += '  "shows_real_work": true if it shows real work of the expected kind (not a stock image, screenshot of text, or unrelated picture).\n'
@@ -419,6 +420,12 @@ async def check_document(doc: dict, member: dict, *, min_limit_cents: Optional[i
                                 entered_expiry=doc.get("expiry_date"), min_limit_cents=min_limit_cents, today=today)
         keep = {k: raw.get(k) for k in ("what_it_is", "insured_name", "holder_name", "insurer", "issuer",
                                         "coverage_amount_cad", "expiry_date", "issue_date", "id_kind") if isinstance(raw, dict) and raw.get(k) is not None}
+        if kind in IDENT and isinstance(raw, dict) and raw.get("id_last4"):
+            # One-way fingerprint so a terminated vendor can't reapply with the same ID; the digits aren't kept.
+            from .vendor_termination import id_fingerprint
+            fp = id_fingerprint(raw.get("holder_name") or member.get("name"), raw.get("id_last4"))
+            if fp:
+                out["id_fingerprint"] = fp
         return {**out, "overall": overall, "points": pts, "read": keep, "model": vision_model(), "cost_usd": cost}
     except Exception as e:
         logger.warning("doc check failed kind=%s (%s)", kind, type(e).__name__)

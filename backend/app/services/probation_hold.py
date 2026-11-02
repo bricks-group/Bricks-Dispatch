@@ -124,6 +124,8 @@ def decide(row: dict, rating: Optional[int], qc_fail: bool, open_dispute: bool,
         return "block", "QC failed"
     if open_dispute:
         return "dispute", "open client complaint"
+    if row.get("status") == "approved" and row.get("reviewed_by") not in (None, "", "auto"):
+        return "release", "owner approved"  # an owner release whose transfer failed earlier
     if rating is not None:
         return "release", f"client rating {int(rating)}/5"
     due = _parse_ts(row.get("release_after"))
@@ -181,15 +183,32 @@ async def _release(db, row: dict, reason: str, reviewed_by: str = "auto") -> dic
     from .payout_service import trigger_payout_for_job
 
     now = _now().isoformat()
+    prior = {k: row.get(k) for k in ("payout_hold", "payout_released_at", "hold_reason",
+                                     "status", "reviewed_by", "reviewed_at")}
     patch = {"payout_hold": "released", "payout_released_at": now, "hold_reason": reason,
              "status": "approved", "reviewed_by": reviewed_by, "reviewed_at": now}
     await _update(db, row, patch)
     try:
         payout = await trigger_payout_for_job(db, str(row["job_id"]), release=True)
-    except Exception as e:  # payout failure is retried by the normal payout retry paths
+    except Exception as e:
         logger.error("probation release payout failed job=%s: %s", row.get("job_id"), type(e).__name__)
-        payout = {"error": type(e).__name__}
-    return {"payout": {k: payout.get(k) for k in ("payout_id", "status", "error") if isinstance(payout, dict)}}
+        payout = {"status": "failed", "error": type(e).__name__}
+    if not isinstance(payout, dict):
+        payout = {"status": "failed", "error": "no_payout_result"}
+    out = {k: payout.get(k) for k in ("payout_id", "status", "error")}
+    if payout.get("status") != "paid":
+        # The transfer did not land: keep the hold open so the owner approve, the
+        # one-tap link and the probation sweep can all release it again. Only an
+        # owner's review decision is kept; an auto release is undone entirely.
+        keep = {"payout_hold": prior["payout_hold"] if prior["payout_hold"] in ("held", "blocked") else "held",
+                "payout_released_at": None,
+                "hold_reason": f"{reason}; payout failed, retry pending"}
+        if reviewed_by == "auto":
+            keep.update({k: prior[k] for k in ("status", "reviewed_by", "reviewed_at")})
+        await _update(db, row, keep)
+        logger.warning("probation release kept hold job=%s: payout %s", row.get("job_id"), out.get("status"))
+        out["retryable"] = True
+    return {"payout": out}
 
 
 async def _update(db, row: dict, patch: dict) -> None:

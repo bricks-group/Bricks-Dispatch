@@ -119,6 +119,10 @@ export type AuthMember = {
   app_access?: boolean;
   /** Server: a contractor in GO who never accepted the IC agreement and privacy policy. */
   needs_terms?: boolean;
+  /** Still needs the IC agreement v1.9 and privacy policy. */
+  needs_ic_terms?: boolean;
+  /** Still needs IC amendment A1 (every contractor). */
+  needs_amendment?: boolean;
   portfolio_samples?: Array<{ media_type: string; url?: string; link?: string; label?: string }>;
   /** Onboarding checklist (approved vendors who are not live yet). */
   onboarding?: OnboardingState | null;
@@ -423,11 +427,11 @@ export async function me(): Promise<AuthMember> {
   return api.get<AuthMember>('/api/vendor-os/auth/me');
 }
 
-/** Record the contractor agreement and privacy policy as read and accepted. */
-export async function acceptTerms(icAgreementVersion: string, read: string[]) {
-  return api.post<{ terms_accepted_at: string; ic_agreement_version: string; needs_terms: boolean }>(
+/** Record the contractor agreement, privacy policy and amendment A1 as read and accepted. */
+export async function acceptTerms(icAgreementVersion: string, read: string[], icAmendmentVersion = '') {
+  return api.post<{ terms_accepted_at: string; ic_agreement_version: string; ic_amendment_version: string; needs_terms: boolean }>(
     '/api/vendor-os/profile/accept-terms',
-    { ic_agreement_version: icAgreementVersion, read },
+    { ic_agreement_version: icAgreementVersion || null, ic_amendment_version: icAmendmentVersion || null, read },
   );
 }
 
