@@ -51,6 +51,15 @@ def classify_connect_account(account) -> dict:
     if requirements is not None:
         disabled = getattr(requirements, "disabled_reason", None) or None
 
+    transfers_active = _capability(account, "transfers") == "active"
+    # A platform-to-connected Transfer only needs the transfers capability.
+    # payouts_enabled / a past_due disabled_reason (e.g. proof_of_liveness) only
+    # stop the vendor's bank payout; the money waits in their Stripe balance.
+    # A rejected account (rejected.*) is never paid.
+    can_receive_transfers = bool(
+        details_submitted and transfers_active and not str(disabled or "").startswith("rejected")
+    )
+
     if disabled:
         status = "restricted"
         connected = False
@@ -71,7 +80,19 @@ def classify_connect_account(account) -> dict:
         "payouts_enabled": payouts_enabled,
         "charges_enabled": charges_enabled,
         "disabled_reason": disabled,
+        "transfers_active": transfers_active,
+        "can_receive_transfers": can_receive_transfers,
     }
+
+
+def _capability(account, name: str):
+    """capabilities[name] from a Stripe Account (StripeObject or plain object)."""
+    caps = getattr(account, "capabilities", None)
+    if caps is None:
+        return None
+    if isinstance(caps, dict):
+        return caps.get(name)
+    return getattr(caps, name, None)
 
 
 def sync_contractor_connect_status(contractor_id: str, stripe_account_id: str) -> dict:
@@ -219,12 +240,18 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
         raise ValueError(f"Stripe account not found for member {contractor_id or '-'} (company {vendor_id})")
 
     stripe_account_id = contractor["stripe_account_id"]
-    # Fail closed: verify Stripe readiness (and refresh connect_status) before transfer.
+    # Fail closed: verify Stripe can take a transfer (and refresh connect_status).
+    # Gate on the transfers capability, not payouts_enabled: an account that still
+    # owes Stripe a payout requirement (proof_of_liveness) can be paid; it just
+    # can't withdraw yet. E2E 2026-11-02: the gate on "connected" failed every
+    # such transfer as restricted.
     synced = sync_contractor_connect_status(contractor["id"], stripe_account_id)
-    if not synced.get("connected"):
+    if not synced.get("can_receive_transfers"):
         raise ValueError(
-            f"Stripe account is not payout-ready for {payee_label(contractor, contractor_id)} "
-            f"(status={synced.get('connect_status')})"
+            f"Stripe account cannot receive transfers for {payee_label(contractor, contractor_id)} "
+            f"(status={synced.get('connect_status')}, transfers={'active' if synced.get('transfers_active') else 'inactive'}"
+            + (f", disabled_reason={synced.get('disabled_reason')}" if synced.get("disabled_reason") else "")
+            + ")"
         )
 
     idempotency_key = f"payout_{payout_id}" if payout_id else f"payout_{booking_id}"
