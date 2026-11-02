@@ -3352,7 +3352,7 @@ def pg_update_contractor(contractor_id: str, fields: dict) -> bool:
 # ---------------------------------------------------------------------------
 _APPLICANT_TABLES = {
     "vendor_applicant_reviews": (
-        ("member_id", "verdict", "needs_samples", "result", "model", "cost_usd", "trigger"),
+        ("member_id", "verdict", "needs_samples", "result", "model", "cost_usd", "trigger", "trade", "rubric_version"),
         {"result"},
     ),
     "vendor_applicant_image_hashes": (

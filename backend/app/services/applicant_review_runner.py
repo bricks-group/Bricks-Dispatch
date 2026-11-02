@@ -198,6 +198,17 @@ async def notify_owner(member: dict, result: dict) -> None:
         logger.error("applicant notify email failed (%s)", type(e).__name__)
 
 
+async def _load_docs(member_id: str) -> list:
+    try:
+        db = await get_db()
+        res = await db.table("vendor_documents").select("doc_type, status, expiry_date, validation_result").eq(
+            "member_id", member_id).execute()
+        return res.data or []
+    except Exception as e:
+        logger.warning("applicant docs lookup failed (%s)", type(e).__name__)
+        return []
+
+
 async def review_application(
     member_id: str,
     *,
@@ -211,9 +222,18 @@ async def review_application(
         member = member or await _load_member(member_id)
         if not member:
             return None
-        availability = await _load_availability(member_id)
-        inp = review_input_from_member(member, availability)
-        result = await run_review(inp, other_hashes=await _load_hashes())
+        from .applicant_review import _member_trade
+        trade = _member_trade(member)
+        if trade != "photographer":
+            # Rules rubric for non-photographer trades (no sample photos to score).
+            from .trade_review import run_trade_review
+            result = run_trade_review({**member, "vendor_type": trade}, await _load_docs(member_id))
+        else:
+            availability = await _load_availability(member_id)
+            inp = review_input_from_member(member, availability)
+            result = await run_review(inp, other_hashes=await _load_hashes())
+            result.setdefault("trade", "photographer")
+            result.setdefault("rubric_version", "photo-v1")
         if store:
             await _store_thumbs(result)
         else:
@@ -227,6 +247,8 @@ async def review_application(
                 "model": result.get("model"),
                 "cost_usd": result.get("cost_usd"),
                 "trigger": trigger,
+                "trade": result.get("trade"),
+                "rubric_version": result.get("rubric_version"),
             }])
             seen = set()
             hash_rows = []

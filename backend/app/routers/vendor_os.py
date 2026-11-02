@@ -2371,6 +2371,14 @@ async def update_vendor_job_status(
             await _refresh_decline_rate(db, assignee_id, now, job_id)
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
+        # Probation: hold one of the vendor's first N jobs for admin review (soft-fail).
+        try:
+            from ..services.vendor_vetting import record_probation_job
+            await record_probation_job(db, job)
+        except Exception as e:
+            logger.warning(f"Probation record failed for job {job_id}: {e}")
+
+    if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         try:
             from ..shared.pg_fallback import (
                 _is_rest_quota_error,

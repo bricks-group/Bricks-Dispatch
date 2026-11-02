@@ -34,7 +34,8 @@ VERDICT_BAND = {
     "red": "Not a fit",
     "grey": "Incomplete",
 }
-PART_ORDER = ("samples", "gear", "availability", "location", "portfolio", "drone", "resume")
+PART_ORDER = ("samples", "gear", "availability", "location", "portfolio", "drone", "resume",
+              "proof", "credentials", "identity", "experience", "completeness")
 SPECIALTY_LABEL = {
     "photo": "Photos", "video": "Video", "drone": "Drone", "virtual_tour": "Virtual tour",
     "virtual_visit": "Virtual visit", "floor_plan": "Floor plans", "twilight": "Twilight",
@@ -59,7 +60,21 @@ def band_title(review: dict) -> str:
 
 def subject(name: str, review: dict) -> str:
     who = (name or "").strip() or "Applicant"
-    return f"{band_title(review)} · {review.get('score', 0)}/100 · {who} applied to Bricks"
+    trade = review.get("trade_label") if review.get("trade") not in (None, "", "photographer") else None
+    lead = f"{trade} · " if trade else ""
+    return f"{lead}{band_title(review)} · {review.get('score', 0)}/100 · {who} applied to Bricks"
+
+
+def _rubric_note(review: dict) -> str:
+    if review.get("rubric_version", "").startswith("trade-rules"):
+        return f"{review.get('trade_label') or 'Trade'} rules: credentials, ID, proof of work, experience and completeness."
+    return "Not run: no sample photos were reviewed."
+
+
+def _cap_note(review: dict) -> str:
+    if review.get("rubric_version", "").startswith("trade-rules"):
+        return f"Capped at {review.get('score_cap') or 60} until required documents are in."
+    return f"Capped at {review.get('score_cap') or 60} until samples are reviewed."
 
 
 def _specialties(specs) -> str:
@@ -107,7 +122,7 @@ def render_html(
     score = int(review.get("score") or 0)
     cap_note = ""
     if review.get("incomplete"):
-        cap_note = f"Capped at {review.get('score_cap') or 60} until samples are reviewed."
+        cap_note = _cap_note(review)
     parts = review.get("parts") or {}
 
     # per-part R/Y/G bar (labels + status word, never colour alone)
@@ -174,7 +189,7 @@ def render_html(
     else:
         rubric_html = (
             _section_label("Rubric")
-            + f'<tr><td style="padding:0 24px;font-family:{SANS};font-size:13px;line-height:19px;color:{INK_MUTE};">Not run: no sample photos were reviewed.</td></tr>'
+            + f'<tr><td style="padding:0 24px;font-family:{SANS};font-size:13px;line-height:19px;color:{INK_MUTE};">{e(_rubric_note(review))}</td></tr>'
         )
 
     # evidence + flags
@@ -286,12 +301,13 @@ Tags: <b style="font-weight:600;">Verified</b> = Bricks looked at it. <b style="
 def render_text(*, member_id: str, name: str, city: str, specialties, found_via: str, review: dict, thumb_urls: list,
                 resume_url: str | None = None) -> str:
     lines = [
-        f"{band_title(review)} · {review.get('score', 0)}/100",
+        (f"{review['trade_label']} · " if review.get("trade") not in (None, "", "photographer") and review.get("trade_label") else "")
+        + f"{band_title(review)} · {review.get('score', 0)}/100",
     ]
     for r in review.get("verdict_reasons") or []:
         lines.append(f"Why: {r}")
     if review.get("incomplete"):
-        lines.append(f"Score capped at {review.get('score_cap') or 60} until samples are reviewed.")
+        lines.append("Score " + _cap_note(review)[0].lower() + _cap_note(review)[1:])
     parts = review.get("parts") or {}
     bar = []
     for key in PART_ORDER:
@@ -314,7 +330,7 @@ def render_text(*, member_id: str, name: str, city: str, specialties, found_via:
     if review.get("vision_ran"):
         lines += ["", "Rubric:"] + [f"- {c['label']}: {c['words']}" for c in (review.get("criteria") or {}).values()]
     else:
-        lines += ["", "Rubric: not run (no sample photos were reviewed)."]
+        lines += ["", "Rubric: " + _rubric_note(review)]
     lines += ["", "Evidence:"]
     for b in list(review.get("flags") or []) + list(review.get("evidence") or []):
         lines.append(f"- [{SOURCE_LABEL.get(b.get('source'), 'Self-reported')}] {b.get('text')}")

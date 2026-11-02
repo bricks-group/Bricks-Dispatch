@@ -441,6 +441,12 @@ async def update_job_status(
 
     # Auto-trigger payout when job is completed or delivered
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
+        # Probation: hold one of the vendor's first N jobs for admin review (soft-fail).
+        try:
+            from ..services.vendor_vetting import record_probation_job
+            await record_probation_job(db, job)
+        except Exception as e:
+            logger.warning(f"Probation record failed for job {job_id}: {e}")
         logger.info(f"Job {job_id} moved to {new_status}, triggering payout")
         try:
             from ..services.payout_service import trigger_payout_for_job

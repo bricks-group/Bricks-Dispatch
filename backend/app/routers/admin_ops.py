@@ -1009,3 +1009,50 @@ async def seed_owner_profile(
     await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
     from ..services.vendor_profile import ensure_owner_profile
     return await ensure_owner_profile(await get_db())
+
+
+# ── Probation reviews (first N jobs per vendor; Kam, 2026-11-01) ─────────────
+from pydantic import BaseModel as _BaseModel, Field as _Field
+
+
+class ProbationReviewIn(_BaseModel):
+    status: str = _Field(..., description="approved | failed")
+    client_rating: Optional[int] = _Field(default=None, ge=1, le=5)
+    qc_result: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.get("/probation-reviews")
+async def list_probation_reviews(
+    member_id: Optional[str] = None,
+    status: Optional[str] = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
+    from ..services.vendor_vetting import probation_reviews
+    return {"reviews": await probation_reviews(await get_db(), member_id=member_id, status=status)}
+
+
+@router.post("/vendors/{member_id}/probation/{job_id}")
+async def review_probation(
+    member_id: str,
+    job_id: str,
+    body: ProbationReviewIn,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """Approve or fail one probation job. A fail, or a client rating at or under
+    bad_rating_max, pauses the vendor (never assigned until resumed). No email."""
+    actor_id, _ = await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
+    from ..services.vendor_vetting import review_probation_job
+    try:
+        out = await review_probation_job(await get_db(), member_id, job_id, body.status, body.client_rating,
+                                         body.qc_result, body.notes, reviewed_by=actor_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if out is None:
+        raise HTTPException(status_code=404, detail="No probation review for this vendor and job")
+    return out

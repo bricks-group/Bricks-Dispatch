@@ -910,6 +910,20 @@ async def applicant_review_backlog(request: Request, limit: int = 5):
     return {"ok": True, "reviewed": done}
 
 
+@router.get("/credential-expiry")
+async def credential_expiry_cron(request: Request, dry_run: bool = False):
+    """Daily Vercel cron: pause approved vendors whose required credential has
+    expired; lift pauses this sweep set once credentials are current. Never
+    contacts anyone. Auth: Vercel CRON_SECRET bearer or internal key."""
+    from .vendor_os import _cron_authorized
+    from ..services.vendor_vetting import run_expiry_sweep
+
+    if not _cron_authorized(request.headers.get("Authorization"), request.headers.get("X-Internal-Key")
+                            or request.headers.get("X-Internal-Api-Key")):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return await run_expiry_sweep(await get_db(), dry_run=bool(dry_run))
+
+
 @router.post("/review/{member_id}")
 async def rerun_applicant_review(member_id: str, request: Request, notify: bool = False, store: bool = True):
     """Re-run the automatic review for one applicant. Internal key only.
