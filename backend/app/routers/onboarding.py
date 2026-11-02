@@ -863,7 +863,9 @@ async def mint_sample_uploads(body: SampleUploadRequest):
         mime = ev.resume_mime_for(f.name, f.type)
         if not mime:
             raise HTTPException(status_code=400, detail="Your resume must be a PDF, DOC or DOCX file.")
-        if f.size < ev.MIN_RESUME_BYTES or f.size > ev.MAX_RESUME_BYTES:
+        if f.size < ev.MIN_RESUME_BYTES:
+            raise HTTPException(status_code=400, detail="Your resume file is too small (under 1 KB). Upload the full PDF, DOC or DOCX.")
+        if f.size > ev.MAX_RESUME_BYTES:
             raise HTTPException(status_code=400, detail=f"Your resume must be under {ev.MAX_RESUME_BYTES // (1024 * 1024)} MB.")
         f.type = mime
     for f in files:

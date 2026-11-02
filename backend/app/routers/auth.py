@@ -53,39 +53,23 @@ async def vendor_os_verify(payload: dict):
         api_error(400, "Email and token are required", "missing_fields")
     
     try:
-        res = await (await get_db()).auth.verify_otp({"email": email, "token": token, "type": "email"})
+        # Verify on a throwaway auth client. verify_otp on the shared client
+        # switched its Authorization header to the vendor's JWT, so the member
+        # lookup/link below ran under RLS and failed for unlinked rows.
+        from ..shared.database import new_auth_client
+        res = await (await new_auth_client()).auth.verify_otp({"email": email, "token": token, "type": "email"})
         if res.session:
-            # We might want to ensure the member exists in our table too
             user = res.user
-            from ..shared.job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
-            db = await get_db()
-            member_res = await db.table("vendor_members").select("*").eq("id", user.id).maybe_single().execute()
-            # maybe_single() is None when no member row — None.data was AttributeError.
-            _mdata = getattr(member_res, "data", None) if member_res is not None else None
-            rows = [_mdata] if isinstance(_mdata, dict) else []
-            if user.email:
-                by_email = await db.table("vendor_members").select("*").ilike("email", user.email).limit(10).execute()
-                for row in by_email.data or []:
-                    # exact address only (ilike treats % and _ as wildcards)
-                    if not row or str(row.get("email") or "").strip().lower() != user.email.strip().lower():
-                        continue
-                    if row.get("id") not in {r.get("id") for r in rows}:
-                        rows.append(row)
-            if (user.email or "").lower() in KAM_EMAILS or str(user.id).lower().startswith("0c3fa7c2"):
-                kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
-                _kdata = getattr(kam, "data", None) if kam is not None else None
-                if isinstance(_kdata, dict) and _kdata.get("id") not in {r.get("id") for r in rows}:
-                    rows.append(_kdata)
-            picked = pick_canonical_member(rows, user.id, user.email or "")
-            if not picked:
-                await db.table("vendor_members").insert({
-                    "id": user.id,
-                    "email": user.email,
-                    "name": user.user_metadata.get("name", email.split("@")[0]),
-                    "role": "Photographer",
-                    "vendor_id": "default_vendor"
-                }).execute()
-            
+            from ..services.vendor_otp_link import link_member_after_otp
+            db = await get_db()  # service role
+            meta = getattr(user, "user_metadata", None) or {}
+            try:
+                await link_member_after_otp(db, str(user.id), user.email or "", meta.get("name") or "")
+            except Exception as le:
+                # Code is valid; /auth/me resolves the member again. Don't fail the login.
+                import logging
+                logging.getLogger(__name__).warning("otp verify: member link failed: %s", str(le)[:200])
+
             await write_audit_event(user.id, "session", user.id, "login", vendor_id="default_vendor")
             return {
                 "access_token": res.session.access_token,
