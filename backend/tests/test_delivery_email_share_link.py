@@ -17,7 +17,7 @@ JOB = {"id": "j1", "booking_id": "e2e-20261011-weball", "address": "1 Main St",
 def _wire(monkeypatch, job=JOB, share="https://app.brxs.ca/share/tok", allows=True, send_ok=True):
     sent = []
 
-    async def send(to, subject, html):
+    async def send(to, subject, html, text=None):
         sent.append((to, subject, html))
         return send_ok
 

@@ -95,6 +95,8 @@ app.include_router(auth.router, tags=["auth"])
 app.include_router(capture.router, tags=["capture"])
 from .routers import capture_visit_video
 app.include_router(capture_visit_video.router, tags=["capture"])
+from .routers.delivery_email_media import router as delivery_email_media_router
+app.include_router(delivery_email_media_router)
 from .routers.vendor_profile import router as vendor_profile_router, os_router as vendor_profile_os_router
 app.include_router(vendor_profile_router)
 app.include_router(vendor_profile_os_router)
