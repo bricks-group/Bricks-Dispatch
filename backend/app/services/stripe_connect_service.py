@@ -18,7 +18,14 @@ logger = logging.getLogger(__name__)
 
 stripe_lib.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+# contractors has RLS (service_role or owner-only). SUPABASE_KEY alone is not the
+# service role in prod, so reads came back empty and inserts hit 42501 and every
+# "Connect payouts" tap 502'd. Prefer the service key, like app.shared.database.
+SUPABASE_KEY = (
+    os.environ.get("SUPABASE_SERVICE_KEY")
+    or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    or os.environ.get("SUPABASE_KEY", "")
+)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
