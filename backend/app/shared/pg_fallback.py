@@ -3256,7 +3256,7 @@ def pg_insert_contractor(row: dict) -> Optional[dict]:
         "created_at",
     }
     data = {k: row[k] for k in allowed if k in row and row[k] is not None}
-    if not data.get("vendor_id") or not data.get("full_name") or not data.get("email"):
+    if not (data.get("vendor_id") or data.get("member_id")) or not data.get("full_name") or not data.get("email"):
         return None
     if not data.get("id"):
         data["id"] = str(uuid.uuid4())

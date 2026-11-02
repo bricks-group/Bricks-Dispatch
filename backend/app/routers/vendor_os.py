@@ -2147,6 +2147,11 @@ async def start_stripe_connect_onboarding(
         )
     except ValueError as e:
         api_error(502, str(e), "stripe_connect_failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("stripe-connect/onboard failed for member %s: %s", actor_member.get("id"), e)
+        api_error(502, "Could not open Stripe payout setup. Try again in a minute.", "stripe_connect_failed")
 
     await write_audit_event(actor_id, "stripe_connect", vendor_id, "onboard_started", vendor_id=vendor_id)
     return {"url": url}

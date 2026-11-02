@@ -224,6 +224,53 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
     return transfer.id
 
 
+def _is_vendor_fk_violation(err: Exception) -> bool:
+    """contractors.vendor_id references vendors(vendor_id). Member vendor_ids like
+    'default_vendor' have no vendors row, so the insert fails with 23503."""
+    text = f"{getattr(err, 'code', '')} {getattr(err, 'message', '')} {err}".lower()
+    return "contractors_vendor_id_fkey" in text or (
+        "23503" in text and "vendor_id" in text
+    )
+
+
+def _insert_contractor_row(payload: dict, vendor_id: str) -> dict:
+    """Insert a contractors row. A per-member row (member_id set) does not need
+    vendor_id: it is found by member_id. When vendor_id has no vendors row (FK
+    violation), retry the member row without vendor_id instead of failing."""
+    from app.shared.pg_fallback import _is_rest_quota_error, pg_insert_contractor
+
+    def _rest(row: dict) -> dict:
+        res = supabase.table("contractors").insert(row).execute()
+        if not res.data:
+            raise ValueError(f"Could not create contractor record for vendor: {vendor_id}")
+        return res.data[0]
+
+    def _pg(row: dict, cause: Exception) -> dict:
+        out = pg_insert_contractor(row)
+        if not out:
+            raise ValueError(f"Could not create contractor record for vendor: {vendor_id}") from cause
+        return out
+
+    try:
+        return _rest(payload)
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            return _pg(payload, e)
+        if payload.get("member_id") and _is_vendor_fk_violation(e):
+            logger.warning(
+                "contractors insert: vendor_id %r has no vendors row; storing member %s without vendor_id",
+                vendor_id, payload.get("member_id"),
+            )
+            retry = {k: v for k, v in payload.items() if k != "vendor_id"}
+            try:
+                return _rest(retry)
+            except Exception as e2:
+                if _is_rest_quota_error(e2):
+                    return _pg(retry, e2)
+                raise
+        raise
+
+
 async def create_connect_account_and_link(
     vendor_id: str, refresh_url: str, return_url: str, full_name: str = "", email: str = "",
     member_id: str | None = None,
@@ -252,20 +299,7 @@ async def create_connect_account_and_link(
         }
         if member_id:
             payload["member_id"] = member_id
-        try:
-            insert_res = supabase.table("contractors").insert(payload).execute()
-            if not insert_res.data:
-                raise ValueError(f"Could not create contractor record for vendor: {vendor_id}")
-            contractor = insert_res.data[0]
-        except Exception as e:
-            if _is_rest_quota_error(e):
-                contractor = pg_insert_contractor(payload)
-                if not contractor:
-                    raise ValueError(
-                        f"Could not create contractor record for vendor: {vendor_id}"
-                    ) from e
-            else:
-                raise
+        contractor = _insert_contractor_row(payload, vendor_id)
 
     stripe_account_id = contractor.get("stripe_account_id")
     if not stripe_account_id:
