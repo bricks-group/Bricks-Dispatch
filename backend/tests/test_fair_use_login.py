@@ -248,8 +248,9 @@ async def test_resolve_minted_fair_use_token_after_signature_reject(monkeypatch)
     async def fake_get_db():
         return _Db()
 
-    async def fake_lookup(uid, em=None):
+    async def fake_lookup(uid, em=None, **kw):
         assert uid == auth_uid
+        assert kw.get("email_confirmed") is False  # minted tokens never email-match
         return {
             "id": member_id,
             "email": email,

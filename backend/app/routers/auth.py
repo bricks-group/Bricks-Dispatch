@@ -66,7 +66,10 @@ async def vendor_os_verify(payload: dict):
             if user.email:
                 by_email = await db.table("vendor_members").select("*").ilike("email", user.email).limit(10).execute()
                 for row in by_email.data or []:
-                    if row and row.get("id") not in {r.get("id") for r in rows}:
+                    # exact address only (ilike treats % and _ as wildcards)
+                    if not row or str(row.get("email") or "").strip().lower() != user.email.strip().lower():
+                        continue
+                    if row.get("id") not in {r.get("id") for r in rows}:
                         rows.append(row)
             if (user.email or "").lower() in KAM_EMAILS or str(user.id).lower().startswith("0c3fa7c2"):
                 kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()

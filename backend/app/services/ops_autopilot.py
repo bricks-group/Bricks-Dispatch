@@ -633,11 +633,34 @@ def _storage_headers() -> tuple[str, dict]:
 
 
 BACKUP_SCHEMAS = ("public",)
-BACKUP_EXTRA_TABLES = ("auth.users", "auth.identities")
+# auth.users only, without secrets: no encrypted_password, no confirmation /
+# recovery / email-change / reauth tokens. auth.identities is not backed up
+# (provider tokens + identity data; recreated by sign-in).
+BACKUP_EXTRA_TABLES = ("auth.users",)
+AUTH_USERS_BACKUP_COLUMNS = (
+    "id", "aud", "role", "email", "phone", "created_at", "updated_at",
+    "email_confirmed_at", "phone_confirmed_at", "last_sign_in_at",
+    "raw_app_meta_data", "raw_user_meta_data", "banned_until", "deleted_at",
+    "is_anonymous", "is_sso_user",
+)
+_BACKUP_SELECT = {
+    "auth.users": "select row_to_json(x)::text from (select "
+    + ", ".join(f'"{c}"' for c in AUTH_USERS_BACKUP_COLUMNS)
+    + ' from "auth"."users") x',
+}
+
+
+def _backup_select(table: str) -> str:
+    if table in _BACKUP_SELECT:
+        return _BACKUP_SELECT[table]
+    if table.startswith("auth."):
+        raise ValueError(f"refusing to back up {table}")
+    schema, name = table.split(".", 1)
+    return f'select row_to_json(x)::text from "{schema}"."{name}" x'
 
 
 def dump_database() -> tuple[bytes, dict]:
-    """Logical backup: every public table (+ auth users) as JSON lines, gzipped."""
+    """Logical backup: every public table (+ auth users minus secrets) as JSON lines, gzipped."""
     from ..shared.pg_fallback import _pg_connect
     conn = _pg_connect()
     if conn is None:
@@ -650,10 +673,8 @@ def dump_database() -> tuple[bytes, dict]:
                         "where table_schema = any(%s) and table_type='BASE TABLE' order by 1", (list(BACKUP_SCHEMAS),))
             tables = [r[0] for r in cur.fetchall()] + list(BACKUP_EXTRA_TABLES)
             for t in tables:
-                schema, name = t.split(".", 1)
-                ident = f'"{schema}"."{name}"'
                 try:
-                    cur.execute(f"select row_to_json(x)::text from {ident} x")
+                    cur.execute(_backup_select(t))
                 except Exception as e:
                     counts[t] = -1
                     logger.warning("backup skip %s: %s", t, e)
