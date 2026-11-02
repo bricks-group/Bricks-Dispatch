@@ -1496,6 +1496,20 @@ async def public_availability_days(
         return {"ok": False, "source": "unavailable", "days": []}
 
 
+async def _auto_reassign_after_decline(db, job: dict, decliner_id: str | None) -> None:
+    """A decline sends the job straight to the next vendor (ops autopilot, 2026-11-02).
+    Only for jobs that have not started; the 15-minute sweep is the backstop. Never raises."""
+    try:
+        from ..services import ops_autopilot as ops
+        start = ops.job_start_utc(job)
+        if not start or start <= datetime.now(timezone.utc):
+            return
+        if await ops.once(db, f"reassign:{job.get('id')}:{decliner_id or ''}"):
+            await ops.reassign_job(db, job["id"], "vendor_declined")
+    except Exception as e:
+        logger.error(f"Auto-reassign after decline failed for job {job.get('id')}: {e}")
+
+
 def _cron_authorized(authorization: str | None, x_internal_key: str | None) -> bool:
     secret = (os.environ.get("CRON_SECRET") or "").strip()
     if secret and (authorization or "").strip() == f"Bearer {secret}":
@@ -2369,6 +2383,7 @@ async def update_vendor_job_status(
         assignee_id = job.get("assignee_id")
         if assignee_id and assignee_id != "default_user":
             await _refresh_decline_rate(db, assignee_id, now, job_id)
+        await _auto_reassign_after_decline(db, job, assignee_id)
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         # Probation: hold one of the vendor's first N jobs for admin review (soft-fail).
@@ -2528,6 +2543,7 @@ async def watch_job_action(
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
         await _refresh_decline_rate(db, actor_id, now, job_id)
+        await _auto_reassign_after_decline(db, job, actor_id)
 
     booking_id = job.get("booking_id")
     if booking_id:

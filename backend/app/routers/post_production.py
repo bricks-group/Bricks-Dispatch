@@ -1199,9 +1199,12 @@ async def boxbrownie_callback(
 @router.post("/reconcile")
 async def reconcile_stuck_uploads(
     x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
+    since: Optional[str] = None,
 ):
     """
     Mark Fotello/Autoenhance/BoxBrownie uploads stuck >2h as failed, then re-trigger finalization.
+    since: optional YYYY-MM-DD; only uploads created on/after it (the ops sweep passes
+    3 days back so old test uploads are never swept into a delivery).
     """
     _internal_api_keys_str = os.environ.get("INTERNAL_API_KEYS", "")
     if not _internal_api_keys_str:
@@ -1243,7 +1246,7 @@ async def reconcile_stuck_uploads(
     # and will never receive a callback. Without this they block _finalize_job_if_complete forever.
     res_stuck = await db.table("uploads").select("id, job_id, provider, file_url, filename").in_(
         "processing_status", ["processing", "pending"]
-    ).lt("created_at", cutoff).limit(100).execute()
+    ).lt("created_at", cutoff).gte("created_at", since or "0000").limit(100).execute()
 
     stuck = res_stuck.data or []
 
@@ -1330,7 +1333,7 @@ async def reconcile_stuck_uploads(
     if pil_tier3_count:
         res_stuck = await db.table("uploads").select("id, job_id, provider, file_url, filename").in_(
             "processing_status", ["processing", "pending"]
-        ).lt("created_at", cutoff).limit(100).execute()
+        ).lt("created_at", cutoff).gte("created_at", since or "0000").limit(100).execute()
         stuck = res_stuck.data or []
 
     stuck_ids = [u["id"] for u in stuck]

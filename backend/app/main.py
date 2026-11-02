@@ -82,6 +82,8 @@ app.router.routes = [
 app.include_router(stripe_connect_webhook_router, tags=["stripe-connect"])
 app.include_router(onboarding.router, tags=["onboarding"])
 app.include_router(admin_ops.router, tags=["admin"])
+from app.routers.ops_autopilot import router as ops_autopilot_router
+app.include_router(ops_autopilot_router, tags=["ops"])
 # Mounted 2026-07-27: both carry their own /api/* prefix internally, real
 # working code that was built but never wired in. uploads.py is a dependency
 # of vendor_os.py's post-production trigger comment; auth.py is the only path
