@@ -423,7 +423,11 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         })
         payout_id = reuse_payout_id
     else:
+        # payouts.id is text NOT NULL with no default: REST inserts without an id
+        # fail 23502, so every first payout died after delivery (Kam E2E, 2026-11-02).
+        import uuid as _uuid
         payout_record = {
+            "id": str(_uuid.uuid4()),
             "job_id": job_id,
             "vendor_id": vendor_id,
             "contractor_id": contractor_id,
