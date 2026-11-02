@@ -339,6 +339,6 @@ async def create_connect_account_and_link(
         refresh_url=refresh_url,
         return_url=return_url,
         type="account_onboarding",
-        collect_options={"fields": "currently_due"},
+        collection_options={"fields": "currently_due"},
     )
     return account_link.url
