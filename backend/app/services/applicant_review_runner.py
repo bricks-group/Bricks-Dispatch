@@ -201,12 +201,34 @@ async def notify_owner(member: dict, result: dict) -> None:
 async def _load_docs(member_id: str) -> list:
     try:
         db = await get_db()
-        res = await db.table("vendor_documents").select("doc_type, status, expiry_date, validation_result").eq(
+        res = await db.table("vendor_documents").select("id, doc_type, status, expiry_date, validation_result, file_url").eq(
             "member_id", member_id).execute()
         return res.data or []
     except Exception as e:
         logger.warning("applicant docs lookup failed (%s)", type(e).__name__)
         return []
+
+
+def _apply_doc_checks_photographer(member: dict, result: dict, docs: list) -> None:
+    """Photographer rubric scores samples; documents still can't be blank or mismatched."""
+    try:
+        from . import trade_specs as ts
+        from .trade_review import doc_checks, DOC_PROBLEM_SCORE_CAP, NEEDS_REVIEW, VERDICT_LABEL
+        checks = doc_checks(ts.credential_states({**member, "vendor_type": "photographer"}, docs), docs)
+        result["doc_checks"] = checks
+        bad = [x for x in checks if x["overall"] in ("blank", "unreadable", "mismatch")]
+        unver = [x for x in checks if x not in bad and x["overall"] != "verified" and x["group"] in ("credential", "identity")]
+        result["doc_problem"] = bool(bad)
+        if bad:
+            result["score"] = min(int(result.get("score") or 0), DOC_PROBLEM_SCORE_CAP)
+            result["score_cap"] = DOC_PROBLEM_SCORE_CAP
+            result.setdefault("flags", []).insert(0, {"source": "verified", "text": "Document check failed: " + ", ".join(x["label"] for x in bad) + "."})
+        if (bad or unver) and result.get("verdict") == "recommend":
+            result["verdict"], result["verdict_label"], result["colour"] = NEEDS_REVIEW, VERDICT_LABEL[NEEDS_REVIEW], "yellow"
+            result.setdefault("verdict_reasons", []).append(
+                "Document check failed." if bad else "Couldn't verify the content of: " + ", ".join(x["label"] for x in unver[:4]) + ".")
+    except Exception as e:
+        logger.warning("photographer doc checks skipped (%s)", type(e).__name__)
 
 
 async def review_application(
@@ -224,16 +246,23 @@ async def review_application(
             return None
         from .applicant_review import _member_trade
         trade = _member_trade(member)
+        docs = await _load_docs(member_id)
+        try:  # read what's actually on each uploaded document (server-side vision)
+            from .doc_vision import check_member_docs
+            docs = await check_member_docs(await get_db(), {**member, "vendor_type": trade}, docs)
+        except Exception as e:
+            logger.warning("doc content check skipped (%s)", type(e).__name__)
         if trade != "photographer":
             # Rules rubric for non-photographer trades (no sample photos to score).
             from .trade_review import run_trade_review
-            result = run_trade_review({**member, "vendor_type": trade}, await _load_docs(member_id))
+            result = run_trade_review({**member, "vendor_type": trade}, docs)
         else:
             availability = await _load_availability(member_id)
             inp = review_input_from_member(member, availability)
             result = await run_review(inp, other_hashes=await _load_hashes())
             result.setdefault("trade", "photographer")
             result.setdefault("rubric_version", "photo-v1")
+            _apply_doc_checks_photographer(member, result, docs)
         if store:
             await _store_thumbs(result)
         else:

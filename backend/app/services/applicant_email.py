@@ -34,6 +34,11 @@ VERDICT_BAND = {
     "red": "Not a fit",
     "grey": "Incomplete",
 }
+POINT_WORD = {"verified": ("Verified", STATUS["green"]["fg"]), "unverified": ("Unverified", STATUS["yellow"]["fg"]),
+              "mismatch": ("Mismatch", STATUS["red"]["fg"])}
+DOC_OVERALL = {"verified": ("Verified", STATUS["green"]["fg"]), "partial": ("Partly verified", STATUS["yellow"]["fg"]),
+               "not_checked": ("Not verified", STATUS["grey"]["fg"]), "mismatch": ("Mismatch", STATUS["red"]["fg"]),
+               "unreadable": ("Unreadable", STATUS["red"]["fg"]), "blank": ("Blank file", STATUS["red"]["fg"])}
 PART_ORDER = ("samples", "gear", "availability", "location", "portfolio", "drone", "resume",
               "proof", "credentials", "identity", "experience", "completeness")
 SPECIALTY_LABEL = {
@@ -72,6 +77,8 @@ def _rubric_note(review: dict) -> str:
 
 
 def _cap_note(review: dict) -> str:
+    if review.get("doc_problem"):
+        return f"Capped at {review.get('score_cap') or 50}: a document is blank, unreadable or doesn't match."
     if review.get("rubric_version", "").startswith("trade-rules"):
         return f"Capped at {review.get('score_cap') or 60} until required documents are in."
     return f"Capped at {review.get('score_cap') or 60} until samples are reviewed."
@@ -121,7 +128,7 @@ def render_html(
     st = STATUS.get(colour, STATUS["yellow"])
     score = int(review.get("score") or 0)
     cap_note = ""
-    if review.get("incomplete"):
+    if review.get("incomplete") or review.get("doc_problem"):
         cap_note = _cap_note(review)
     parts = review.get("parts") or {}
 
@@ -209,6 +216,20 @@ def render_html(
         )
         missing_html = _section_label("Still missing") + f'<tr><td style="padding:0 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{items}</table></td></tr>'
 
+    docs_html = ""
+    if review.get("doc_checks"):
+        rows = []
+        for x in review["doc_checks"]:
+            ocol = DOC_OVERALL.get(x.get("overall"), DOC_OVERALL["not_checked"])
+            rows.append(
+                f'<tr><td colspan="2" style="padding:10px 0 2px 0;font-family:{SANS};font-size:13px;line-height:19px;font-weight:600;color:{INK};">'
+                f'{e(x.get("label"))} <span style="font-family:{MONO};font-size:10px;letter-spacing:.6px;font-weight:400;color:{ocol[1]};">{e(ocol[0].upper())}</span></td></tr>')
+            for pt in x.get("points") or []:
+                w, col = POINT_WORD.get(pt.get("status"), POINT_WORD["unverified"])
+                rows.append(
+                    f'<tr><td valign="top" width="96" style="width:96px;padding:3px 8px 3px 0;font-family:{MONO};font-size:9px;letter-spacing:1px;color:{col};">{e(w.upper())}</td>'
+                    f'<td valign="top" style="padding:2px 0;font-family:{SANS};font-size:12px;line-height:17px;color:{INK_SOFT};">{e(pt.get("point"))}: {e(pt.get("detail"))}</td></tr>')
+        docs_html = _section_label("Document check") + f'<tr><td style="padding:0 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{"".join(rows)}</table></td></tr>'
     reasons = review.get("verdict_reasons") or []
     reasons_html = ""
     if reasons:
@@ -277,6 +298,7 @@ def render_html(
 {thumbs_html}
 {resume_html}
 {rubric_html}
+{docs_html}
 {_section_label("Evidence")}
 <tr><td style="padding:0 24px;" class="px"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{''.join(ev_rows)}</table></td></tr>
 {missing_html}
@@ -306,7 +328,7 @@ def render_text(*, member_id: str, name: str, city: str, specialties, found_via:
     ]
     for r in review.get("verdict_reasons") or []:
         lines.append(f"Why: {r}")
-    if review.get("incomplete"):
+    if review.get("incomplete") or review.get("doc_problem"):
         lines.append("Score " + _cap_note(review)[0].lower() + _cap_note(review)[1:])
     parts = review.get("parts") or {}
     bar = []
@@ -331,6 +353,12 @@ def render_text(*, member_id: str, name: str, city: str, specialties, found_via:
         lines += ["", "Rubric:"] + [f"- {c['label']}: {c['words']}" for c in (review.get("criteria") or {}).values()]
     else:
         lines += ["", "Rubric: " + _rubric_note(review)]
+    if review.get("doc_checks"):
+        lines += ["", "Document check:"]
+        for x in review["doc_checks"]:
+            lines.append(f"- {x.get('label')}: {DOC_OVERALL.get(x.get('overall'), DOC_OVERALL['not_checked'])[0]}")
+            for pt in x.get("points") or []:
+                lines.append(f"    {POINT_WORD.get(pt.get('status'), POINT_WORD['unverified'])[0]}: {pt.get('point')}: {pt.get('detail')}")
     lines += ["", "Evidence:"]
     for b in list(review.get("flags") or []) + list(review.get("evidence") or []):
         lines.append(f"- [{SOURCE_LABEL.get(b.get('source'), 'Self-reported')}] {b.get('text')}")
