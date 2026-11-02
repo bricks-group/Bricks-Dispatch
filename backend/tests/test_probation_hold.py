@@ -112,7 +112,7 @@ def test_record_probation_job_creates_held_row():
     assert db.tables["vendor_probation_reviews"][0]["payout_hold"] == "held"
 
 
-def _payout_patches(db):
+def _payout_patches(db, stripe_error=None):
     async def sel(_db, job_id):
         rows = [p for p in db.tables["payouts"] if p["job_id"] == job_id]
         return dict(rows[0]) if rows else None
@@ -126,7 +126,7 @@ def _payout_patches(db):
             if p["id"] == pid:
                 p.update(fields)
 
-    stripe = AsyncMock(return_value="tr_test_1")
+    stripe = AsyncMock(return_value="tr_test_1", side_effect=stripe_error)
     return stripe, [
         patch.object(ps, "_db_select_job", AsyncMock(return_value=dict(JOB))),
         patch.object(ps, "_db_select_vendor_member", AsyncMock(return_value={"tier": 2})),
@@ -143,8 +143,8 @@ def _payout_patches(db):
     ]
 
 
-def _run(db, coro_fn):
-    stripe, ps_ = _payout_patches(db)
+def _run(db, coro_fn, stripe_error=None):
+    stripe, ps_ = _payout_patches(db, stripe_error)
     for p in ps_:
         p.start()
     try:
@@ -261,3 +261,68 @@ def test_routes_auth_and_confirm_page(monkeypatch):
         assert e.value.status_code == 401
     assert asyncio.run(onboarding.probation_sweep(Req(Authorization="Bearer cron-x")))["checked"] == 0
     assert asyncio.run(onboarding.probation_sweep(Req(**{"X-Internal-Api-Key": "ik-1"}), job_id="j1"))["ok"]
+
+
+NOT_READY = ValueError("Stripe account is not payout-ready for Test Vendor (member m1, contractor c1) (status=restricted)")
+
+
+def test_owner_approve_with_failed_transfer_keeps_hold_retryable():
+    """E2E bug 3: a failed transfer must not mark the hold released."""
+    db = _db()
+    _run(db, lambda: ps.trigger_payout_for_job(db, "j1"))
+    stripe, out = _run(db, lambda: vv.review_probation_job(db, "m1", "j1", "approved", client_rating=5,
+                                                          reviewed_by="admin"), stripe_error=NOT_READY)
+    assert stripe.await_count == 1
+    assert out["payout"]["status"] == "failed" and out["payout"]["retryable"] is True
+    row = db.tables["vendor_probation_reviews"][0]
+    assert row["payout_hold"] == "held" and row["payout_released_at"] is None
+    assert "payout failed" in row["hold_reason"]
+    assert db.tables["payouts"][0]["status"] == "failed"
+    # The daily sweep picks the owner-approved row up again and pays once Stripe is ready.
+    stripe, swept = _run(db, lambda: ph.run_probation_sweep(db, job_id="j1"))
+    assert swept["results"][0]["action"] == "release" and stripe.await_count == 1
+    row = db.tables["vendor_probation_reviews"][0]
+    assert row["payout_hold"] == "released" and row["payout_released_at"]
+    assert db.tables["payouts"][0]["status"] == "paid"
+
+
+def test_ops_retry_of_failed_release_goes_through_probation_release():
+    db = _db()
+    _run(db, lambda: ps.trigger_payout_for_job(db, "j1"))
+    _run(db, lambda: vv.review_probation_job(db, "m1", "j1", "approved", reviewed_by="admin"), stripe_error=NOT_READY)
+    # The ops payout retry (no release flag) re-evaluates the hold, which releases the owner-approved row.
+    stripe, res = _run(db, lambda: ps.trigger_payout_for_job(db, "j1"))
+    assert res["probation"]["action"] == "release" and stripe.await_count == 1
+    assert db.tables["vendor_probation_reviews"][0]["payout_hold"] == "released"
+    assert db.tables["payouts"][0]["status"] == "paid"
+
+
+def test_owner_approve_retry_after_failure_pays():
+    db = _db()
+    _run(db, lambda: ps.trigger_payout_for_job(db, "j1"))
+    _run(db, lambda: vv.review_probation_job(db, "m1", "j1", "approved", reviewed_by="admin"), stripe_error=NOT_READY)
+    stripe, out = _run(db, lambda: vv.review_probation_job(db, "m1", "j1", "approved", reviewed_by="admin"))
+    assert out["payout"]["status"] == "paid" and stripe.await_count == 1
+    assert db.tables["vendor_probation_reviews"][0]["payout_hold"] == "released"
+
+
+def test_auto_release_with_failed_transfer_is_undone_and_retried():
+    db = _db()
+    _run(db, lambda: ps.trigger_payout_for_job(db, "j1"))
+    db.tables["vendor_reviews"].append({"job_id": "j1", "vendor_id": "m1", "rating": 5})
+    stripe, out = _run(db, lambda: ph.run_probation_sweep(db, job_id="j1"), stripe_error=RuntimeError("stripe down"))
+    assert stripe.await_count == 1
+    row = db.tables["vendor_probation_reviews"][0]
+    assert row["payout_hold"] == "held" and row["status"] == "pending" and not row.get("reviewed_by")
+    stripe, out = _run(db, lambda: ph.run_probation_sweep(db, job_id="j1"))
+    assert out["results"][0]["action"] == "release" and stripe.await_count == 1
+    assert db.tables["vendor_probation_reviews"][0]["payout_hold"] == "released"
+
+
+def test_payout_error_names_the_payee_not_the_org():
+    """E2E bug 1: the not-ready error named vendor default_vendor."""
+    from app.shared.payee import payee_label
+    lbl = payee_label({"id": "c1", "full_name": "Test Vendor", "stripe_account_id": "acct_1"}, "m1")
+    assert lbl == "Test Vendor (member m1, contractor c1, acct_1)" and "default_vendor" not in lbl
+    assert payee_label({"id": "c1"}) == "contractor c1"
+    assert payee_label({}) == "unknown payee"

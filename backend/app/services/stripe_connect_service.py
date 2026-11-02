@@ -13,6 +13,7 @@ import os
 import stripe as stripe_lib
 from supabase import create_client, Client
 from app.shared.database import maybe_single_row
+from app.shared.payee import payee_label
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +155,7 @@ def load_contractor_row(vendor_id: str, member_id: str | None = None) -> dict | 
         pg_select_contractor_by_member_id,
         pg_select_contractor_by_vendor_id,
     )
-    cols = "id, stripe_account_id, connect_status, vendor_id, member_id"
+    cols = "id, stripe_account_id, connect_status, vendor_id, member_id, full_name"
     try:
         q = supabase.table("contractors").select(cols)
         if member_id:
@@ -215,14 +216,14 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
         contractor = load_contractor_row(vendor_id, None)
 
     if not contractor or not contractor.get("stripe_account_id"):
-        raise ValueError(f"Stripe account not found for vendor: {vendor_id} contractor: {contractor_id}")
+        raise ValueError(f"Stripe account not found for member {contractor_id or '-'} (company {vendor_id})")
 
     stripe_account_id = contractor["stripe_account_id"]
     # Fail closed: verify Stripe readiness (and refresh connect_status) before transfer.
     synced = sync_contractor_connect_status(contractor["id"], stripe_account_id)
     if not synced.get("connected"):
         raise ValueError(
-            f"Stripe account is not payout-ready for vendor {vendor_id} "
+            f"Stripe account is not payout-ready for {payee_label(contractor, contractor_id)} "
             f"(status={synced.get('connect_status')})"
         )
 
