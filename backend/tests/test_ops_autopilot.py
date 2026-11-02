@@ -190,3 +190,13 @@ def test_daily_flags_stale_sweep():
 
 def test_run_action_unknown():
     assert run(ops.run_action(FakeDB(), {"a": "nope", "p": {}}))["ok"] is False
+
+
+def test_probation_held_payout_is_not_retried_or_escalated():
+    job = {"id": "p2", "status": "delivered", "payout_status": None, "updated_at": (NOW - timedelta(hours=30)).isoformat()}
+    db = FakeDB(jobs=[job], payouts=[{"job_id": "p2", "status": "held"}])
+    tp = AsyncMock(return_value={"status": "held"})
+    with patch("app.services.payout_service.trigger_payout_for_job", new=tp):
+        out = {"payout_retried": [], "payout_escalated": []}
+        run(ops._payout_retries(db, NOW, out))
+    assert tp.await_count == 0 and out == {"payout_retried": [], "payout_escalated": []}

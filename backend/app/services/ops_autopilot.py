@@ -436,6 +436,12 @@ async def sweep(db, now: Optional[datetime] = None, *, run_reconcile: bool = Tru
         except Exception as e:
             out["errors"].append({"step": "reconcile", "error": str(e)[:200]})
     if run_payouts:
+        try:  # probation payout holds: release / block on the same 15-min cadence
+            from .probation_hold import run_probation_sweep
+            pr = await run_probation_sweep(db, now=now)
+            out["probation"] = [r for r in pr.get("results", []) if r.get("action") != "wait"]
+        except Exception as e:
+            out["errors"].append({"step": "probation", "error": str(e)[:200]})
         try:
             await _payout_retries(db, now, out)
         except Exception as e:
@@ -477,8 +483,8 @@ async def _payout_retries(db, now: datetime, out: dict) -> None:
         if not upd or now - upd < timedelta(hours=PAYOUT_MIN_AGE_H):
             continue
         pres = await db.table("payouts").select("status").eq("job_id", jid).execute()
-        if any((r.get("status") or "") == "paid" for r in (pres.data or [])):
-            continue
+        if any((r.get("status") or "") in ("paid", "held") for r in (pres.data or [])):
+            continue  # "held" = probation hold; released by the probation sweep, not retried
         tries = await events_like(db, f"payout_retry:{jid}:")
         last = max((_parse_ts(t.get("created_at")) for t in tries), default=None)
         if len(tries) >= PAYOUT_MAX_TRIES:
