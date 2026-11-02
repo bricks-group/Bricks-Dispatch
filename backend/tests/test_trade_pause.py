@@ -38,7 +38,7 @@ def test_paused_vendor_is_not_assignable():
 
 
 def test_owner_never_paused():
-    assert not is_vendor_paused(_m(id="0c3fa7c2-x", paused_at="2026-11-01"))
+    assert not is_vendor_paused(_m(id="0c3fa7c2-d23b-4e44-90ad-ab2d19af2580", paused_at="2026-11-01"))
 
 
 def test_registry_copies_match():

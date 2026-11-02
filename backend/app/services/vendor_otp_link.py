@@ -54,7 +54,7 @@ async def link_member_after_otp(db, user_id: str, email: str, name: str = "") ->
                 conflict = True  # someone else's row: never claim it
                 continue
             add(row)
-    if email_l in KAM_EMAILS or uid.lower().startswith("0c3fa7c2"):
+    if email_l in KAM_EMAILS or uid.lower() == str(KAM_MEMBER_ID).lower():
         res = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
         add(getattr(res, "data", None) if res is not None else None)
 

@@ -35,6 +35,7 @@ import hashlib
 import hmac
 import html as _html
 import io
+import re
 import json
 import logging
 import os
@@ -670,18 +671,89 @@ _BACKUP_SELECT = {
     + ' from "auth"."users") x',
 }
 
+# SECURITY (2026-11-02): public-table secrets never go into the backup file.
+# Explicit per-table denylist (always redacted) ...
+BACKUP_REDACT_COLUMNS: dict[str, frozenset] = {
+    "public.app_secrets": frozenset({"value"}),  # INTERNAL_API_KEY, Stripe webhook secrets
+    "public.vendor_calendar_connections": frozenset({"access_token", "refresh_token", "caldav_password",
+                                                     "ics_url", "caldav_url"}),
+    # calendar feed links carry secret tokens
+    "public.contractors": frozenset({"ical_url"}),
+    "public.company_calendar_settings": frozenset({"ical_url"}),
+    "public.connected_tools": frozenset({"credential_secret", "credential_key", "credentials"}),
+    "public.password_resets": frozenset({"token"}),
+    "public.signature_recipients": frozenset({"token"}),
+    "public.push_tokens": frozenset({"token"}),
+    "public.vendor_members": frozenset({"application_token"}),
+    "public.property_visits": frozenset({"password_hash"}),
+    # share / bearer-link tokens
+    "public.dev_progress_reports": frozenset({"share_token"}),
+    "public.dev_project_share_links": frozenset({"token"}),
+    "public.site_monitor_share_tokens": frozenset({"token"}),
+    "public.deal_room_links": frozenset({"token_hash"}),
+    "public.deal_room_parties": frozenset({"reminders_stop_token"}),
+    "public.assignment_offers": frozenset({"token"}),
+    # sealed / hashed credentials
+    "public.accounting_connections": frozenset({"token_sealed"}),
+    "public.dev_capture_connections": frozenset({"secret_sealed"}),
+    "public.dev_procore_connections": frozenset({"token_sealed"}),
+    "public.api_keys": frozenset({"key_hash"}),
+}
+# ... plus fail-closed by name: any column named like a secret is redacted
+# unless it is on this reviewed keep-list (not secrets, needed for restore).
+SENSITIVE_COLUMN_RE = re.compile(
+    r"(token|secret|passw|hash|credential|api_?key|private_?key|sealed|(^|_)otp(_|$)|(^|_)salt(_|$)"
+    r"|(ical|ics|caldav|webcal)_?(feed_?)?url)",
+    re.IGNORECASE,
+)
+BACKUP_KEEP_COLUMNS: dict[str, frozenset] = {
+    "public.vendor_calendar_connections": frozenset({"token_expires_at"}),  # timestamp
+    "public.bookings": frozenset({"idempotency_request_hash"}),  # request fingerprint
+    "public.vendor_applicant_image_hashes": frozenset({"dhash"}),  # perceptual image hash
+    "public.vendor_terminations": frozenset({"id_hashes"}),  # re-signup block list
+}
+REDACTED = "[redacted]"
 
-def _backup_select(table: str) -> str:
+
+def backup_redacted_columns(table: str, columns) -> set:
+    cols = [str(c) for c in columns]
+    keep = BACKUP_KEEP_COLUMNS.get(table, frozenset())
+    explicit = BACKUP_REDACT_COLUMNS.get(table, frozenset())
+    return {c for c in cols if c in explicit or (SENSITIVE_COLUMN_RE.search(c) and c not in keep)}
+
+
+def _qi(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _backup_select(table: str, columns=None) -> str:
     if table in _BACKUP_SELECT:
         return _BACKUP_SELECT[table]
     if table.startswith("auth."):
         raise ValueError(f"refusing to back up {table}")
+    if not columns:
+        # Fail closed: without the column list we cannot redact.
+        raise ValueError(f"column list required to back up {table}")
     schema, name = table.split(".", 1)
-    return f'select row_to_json(x)::text from "{schema}"."{name}" x'
+    red = backup_redacted_columns(table, columns)
+    parts = []
+    for c in columns:
+        if c in red:
+            parts.append(f"case when {_qi(c)} is null then null else '{REDACTED}' end as {_qi(c)}")
+        else:
+            parts.append(_qi(c))
+    return f"select row_to_json(x)::text from (select {', '.join(parts)} from {_qi(schema)}.{_qi(name)}) x"
+
+
+def redact_backup_row(table: str, row: dict) -> dict:
+    """Python mirror of the SQL redaction (used by checks / samples)."""
+    red = backup_redacted_columns(table, row.keys())
+    return {k: (None if v is None else REDACTED) if k in red else v for k, v in row.items()}
 
 
 def dump_database() -> tuple[bytes, dict]:
-    """Logical backup: every public table (+ auth users minus secrets) as JSON lines, gzipped."""
+    """Logical backup: every public table (secret columns redacted) + auth users
+    minus secrets, as JSON lines, gzipped."""
     from ..shared.pg_fallback import _pg_connect
     conn = _pg_connect()
     if conn is None:
@@ -693,12 +765,21 @@ def dump_database() -> tuple[bytes, dict]:
             cur.execute("select table_schema||'.'||table_name from information_schema.tables "
                         "where table_schema = any(%s) and table_type='BASE TABLE' order by 1", (list(BACKUP_SCHEMAS),))
             tables = [r[0] for r in cur.fetchall()] + list(BACKUP_EXTRA_TABLES)
+            cur.execute("select table_schema||'.'||table_name, column_name from information_schema.columns "
+                        "where table_schema = any(%s) order by 1, ordinal_position", (list(BACKUP_SCHEMAS),))
+            columns: dict[str, list] = {}
+            for t, c in cur.fetchall():
+                columns.setdefault(t, []).append(c)
             for t in tables:
                 try:
-                    cur.execute(_backup_select(t))
+                    cur.execute(_backup_select(t, columns.get(t)))
                 except Exception as e:
                     counts[t] = -1
                     logger.warning("backup skip %s: %s", t, e)
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                     continue
                 n = 0
                 gz.write((json.dumps({"table": t}) + "\n").encode())

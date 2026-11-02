@@ -87,7 +87,7 @@ def test_expiry_decision_pauses_then_resumes_only_its_own_pause():
     assert vv.expiry_decision(_m(paused_at="x", paused_reason=reason), DOCS_OK, TODAY) == ("resume", None)
     # Probation/admin pauses are never lifted by the sweep.
     assert vv.expiry_decision(_m(paused_at="x", paused_reason="Probation: job failed review"), DOCS_OK, TODAY) == (None, None)
-    assert vv.expiry_decision(_m(id="0c3fa7c2-owner"), DOCS_EXPIRED, TODAY) == (None, None)
+    assert vv.expiry_decision(_m(id="0c3fa7c2-d23b-4e44-90ad-ab2d19af2580"), DOCS_EXPIRED, TODAY) == (None, None)
 
 
 def test_expiry_sweep_writes_and_dry_run_does_not():
@@ -111,7 +111,7 @@ def test_probation_records_first_n_jobs_only():
     rows = db.tables["vendor_probation_reviews"]
     assert [r["job_id"] for r in rows] == [f"j{i}" for i in range(n)]
     assert asyncio.run(vv.record_probation_job(db, {"id": "x", "assignee_id": "default_user"})) is None
-    assert asyncio.run(vv.record_probation_job(db, {"id": "x", "assignee_id": "0c3fa7c2-owner"})) is None
+    assert asyncio.run(vv.record_probation_job(db, {"id": "x", "assignee_id": "0c3fa7c2-d23b-4e44-90ad-ab2d19af2580"})) is None
 
 
 def test_probation_fail_or_low_rating_pauses():
