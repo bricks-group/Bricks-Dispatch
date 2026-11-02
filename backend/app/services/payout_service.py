@@ -432,6 +432,7 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
                 return {"error": "payout_record_creation_failed", "job_id": job_id}
             payout_id = inserted["id"]
         await _db_update_job_payout_amount(db, job_id, payout_amount)
+        await _db_update_job_fields(db, job_id, ledger_fields(job, payout_amount))
         logger.info(f"Probation hold: payout {payout_id} for job {job_id} held until rating or auto-release")
         result = {"payout_id": payout_id, "status": "held", "base_amount": payout_amount,
                   "held": True, "release_after": hold_row.get("release_after")}
