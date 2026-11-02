@@ -245,13 +245,18 @@ async def _db_update_noshow_claim(db, claim_id: str, fields: dict) -> None:
     await db.table("agent_noshow_trip_fees").update(fields).eq("id", claim_id).execute()
 
 
-async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = None) -> dict:
+async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = None,
+                                 release: bool = False) -> dict:
     """
     Trigger a payout for a completed job.
 
     noshow_claim_id: set for an approved client no-show claim on this job. The vendor
     is paid half the job's normal base payout (HST on top as usual) and the claim's
     amount_cents is set to that half. Kam, 2026-10-30.
+
+    release: set only by the probation sweep / owner one-tap. Without it, one of
+    a vendor's first N jobs (probation) records a "held" payout and pays nothing
+    until the client rating lands or the auto-release window passes.
     Looks up the job, calculates the payout amount, calls Stripe Connect,
     and records the payout in the payouts table.
 
@@ -346,6 +351,44 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
 
     # Check if payout already exists for this job
     existing_data = await _db_select_payout_by_job(db, job_id)
+
+    hold_row = None
+    if not release and not noshow_claim_id and not owner_job:
+        from .probation_hold import hold_for_payout
+        hold_row = await hold_for_payout(db, job)
+    if hold_row is not None and not (
+        existing_data and (existing_data.get("status") == "paid" or existing_data.get("stripe_transfer_id"))
+    ):
+        held_fields = {
+            "amount": payout_amount,
+            "hst_paid_cents": hst_paid_cents,
+            "contractor_hst_rate": contractor_hst_rate,
+            "contractor_id": contractor_id or "",
+            "status": "held",
+        }
+        if existing_data:
+            await _db_update_payout(db, existing_data["id"], held_fields)
+            payout_id = existing_data["id"]
+        else:
+            import uuid as _uuid
+            inserted = await _db_insert_payout(db, {
+                "id": str(_uuid.uuid4()), "job_id": job_id, "vendor_id": vendor_id,
+                "created_at": now, **held_fields,
+            })
+            if not inserted:
+                return {"error": "payout_record_creation_failed", "job_id": job_id}
+            payout_id = inserted["id"]
+        await _db_update_job_payout_amount(db, job_id, payout_amount)
+        logger.info(f"Probation hold: payout {payout_id} for job {job_id} held until rating or auto-release")
+        result = {"payout_id": payout_id, "status": "held", "base_amount": payout_amount,
+                  "held": True, "release_after": hold_row.get("release_after")}
+        if hold_row.get("payout_hold") == "held":
+            try:  # a QC fail or an existing rating is acted on at once
+                from .probation_hold import evaluate
+                result["probation"] = await evaluate(db, dict(hold_row))
+            except Exception as e:
+                logger.warning(f"Probation evaluate at payout soft-fail job {job_id}: {type(e).__name__}")
+        return result
     is_retry = False
     reuse_payout_id = None
     retry_created_at = ""  # set below when reusing an existing payout record
@@ -379,7 +422,8 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
 
         # A pending record with no Stripe transfer ID means the process crashed before the
         # Stripe call was made — treat it as retriable, same as "failed".
-        is_retriable = existing_status == "failed" or (
+        # "held" = probation hold that has since been released (or cleared).
+        is_retriable = existing_status in ("failed", "held") or (
             existing_status == "pending" and not existing_transfer_id
         )
         if not is_retriable:

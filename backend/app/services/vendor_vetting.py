@@ -86,7 +86,9 @@ async def record_probation_job(db, job: dict) -> Optional[dict]:
         rows = res.data or []
         if any(str(r.get("job_id")) == job_id for r in rows) or len(rows) >= ts.probation_jobs():
             return None
-        row = {"job_id": job_id, "member_id": member_id, "status": "pending"}
+        from .probation_hold import new_row
+
+        row = new_row(job_id, member_id)  # payout held until rating / auto-release
         await db.table("vendor_probation_reviews").insert(row).execute()
         return row
     except Exception as e:  # never block a status change
@@ -116,7 +118,16 @@ async def review_probation_job(db, member_id: str, job_id: str, status: str, cli
         if m and not m.get("paused_at") and not is_owner_member(m):
             await db.table("vendor_members").update({"paused_at": now, "paused_reason": reason, "updated_at": now}).eq("id", member_id).execute()
             paused = True
-    return {**found.data[0], **patch, "paused": paused, "pause_reason": reason}
+    payout = None
+    row = {**found.data[0], **patch}
+    if found.data[0].get("payout_hold") in ("held", "blocked"):
+        from . import probation_hold as ph
+
+        if status == "approved" and not reason:
+            payout = (await ph._release(db, row, "owner approved", reviewed_by=reviewed_by or "owner")).get("payout")
+        elif reason:
+            await ph._update(db, row, {"payout_hold": "blocked", "hold_reason": reason})
+    return {**row, "paused": paused, "pause_reason": reason, "payout": payout}
 
 
 async def probation_reviews(db, member_id: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
