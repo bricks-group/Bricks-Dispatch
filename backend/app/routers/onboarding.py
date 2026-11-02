@@ -5,7 +5,7 @@ import secrets
 import traceback
 import uuid
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Form, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Form, Request, Body
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +314,11 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         application.trade_credentials = None
 
     try:
+        application.vetting = _clean_vetting(vtype, application)
+    except ValueError as exc:
+        errs.append(str(exc))
+
+    try:
         application.source, application.source_detail = normalize_applicant_source(
             getattr(application, "source", None), getattr(application, "source_detail", None)
         )
@@ -324,6 +329,59 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         raise HTTPException(status_code=400, detail=" ".join(errs))
 
 
+
+
+_REVIEW_HOSTS = ("google.", "g.page", "goo.gl", "homestars.com", "maps.app.goo.gl")
+
+
+def _clean_vetting(vtype: str, application) -> Optional[dict]:
+    """Identity and reputation for the trade (trade_specs.json identity rules).
+
+    Occupied-home trades need a reviews link (Google or HomeStars) or two references.
+    Every trade needs a business name or an HST number. Documents (ID, police check,
+    insurance, proof of work) are uploaded to /documents after apply.
+    Raises ValueError with an applicant-facing message.
+    """
+    from ..services.trade_specs import identity_rules, occupied_homes
+
+    if application.vetting is None and not getattr(application, "docs_pending", False):
+        # Older forms (live www before the vetting form ships) send no vetting block.
+        # Enforce once the form sends it; the admin review still asks for what's missing.
+        return None
+    raw = application.vetting if isinstance(application.vetting, dict) else {}
+    out: dict = {}
+    link = str(raw.get("reviews_link") or "").strip()[:300]
+    if link:
+        if not link.startswith("https://"):
+            raise ValueError("Your reviews link must be a full URL starting with https://.")
+        out["reviews_link"] = link
+        out["reviews_link_known_host"] = any(h in link.lower() for h in _REVIEW_HOSTS)
+    refs = []
+    for r in (raw.get("references") or [])[:3]:
+        if not isinstance(r, dict):
+            continue
+        name = " ".join(str(r.get("name") or "").split())[:120]
+        contact = " ".join(str(r.get("contact") or "").split())[:160]
+        if name and contact:
+            refs.append({"name": name, "contact": contact,
+                         "relationship": " ".join(str(r.get("relationship") or "").split())[:120]})
+    if refs:
+        out["references"] = refs
+    if raw.get("commercial_drone"):
+        out["commercial_drone"] = True
+    if raw.get("police_check_consent"):
+        out["police_check_consent"] = True
+    rules = identity_rules(vtype)
+    if vtype != "photographer" and occupied_homes(vtype) and rules.get("reviews_or_refs"):
+        if not link and len(refs) < 2:
+            raise ValueError("Add a Google or HomeStars reviews link, or two references.")
+    if vtype != "photographer" and rules.get("business_or_hst"):
+        business = str((application.trade_credentials or {}).get("business_name") or "").strip()
+        if not business and not (application.hst_number or "").strip():
+            raise ValueError("Add your business name or HST number.")
+    from ..services.trade_specs import registry
+    out["rules_version"] = registry().get("version")
+    return out
 
 
 _CREDENTIAL_TEXT_KEYS = ("insurer", "policy_number", "wsib_number", "licences", "service_notes", "business_name")
@@ -467,7 +525,12 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     # vendor_applicant_reviews, then one short text + one HTML email to Kam.
     # Runs after the response; it never approves or rejects.
     from ..services.applicant_review_runner import review_application
-    background_tasks.add_task(review_application, result["member_id"], notify=True, trigger="apply")
+    if getattr(application, "docs_pending", False):
+        # The trade form uploads ID, insurance and proof next, then calls
+        # /apply/{id}/submitted. The daily backlog cron catches any that never do.
+        pass
+    else:
+        background_tasks.add_task(review_application, result["member_id"], notify=True, trigger="apply")
 
     found = found_us_line(getattr(application, "source", None), getattr(application, "source_detail", None))
     # In-app record only. Kam's text and raphael@brxs.ca email are the notify above.
@@ -591,6 +654,10 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         if vtype != "photographer":
             application_profile["trade"] = vtype
             application_profile["credentials"] = getattr(application, "trade_credentials", None) or {}
+        if getattr(application, "vetting", None):
+            application_profile["vetting"] = application.vetting
+            if application.vetting.get("commercial_drone"):
+                application_profile.setdefault("trade_credentials", {})["commercial_drone"] = True
     member = VendorMember(
         id=str(reapply_of["id"]) if reapply_of else str(uuid.uuid4()),
         application_token=application_token,
@@ -977,6 +1044,25 @@ async def get_application_status(member_id: str, token: Optional[str] = None):
     }
 
 
+@router.post("/apply/{member_id}/submitted")
+async def application_documents_submitted(member_id: str, background_tasks: BackgroundTasks, payload: dict = Body(default={})):
+    """The trade form finished uploading documents: review and notify Kam once."""
+    res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
+    member = maybe_single_row(res_member) or None
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found.")
+    _check_application_token(member, (payload or {}).get("token") or (payload or {}).get("application_token"))
+    try:
+        done = await (await get_db()).table("vendor_applicant_reviews").select("id").eq("member_id", member_id).limit(1).execute()
+        if done.data:
+            return {"ok": True, "already_reviewed": True}
+    except Exception:
+        pass
+    from ..services.applicant_review_runner import review_application
+    background_tasks.add_task(review_application, member_id, notify=True, trigger="submitted")
+    return {"ok": True}
+
+
 @router.post("/documents")
 async def upload_compliance_document(
     member_id: str = Form(...),
@@ -998,13 +1084,26 @@ async def upload_compliance_document(
     _check_application_token(member, token or application_token)
 
     portfolio_docs = [portfolio_doc_type(t) for t in PORTFOLIO_MEDIA_TYPES]
-    valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume", *portfolio_docs]
+    from ..services.trade_specs import expiring_kinds, upload_kinds
+    valid_docs = list(dict.fromkeys(
+        ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume", *upload_kinds(), *portfolio_docs]
+    ))
     # Allow portfolio_<type> aliases passed as bare media type via normalize
     mt = normalize_media_type(doc_type)
     if mt and doc_type not in valid_docs:
         doc_type = portfolio_doc_type(mt)
     if doc_type not in valid_docs:
         raise HTTPException(status_code=400, detail=f"Invalid doc_type. Must be one of {valid_docs}")
+
+    if doc_type in expiring_kinds():
+        from datetime import date as _date
+        try:
+            exp = _date.fromisoformat(str(expiry_date or "")[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Add the expiry date for this document.")
+        if exp < datetime.now(timezone.utc).date():
+            raise HTTPException(status_code=400, detail="This document has expired. Upload a current one.")
+        expiry_date = exp.isoformat()
 
     import base64
     try:

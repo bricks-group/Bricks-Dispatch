@@ -476,6 +476,11 @@ class VendorApplicationCreate(BaseModel):
     # Repairs and inspections must confirm $2M CGL; the COI file goes to
     # POST /api/onboarding/documents (doc_type=coi) after /apply.
     trade_credentials: Optional[Dict[str, Any]] = None
+    # Trade vetting (2026-11-01): reviews link or references, commercial drone flag.
+    vetting: Optional[Dict[str, Any]] = None
+    # www trade form uploads documents after /apply, then calls /apply/{id}/submitted,
+    # which runs the review and notifies Kam. False keeps the old notify-on-apply.
+    docs_pending: bool = False
 
 
 class SampleUploadFile(BaseModel):

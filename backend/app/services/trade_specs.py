@@ -88,6 +88,27 @@ def required_credentials(member: dict, vendor_type: Optional[str] = None) -> lis
     return [c for c in s.get("credentials", []) if c.get("required_when", "always") in flags]
 
 
+def upload_kinds() -> list[str]:
+    """Every doc_type the registry can ask for (for /documents validation)."""
+    kinds = {"id_verification", "police_check"}
+    for t in trades().values():
+        kinds.update(c["kind"] for c in t.get("credentials", []))
+        kinds.update(p["kind"] for p in t.get("proof", []) if p["kind"] != "portfolio")
+    return sorted(kinds)
+
+
+def expiring_kinds() -> set[str]:
+    return {c["kind"] for t in trades().values() for c in t.get("credentials", []) if c.get("expires")}
+
+
+def occupied_homes(vendor_type: Optional[str]) -> bool:
+    return bool((spec(vendor_type) or {}).get("occupied_homes"))
+
+
+def identity_rules(vendor_type: Optional[str]) -> dict:
+    return dict((spec(vendor_type) or {}).get("identity") or {})
+
+
 def required_docs(member: dict, vendor_type: Optional[str] = None) -> list[dict]:
     """Every upload the trade requires: credentials, proof of work and identity."""
     vt = vendor_type or member.get("vendor_type")
@@ -99,7 +120,7 @@ def required_docs(member: dict, vendor_type: Optional[str] = None) -> list[dict]
             out.append({"kind": p["kind"], "label": p["label"], "group": "proof", "min_count": int(p.get("min_count") or 1)})
     ident = s.get("identity", {})
     if ident.get("gov_id"):
-        out.append({"kind": "gov_id", "label": doc_label("gov_id"), "group": "identity"})
+        out.append({"kind": "id_verification", "label": doc_label("id_verification"), "group": "identity"})
     if ident.get("police_check"):
         out.append({"kind": "police_check", "label": doc_label("police_check"), "group": "identity"})
     return out

@@ -54,7 +54,7 @@ def test_expired_credential_detected():
     exp = ts.expired_required(m, docs, today=date(2026, 11, 1))
     assert [e["kind"] for e in exp] == ["eo"]
     states = {c["kind"]: c["state"] for c in ts.credential_states(m, docs, today=date(2026, 11, 1))}
-    assert states["coi"] == "verified" and states["sample_report"] == "missing" and states["gov_id"] == "missing"
+    assert states["coi"] == "verified" and states["sample_report"] == "missing" and states["id_verification"] == "missing"
 
 
 def test_photographer_listing_coi_not_required():
