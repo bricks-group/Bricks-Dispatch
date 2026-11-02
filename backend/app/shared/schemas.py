@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 SESSION_TTL_DAYS = 7
@@ -330,6 +330,29 @@ class PortfolioSample(BaseModel):
 
 
 class VendorMember(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _null_columns_use_defaults(cls, data: Any) -> Any:
+        # DB rows carry NULL for columns a signup path never wrote (title, phone,
+        # home_city, internal_notes...). A NULL in a non-Optional field used to
+        # fail validation, and auto-assign silently skipped that vendor
+        # ("Skipping vendor_members row"). Drop NULLs for fields that have a
+        # default so the default applies; Optional fields keep None.
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for key, value in data.items():
+            if value is not None:
+                continue
+            field = cls.model_fields.get(key)
+            if field is None or field.is_required():
+                continue
+            ann = field.annotation
+            if ann is not None and type(None) in getattr(ann, "__args__", ()):
+                continue
+            out.pop(key, None)
+        return out
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     vendor_id: str = "default_vendor"
     name: str
