@@ -78,3 +78,13 @@ def test_partial_proof_gets_partial_credit():
     docs = [d for d in _all_docs() if d["doc_type"] != "before_after"] + [{"doc_type": "before_after", "status": "pending"}] * 5
     r = run_trade_review(_member(), docs, TODAY)
     assert r["parts"]["proof"]["value"] == 0.5 and r["incomplete"]
+
+
+def test_backlog_picks_up_trades_after_30_minutes():
+    from datetime import datetime, timezone
+    from app.services.applicant_review_runner import _backlog_due
+    now = datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)
+    assert _backlog_due({"created_at": "2026-11-02T14:59:00+00:00"}, "photographer", now)
+    assert not _backlog_due({"created_at": "2026-11-02T14:45:00+00:00"}, "cleaner", now)
+    assert _backlog_due({"created_at": "2026-11-02T14:20:00Z"}, "cleaner", now)
+    assert not _backlog_due({"created_at": ""}, "stager", now)

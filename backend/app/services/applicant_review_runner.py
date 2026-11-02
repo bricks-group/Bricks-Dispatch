@@ -267,15 +267,33 @@ async def review_application(
         return None
 
 
+def _backlog_due(row: dict, vtype: str, now=None) -> bool:
+    if vtype == "photographer":
+        return True
+    from datetime import datetime, timedelta, timezone
+    try:
+        created = datetime.fromisoformat(str(row.get("created_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) - created >= timedelta(minutes=30)
+
+
 async def pending_without_review(limit: int = 5) -> list:
-    """Pending photographer ids with no row in vendor_applicant_reviews (oldest first)."""
+    """Pending applicant ids with no row in vendor_applicant_reviews (oldest first).
+
+    Photographers as soon as they apply. Other trades upload documents after
+    /apply and then call /submitted; if that call never lands, they're picked
+    up here once the application is 30 minutes old.
+    """
     try:
         db = await get_db()
         pend = await db.table("vendor_members").select("id,vendor_type,role,title,application_profile,created_at").eq(
             "onboarding_status", "pending"
         ).order("created_at").limit(200).execute()
         from .vendor_profile import member_vendor_type
-        ids = [r["id"] for r in (pend.data or []) if member_vendor_type(r) == "photographer"]
+        ids = [r["id"] for r in (pend.data or []) if _backlog_due(r, member_vendor_type(r))]
         if not ids:
             return []
         done = await db.table("vendor_applicant_reviews").select("member_id").in_("member_id", ids).execute()
