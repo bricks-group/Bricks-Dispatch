@@ -37,23 +37,33 @@ def is_owner_member(member: Optional[dict]) -> bool:
     return title == "owner" or role == "owner"
 
 
-def needs_terms(member: Optional[dict]) -> bool:
-    """A contractor who reached GO without accepting the IC agreement and privacy policy.
+def needs_ic_terms(member: Optional[dict]) -> bool:
+    """The contractor still has to accept the current IC agreement and privacy policy.
 
-    Applicants accept on the www application. Members an owner added from the
-    team screen (and older rows) never did, so GO asks them once before the app
-    opens. Owners are not contractors and are never asked.
-    """
+    Applicants accept on the www application; members an owner added from the team
+    screen (and older rows) never did. Vendors still onboarding accept the current
+    version. Owners are not contractors and are never asked."""
     if not member or is_owner_member(member):
         return False
     if not member.get("terms_accepted_at"):
         return True
-    # Vendors still onboarding accept the current agreement version (one of the
-    # checklist steps). Live vendors on an older version are not re-gated here.
     if not member.get("onboarding_completed_at"):
         from ..routers.onboarding import _IC_AGREEMENT_VERSION
         return str(member.get("ic_agreement_version") or "") != _IC_AGREEMENT_VERSION
     return False
+
+
+def needs_amendment(member: Optional[dict]) -> bool:
+    """Every contractor, current and new, accepts IC amendment A1 in the GO gate."""
+    if not member or is_owner_member(member):
+        return False
+    from ..routers.onboarding import _IC_AMENDMENT_VERSION
+    return str(member.get("ic_amendment_version") or "") != _IC_AMENDMENT_VERSION
+
+
+def needs_terms(member: Optional[dict]) -> bool:
+    """GO shows the "I agree" gate before the app opens."""
+    return needs_ic_terms(member) or needs_amendment(member)
 
 
 def member_title(member: Optional[dict]) -> str:

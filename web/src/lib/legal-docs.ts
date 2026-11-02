@@ -4,14 +4,37 @@
 
 export const LEGAL_BASE = 'https://www.brxs.ca';
 
-export type LegalKey = 'ic' | 'privacy';
+export const DISPATCH_BASE = 'https://dispatch-api.brxs.ca';
+
+export type LegalKey = 'ic' | 'privacy' | 'ic_a1';
 
 export const LEGAL_DOCS: Record<LegalKey, { key: LegalKey; title: string; url: string }> = {
   ic: { key: 'ic', title: 'Independent contractor agreement', url: `${LEGAL_BASE}/legal/ic-agreement.txt` },
   privacy: { key: 'privacy', title: 'Privacy policy', url: `${LEGAL_BASE}/privacy` },
+  ic_a1: { key: 'ic_a1', title: 'Amendment A1: accepted jobs', url: `${DISPATCH_BASE}/api/onboarding/ic-amendment.txt` },
 };
 
-export const REQUIRED_DOCS: LegalKey[] = ['ic', 'privacy'];
+export const REQUIRED_DOCS: LegalKey[] = ['ic', 'privacy', 'ic_a1'];
+
+/** Kam's one-line summary of amendment A1, shown in the gate, the banner and the guide. */
+export const A1_GUIDE_LINE =
+  "You can hand back a job up to 48 hours before. After that, or if you don't check in within 30 minutes of the window start, your Bricks account ends. Emergencies are excepted, and completed work is always paid.";
+
+/** Which documents this member still has to accept. Older API without the split flags: all of them. */
+export function requiredDocs(m: TermsMember): LegalKey[] {
+  if (!m || (m.needs_ic_terms == null && m.needs_amendment == null)) return REQUIRED_DOCS;
+  const out: LegalKey[] = [];
+  if (m.needs_ic_terms) out.push('ic', 'privacy');
+  if (m.needs_amendment) out.push('ic_a1');
+  return out.length ? out : REQUIRED_DOCS;
+}
+
+/** "IC-A1 v1.0" from the first line of the amendment text. */
+export function amendmentVersionFromText(text: string): string {
+  const first = (text || '').split('\n', 1)[0] || '';
+  const m = first.match(/\bIC-A\d+ v\d+(?:\.\d+)*/i);
+  return m ? m[0] : '';
+}
 
 /** Within this many px of the end counts as read. */
 export const READ_END_SLACK_PX = 24;
@@ -29,14 +52,18 @@ export function allRead(required: LegalKey[], read: Partial<Record<LegalKey, boo
 
 /** Reason the agree button is still locked, or '' when it is not. */
 export function lockedReason(required: LegalKey[], read: Partial<Record<LegalKey, boolean>>): string {
-  const left = required.filter((k) => !read[k]).map((k) => LEGAL_DOCS[k].title.toLowerCase());
+  const left = required.filter((k) => !read[k]).map((k) => LEGAL_DOCS[k].title.charAt(0).toLowerCase() + LEGAL_DOCS[k].title.slice(1));
   if (!left.length) return '';
   if (left.length === 1) return `Open the ${left[0]} and scroll to the end to continue.`;
   return `Open the ${left.slice(0, -1).join(', ')} and the ${left[left.length - 1]}, and scroll each to the end to continue.`;
 }
 
 /** Member shape GO gets from /auth/me (only the fields the gate reads). */
-export type TermsMember = { needs_terms?: boolean | null } | null | undefined;
+export type TermsMember = {
+  needs_terms?: boolean | null;
+  needs_ic_terms?: boolean | null;
+  needs_amendment?: boolean | null;
+} | null | undefined;
 
 /** Show the agreement step before the app opens. Missing flag (older API) never blocks. */
 export function needsTermsStep(m: TermsMember, appAccess: boolean): boolean {
@@ -56,10 +83,11 @@ function escapeHtml(s: string): string {
 
 export type LoadedDoc = { html: string; updated: string; version: string };
 
-export function textDoc(body: string): LoadedDoc {
+export function textDoc(body: string, key: LegalKey = 'ic'): LoadedDoc {
   const t = (body || '').trim();
   if (!t) throw new Error('empty document');
-  return { html: `<div class="ldoc-text">${escapeHtml(t)}</div>`, updated: '', version: icVersionFromText(t) };
+  const version = key === 'ic_a1' ? amendmentVersionFromText(t) : icVersionFromText(t);
+  return { html: `<div class="ldoc-text">${escapeHtml(t)}</div>`, updated: '', version };
 }
 
 /** Keep just the .legal-body sections of a www legal page, stripped of scripts, handlers and styles. */
@@ -100,7 +128,7 @@ export function loadLegalDoc(key: LegalKey): Promise<LoadedDoc> {
   if (hit) return hit;
   const p = fetch(meta.url, { credentials: 'omit', cache: 'no-cache' })
     .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((body) => (key === 'ic' ? textDoc(body) : htmlDoc(body, meta.url)));
+    .then((body) => (key === 'privacy' ? htmlDoc(body, meta.url) : textDoc(body, key)));
   p.catch(() => cache.delete(meta.url));
   cache.set(meta.url, p);
   return p;

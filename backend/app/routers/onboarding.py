@@ -130,6 +130,60 @@ Bricks Group · Ontario, Canada
 """.strip()
 
 
+# IC amendment A1 (accepted jobs), final text from counsel 2026-11-02
+# (legal/final/ic-amendment-A1-v1.0.md). It amends the live v1.9 above; current
+# vendors re-accept it in the GO "I agree" gate. It binds a vendor from the time
+# they accept it, or from _IC_AMENDMENT_NOTICE_BINDS (14 days' notice, v1.9 s.18).
+_IC_AMENDMENT_VERSION = "IC-A1 v1.0"
+_IC_AMENDMENT_EFFECTIVE_DATE = "2026-11-02"
+_IC_AMENDMENT_NOTICE_BINDS = "2026-11-16T00:00:00-05:00"  # midnight ET
+_IC_AMENDMENT_TEXT = """
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT - AMENDMENT A1: ACCEPTED JOBS  IC-A1 v1.0
+
+Version: IC-A1 v1.0
+Effective: 2 November 2026 for vendors who accept it in the Bricks app, and for new vendors when they accept the agreement. For other current vendors, 16 November 2026 (14 days' notice).
+Applies to: every vendor and every trade, and to all jobs accepted on or after it takes effect for you.
+
+This amendment forms part of your Bricks independent contractor agreement. If it conflicts with the agreement, this amendment wins. Everything else in the agreement stays the same, including your status as an independent contractor and your right to turn down any job.
+
+No-show or cancellation of an accepted job
+Turning down a job before you accept it is always fine. Once you accept a job, you've agreed to do it.
+- Handing a job back. You can hand back an accepted job in the app up to 48 hours before the job window starts. That's not a breach and has no consequence.
+- What ends your agreement. If you no-show, or cancel an accepted job less than 48 hours before the job window starts, this agreement ends automatically and right away.
+- Cancellation. Cancelling, un-accepting or handing back an accepted job in the app, or telling Bricks you won't do it, less than 48 hours before the job window starts.
+- No-show. You haven't checked in through the Bricks app within 30 minutes after the job window starts. Checking in at minute 31 or later is a no-show, even if you then do the job. Check-in uses your device's location.
+- Doesn't count. It isn't a no-show or cancellation if:
+  - (a) Bricks or the client cancelled or rescheduled the job, or Bricks reassigned or changed it;
+  - (b) you, or a member of your immediate family (your spouse or partner, children, parents and siblings), had a medical emergency, or there was a death in your immediate family;
+  - (c) you had a vehicle accident or breakdown on the way to the job;
+  - (d) severe weather made travel or the job unsafe, or, for drone work, conditions made flying unsafe or illegal;
+  - (e) the site was unsafe, or the client didn't give access;
+  - (f) the Bricks app or device location service was down and you couldn't check in.
+  Tell Bricks in the app or at help@brxs.ca as soon as you safely can, and give reasonable proof if Bricks asks.
+- No substitutes. You can't send another vendor in your place. Helpers can assist, but you must attend the job.
+- What happens. Your access to the Bricks app ends, your open jobs are reassigned, and you can't apply to Bricks again.
+- Pay. Work you completed and delivered is still paid on the normal cycle, including a job you finished after a late check-in and any client no-show pay you've earned. Nothing is paid for a job you cancelled or didn't do.
+- Errors and appeal. If you think it happened by mistake, or one of (a)–(f) applies, email help@brxs.ca within 7 days. Bricks may reverse the ending at its discretion if it was a genuine error or one of (a)–(f) applies. If Bricks reverses it, your agreement continues as if it hadn't ended.
+- This amendment adds to the agreement's termination section. It doesn't limit Bricks' other rights to suspend or end the agreement.
+
+Questions: help@brxs.ca · Bricks · Ontario, Canada
+""".strip()
+
+
+@router.get("/ic-amendment")
+async def get_ic_amendment():
+    """The IC amendment every vendor accepts on top of the agreement (JSON)."""
+    return {"version": _IC_AMENDMENT_VERSION, "effective_date": _IC_AMENDMENT_EFFECTIVE_DATE,
+            "binds_without_acceptance": _IC_AMENDMENT_NOTICE_BINDS, "text": _IC_AMENDMENT_TEXT}
+
+
+@router.get("/ic-amendment.txt")
+async def get_ic_amendment_text():
+    """Plain text for the GO legal sheet (first line carries the version)."""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(_IC_AMENDMENT_TEXT, headers={"Cache-Control": "no-cache"})
+
+
 @router.get("/ic-agreement")
 async def get_ic_agreement():
     """Return the current Bricks IC agreement text and version number."""

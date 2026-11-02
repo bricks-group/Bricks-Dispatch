@@ -32,7 +32,7 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-CHECKIN_RADIUS_M: int = _int_env("NOSHOW_CHECKIN_RADIUS_M", 250)
+CHECKIN_RADIUS_M: int = _int_env("NOSHOW_CHECKIN_RADIUS_M", 100)  # Kam 2026-11-02: 100 m geofence
 WAIT_MIN: int = 20
 # A report must be filed within this many minutes of the wait starting.
 CLAIM_WINDOW_AFTER_MIN: int = 90

@@ -4,6 +4,7 @@ GET|POST /api/ops/sweep   every 15 min from Supabase pg_cron (job brxs-ops-sweep
 GET|POST /api/ops/daily   once a day from the Vercel cron (health, backup, digest)
 GET      /api/ops/act?t=  one-tap link from an email: shows a confirm page
 POST     /api/ops/act     runs the signed action (single use)
+GET|POST /api/ops/appeal  a terminated vendor's 7-day appeal form (signed link in the notice)
 
 Cron auth: Vercel's CRON_SECRET bearer, an INTERNAL_API_KEYS key, or the
 ops_cron_secret held in Supabase vault (pg_cron sends it; never leaves the DB).
@@ -146,3 +147,49 @@ async def ops_act_run(t: str = Form(...)):
     if payload.get("a") == "reassign":
         detail = "Assigned to a new vendor." if res.get("to") else "No other vendor was free. The job is marked dispatch failed and you got the no-vendor email."
     return _page("Done" if ok else "Not done", f"<p>{_html.escape(_describe(payload))}</p><p>{_html.escape(detail or str(res.get('error') or ''))}</p>")
+
+
+def _appeal_member(t: str) -> Optional[str]:
+    payload = ops.verify_action(t)
+    if not payload or payload.get("a") != "vendor_appeal":
+        return None
+    return (payload.get("p") or {}).get("member_id")
+
+
+_CLOSED = "<p>The appeal window has closed. Questions: help@brxs.ca.</p>"
+
+
+@router.get("/appeal", response_class=HTMLResponse)
+async def vendor_appeal_form(t: str = Query(...)):
+    from ..services.vendor_termination import APPEAL_DAYS, appeal_open
+    mid = _appeal_member(t)
+    db = await get_db()
+    if not mid or not await appeal_open(db, mid):
+        return _page("Appeal closed", _CLOSED, 400)
+    return _page("Appeal your account closure", (
+        f"<p style='font-size:15px'>Tell Bricks what happened. You can appeal once, within {APPEAL_DAYS} days "
+        "of the closure. Bricks will reply by email.</p>"
+        "<form method='post' action='/api/ops/appeal'>"
+        f"<input type='hidden' name='t' value='{_html.escape(t)}'>"
+        "<textarea name='message' required minlength='5' maxlength='2000' rows='6' style='width:100%;box-sizing:border-box;"
+        "padding:10px;border:1px solid #ccc;border-radius:8px;font:inherit'></textarea>"
+        "<button style='margin-top:12px;padding:12px 18px;background:#d2542b;color:#fff;border:0;border-radius:8px;"
+        "font-size:15px;font-weight:600'>Send appeal</button></form>"))
+
+
+@router.post("/appeal", response_class=HTMLResponse)
+async def vendor_appeal_submit(t: str = Form(...), message: str = Form(...)):
+    from ..services.vendor_termination import submit_appeal
+    mid = _appeal_member(t)
+    if not mid:
+        return _page("Appeal closed", _CLOSED, 400)
+    db = await get_db()
+    res = await submit_appeal(db, mid, message)
+    if res.get("ok"):
+        return _page("Appeal sent", "<p>Thanks. Bricks will review it and email you.</p>")
+    err = res.get("error")
+    if err == "already_sent":
+        return _page("Appeal already sent", "<p>Bricks has your appeal and will email you.</p>")
+    if err == "empty":
+        return _page("Add a few words", "<p>Go back and tell us what happened.</p>", 400)
+    return _page("Appeal closed", _CLOSED, 400)

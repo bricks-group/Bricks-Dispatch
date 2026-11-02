@@ -87,12 +87,13 @@ async def vendor_os_me(authorization: str | None = Header(default=None, alias="A
     actor_id = await resolve_vendor_actor_id(authorization, None)
     member = await get_vendor_member(actor_id)
     if isinstance(member, dict):
-        from ..shared.vendor_identity import needs_terms
+        from ..shared.vendor_identity import needs_amendment, needs_ic_terms, needs_terms
         from ..services.vendor_onboarding import ensure_signed_in
         onboarding = await ensure_signed_in(member)
         if onboarding and onboarding.get("complete"):
             member = {**member, "onboarding_completed_at": onboarding.get("completed_at")}
-        out = {**member, "needs_terms": needs_terms(member)}
+        out = {**member, "needs_terms": needs_terms(member), "needs_ic_terms": needs_ic_terms(member),
+               "needs_amendment": needs_amendment(member)}
         if onboarding is not None:
             out["onboarding"] = onboarding
         out["onboarding_complete"] = bool(member.get("onboarding_completed_at"))

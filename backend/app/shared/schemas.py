@@ -170,6 +170,8 @@ class JobIntakeRequest(BaseModel):
 class JobStatusUpdate(BaseModel):
     status: str
     completed_at: Optional[str] = None  # vendor device timestamp for on-time accuracy
+    cancel_reason: Optional[str] = None  # vendor hand-back reason (vendor_termination.CANCEL_REASONS)
+    cancel_note: Optional[str] = None
 
 
 class ChecklistProgress(BaseModel):

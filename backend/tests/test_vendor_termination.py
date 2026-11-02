@@ -72,12 +72,14 @@ class FakeDB:
 
 NOW = datetime(2026, 11, 3, 15, 0, tzinfo=timezone.utc)  # 10:00 ET
 VENDOR = {"id": "m1", "name": "Test Cleaner", "email": "test+v@example.com", "phone": "+1 (416) 555-0100",
-          "is_active": True, "onboarding_status": "approved", "vendor_type": "cleaner"}
+          "is_active": True, "onboarding_status": "approved", "vendor_type": "cleaner",
+          "ic_amendment_version": "IC-A1 v1.0", "ic_amendment_accepted_at": "2026-11-02T15:00:00+00:00"}
 
 
 def _job(**kw):
     j = {"id": "j1", "assignee_id": "m1", "status": "assigned", "scheduled_date": "2026-11-03",
-         "selected_slot_start": "2026-11-03T14:00:00+00:00", "address": "1 Test St", "agent_email": "client@example.com"}
+         "selected_slot_start": "2026-11-03T14:00:00+00:00", "address": "1 Test St", "agent_email": "client@example.com",
+         "lat": 43.65, "lng": -79.38, "vendor_accepted_at": "2026-11-02T20:00:00+00:00"}
     j.update(kw)
     return j
 
@@ -165,35 +167,95 @@ def test_terminate_no_show_full_flow(_mocks):
     assert again.get("skipped") == "already_terminated"
 
 
+def _drop(db, reason="other", **kw):
+    return asyncio.run(vt.on_vendor_drop(db, db.tables["jobs"][0], "m1", "assigned", "declined", now=NOW,
+                                         reason=reason, **kw))
+
+
 def test_cancel_after_accept_no_client_notice_when_reassigned(_mocks):
-    db = _db(jobs=[_job(status="declined", vendor_accepted_at="2026-11-02T20:00:00Z",
-                        selected_slot_start="2026-11-04T14:00:00+00:00")])
-    out = asyncio.run(vt.on_vendor_drop(db, db.tables["jobs"][0], "m1", "assigned", "declined", now=NOW))
+    db = _db(jobs=[_job(status="declined", selected_slot_start="2026-11-04T14:00:00+00:00")])
+    out = _drop(db)
     assert out["terminated"]
     assert "client@example.com" not in [s[0] for s in _mocks["sent"]]
+    vendor_mail = [b for to, _, b in _mocks["sent"] if to == VENDOR["email"]]
+    assert vendor_mail and "IC-A1 v1.0" in vendor_mail[0] and "help@brxs.ca" in vendor_mail[0]
 
 
 def test_client_notified_when_no_replacement(_mocks):
     _mocks["reassign"].side_effect = lambda db, jid, reason: {"ok": False, "job_id": jid, "to": None}
-    db = _db(jobs=[_job(status="declined", vendor_accepted_at="x", selected_slot_start="2026-11-04T14:00:00+00:00")])
-    asyncio.run(vt.on_vendor_drop(db, db.tables["jobs"][0], "m1", "assigned", "declined", now=NOW))
+    db = _db(jobs=[_job(status="declined", selected_slot_start="2026-11-04T14:00:00+00:00")])
+    _drop(db)
     assert "client@example.com" in [s[0] for s in _mocks["sent"]]
 
 
+def test_free_handback_48h_before(_mocks):
+    db = _db(jobs=[_job(status="declined", selected_slot_start="2026-11-05T15:00:00+00:00")])  # exactly 48 h
+    assert _drop(db, reason=None) == {"skipped": "free_handback"}
+    assert db.tables["vendor_members"][0]["is_active"] is True
+
+
 def test_drop_inside_accept_window_or_offer_decline_does_not_terminate(_mocks):
-    db = _db(jobs=[_job(status="declined", assigned_at=(NOW - timedelta(minutes=5)).isoformat())])
-    out = asyncio.run(vt.on_vendor_drop(db, db.tables["jobs"][0], "m1", "assigned", "declined", now=NOW))
-    assert out == {"skipped": "acceptance_no"}
+    db = _db(jobs=[_job(status="declined", vendor_accepted_at=None, assigned_at=(NOW - timedelta(minutes=5)).isoformat())])
+    assert _drop(db) == {"skipped": "not_accepted"}
     assert asyncio.run(vt.on_vendor_drop(db, db.tables["jobs"][0], "m1", "pending_assignment", "declined", now=NOW)) is None
     assert db.tables["vendor_members"][0]["is_active"] is True
 
 
 def test_unknown_acceptance_asks_kam(_mocks):
-    db = _db(jobs=[_job(status="declined")])
-    out = asyncio.run(vt.on_vendor_drop(db, db.tables["jobs"][0], "m1", "assigned", "declined", now=NOW))
-    assert out == {"skipped": "acceptance_unknown"}
+    db = _db(jobs=[_job(status="declined", vendor_accepted_at=None)])
+    out = _drop(db)
+    assert out["held"] and out["decision"] == "review_unknown_accept"
     assert _mocks["kam"].call_args[0][4][0][0] == "terminate_vendor"
     assert db.tables["vendor_members"][0]["is_active"] is True
+
+
+def test_missing_reason_and_exception_are_held_for_kam(_mocks):
+    for n, (reason, decision) in enumerate(((None, "review_no_reason"), ("medical", "review_exception"),
+                                            ("app_outage", "review_exception"))):
+        db = _db(jobs=[_job(id=f"j{n + 10}", status="declined")])
+        db.tables["vendor_termination_reviews"] = []
+        out = _drop(db, reason=reason)
+        assert out["held"] and out["decision"] == decision, reason
+        assert db.tables["vendor_members"][0]["is_active"] is True
+        assert not db.tables["vendor_terminations"]
+        acts = [a[0] for a in _mocks["kam"].call_args[0][4]]
+        assert "terminate_vendor" in acts and "excuse_vendor" in acts
+
+
+def test_not_bound_until_amendment_accepted_or_notice_date(_mocks):
+    # Not accepted A1: binds 2026-11-16 00:00 ET, so a job accepted on 2 Nov is Kam's call.
+    unbound = {k: v for k, v in VENDOR.items() if not k.startswith("ic_amendment")}
+    assert vt.binding_at(unbound) == datetime(2026, 11, 16, 5, tzinfo=timezone.utc)
+    assert not vt.clause_in_force(unbound, _job())
+    assert vt.clause_in_force(unbound, _job(vendor_accepted_at="2026-11-16T05:00:00+00:00"))
+    # Accepted A1 at 15:00Z on 2 Nov: binds then; a job accepted before that is not covered.
+    assert vt.clause_in_force(VENDOR, _job())
+    assert not vt.clause_in_force(VENDOR, _job(vendor_accepted_at="2026-11-02T14:00:00+00:00"))
+    db = FakeDB(vendor_members=[dict(unbound)], jobs=[_job(status="declined")], vendor_terminations=[],
+                vendor_documents=[], vendor_termination_reviews=[])
+    out = _drop(db)
+    assert out["skipped"] == "clause_not_accepted" and db.tables["vendor_members"][0]["is_active"] is True
+
+
+def test_no_show_without_property_location_is_held(_mocks):
+    db = _db(jobs=[_job(lat=None, lng=None)])
+    db.tables["vendor_termination_reviews"] = []
+    out = asyncio.run(vt.terminate(db, "m1", "j1", "no_show", now=NOW))
+    assert out["skipped"] == "clause_not_accepted" and out["decision"] == "review_no_geofence"
+    assert db.tables["vendor_members"][0]["is_active"] is True
+
+
+def test_checkin_radius_is_100m():
+    from app.shared import noshow_policy
+    assert noshow_policy.CHECKIN_RADIUS_M == 100
+
+
+def test_late_checkin_counts_after_completion():
+    j = _job(checked_in_at="2026-11-03T14:31:00+00:00", status="completed")
+    assert vt.late_check_in_min(j) == 31
+    assert vt.is_late_check_in_due(j, NOW)
+    assert vt.late_check_in_min(_job(checked_in_at="2026-11-03T14:30:00+00:00")) is None
+    assert not vt.is_late_check_in_due(_job(checked_in_at="2026-11-03T14:40:00+00:00", status="in_progress"), NOW)
 
 
 def test_owner_never_terminated(_mocks):

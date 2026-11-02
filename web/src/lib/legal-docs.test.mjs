@@ -20,14 +20,18 @@ test('scroll end within 24px counts as read; short docs are read at once', () =>
   assert.equal(m.isScrolledToEnd({ scrollHeight: 400, scrollTop: 0, clientHeight: 600 }), true);
 });
 
-test('agree stays locked until both the agreement and privacy policy are read', () => {
-  assert.equal(m.allRead(m.REQUIRED_DOCS, {}), false);
-  assert.equal(m.allRead(m.REQUIRED_DOCS, { ic: true }), false);
-  assert.equal(m.allRead(m.REQUIRED_DOCS, { ic: true, privacy: true }), true);
+test('agree stays locked until the agreement, privacy policy and amendment A1 are read', () => {
+  const ICP = ['ic', 'privacy'];
+  assert.deepEqual(m.REQUIRED_DOCS, ['ic', 'privacy', 'ic_a1']);
+  assert.equal(m.allRead(m.REQUIRED_DOCS, { ic: true, privacy: true }), false);
+  assert.equal(m.allRead(m.REQUIRED_DOCS, { ic: true, privacy: true, ic_a1: true }), true);
+  assert.equal(m.allRead(ICP, {}), false);
+  assert.equal(m.allRead(ICP, { ic: true }), false);
+  assert.equal(m.allRead(ICP, { ic: true, privacy: true }), true);
   assert.equal(m.allRead([], {}), false);
-  assert.match(m.lockedReason(m.REQUIRED_DOCS, {}), /independent contractor agreement and the privacy policy, and scroll each/);
-  assert.equal(m.lockedReason(m.REQUIRED_DOCS, { ic: true }), 'Open the privacy policy and scroll to the end to continue.');
-  assert.equal(m.lockedReason(m.REQUIRED_DOCS, { ic: true, privacy: true }), '');
+  assert.match(m.lockedReason(ICP, {}), /independent contractor agreement and the privacy policy, and scroll each/);
+  assert.equal(m.lockedReason(ICP, { ic: true }), 'Open the privacy policy and scroll to the end to continue.');
+  assert.equal(m.lockedReason(ICP, { ic: true, privacy: true }), '');
 });
 
 test('only members with access and the server flag are asked; missing flag never blocks', () => {
@@ -45,4 +49,14 @@ test('agreement version comes from the published first line and text is escaped'
   assert.equal(d.version, '2.0');
   assert.match(d.html, /&lt;script&gt;x&lt;\/script&gt; &amp; more/);
   assert.throws(() => m.textDoc('   '));
+});
+
+test('amendment A1: who reads what, and its version', () => {
+  assert.deepEqual(m.requiredDocs({ needs_terms: true, needs_ic_terms: false, needs_amendment: true }), ['ic_a1']);
+  assert.deepEqual(m.requiredDocs({ needs_terms: true, needs_ic_terms: true, needs_amendment: true }), ['ic', 'privacy', 'ic_a1']);
+  assert.deepEqual(m.requiredDocs({ needs_terms: true }), ['ic', 'privacy', 'ic_a1']);
+  assert.equal(m.amendmentVersionFromText('BRICKS ... AMENDMENT A1: ACCEPTED JOBS  IC-A1 v1.0\n\nVersion: IC-A1 v1.0'), 'IC-A1 v1.0');
+  assert.equal(m.textDoc('X  IC-A1 v1.0\nbody', 'ic_a1').version, 'IC-A1 v1.0');
+  assert.ok(m.A1_GUIDE_LINE.startsWith('You can hand back a job up to 48 hours before.'));
+  assert.equal(m.lockedReason(['ic_a1'], {}), 'Open the amendment A1: accepted jobs and scroll to the end to continue.');
 });

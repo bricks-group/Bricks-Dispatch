@@ -197,6 +197,7 @@ ACTION_LABELS = {
     "retry_processing": "Retry editing and delivery",
     "undo_termination": "Undo termination",
     "terminate_vendor": "Terminate this vendor",
+    "excuse_vendor": "Excuse (no termination)",
 }
 
 
@@ -338,8 +339,14 @@ async def run_action(db, payload: dict) -> dict:
         out = await apply_action(db, p["member_id"], p["job_id"], a.split("_", 1)[1])
         return {"ok": bool(out.get("ok")), "result": out}
     if a == "terminate_vendor":
-        from .vendor_termination import terminate
-        return await terminate(db, p["member_id"], p.get("job_id"), "cancelled_after_accept")
+        from .vendor_termination import terminate, _set_review
+        out = await terminate(db, p["member_id"], p.get("job_id"), p.get("trigger") or "cancelled_after_accept",
+                              detail="Kam's decision", force=True)
+        await _set_review(db, p.get("review_id"), "terminated", "kam-one-tap")
+        return {"ok": bool(out.get("terminated")) or out.get("skipped") == "already_terminated", **out}
+    if a == "excuse_vendor":
+        from .vendor_termination import excuse
+        return await excuse(db, p["member_id"], p.get("review_id"))
     if a == "undo_termination":
         from .vendor_termination import undo
         return await undo(db, p["member_id"], by="kam-one-tap")
@@ -392,10 +399,16 @@ async def sweep(db, now: Optional[datetime] = None, *, run_reconcile: bool = Tru
                 continue
             if not start:
                 continue
-            # 3. vendor no-show (no check-in, not started)
-            from .vendor_termination import is_no_show, terminate
-            if is_no_show(job, now):  # policy: no GPS check-in by start + grace -> terminate + reassign
+            # 3. vendor no-show: no GPS check-in by start + grace -> terminate + reassign;
+            #    a check-in after start + grace also counts, terminated once that job is done (kept + paid)
+            from .vendor_termination import is_no_show, is_late_check_in_due, late_check_in_min, terminate
+            if is_no_show(job, now):
                 out["terminated"].append(await terminate(db, job.get("assignee_id"), jid, "no_show", now=now))
+                continue
+            if is_late_check_in_due(job, now):
+                out["terminated"].append(await terminate(
+                    db, job.get("assignee_id"), jid, "no_show", now=now, keep_job=True,
+                    detail=f"checked in {late_check_in_min(job)} minutes after the start"))
                 continue
             if st == "assigned" and not job.get("checked_in_at") and now >= start + timedelta(minutes=NOSHOW_GRACE_MIN) \
                     and now <= start + timedelta(hours=12):
@@ -464,6 +477,14 @@ async def sweep(db, now: Optional[datetime] = None, *, run_reconcile: bool = Tru
             await _payout_retries(db, now, out)
         except Exception as e:
             out["errors"].append({"step": "payouts", "error": str(e)[:200]})
+    # IC amendment A1 notice (runs only when its request marker exists; idempotent).
+    try:
+        from .amendment_notice import run as run_ic_a1_notice
+        res = await run_ic_a1_notice(db)
+        if res:
+            out["ic_a1_notice"] = [res]
+    except Exception as e:
+        out["errors"].append({"step": "ic_a1_notice", "error": type(e).__name__})
     return out
 
 

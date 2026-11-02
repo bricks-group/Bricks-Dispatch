@@ -627,11 +627,13 @@ async def os_upload_photo(
 # ── Contractor agreement for members added without an application ────────────
 
 class AcceptTermsBody(BaseModel):
-    ic_agreement_version: str
+    ic_agreement_version: Optional[str] = None
+    ic_amendment_version: Optional[str] = None
     read: List[str] = []
 
 
 REQUIRED_READS = ("ic", "privacy")
+AMENDMENT_READ = "ic_a1"
 
 
 async def accept_terms_impl(
@@ -639,37 +641,49 @@ async def accept_terms_impl(
     authorization: Optional[str],
     x_user_id: Optional[str],
 ) -> dict:
-    """Record that the signed-in contractor read and accepted the current IC
-    agreement and the privacy policy. Applicants do this on the www form; team
-    members an owner added get the same step in GO before the app opens."""
-    from .onboarding import _IC_AGREEMENT_VERSION
+    """Record what the signed-in contractor read and accepted in GO: the current IC
+    agreement and privacy policy when they still need them (members an owner added),
+    and IC amendment A1 (everyone). Records each version string and timestamp."""
+    from .onboarding import _IC_AGREEMENT_VERSION, _IC_AMENDMENT_VERSION
     from ..shared.pg_fallback import _is_rest_quota_error, pg_update_vendor_member_fields
+    from ..shared.vendor_identity import needs_amendment, needs_ic_terms
 
     member = await _actor_member(authorization, x_user_id)
     if not member or not member.get("id"):
         api_error(403, "Vendor member not found", "vendor_member_not_found")
-    if (payload.ic_agreement_version or "").strip() != _IC_AGREEMENT_VERSION:
-        api_error(409, "The agreement was updated. Reload to read the current version.", "ic_agreement_outdated")
-    missing = [k for k in REQUIRED_READS if k not in set(payload.read or [])]
-    if missing:
-        api_error(422, "Read the contractor agreement and privacy policy to the end first.", "terms_not_read")
+    read = set(payload.read or [])
+    want_ic, want_a1 = needs_ic_terms(member), needs_amendment(member)
+    if want_ic:
+        if (payload.ic_agreement_version or "").strip() != _IC_AGREEMENT_VERSION:
+            api_error(409, "The agreement was updated. Reload to read the current version.", "ic_agreement_outdated")
+        if any(k not in read for k in REQUIRED_READS):
+            api_error(422, "Read the contractor agreement and privacy policy to the end first.", "terms_not_read")
+    if want_a1:
+        if (payload.ic_amendment_version or "").strip() != _IC_AMENDMENT_VERSION:
+            api_error(409, "The agreement was updated. Reload to read the current version.", "ic_amendment_outdated")
+        if AMENDMENT_READ not in read:
+            api_error(422, "Read amendment A1 to the end first.", "terms_not_read")
 
-    if member.get("terms_accepted_at") and member.get("ic_agreement_version") == _IC_AGREEMENT_VERSION:
-        return {
-            "terms_accepted_at": member["terms_accepted_at"],
-            "ic_agreement_version": _IC_AGREEMENT_VERSION,
-            "needs_terms": False,
-        }
+    def _done(at: Optional[str]) -> dict:
+        return {"terms_accepted_at": member.get("terms_accepted_at") or at, "ic_agreement_version": _IC_AGREEMENT_VERSION,
+                "ic_amendment_version": _IC_AMENDMENT_VERSION,
+                "ic_amendment_accepted_at": member.get("ic_amendment_accepted_at") or at, "needs_terms": False}
+
+    if not want_ic and not want_a1:
+        return _done(None)
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    note = f"IC agreement v{_IC_AGREEMENT_VERSION} and privacy policy accepted in GO on {now_iso}"
+    what = []
+    fields: dict = {"updated_at": now_iso}
+    if want_ic:
+        fields.update(terms_accepted_at=now_iso, ic_agreement_version=_IC_AGREEMENT_VERSION)
+        what.append(f"IC agreement v{_IC_AGREEMENT_VERSION} and privacy policy")
+    if want_a1:
+        fields.update(ic_amendment_version=_IC_AMENDMENT_VERSION, ic_amendment_accepted_at=now_iso)
+        what.append(_IC_AMENDMENT_VERSION)
+    note = f"{' and '.join(what)} accepted in GO on {now_iso}"
     prior = (member.get("internal_notes") or "").strip()
-    fields = {
-        "terms_accepted_at": now_iso,
-        "ic_agreement_version": _IC_AGREEMENT_VERSION,
-        "internal_notes": f"{prior}\n{note}".strip(),
-        "updated_at": now_iso,
-    }
+    fields["internal_notes"] = f"{prior}\n{note}".strip()
     saved = False
     db = await get_db()
     try:
@@ -687,7 +701,9 @@ async def accept_terms_impl(
         await write_audit_event(
             member["id"], "vendor_member", member["id"], "terms_accepted",
             vendor_id=member.get("vendor_id") or "default_vendor",
-            details={"ic_agreement_version": _IC_AGREEMENT_VERSION, "read": list(REQUIRED_READS), "surface": "go"},
+            details={"ic_agreement_version": _IC_AGREEMENT_VERSION if want_ic else None,
+                     "ic_amendment_version": _IC_AMENDMENT_VERSION if want_a1 else None,
+                     "read": sorted(read), "surface": "go"},
         )
     except Exception:
         pass
@@ -697,7 +713,8 @@ async def accept_terms_impl(
             await refresh_onboarding(member["id"])
         except Exception:
             pass
-    return {"terms_accepted_at": now_iso, "ic_agreement_version": _IC_AGREEMENT_VERSION, "needs_terms": False}
+    member.update(fields)
+    return _done(now_iso)
 
 
 @router.post("/api/profile/accept-terms")
