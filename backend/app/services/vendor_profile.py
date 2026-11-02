@@ -701,6 +701,9 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     m = _as_dict(member)
     if not m.get("is_active"):
         return False
+    # Terminated for a no-show / cancel after accepting (Kam, 2026-11-02): never auto-assigned.
+    if m.get("terminated_at") or str(m.get("onboarding_status") or "") == "terminated":
+        return False
     if is_aman_pending(m):
         return False
     # Approved vendors finish the onboarding checklist first (Kam, 2026-10-31).

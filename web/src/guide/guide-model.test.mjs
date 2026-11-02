@@ -16,9 +16,9 @@ execSync(`npx --yes esbuild ${path.join(here, 'guide-model.ts')} --bundle --plat
 const m = await import(out);
 const guide = JSON.parse(readFileSync(path.join(here, 'data/guide.json'), 'utf8'));
 
-test('guide data: 7 phases, 42 steps, every diagram bundled', () => {
+test('guide data: 7 phases, 43 steps, every diagram bundled', () => {
   assert.equal(guide.phases.length, 7);
-  assert.equal(guide.steps.length, 42);
+  assert.equal(guide.steps.length, 43);
   const files = new Set(readdirSync(path.join(here, 'data/svg')).map((f) => `svg/${f}`));
   for (const s of guide.steps) if (s.diagram) assert.ok(files.has(s.diagram), s.diagram);
 });
@@ -57,7 +57,7 @@ test('steps follow package services', () => {
   assert.ok(story.includes('clips-01') && story.includes('drone-04') && story.includes('wrap-04') && !story.includes('vv-01'));
   assert.ok(ids('showcase').includes('vv-04'));
   assert.ok(ids('essentials', { visit: true }).includes('vv-01'));
-  assert.equal(m.stepsForServices(guide, null).length, 42);
+  assert.equal(m.stepsForServices(guide, null).length, 43);
 });
 
 test('clip plans per package and property type', () => {

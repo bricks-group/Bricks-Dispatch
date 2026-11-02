@@ -561,6 +561,9 @@ def _reapply_target(existing: dict) -> dict:
     """Rejected applicants may apply again 90 days after the rejection.
     Returns the row to reuse; raises for pending / approved / too-soon."""
     status = (existing.get("onboarding_status") or "").lower()
+    if status == "terminated":
+        from ..services.vendor_termination import TERMINATED_APPLY_MESSAGE
+        raise HTTPException(status_code=400, detail=TERMINATED_APPLY_MESSAGE)
     if status != "rejected":
         raise HTTPException(status_code=400, detail="An application with this email already exists.")
     raw = existing.get("rejected_at") or existing.get("updated_at") or existing.get("created_at")
@@ -590,6 +593,10 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     )
 
     email_l = application.email.lower().strip()
+    # Terminated vendors can't reapply with the same email or phone (Kam, 2026-11-02).
+    from ..services.vendor_termination import blocked_identity, TERMINATED_APPLY_MESSAGE
+    if await blocked_identity(await get_db(), email=email_l, phone=getattr(application, "phone", None)):
+        raise HTTPException(status_code=400, detail=TERMINATED_APPLY_MESSAGE)
     existing = None
     try:
         res_existing = await (await get_db()).table("vendor_members").select("*").eq(

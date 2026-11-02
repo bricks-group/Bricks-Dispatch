@@ -1,7 +1,7 @@
 {
   "title": "The Bricks Standard: vendor guide",
   "version": "1.1",
-  "updated": "2026-10-18",
+  "updated": "2026-11-02",
   "intro": "Calm, composed and true. Follow these steps on every job. Diagrams use metres and seconds.",
   "phases": [
     {
@@ -99,6 +99,25 @@
     }
   ],
   "steps": [
+    {
+      "id": "before-00",
+      "phase": "before",
+      "title": "Show up for every job you accept",
+      "body": "Once a job is yours, it's booked. If you cancel or un-accept a job after accepting it, or you haven't checked in on site within 30 minutes of the start time, Bricks closes your vendor account. You won't get new jobs and can't apply again. Jobs you've completed and delivered are still paid.",
+      "diagram": null,
+      "diagram_alt": null,
+      "do": [
+        "Accept only the jobs you can do",
+        "Check in on site in the app when you arrive"
+      ],
+      "dont": [
+        "Accept a job and cancel it later",
+        "Skip the check-in"
+      ],
+      "applies_to": [
+        "all"
+      ]
+    },
     {
       "id": "before-01",
       "phase": "before",

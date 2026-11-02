@@ -195,6 +195,8 @@ ACTION_LABELS = {
     "probation_keep": "Keep paused, payout blocked",
     "resolve_escalation": "Mark resolved",
     "retry_processing": "Retry editing and delivery",
+    "undo_termination": "Undo termination",
+    "terminate_vendor": "Terminate this vendor",
 }
 
 
@@ -335,6 +337,12 @@ async def run_action(db, payload: dict) -> dict:
         from .probation_hold import apply_action
         out = await apply_action(db, p["member_id"], p["job_id"], a.split("_", 1)[1])
         return {"ok": bool(out.get("ok")), "result": out}
+    if a == "terminate_vendor":
+        from .vendor_termination import terminate
+        return await terminate(db, p["member_id"], p.get("job_id"), "cancelled_after_accept")
+    if a == "undo_termination":
+        from .vendor_termination import undo
+        return await undo(db, p["member_id"], by="kam-one-tap")
     if a == "resolve_escalation":
         now = datetime.now(timezone.utc).isoformat()
         await db.table("ops_escalations").update({"status": "resolved", "resolved_at": now, "resolved_by": "kam-one-tap"}).eq("id", p["id"]).execute()
@@ -358,7 +366,7 @@ async def sweep(db, now: Optional[datetime] = None, *, run_reconcile: bool = Tru
     now = now or datetime.now(timezone.utc)
     out: dict[str, list] = {k: [] for k in (
         "reassigned", "assign_retried", "noshow_flagged", "upload_reminded", "upload_escalated",
-        "stuck_escalated", "payout_retried", "payout_escalated", "reminded", "errors")}
+        "stuck_escalated", "payout_retried", "payout_escalated", "reminded", "terminated", "errors")}
     jobs = await _recent_jobs(db, now)
     for job in jobs:
         jid, st = job.get("id"), job.get("status")
@@ -385,6 +393,10 @@ async def sweep(db, now: Optional[datetime] = None, *, run_reconcile: bool = Tru
             if not start:
                 continue
             # 3. vendor no-show (no check-in, not started)
+            from .vendor_termination import is_no_show, terminate
+            if is_no_show(job, now):  # policy: no GPS check-in by start + grace -> terminate + reassign
+                out["terminated"].append(await terminate(db, job.get("assignee_id"), jid, "no_show", now=now))
+                continue
             if st == "assigned" and not job.get("checked_in_at") and now >= start + timedelta(minutes=NOSHOW_GRACE_MIN) \
                     and now <= start + timedelta(hours=12):
                 m = await _member(db, job.get("assignee_id"))

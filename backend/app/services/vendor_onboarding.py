@@ -33,7 +33,8 @@ STEP_COPY = {
     "signed_in": ("Sign in to the Bricks app", "You're in. Nothing else to do here."),
     "payouts": ("Connect payouts", "Set up Stripe so we can pay you after each job."),
     "availability": ("Confirm your availability", "Check the days and hours you can shoot, then confirm."),
-    "guide": ("Read the vendor guide", "How shoots, delivery and pay work at Bricks."),
+    "guide": ("Read the vendor guide", "How jobs, delivery and pay work at Bricks. Cancelling a job after "
+              "accepting it, or not checking in on time, closes your account."),
     "agreement": ("Accept the contractor agreement", "Read and accept the current version."),
 }
 
@@ -92,7 +93,7 @@ def checklist(member: Any, contractor: Optional[dict] = None) -> dict:
         })
     status = (m.get("onboarding_status") or "pending").lower()
     completed_at = m.get("onboarding_completed_at")
-    if status == "rejected":
+    if status in ("rejected", "terminated"):
         state = "rejected"
     elif status != "approved":
         state = "applicant"
@@ -276,6 +277,8 @@ def live_email(member: dict) -> tuple[str, str, str]:
             "Your setup is done. Jobs that fit your schedule and area will now come to you automatically, "
             "and we'll let you know each time one is assigned.",
             "Keep your availability up to date so you only get jobs you can take.",
+            "Once a job is yours, show up for it. Cancelling a job after accepting it, or not checking in "
+            "within 30 minutes of the start time, closes your Bricks account.",
         ],
         "Open the Bricks app",
         _go_url(),

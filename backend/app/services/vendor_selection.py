@@ -841,6 +841,8 @@ async def _update_job_assignee(
         "assignee_id": member_id,
         "status": "assigned",
         "updated_at": now,
+        "assigned_at": now,
+        "vendor_accepted_at": None,
     }
     if estimated_duration_min is not None:
         patch["estimated_duration_min"] = int(estimated_duration_min)
