@@ -276,7 +276,7 @@ export async function verifyOtp(email: string, token: string): Promise<AuthMembe
   const { data, error } = await supabase.auth.verifyOtp({
     email,
     token,
-    type: 'magiclink'
+    type: 'email'
   });
   if (error) throw error;
   if (!data.session) throw new Error('No session');
