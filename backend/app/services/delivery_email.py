@@ -18,7 +18,10 @@ Rendering rules (email clients, Nov 2026):
     visible, keyframes only *start* from hidden. Clients that drop @keyframes
     (Gmail, Outlook, Yahoo) render the static, complete layout. All motion sits
     inside prefers-reduced-motion: no-preference.
-  * Only QC-passed listing stills are ever passed in (see delivery_email_media).
+  * Hero: one plain <img> per state with an absolute public HTTPS URL to a
+    static JPEG/GIF (no cid:, data:, SVG, CSS background or expiring signature)
+    and explicit width/height. No tiles: the only photos shown are this job's
+    own QC-passed stills (see delivery_email_media.gallery_preview).
 """
 from __future__ import annotations
 
@@ -56,15 +59,13 @@ D = {
 }
 
 HERO_W, HERO_H = 600, 375          # 16:10 edge-to-edge hero
-TILE_W, TILE_H = 254, 169          # 3:2, two columns in a 520px column
-MAX_TILES = 4
 
 
 @dataclass
 class PreviewStill:
-    """One QC-passed listing still, already resized + signed for email."""
+    """One QC-passed still from this job, published at an absolute HTTPS URL."""
 
-    tile_url: str
+    tile_url: str = ""
     hero_url: str = ""
     alt: str = ""
 
@@ -81,7 +82,6 @@ class DeliveryEmailContext:
     services: Sequence[str] = ()     # ordered labels, e.g. ["24 photos", "Video"]
     stills: Sequence[PreviewStill] = ()
     hero_gif_url: str = ""           # optional crossfade; first frame == stills[0]
-    more_count: int = 0
     headline_what: str = "photos"    # "photos" | "media" | "floor plan" | ...
     headline_verb: str = "are"
     button_label: str = "View your gallery"
@@ -127,7 +127,7 @@ def _style_block() -> str:
   .bx-mute{{color:{D['mute']}!important}}
   .bx-hair{{border-color:{D['hair']}!important}}
   .bx-chip{{background:{D['chip']}!important;border-color:{D['hair']}!important;color:{D['soft']}!important}}
-  .bx-tile{{background:{D['tile']}!important}}
+  .bx-hero-img{{background:{D['tile']}!important}}
   .bx-link{{color:#E8754F!important}}
   .bx-btn{{background:{BRICK}!important}}
   .bx-btn a{{color:#FFFFFF!important}}"""
@@ -144,7 +144,7 @@ def _style_block() -> str:
 body{{margin:0!important;padding:0!important;width:100%!important;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}}
 img{{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic}}
 a{{text-decoration:none}}
-.bx-tile-img,.bx-hero-img{{display:block;width:100%!important;height:auto!important}}
+.bx-hero-img{{display:block;width:100%!important;max-width:600px!important;height:auto!important}}
 @media only screen and (max-width:620px){{
   .bx-outer{{padding:0!important}}
   .bx-card{{border-radius:0!important;border-left:0!important;border-right:0!important}}
@@ -172,17 +172,17 @@ a{{text-decoration:none}}
 @media (prefers-reduced-motion:no-preference){
   @keyframes bx-rise{from{opacity:0;transform:translate3d(0,14px,0)}to{opacity:1;transform:none}}
   @keyframes bx-fade{from{opacity:0}to{opacity:1}}
-  @keyframes bx-settle{from{transform:scale(1.045)}to{transform:scale(1)}}
   @keyframes bx-brick{0%{opacity:0;transform:translate3d(0,-7px,0)}70%{opacity:1}100%{opacity:1;transform:none}}
-  .bx-hero-img{animation:bx-settle 2.4s cubic-bezier(.16,1,.3,1) both}
   .bx-in{animation:bx-fade .9s cubic-bezier(.16,1,.3,1) .15s both}
-  .bx-t1{animation:bx-rise 1s cubic-bezier(.16,1,.3,1) .35s both}
-  .bx-t2{animation:bx-rise 1s cubic-bezier(.16,1,.3,1) .5s both}
-  .bx-t3{animation:bx-rise 1s cubic-bezier(.16,1,.3,1) .65s both}
-  .bx-t4{animation:bx-rise 1s cubic-bezier(.16,1,.3,1) .8s both}
   .bx-b1{animation:bx-brick .7s cubic-bezier(.16,1,.3,1) .1s both}
   .bx-b2{animation:bx-brick .7s cubic-bezier(.16,1,.3,1) .28s both}
   .bx-b3{animation:bx-brick .7s cubic-bezier(.16,1,.3,1) .46s both}
+}
+</style>
+<style>
+@media (prefers-reduced-motion:reduce){
+  .bx-hero-gif{display:none!important}
+  .bx-hero-still{display:block!important;max-height:none!important;overflow:visible!important}
 }
 </style>
 <style>
@@ -237,26 +237,38 @@ def _header(date_label: str) -> str:
 </td></tr>"""
 
 
+def _hero_img(src: str, alt: str, cls: str, extra: str = "") -> str:
+    # Plain absolute-URL <img> with explicit width AND height so every client
+    # reserves the box before it loads; CSS keeps it fluid on phones.
+    return (
+        f'<img class="bx-hero-img {cls}" src="{_e(src)}" width="{HERO_W}" height="{HERO_H}" alt="{_e(alt)}" '
+        f'style="display:block;width:100%;max-width:{HERO_W}px;height:auto;border:0;outline:none;{extra}'
+        f'background:{L["tile"]};color:{L["mute"]};font-family:{FONT_STACK};font-size:13px">'
+    )
+
+
 def _hero(ctx: DeliveryEmailContext) -> str:
+    """One image from this job. GIF crossfade when available (its first frame is
+    the still, so Outlook for Windows shows the still); reduced-motion readers in
+    Apple Mail get the still JPEG instead."""
     if not ctx.stills:
         return ""
     first = ctx.stills[0]
-    static_src = first.hero_url or first.tile_url
-    src = ctx.hero_gif_url or static_src
+    still = first.hero_url or first.tile_url
+    if not still:
+        return ""
     alt = first.alt or f"Photo from {ctx.address}"
-    img = (
-        f'<img class="bx-hero-img" src="{_e(src)}" width="{HERO_W}" alt="{_e(alt)}" '
-        f'style="display:block;width:100%;max-width:{HERO_W}px;height:auto;border:0;'
-        f'background:{L["tile"]};color:{L["mute"]};font-family:{FONT_STACK};font-size:13px">'
-    )
-    if ctx.hero_gif_url and static_src:
-        # Apple Mail honours <picture>: reduced-motion readers get the still.
-        img = (
-            f'<picture><source srcset="{_e(static_src)}" media="(prefers-reduced-motion: reduce)">'
-            f"{img}</picture>"
+    if ctx.hero_gif_url:
+        img = _hero_img(ctx.hero_gif_url, alt, "bx-hero-gif") + (
+            "<!--[if !mso]><!-->"
+            + _hero_img(still, alt, "bx-hero-still", "display:none;max-height:0;overflow:hidden;mso-hide:all;")
+            .replace("display:block;width:100%", "width:100%", 1)
+            + "<!--<![endif]-->"
         )
-    return f"""<tr><td style="padding:24px 0 0 0">
-<a href="{_e(ctx.primary_url)}" target="_blank" style="display:block;overflow:hidden;text-decoration:none">{img}</a>
+    else:
+        img = _hero_img(still, alt, "bx-hero-jpg")
+    return f"""<tr><td style="padding:24px 0 0 0;font-size:0;line-height:0">
+<a href="{_e(ctx.primary_url)}" target="_blank" style="display:block;text-decoration:none">{img}</a>
 </td></tr>"""
 
 
@@ -290,56 +302,8 @@ def _button(ctx: DeliveryEmailContext) -> str:
 </td></tr>"""
 
 
-def _grid_tiles(stills: Sequence[PreviewStill]) -> list[PreviewStill]:
-    tiles = list(stills[1:1 + MAX_TILES])
-    return tiles[:-1] if len(tiles) % 2 else tiles
-
-
-def shown_still_count(stills: Sequence[PreviewStill]) -> int:
-    """Stills the email actually shows (hero + even number of tiles)."""
-    return (1 + len(_grid_tiles(stills))) if stills else 0
-
-
-def _grid(ctx: DeliveryEmailContext) -> str:
-    tiles = _grid_tiles(ctx.stills)
-    if not tiles:
-        return ""
-    rows = []
-    for r in range(0, len(tiles), 2):
-        cells = []
-        for c, t in enumerate(tiles[r:r + 2]):
-            n = r + c + 1
-            alt = t.alt or f"Photo from {ctx.address}"
-            cell = (
-                f'<td class="bx-t{n}" width="{TILE_W}" valign="top" style="width:50%">'
-                f'<a href="{_e(ctx.primary_url)}" target="_blank" style="display:block;text-decoration:none">'
-                f'<img class="bx-tile-img bx-tile" src="{_e(t.tile_url)}" width="{TILE_W}" alt="{_e(alt)}" '
-                f'style="display:block;width:100%;max-width:{TILE_W}px;height:auto;border:0;border-radius:4px;'
-                f'background:{L["tile"]};color:{L["mute"]};font-family:{FONT_STACK};font-size:12px"></a></td>'
-            )
-            cells.append(cell)
-        row = f'{cells[0]}<td class="bx-gap" width="12" style="width:12px;font-size:0;line-height:0">&nbsp;</td>{cells[1]}'
-        rows.append(f"<tr>{row}</tr>")
-        if r + 2 < len(tiles):
-            rows.append('<tr><td colspan="3" height="12" style="height:12px;font-size:0;line-height:0">&nbsp;</td></tr>')
-    more = ""
-    if ctx.more_count > 0:
-        noun = "photo" if ctx.more_count == 1 else "photos"
-        more = (
-            f'<tr><td colspan="3" style="padding:14px 0 0 0;font-family:{FONT_STACK};font-size:14px;line-height:20px">'
-            f'<a class="bx-link" href="{_e(ctx.primary_url)}" target="_blank" style="color:{BRICK};text-decoration:none">'
-            f"+{ctx.more_count} more {noun} in your gallery</a></td></tr>"
-        )
-    return f"""<tr><td class="bx-pad" style="padding:32px 40px 0 40px">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-{''.join(rows)}
-{more}
-</table>
-</td></tr>"""
-
-
 def _no_stills_panel(ctx: DeliveryEmailContext) -> str:
-    """Video-only / floor-plan-only / Visit-only: a quiet panel instead of a grid."""
+    """Video-only / floor-plan-only / Visit-only: a quiet panel instead of a hero."""
     if ctx.stills:
         return ""
     return f"""<tr><td class="bx-pad" style="padding:24px 40px 0 40px">
@@ -423,7 +387,6 @@ def render_delivery_email(ctx: DeliveryEmailContext) -> RenderedEmail:
 {_chips(ctx.services)}
 {_button(ctx)}
 <tr><td class="bx-pad" style="padding:14px 40px 0 40px"><p class="bx-mute" style="margin:0;font-family:{FONT_STACK};font-size:13px;line-height:19px;color:{L['mute']}">{_e(note)}</p></td></tr>
-{_grid(ctx)}
 {_no_stills_panel(ctx)}
 {_footer(ctx)}
 </table>
@@ -451,7 +414,7 @@ def _plain_text(ctx: DeliveryEmailContext, *, subject: str, addr: str, name: str
     if ctx.services:
         lines += ["Included: " + ", ".join(ctx.services), ""]
     lines += [f"{ctx.button_label}: {ctx.primary_url}", note]
-    if ctx.more_count > 0 and ctx.photo_count:
+    if ctx.photo_count > 1:
         lines.append(f"{ctx.photo_count} photos in your gallery.")
     if ctx.share_link and ctx.desk_url:
         lead = "Or open your Bricks account" if ctx.client else "Or open the listing file"

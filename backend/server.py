@@ -42,7 +42,7 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip internal auth for health, seed, docs, root, and job intake endpoints
         exempt_paths = ("/health", "/health/ready", "/docs", "/openapi.json", "/redoc")
-        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads", "/api/jobs", "/api/notifications", "/api/push-tokens", "/api/capture", "/api/stripe/connect-webhook", "/api/ops", "/api/public/delivery-email/")
+        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads", "/api/jobs", "/api/notifications", "/api/push-tokens", "/api/capture", "/api/stripe/connect-webhook", "/api/ops")
         if request.url.path in exempt_paths or any(request.url.path.startswith(p) for p in exempt_prefixes):
             return await call_next(request)
 
@@ -78,7 +78,6 @@ from app.routers.jobs import router as jobs_router
 from app.routers.capture import router as capture_router
 from app.routers.capture_visit_video import router as capture_visit_video_router
 from app.routers.ops_autopilot import router as ops_autopilot_router
-from app.routers.delivery_email_media import router as delivery_email_media_router
 from app.shared.database import get_db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -198,7 +197,6 @@ app.include_router(jobs_router)
 app.include_router(capture_router)
 app.include_router(capture_visit_video_router)
 app.include_router(ops_autopilot_router)  # self-running ops sweep/daily/one-tap (2026-11-02)
-app.include_router(delivery_email_media_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
 install_browser_middleware(app)

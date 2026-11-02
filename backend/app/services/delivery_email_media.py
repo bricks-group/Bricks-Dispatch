@@ -29,15 +29,15 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 HERO_SIZE = (1200, 750)
-TILE_SIZE = (560, 373)
 GIF_BUDGET_BYTES = 1_000_000
 # (width, height, blend frames between stills) — first that fits the budget wins.
 GIF_LADDER = ((600, 375, 2), (560, 350, 2), (560, 350, 1), (480, 300, 2), (480, 300, 1))
 GIF_HOLD_MS = 2800
-MAX_PREVIEW = 8            # candidates loaded (hero + 4 tiles + 2 GIF-only frames)
-SHOWN_STILLS = 5
+MAX_PREVIEW = 3            # hero + 2 more frames for the crossfade, all from this job
+PUBLIC_BUCKET = os.environ.get("DELIVERY_EMAIL_PUBLIC_BUCKET", "bricks-media")
+PUBLIC_PREFIX = "delivery-email"
+CACHE_CONTROL = "31536000"
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
-_ASSET_RE = re.compile(r"^(?:(?P<uid>[A-Za-z0-9_-]{1,80})-(?P<kind>hero|tile)\.jpg|crossfade\.gif)$")
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tif", ".tiff")
 _SKIP_KINDS = {"floorplan", "reel", "visit", "splat", "tour"}
 
@@ -60,48 +60,61 @@ def sign_asset(job_id: str, asset: str, ids: str = "") -> str:
     return hmac.new(_secret(), msg, hashlib.sha256).hexdigest()[:40]
 
 
-def verify_asset(job_id: str, asset: str, ids: str, sig: str) -> bool:
-    if not sig or not isinstance(sig, str):
-        return False
+# ---------------------------------------------------------------------------
+# Public hosting. Mail clients (Gmail's image proxy, Apple Mail, Outlook) are
+# most reliable with a plain absolute HTTPS URL to a static JPEG/GIF served by
+# a CDN with the right Content-Type: no cid:, no data:, no expiring signature,
+# no function cold start. Only QC-passed stills from THIS job are published,
+# under an unguessable per-job folder in the public bucket.
+# ---------------------------------------------------------------------------
+
+def public_folder(job_id: str) -> str:
+    token = sign_asset(job_id, "folder")[:24]
+    return f"{PUBLIC_PREFIX}/{job_id}/{token}"
+
+
+def public_object_url(path: str) -> str:
+    base = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/storage/v1/object/public/{quote(PUBLIC_BUCKET)}/{quote(path)}"
+
+
+async def publish(path: str, data: bytes, content_type: str) -> str:
+    """Upload to the public bucket; return the absolute URL ('' on failure)."""
+    if not data:
+        return ""
     try:
-        expected = sign_asset(job_id, asset, ids)
-    except RuntimeError:
-        return False
-    return hmac.compare_digest(expected, sig.strip().lower())
+        from ..shared.database import get_db
+
+        db = await get_db()
+        await db.storage.from_(PUBLIC_BUCKET).upload(
+            path=path,
+            file=data,
+            file_options={"content-type": content_type, "cache-control": CACHE_CONTROL, "upsert": "true"},
+        )
+    except Exception as e:  # noqa: BLE001 - the email falls back to no image
+        logger.warning("delivery email: publish failed %s: %s", path, type(e).__name__)
+        return ""
+    return public_object_url(path)
 
 
-def public_base() -> str:
-    from .storage import _dispatch_public_base
+async def unpublish_email_assets(job_id: str) -> int:
+    """Remove a job's published email images (e.g. a post-delivery QC hold)."""
+    try:
+        from ..shared.database import get_db
 
-    return _dispatch_public_base()
+        db = await get_db()
+        folder = public_folder(job_id)
+        items = await db.storage.from_(PUBLIC_BUCKET).list(folder)
+        names = [f"{folder}/{i['name']}" for i in (items or []) if i.get("name")]
+        if names:
+            await db.storage.from_(PUBLIC_BUCKET).remove(names)
+        return len(names)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("delivery email: unpublish failed job=%s: %s", job_id, type(e).__name__)
+        return 0
 
-
-def asset_url(job_id: str, asset: str, ids: str = "", *, base: Optional[str] = None) -> str:
-    sig = sign_asset(job_id, asset, ids)
-    q = f"ids={quote(ids, safe=',')}&" if ids else ""
-    return f"{(base or public_base()).rstrip('/')}/api/public/delivery-email/{quote(job_id)}/{asset}?{q}s={sig}"
-
-
-def parse_asset(asset: str) -> Optional[tuple[str, str]]:
-    """('hero'|'tile', upload_id) or ('gif', '') for valid asset names."""
-    m = _ASSET_RE.match(asset or "")
-    if not m:
-        return None
-    if asset == "crossfade.gif":
-        return "gif", ""
-    return m.group("kind"), m.group("uid")
-
-
-def parse_ids(ids: str) -> list[str]:
-    out = [i for i in (ids or "").split(",") if i]
-    if not out or len(out) > 4 or not all(_ID_RE.match(i) for i in out):
-        return []
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Eligibility (QC holds)
-# ---------------------------------------------------------------------------
 
 def preview_candidate_ids(delivery_urls: Iterable | None) -> list[str]:
     """Upload ids of listing stills from media_delivery rows, in delivery order."""
@@ -172,29 +185,6 @@ async def load_eligible_uploads(job_id: str, ids: list[str]) -> list[dict]:
     by_id = {str(r.get("id")): r for r in rows if str(r.get("job_id") or job_id) == str(job_id)}
     return [by_id[i] for i in ids if i in by_id and is_preview_eligible(by_id[i])]
 
-
-async def job_is_delivered(job_id: str) -> bool:
-    try:
-        from ..shared.database import get_db
-
-        db = await get_db()
-        res = await db.table("media_delivery").select("id").eq("job_id", job_id).limit(1).execute()
-        return bool(res.data)
-    except Exception as e:  # noqa: BLE001
-        try:
-            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_media_delivery_by_job_id
-
-            if _is_rest_quota_error(e):
-                return bool(pg_select_media_delivery_by_job_id(job_id))
-        except Exception:  # noqa: BLE001
-            pass
-        logger.warning("delivery email: media_delivery check failed job=%s: %s", job_id, type(e).__name__)
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Image building
-# ---------------------------------------------------------------------------
 
 def _open(image_bytes: bytes) -> Image.Image:
     from .image_io import open_rgb
@@ -279,47 +269,15 @@ async def _source_bytes(upload: dict) -> Optional[bytes]:
     return await download_bytes(path)
 
 
-def cache_path(job_id: str, asset: str, ids: str = "") -> str:
-    if asset == "crossfade.gif":
-        h = hashlib.sha256(ids.encode("utf-8")).hexdigest()[:12]
-        asset = f"crossfade-{h}.gif"
-    return f"bricks-go/jobs/{job_id}/email/{asset}"
-
-
-async def build_asset(job_id: str, asset: str, ids: str, uploads_by_id: dict[str, dict]) -> Optional[bytes]:
-    """Build (or read cached) bytes for an already-authorised asset."""
-    from .storage import download_bytes, upload_bytes
-
-    parsed = parse_asset(asset)
-    if not parsed:
-        return None
-    kind, uid = parsed
-    path = cache_path(job_id, asset, ids)
-    try:
-        cached = await download_bytes(path)
-    except Exception:  # noqa: BLE001
-        cached = None
-    if cached:
-        return cached
-    data: Optional[bytes] = None
-    if kind in ("hero", "tile"):
-        u = uploads_by_id.get(uid)
-        src = await _source_bytes(u) if u else None
-        if src:
-            size = HERO_SIZE if kind == "hero" else TILE_SIZE
-            data = await asyncio.to_thread(make_jpeg, src, size, 82 if kind == "hero" else 80)
-    else:
-        rows = [uploads_by_id[i] for i in parse_ids(ids) if i in uploads_by_id]
-        srcs = [b for b in await asyncio.gather(*(_source_bytes(r) for r in rows)) if b]
-        if len(srcs) >= 2:
-            data = await asyncio.to_thread(make_crossfade_gif, srcs)
-    if data:
-        ctype = "image/gif" if kind == "gif" else "image/jpeg"
-        try:
-            await upload_bytes(path, data, content_type=ctype, upsert=True)
-        except Exception as e:  # noqa: BLE001 - serve uncached
-            logger.warning("delivery email: cache write failed %s: %s", path, type(e).__name__)
-    return data
+async def build_hero_assets(rows: list[dict]) -> tuple[bytes | None, bytes | None]:
+    """(hero JPEG, crossfade GIF) from this job's eligible rows; first GIF frame == hero."""
+    srcs = await asyncio.gather(*(_source_bytes(r) for r in rows))
+    if not srcs or not srcs[0]:
+        return None, None
+    hero = await asyncio.to_thread(make_jpeg, srcs[0], HERO_SIZE, 82)
+    frames = [b for b in srcs if b]
+    gif = await asyncio.to_thread(make_crossfade_gif, frames) if len(frames) >= 2 else None
+    return hero, gif
 
 
 # ---------------------------------------------------------------------------
@@ -331,12 +289,13 @@ async def gallery_preview(
     delivery_urls: list | None,
     *,
     address: str = "",
-    prewarm: bool = True,
     timeout: float = 25.0,
 ) -> dict:
     """{"stills": [PreviewStill], "hero_gif_url": str, "total": int}.
 
-    Never raises — the email goes out without a gallery rather than not at all.
+    Only this job's QC-passed stills. The hero URL is returned only once the
+    image is actually published, so the email never points at a missing file.
+    Never raises: the email goes out without a hero rather than not at all.
     """
     from .delivery_email import PreviewStill
 
@@ -350,37 +309,30 @@ async def gallery_preview(
         pick = rows[:MAX_PREVIEW]
         if not pick:
             return empty
-        by_id = {str(r["id"]): r for r in pick}
-        shown = pick[:SHOWN_STILLS]
-        label = (address or "").strip()
-        stills = [
-            PreviewStill(
-                tile_url=asset_url(job_id, f"{r['id']}-tile.jpg"),
-                hero_url=asset_url(job_id, f"{r['id']}-hero.jpg") if i == 0 else "",
-                alt=f"Photo {i + 1} of {total}" + (f", {label}" if label else ""),
+
+        async def _go() -> tuple[str, str]:
+            hero, gif = await build_hero_assets(pick)
+            if not hero:
+                return "", ""
+            folder = public_folder(job_id)
+            hero_name = f"hero-{pick[0]['id']}.jpg"
+            gif_name = "hero-" + hashlib.sha256(",".join(str(r["id"]) for r in pick).encode()).hexdigest()[:12] + ".gif"
+            hero_url, gif_url = await asyncio.gather(
+                publish(f"{folder}/{hero_name}", hero, "image/jpeg"),
+                publish(f"{folder}/{gif_name}", gif, "image/gif") if gif else asyncio.sleep(0, ""),
             )
-            for i, r in enumerate(shown)
-        ]
-        gif_ids: list[str] = []
-        if len(pick) >= 2:
-            extras = [str(r["id"]) for r in pick[SHOWN_STILLS:]]
-            fill = [str(r["id"]) for r in shown[1:]]
-            gif_ids = [str(shown[0]["id"])] + (extras + fill)[:2]
-        gif_url = ""
-        if prewarm:
-            jobs = [build_asset(job_id, f"{shown[0]['id']}-hero.jpg", "", by_id)]
-            jobs += [build_asset(job_id, f"{r['id']}-tile.jpg", "", by_id) for r in shown[1:]]
-            gif_job = build_asset(job_id, "crossfade.gif", ",".join(gif_ids), by_id) if gif_ids else None
-            try:
-                results = await asyncio.wait_for(
-                    asyncio.gather(*(jobs + ([gif_job] if gif_job else [])), return_exceptions=True),
-                    timeout=timeout,
-                )
-                if gif_job and results and isinstance(results[-1], (bytes, bytearray)) and results[-1]:
-                    gif_url = asset_url(job_id, "crossfade.gif", ",".join(gif_ids))
-            except asyncio.TimeoutError:
-                logger.info("delivery email: prewarm timed out job=%s (assets build on first open)", job_id)
-        return {"stills": stills, "hero_gif_url": gif_url, "total": total}
+            return hero_url, (gif_url if hero_url else "")
+
+        try:
+            hero_url, gif_url = await asyncio.wait_for(_go(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.info("delivery email: hero build timed out job=%s", job_id)
+            return {**empty, "total": total}
+        if not hero_url:
+            return {**empty, "total": total}
+        label = (address or "").strip()
+        alt = f"Photo from your gallery" + (f", {label}" if label else "")
+        return {"stills": [PreviewStill(tile_url="", hero_url=hero_url, alt=alt)], "hero_gif_url": gif_url, "total": total}
     except Exception as e:  # noqa: BLE001
         logger.warning("delivery email: gallery preview failed job=%s: %s", job_id, type(e).__name__)
         return empty

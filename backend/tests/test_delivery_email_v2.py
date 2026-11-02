@@ -1,4 +1,4 @@
-"""Delivery email v2: one template, QC-gated gallery, light/dark, motion that degrades."""
+"""Delivery email v2: one template, QC-gated hero from this job, light/dark, motion that degrades."""
 import asyncio
 import io
 import re
@@ -6,20 +6,19 @@ from unittest.mock import AsyncMock
 
 from PIL import Image
 
-from app.routers import delivery_email_media as route
 from app.services import client_comms as cc
 from app.services import delivery_email as de
 from app.services import delivery_email_media as dem
 
 
 def _stills(n):
-    return [de.PreviewStill(f"https://d/t{i}.jpg", f"https://d/h{i}.jpg", f"Photo {i + 1} of {n}, 1 Main St") for i in range(n)]
+    return [de.PreviewStill(hero_url=f"https://cdn.example/h{i}.jpg", alt=f"Photo from your gallery, 1 Main St") for i in range(n)]
 
 
 def _ctx(**kw):
     base = dict(recipient_name="Alex", address="1 Main St", primary_url="https://app.brxs.ca/share/tok",
                 desk_url="https://app.brxs.ca/properties/j1", share_link=True, photo_count=24,
-                services=["24 photos", "Video"], stills=_stills(5), more_count=19)
+                services=["24 photos", "Video"], stills=_stills(1))
     base.update(kw)
     return de.DeliveryEmailContext(**base)
 
@@ -45,9 +44,10 @@ def test_motion_is_progressive_and_reduced_motion_safe():
     motion = h.split("@media (prefers-reduced-motion:no-preference)")[1].split("</style>")[0]
     assert "@keyframes bx-rise" in motion and "@keyframes bx-brick" in motion
     assert h.count("@keyframes") == motion.count("@keyframes")  # no motion outside the guard
-    # Tiles rest fully visible inline — clients without @keyframes see the static grid.
-    for tile in re.findall(r'<td class="bx-t\d"[^>]*>', h):
-        assert "opacity:0" not in tile
+    # The hero never animates (a stalled animation must not hide it).
+    for img in re.findall(r'<img class="bx-hero-img[^>]*>', h):
+        assert "opacity:0" not in img
+    assert ".bx-hero-img{animation" not in h
     # Live brick twin: exact logo geometry, hidden unless @supports clients swap it in.
     assert "left:3.00px;top:4.00px;width:11.00px;height:6.40px" in h
     assert "left:10.20px;top:11.60px;width:10.80px;height:8.40px" in h
@@ -57,27 +57,36 @@ def test_motion_is_progressive_and_reduced_motion_safe():
     assert "max-width:620px" in base and "@keyframes" not in base
 
 
-def test_gallery_grid_alt_text_and_more_count():
+def test_no_gallery_grid_only_this_jobs_hero():
+    h = de.render_delivery_email(_ctx(stills=_stills(5))).html
+    assert "bx-tile" not in h and "more photo" not in h
+    assert len(re.findall(r'<img class="bx-hero-img', h)) == 1
+    assert 'alt="Photo from your gallery, 1 Main St"' in h
+
+
+def test_hero_is_plain_absolute_https_img_with_explicit_size():
     h = de.render_delivery_email(_ctx()).html
-    assert h.count('class="bx-tile-img') == 4
-    assert 'alt="Photo 1 of 5, 1 Main St"' in h
-    assert "+19 more photos in your gallery" in h
-    # 4 stills → hero + 2 tiles (even grid)
-    h3 = de.render_delivery_email(_ctx(stills=_stills(4))).html
-    assert h3.count('class="bx-tile-img') == 2
-    assert de.shown_still_count(_stills(4)) == 3
+    img = re.search(r'<img class="bx-hero-img[^>]*>', h).group(0)
+    assert 'src="https://cdn.example/h0.jpg"' in img
+    assert 'width="600"' in img and 'height="375"' in img
+    for banned in ("cid:", "data:image", ".svg", "background-image", "<picture", "<source"):
+        assert banned not in h
 
 
-def test_gif_hero_keeps_static_for_reduced_motion():
-    h = de.render_delivery_email(_ctx(hero_gif_url="https://d/x.gif")).html
-    assert 'src="https://d/x.gif"' in h
-    assert '<source srcset="https://d/h0.jpg" media="(prefers-reduced-motion: reduce)">' in h
+def test_gif_hero_with_still_for_reduced_motion():
+    h = de.render_delivery_email(_ctx(hero_gif_url="https://cdn.example/x.gif")).html
+    gif = re.search(r'<img class="bx-hero-img bx-hero-gif"[^>]*>', h).group(0)
+    still = re.search(r'<img class="bx-hero-img bx-hero-still"[^>]*>', h).group(0)
+    assert 'src="https://cdn.example/x.gif"' in gif and 'height="375"' in gif
+    assert 'src="https://cdn.example/h0.jpg"' in still and "display:none" in still and "mso-hide:all" in still
+    rm = h.split("@media (prefers-reduced-motion:reduce)")[1].split("</style>")[0]
+    assert ".bx-hero-gif{display:none!important}" in rm and ".bx-hero-still{display:block!important" in rm
 
 
 def test_no_stills_is_graceful():
-    r = de.render_delivery_email(_ctx(stills=[], photo_count=0, more_count=0, headline_what="floor plan",
+    r = de.render_delivery_email(_ctx(stills=[], photo_count=0, headline_what="floor plan",
                                       headline_verb="is", button_label="View your floor plan", services=["Floor plan"]))
-    assert "<img class=\"bx-hero-img" not in r.html and "<img class=\"bx-tile-img" not in r.html
+    assert "<img class=\"bx-hero-img" not in r.html
     assert "Everything for this delivery is waiting on one page" in r.html
     assert r.subject == "Your floor plan is ready · 1 Main St"
 
@@ -119,48 +128,16 @@ def test_candidates_skip_flagged_and_non_photo_kinds():
     assert dem.preview_candidate_ids(urls) == ["a", "e"]
 
 
-def test_signature_binds_job_asset_and_ids(monkeypatch):
+def test_public_folder_is_per_job_and_unguessable(monkeypatch):
     monkeypatch.setenv("DELIVERY_EMAIL_MEDIA_SECRET", "test-secret")
-    sig = dem.sign_asset("j1", "u1-tile.jpg")
-    assert dem.verify_asset("j1", "u1-tile.jpg", "", sig)
-    assert not dem.verify_asset("j2", "u1-tile.jpg", "", sig)
-    assert not dem.verify_asset("j1", "u2-tile.jpg", "", sig)
-    gsig = dem.sign_asset("j1", "crossfade.gif", "a,b")
-    assert not dem.verify_asset("j1", "crossfade.gif", "a,c", gsig)
-    url = dem.asset_url("j1", "crossfade.gif", "a,b", base="https://dispatch-api.brxs.ca")
-    assert url.startswith("https://dispatch-api.brxs.ca/api/public/delivery-email/j1/crossfade.gif?ids=a,b&s=")
-    assert dem.parse_asset("../x.jpg") is None and dem.parse_asset("u1-hero.jpg") == ("hero", "u1")
-
-
-def _wire(monkeypatch, delivered=True, rows=None, data=b"\xff\xd8jpeg"):
-    monkeypatch.setenv("DELIVERY_EMAIL_MEDIA_SECRET", "test-secret")
-    monkeypatch.setattr(dem, "job_is_delivered", AsyncMock(return_value=delivered))
-    monkeypatch.setattr(dem, "load_eligible_uploads", AsyncMock(return_value=rows if rows is not None else [_row()]))
-    monkeypatch.setattr(dem, "build_asset", AsyncMock(return_value=data))
-
-
-def _get(job, asset, s, ids=""):
-    return asyncio.run(route.delivery_email_asset(job, asset, s=s, ids=ids))
-
-
-def test_route_serves_signed_qc_passed_image(monkeypatch):
-    _wire(monkeypatch)
-    r = _get("j1", "u1-tile.jpg", dem.sign_asset("j1", "u1-tile.jpg"))
-    assert r.status_code == 200 and r.media_type == "image/jpeg"
-    assert "max-age=3600" in r.headers["cache-control"]
-
-
-def test_route_404s_bad_sig_undelivered_or_qc_hold(monkeypatch):
-    _wire(monkeypatch)
-    assert _get("j1", "u1-tile.jpg", "nope").status_code == 404
-    sig = dem.sign_asset("j1", "u1-tile.jpg")
-    _wire(monkeypatch, delivered=False)
-    assert _get("j1", "u1-tile.jpg", sig).status_code == 404
-    _wire(monkeypatch, rows=[])  # QC hold / rejected after delivery
-    assert _get("j1", "u1-tile.jpg", sig).status_code == 404
-    _wire(monkeypatch, rows=[_row(id="a")])  # GIF needs every frame still eligible
-    gsig = dem.sign_asset("j1", "crossfade.gif", "a,b")
-    assert _get("j1", "crossfade.gif", gsig, "a,b").status_code == 404
+    monkeypatch.setenv("SUPABASE_URL", "https://proj.supabase.co")
+    f1, f2 = dem.public_folder("j1"), dem.public_folder("j2")
+    assert f1.startswith("delivery-email/j1/") and len(f1.split("/")[-1]) == 24 and f1 != f2
+    monkeypatch.setenv("DELIVERY_EMAIL_MEDIA_SECRET", "other")
+    assert dem.public_folder("j1") != f1
+    url = dem.public_object_url(f"{f1}/hero-u1.jpg")
+    assert url == f"https://proj.supabase.co/storage/v1/object/public/bricks-media/{f1}/hero-u1.jpg"
+    assert "token=" not in url and "exp=" not in url
 
 
 def _jpeg(color, size=(1600, 1067)):
@@ -183,8 +160,8 @@ def test_gif_under_budget_and_first_frame_is_hero():
 
 
 def test_jpeg_cover_sizes():
-    out = Image.open(io.BytesIO(dem.make_jpeg(_jpeg((10, 20, 30), (4000, 3000)), dem.TILE_SIZE)))
-    assert out.size == dem.TILE_SIZE
+    out = Image.open(io.BytesIO(dem.make_jpeg(_jpeg((10, 20, 30), (4000, 3000)), dem.HERO_SIZE)))
+    assert out.size == dem.HERO_SIZE and out.format == "JPEG"
 
 
 def test_services_line():
@@ -196,29 +173,47 @@ def test_services_line():
     assert dem.services_from_delivery([], ["3D tour"]) == ["3D tour"]
 
 
-def test_gallery_preview_picks_hero_tiles_and_gif(monkeypatch):
+def _wire_publish(monkeypatch, rows, fail=()):
     monkeypatch.setenv("DELIVERY_EMAIL_MEDIA_SECRET", "test-secret")
+    monkeypatch.setenv("SUPABASE_URL", "https://proj.supabase.co")
+    monkeypatch.setattr(dem, "load_eligible_uploads", AsyncMock(return_value=rows))
+    srcs = {r["id"]: _jpeg((40 * i % 255, 90, 140)) for i, r in enumerate(rows)}
+    monkeypatch.setattr(dem, "_source_bytes", AsyncMock(side_effect=lambda r: srcs[r["id"]]))
+    published = []
+
+    async def publish(path, data, ctype):
+        published.append((path, ctype, data))
+        return "" if any(path.endswith(x) for x in fail) else dem.public_object_url(path)
+
+    monkeypatch.setattr(dem, "publish", publish)
+    return published
+
+
+def test_gallery_preview_publishes_only_this_jobs_hero_and_gif(monkeypatch):
     rows = [_row(id=f"u{i}") for i in range(7)]
-    monkeypatch.setattr(dem, "load_eligible_uploads", AsyncMock(return_value=rows))
-    monkeypatch.setattr(dem, "build_asset", AsyncMock(return_value=b"x"))
+    published = _wire_publish(monkeypatch, rows)
     pv = asyncio.run(dem.gallery_preview("j1", [{"upload_id": r["id"]} for r in rows], address="1 Main St"))
-    assert pv["total"] == 7 and len(pv["stills"]) == 5
-    assert pv["stills"][0].hero_url and "u0-hero.jpg" in pv["stills"][0].hero_url
-    assert "ids=u0,u5,u6" in pv["hero_gif_url"]
-    assert pv["stills"][0].alt == "Photo 1 of 7, 1 Main St"
+    assert pv["total"] == 7 and len(pv["stills"]) == 1
+    hero = pv["stills"][0].hero_url
+    assert hero.startswith("https://proj.supabase.co/storage/v1/object/public/bricks-media/delivery-email/j1/")
+    assert hero.endswith("/hero-u0.jpg") and pv["hero_gif_url"].endswith(".gif")
+    assert {c for _, c, _ in published} == {"image/jpeg", "image/gif"}
+    assert all("/j1/" in p for p, _, _ in published)
+    gif = Image.open(io.BytesIO([d for _, c, d in published if c == "image/gif"][0]))
+    assert gif.n_frames >= 4  # hero + 2 more of this job's stills
+    assert pv["stills"][0].alt == "Photo from your gallery, 1 Main St"
 
 
-def test_gallery_preview_drops_gif_when_build_fails(monkeypatch):
-    monkeypatch.setenv("DELIVERY_EMAIL_MEDIA_SECRET", "test-secret")
+def test_gallery_preview_never_points_at_unpublished_media(monkeypatch):
     rows = [_row(id=f"u{i}") for i in range(3)]
-    monkeypatch.setattr(dem, "load_eligible_uploads", AsyncMock(return_value=rows))
-
-    async def build(job_id, asset, ids, by_id):
-        return None if asset == "crossfade.gif" else b"x"
-
-    monkeypatch.setattr(dem, "build_asset", build)
+    _wire_publish(monkeypatch, rows, fail=(".gif",))
     pv = asyncio.run(dem.gallery_preview("j1", [{"upload_id": r["id"]} for r in rows]))
-    assert pv["hero_gif_url"] == "" and len(pv["stills"]) == 3
+    assert pv["hero_gif_url"] == "" and len(pv["stills"]) == 1
+    _wire_publish(monkeypatch, rows, fail=(".jpg",))
+    pv = asyncio.run(dem.gallery_preview("j1", [{"upload_id": r["id"]} for r in rows]))
+    assert pv["stills"] == [] and pv["hero_gif_url"] == "" and pv["total"] == 3
+    _wire_publish(monkeypatch, [])  # QC hold / nothing passed: no hero at all
+    assert asyncio.run(dem.gallery_preview("j1", [{"upload_id": "u0"}]))["stills"] == []
 
 
 def test_photo_email_sends_text_part_and_companion_gets_prerendered(monkeypatch):

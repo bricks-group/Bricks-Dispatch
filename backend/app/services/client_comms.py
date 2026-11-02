@@ -607,7 +607,7 @@ def render_delivery(
     capture_note: str = "",
 ):
     """Every delivery email goes through delivery_email.render_delivery_email."""
-    from .delivery_email import DeliveryEmailContext, render_delivery_email, shown_still_count
+    from .delivery_email import DeliveryEmailContext, render_delivery_email
 
     pv = preview or {}
     stills = list(pv.get("stills") or [])
@@ -623,7 +623,6 @@ def render_delivery(
         services=services or [],
         stills=stills,
         hero_gif_url=str(pv.get("hero_gif_url") or "") if stills else "",
-        more_count=max(0, total - shown_still_count(stills)),
         headline_what=what,
         headline_verb=verb,
         button_label=button_label,
