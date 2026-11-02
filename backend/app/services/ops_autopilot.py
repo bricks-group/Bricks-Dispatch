@@ -674,7 +674,12 @@ _BACKUP_SELECT = {
 # SECURITY (2026-11-02): public-table secrets never go into the backup file.
 # Explicit per-table denylist (always redacted) ...
 BACKUP_REDACT_COLUMNS: dict[str, frozenset] = {
-    "public.vendor_calendar_connections": frozenset({"access_token", "refresh_token", "caldav_password"}),
+    "public.app_secrets": frozenset({"value"}),  # INTERNAL_API_KEY, Stripe webhook secrets
+    "public.vendor_calendar_connections": frozenset({"access_token", "refresh_token", "caldav_password",
+                                                     "ics_url", "caldav_url"}),
+    # calendar feed links carry secret tokens
+    "public.contractors": frozenset({"ical_url"}),
+    "public.company_calendar_settings": frozenset({"ical_url"}),
     "public.connected_tools": frozenset({"credential_secret", "credential_key", "credentials"}),
     "public.password_resets": frozenset({"token"}),
     "public.signature_recipients": frozenset({"token"}),
@@ -697,7 +702,8 @@ BACKUP_REDACT_COLUMNS: dict[str, frozenset] = {
 # ... plus fail-closed by name: any column named like a secret is redacted
 # unless it is on this reviewed keep-list (not secrets, needed for restore).
 SENSITIVE_COLUMN_RE = re.compile(
-    r"(token|secret|passw|hash|credential|api_?key|private_?key|sealed|(^|_)otp(_|$)|(^|_)salt(_|$))",
+    r"(token|secret|passw|hash|credential|api_?key|private_?key|sealed|(^|_)otp(_|$)|(^|_)salt(_|$)"
+    r"|(ical|ics|caldav|webcal)_?(feed_?)?url)",
     re.IGNORECASE,
 )
 BACKUP_KEEP_COLUMNS: dict[str, frozenset] = {

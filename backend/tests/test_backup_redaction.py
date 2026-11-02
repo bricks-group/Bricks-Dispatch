@@ -28,7 +28,11 @@ REQUIRED = {
     "public.dev_progress_reports": {"share_token"},
     "public.dev_project_share_links": {"token"},
     "public.site_monitor_share_tokens": {"token"},
+    "public.app_secrets": {"value"},
+    "public.contractors": {"ical_url"},
+    "public.company_calendar_settings": {"ical_url"},
 }
+REQUIRED["public.vendor_calendar_connections"] |= {"ics_url", "caldav_url"}
 NAME_RULE = r"(token|secret|password|passwd|hash)"
 
 
@@ -61,7 +65,8 @@ def test_every_secret_named_column_in_schema_is_redacted_or_reviewed():
 
 
 @pytest.mark.parametrize("col", ["webhook_secret", "api_token", "pin_hash", "new_password", "client_credentials",
-                                  "share_token", "API_KEY", "refresh_token", "otp", "otp_code", "token_sealed"])
+                                  "share_token", "API_KEY", "refresh_token", "otp", "otp_code", "token_sealed",
+                                  "ical_url", "ics_url", "caldav_url", "team_ical_url", "webcal_url", "icsurl"])
 def test_new_secret_named_column_is_redacted_automatically(col):
     cols = ["id", "created_at", col]
     assert oa.backup_redacted_columns("public.brand_new_table", cols) == {col}
@@ -170,3 +175,38 @@ def test_live_schema_has_no_unreviewed_secret_columns():
              if _sensitive(c) and c not in oa.backup_redacted_columns(t, cs)
              and c not in oa.BACKUP_KEEP_COLUMNS.get(t, frozenset())]
     assert leaks == []
+
+
+class _SqlCur(_Cur):
+    """Emulates Postgres applying the generated SELECT: columns the SQL
+    redacts come back as '[redacted]', everything else raw."""
+
+    def execute(self, sql, params=None):
+        self.sql.append(sql)
+        if "information_schema" in sql:
+            return super().execute(sql, params)
+        import re
+        red = set(re.findall(r"else '\[redacted\]' end as \"([^\"]+)\"", sql))
+        sel = sql.split("(select ", 1)[1].split(" from ", 1)[0] if "(select " in sql else "*"
+        out = []
+        for r in (self.rows if '"public"."app_secrets"' in sql else []):
+            if sel.strip() == "*":
+                out.append(r)
+            else:
+                out.append({k: ("[redacted]" if k in red and v is not None else v) for k, v in r.items()})
+        self._out = [(json.dumps(r),) for r in out]
+
+
+def test_app_secrets_values_never_appear_in_dump(monkeypatch):
+    import gzip
+    from app.shared import pg_fallback
+    secrets = {"INTERNAL_API_KEY": "ik_live_SENTINEL_9f8e7d", "STRIPE_WEBHOOK_SECRET": "whsec_SENTINEL_abc123"}
+    rows = [{"key": k, "value": v} for k, v in secrets.items()]
+    cur = _SqlCur(["public.app_secrets"], {"public.app_secrets": ["key", "value"]}, rows)
+    monkeypatch.setattr(pg_fallback, "_pg_connect", lambda: _Conn(cur))
+    data, counts = oa.dump_database()
+    text = gzip.decompress(data).decode()
+    assert counts["public.app_secrets"] == 2
+    for v in secrets.values():
+        assert v not in text
+    assert "INTERNAL_API_KEY" in text  # key names kept so a restore knows what to refill
