@@ -148,14 +148,87 @@ def session_amr_methods(token: str) -> set:
     return out
 
 
-def _jwt_email_verified(token: str) -> bool:
+def _jwt_claims(token: str) -> dict:
     try:
         import jwt
         payload = jwt.decode(token, options={"verify_signature": False, "verify_aud": False, "verify_exp": False})
     except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _jwt_email_verified(token: str) -> bool:
+    """Top-level email_verified claim as issued by Supabase only.
+
+    SECURITY (2026-11-02): never user_metadata.email_verified -- users can
+    edit their own user_metadata (auth.updateUser({data})), so it proves
+    nothing."""
+    return _jwt_claims(token).get("email_verified") is True
+
+
+# First vendor_members link (auth_user_id NULL -> this uid) needs a sign-in
+# that proved the mailbox: an emailed code / magic link / email link, or an
+# OAuth provider that verified the email. A password session never does.
+_FIRST_LINK_EMAIL_AMR = {"otp", "magiclink", "email/signup", "email-link", "email_link"}
+
+
+def _truthy(v) -> bool:
+    return v is True or (isinstance(v, str) and v.strip().lower() == "true")
+
+
+def oauth_email_verified_by_provider(user, email: Optional[str]) -> bool:
+    """True when an OAuth identity (provider-supplied identity_data, not the
+    user-editable user_metadata) says the provider verified this email, and
+    Supabase confirmed it (email_confirmed_at)."""
+    if not user or not getattr(user, "email_confirmed_at", None):
         return False
-    meta = payload.get("user_metadata") or {}
-    return bool(isinstance(meta, dict) and meta.get("email_verified") is True)
+    email_l = (email or "").strip().lower()
+    for ident in getattr(user, "identities", None) or []:
+        get = ident.get if isinstance(ident, dict) else (lambda k, _i=ident: getattr(_i, k, None))
+        provider = str(get("provider") or "").lower()
+        if provider in ("", "email", "phone", "anonymous"):
+            continue
+        data = get("identity_data") or {}
+        if not isinstance(data, dict):
+            continue
+        if not _truthy(data.get("email_verified")):
+            continue
+        if email_l and str(data.get("email") or "").strip().lower() != email_l:
+            continue
+        return True
+    return False
+
+
+def first_link_allowed(amr: Optional[set], *, oauth_email_verified: bool = False) -> bool:
+    methods = set(amr or ())
+    if methods & _FIRST_LINK_EMAIL_AMR:
+        return True
+    return "oauth" in methods and bool(oauth_email_verified)
+
+
+def _pg_email_confirmed(uid: str) -> bool:
+    """auth.users.email_confirmed_at via Postgres (fair-use path, Auth API down)."""
+    if not _is_uuid(uid):
+        return False
+    try:
+        from .pg_fallback import _pg_connect
+        conn = _pg_connect()
+    except Exception:
+        return False
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT email_confirmed_at IS NOT NULL FROM auth.users WHERE id = %s::uuid LIMIT 1", (uid,))
+            row = cur.fetchone()
+            return bool(row and row[0])
+    except Exception:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 async def lookup_vendor_member(
@@ -164,6 +237,7 @@ async def lookup_vendor_member(
     *,
     email_confirmed: Optional[bool] = None,
     amr: Optional[set] = None,
+    first_link_ok: Optional[bool] = None,
 ) -> Optional[dict]:
     """Map auth user -> vendor_members row. Prefer Kam Owner 0c3fa7c2 over a duplicate IC.
 
@@ -173,7 +247,11 @@ async def lookup_vendor_member(
       (email_confirmed=False -> no email match at all).
     - An email-matched row already linked to a DIFFERENT auth user is skipped
       unless the session proved the mailbox/IdP (amr otp/magiclink/oauth...).
-    - The first confirmed-email match links vendor_members.auth_user_id.
+    - The first confirmed-email match links vendor_members.auth_user_id, and
+      only when the session proved the mailbox (first_link_ok: amr otp /
+      magiclink / email link, or OAuth with a provider-verified email). A
+      password session never claims an unlinked row by email (2026-11-02):
+      it only reaches rows already linked to its uid (or id == uid).
     email_confirmed=None keeps the legacy (trusted internal caller) behaviour.
     """
     from .job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
@@ -183,6 +261,8 @@ async def lookup_vendor_member(
     if email_confirmed is False:
         email_l = ""
     strong = bool(set(amr or ()) & _STRONG_AMR)
+    if first_link_ok is None:
+        first_link_ok = first_link_allowed(amr)
     actor_s = str(actor_id or "")
     try:
         db = await get_db()
@@ -217,7 +297,7 @@ async def lookup_vendor_member(
             except Exception as e:
                 if _pg_quota(e) or _is_rest_quota_error(e):
                     raise
-        if actor_s.lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
+        if actor_s.lower() == str(KAM_MEMBER_ID).lower() or email_l in KAM_EMAILS:
             kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
             add(getattr(kam, "data", None))
         if email_l:
@@ -231,6 +311,9 @@ async def lookup_vendor_member(
                 linked = str(row.get("auth_user_id") or "")
                 if email_confirmed is not None and linked and linked != actor_s and not strong:
                     continue
+                if (email_confirmed is not None and not linked and not first_link_ok
+                        and str(row.get("id") or "") != actor_s):
+                    continue  # unlinked row: password session cannot claim it
                 if str(row.get("id") or "") not in seen:
                     email_only.add(str(row.get("id") or ""))
                 add(row)
@@ -238,6 +321,7 @@ async def lookup_vendor_member(
         if (
             picked
             and email_confirmed is True
+            and first_link_ok
             and _is_uuid(actor_id)
             and str(picked.get("id") or "") in email_only
             and str(picked.get("id") or "") != str(KAM_MEMBER_ID)
@@ -254,10 +338,14 @@ async def lookup_vendor_member(
     except Exception as e:
         if _pg_quota(e) or _is_rest_quota_error(e):
             picked = pg_select_vendor_member(actor_id, email_l)
-            if picked and email_confirmed is not None and not strong:
+            if picked and email_confirmed is not None:
                 linked = str(picked.get("auth_user_id") or "")
-                if linked and linked != actor_s and str(picked.get("id") or "") != actor_s:
+                pid = str(picked.get("id") or "")
+                if not strong and linked and linked != actor_s and pid != actor_s:
                     return None
+                if (not linked and pid != actor_s and not first_link_ok
+                        and not (pid == str(KAM_MEMBER_ID) and email_l in KAM_EMAILS)):
+                    return None  # email-only unlinked row, session did not prove the mailbox
             return picked
         raise
 
@@ -368,11 +456,16 @@ async def resolve_vendor_actor_id(
                 user_resp = await (await get_db()).auth.get_user(token)
                 if user_resp and user_resp.user:
                     user = user_resp.user
+                    amr = session_amr_methods(token)
                     member = await lookup_vendor_member(
                         user.id,
                         getattr(user, "email", None),
                         email_confirmed=bool(getattr(user, "email_confirmed_at", None)),
-                        amr=session_amr_methods(token),
+                        amr=amr,
+                        first_link_ok=first_link_allowed(
+                            amr,
+                            oauth_email_verified=oauth_email_verified_by_provider(user, getattr(user, "email", None)),
+                        ),
                     )
                     if not member:
                         api_error(403, "Vendor member not found", "vendor_member_not_found")
@@ -387,13 +480,19 @@ async def resolve_vendor_actor_id(
                     decoded = decode_supabase_user_from_jwt(token)
                     if decoded:
                         uid, email = decoded
-                        # Locally verified token: only trust the email when the
-                        # token says it was verified (fair-use mints never do).
+                        # Locally verified token: trust the email only when Supabase
+                        # says so -- the token's top-level email_verified, or
+                        # auth.users.email_confirmed_at read server-side. Never
+                        # user_metadata (user-editable). Fair-use mints carry no amr,
+                        # so they never create a first link.
+                        amr = session_amr_methods(token)
+                        top_verified = _jwt_email_verified(token)
                         member = await lookup_vendor_member(
                             uid,
                             email,
-                            email_confirmed=_jwt_email_verified(token),
-                            amr=session_amr_methods(token),
+                            email_confirmed=bool(email) and (top_verified or _pg_email_confirmed(uid)),
+                            amr=amr,
+                            first_link_ok=first_link_allowed(amr, oauth_email_verified=top_verified),
                         )
                         if not member:
                             api_error(403, "Vendor member not found", "vendor_member_not_found")

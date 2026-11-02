@@ -31,7 +31,7 @@ def pick_canonical_member(rows: list[dict], actor_id: str = "", email: str = "")
         return None
     email = (email or "").strip().lower()
     for row in rows:
-        if str(row.get("id") or "").lower().startswith("0c3fa7c2"):
+        if str(row.get("id") or "").lower() == KAM_MEMBER_ID:
             return row
     kam_email = email in KAM_EMAILS or any(
         str(r.get("email") or "").strip().lower() in KAM_EMAILS for r in rows
@@ -54,7 +54,7 @@ def photographer_assignee_ids(actor_id: str, member: Optional[dict] = None) -> l
     _add(ids, actor_id)
     _add(ids, (member or {}).get("id"))
     email = str((member or {}).get("email") or "").strip().lower()
-    if is_owner_member(member) or email in KAM_EMAILS or str(actor_id or "").lower().startswith("0c3fa7c2"):
+    if is_owner_member(member) or email in KAM_EMAILS or str(actor_id or "").lower() == KAM_MEMBER_ID:
         _add(ids, KAM_MEMBER_ID)
     return ids
 

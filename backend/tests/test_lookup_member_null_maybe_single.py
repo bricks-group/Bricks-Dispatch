@@ -100,9 +100,12 @@ def test_resolve_actor_fair_use_jwt_maps_to_member_id(monkeypatch):
         "decode_supabase_user_from_jwt",
         lambda tok: (AUTH_UID, MEMBER["email"]),
     )
-    # Real Supabase JWTs carry user_metadata.email_verified for confirmed emails.
+    # Top-level email_verified (Supabase-issued; never user_metadata). The row
+    # is unlinked, so the first link needs a mailbox-proving sign-in (amr otp).
     monkeypatch.setattr(auth_mod, "_jwt_email_verified", lambda tok: True)
-    actor = asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer tok", None))
+    import jwt
+    tok = jwt.encode({"sub": AUTH_UID, "amr": [{"method": "otp", "timestamp": 1}]}, "x", algorithm="HS256")
+    actor = asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + tok, None))
     assert actor == MEMBER["id"]
 
 

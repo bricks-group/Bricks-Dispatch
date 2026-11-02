@@ -1,6 +1,6 @@
 """Vendor identity: Owner vs photographer IC, assignability, payout display.
 
-Kam/Ajani (vendor_members.id starting 0c3fa7c2) is Owner: highest tier,
+Kam/Ajani (vendor_members.id == 0c3fa7c2-d23b-4e44-90ad-ab2d19af2580) is Owner: highest tier,
 full package, zero deductions. Everyone else is a photographer IC on the
 fixed rate card. Pending members (e.g. Aman) are not assignable.
 """
@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-OWNER_ID_PREFIX = "0c3fa7c2"
+# Full uid, never a prefix: a random auth uid starting 0c3fa7c2 must not be Owner.
+OWNER_MEMBER_ID = "0c3fa7c2-d23b-4e44-90ad-ab2d19af2580"
 OWNER_TITLE = "Owner"
 IC_TITLE = "Photographer IC"
 IC_TITLES = {
@@ -28,7 +29,7 @@ def is_owner_member(member: Optional[dict]) -> bool:
     if not member:
         return False
     mid = str(member.get("id") or "").lower()
-    if mid.startswith(OWNER_ID_PREFIX):
+    if mid == OWNER_MEMBER_ID:
         return True
     if (member.get("payout_mode") or "") == "owner_full":
         return True

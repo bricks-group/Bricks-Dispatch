@@ -411,7 +411,7 @@ def pg_select_vendor_member(actor_id: str = "", email: str = "") -> Optional[dic
                 for r in _rows_from_cursor(cur):
                     if r not in rows and str(r.get("id")) not in {str(x.get("id")) for x in rows}:
                         rows.append(r)
-            if actor_id.lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
+            if actor_id.lower() == KAM_MEMBER_ID or email_l in KAM_EMAILS:
                 cur.execute(
                     "SELECT * FROM public.vendor_members WHERE id = %s LIMIT 1",
                     (KAM_MEMBER_ID,),
