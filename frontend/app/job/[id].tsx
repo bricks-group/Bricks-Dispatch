@@ -9,6 +9,7 @@ import { EnterFadeDown, PressScale, SheetEnter } from '../../components/motion';
 import { ArrowLeft, MapPin, Clock, Camera, User, CheckCircle, Navigation, Phone, AlertTriangle, X, Home } from 'lucide-react-native';
 import { useNoShow, LOCATION_REQUIRED_COPY, NOSHOW_RULE_COPY, NOSHOW_REVIEW_COPY, formatCountdown } from '../../lib/noshow';
 import { actorHeaders } from '../../lib/api';
+import { CANCEL_REASONS, HANDBACK_RULE_COPY, IMMEDIATE_FAMILY_COPY, handbackBody } from '../../lib/legal-terms';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
 import { getCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind } from '../../lib/capture-api';
@@ -96,6 +97,11 @@ export default function JobDetailScreen() {
   const [noShowVisible, setNoShowVisible] = useState(false);
   const [noShowNotes, setNoShowNotes] = useState('');
   const [submittingNoShow, setSubmittingNoShow] = useState(false);
+  const [handbackVisible, setHandbackVisible] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelNote, setCancelNote] = useState('');
+  const [handingBack, setHandingBack] = useState(false);
+  const [handbackErr, setHandbackErr] = useState('');
   const noShow = useNoShow(id, job?.status);
   const [listingQuery, setListingQuery] = useState('');
   const [listingHits, setListingHits] = useState<ListingHit[]>([]);
@@ -435,6 +441,30 @@ export default function JobDetailScreen() {
   }
 
   const statusColor = STATUS_COLOR[job.status] || TOKENS.moonMute;
+  const closeHandback = () => { setHandbackVisible(false); setCancelReason(''); setCancelNote(''); setHandbackErr(''); };
+  const submitHandback = async () => {
+    if (!cancelReason || handingBack) return;
+    setHandingBack(true); setHandbackErr('');
+    try {
+      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/status`, {
+        method: 'PUT',
+        headers: await actorHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(handbackBody(cancelReason, cancelNote)),
+      });
+      if (!res.ok) {
+        let msg = "Couldn't hand back this job. Try again.";
+        try { const b = await res.json(); const d = b?.detail ?? b?.message; if (typeof d === 'string' && d) msg = d; else if (typeof d?.message === 'string') msg = d.message; } catch {}
+        throw new Error(msg);
+      }
+      setJob(prev => prev ? { ...prev, status: 'declined' } : prev);
+      closeHandback();
+    } catch (e: any) {
+      setHandbackErr(e?.message || "Couldn't hand back this job. Try again.");
+    } finally {
+      setHandingBack(false);
+    }
+  };
+
   const isComplete = job.status === 'completed';
   const isActive = ['assigned', 'in_progress'].includes(job.status);
   const captureFlags = jobCaptureModes(job);
@@ -783,6 +813,20 @@ export default function JobDetailScreen() {
           </View>
         )}
 
+        {job.status === 'assigned' ? (
+          <View style={s.noShowCard}>
+            <Text style={s.handbackLabel}>Can't make it?</Text>
+            <Text style={s.noShowDesc}>{HANDBACK_RULE_COPY}</Text>
+            <TouchableOpacity style={s.notifyBtn} onPress={() => setHandbackVisible(true)} activeOpacity={0.7} testID="handback-open">
+              <Text style={s.notifyBtnText}>Can't make it</Text>
+            </TouchableOpacity>
+          </View>
+        ) : job.status === 'declined' ? (
+          <View style={s.noShowCard}>
+            <Text style={[s.noShowDesc, { marginBottom: 0 }]}>You handed back this job.</Text>
+          </View>
+        ) : null}
+
         {['assigned', 'in_progress'].includes(job.status) && hasCaptureMode && ([captureFlags.tour, captureFlags.floorplan, captureFlags.visit].filter(Boolean).length > 1) ? (
           <View style={s.captureStartBlock}>
             {captureFlags.tour ? (
@@ -848,7 +892,7 @@ export default function JobDetailScreen() {
             <Text style={s.secondaryBtnText}>Call Agent</Text>
           </PressScale>
         ) : null}
-        {!isComplete ? (
+        {!isComplete && job.status !== 'declined' ? (
           <>
             <PressScale
               style={[s.primaryBtn, actioning && { opacity: 0.5 }]}
@@ -913,6 +957,70 @@ export default function JobDetailScreen() {
                   : <Text style={s.submitBtnText}>Confirm no-show</Text>
                 }
               </PressScale>
+            </SheetEnter>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={handbackVisible} animationType="fade" transparent onRequestClose={closeHandback}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <View style={s.modalOverlay}>
+            <SheetEnter style={[s.modalSheet, { maxHeight: '90%' }]}>
+              <ScrollView keyboardShouldPersistTaps="handled">
+                <View style={s.modalHeader}>
+                  <Text style={s.handbackLabel}>Hand back this job</Text>
+                  <TouchableOpacity onPress={closeHandback} hitSlop={12} accessibilityLabel="Close">
+                    <X size={18} color={TOKENS.moonMute} strokeWidth={1.5} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={s.noShowDesc}>{HANDBACK_RULE_COPY}</Text>
+                <Text style={s.handbackPick}>{cancelReason ? 'Reason' : 'Pick a reason'}</Text>
+                <View style={s.reasonList} accessibilityRole="radiogroup">
+                  {CANCEL_REASONS.map(([value, label], i) => {
+                    const on = cancelReason === value;
+                    return (
+                      <TouchableOpacity
+                        key={value}
+                        style={[s.reasonRow, i > 0 && s.reasonSep]}
+                        onPress={() => setCancelReason(value)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ checked: on }}
+                        testID={`handback-reason-${value}`}
+                      >
+                        <View style={[s.radio, on && s.radioOn]}>{on ? <View style={s.radioDot} /> : null}</View>
+                        <Text style={[s.reasonText, on && { color: TOKENS.moon }]}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {cancelReason === 'medical' || cancelReason === 'bereavement' ? (
+                  <Text style={s.noShowDesc}>{IMMEDIATE_FAMILY_COPY}</Text>
+                ) : null}
+                <TextInput
+                  style={s.notesInput}
+                  placeholder="Anything Bricks should know (optional)"
+                  placeholderTextColor={TOKENS.moonFaint}
+                  multiline
+                  numberOfLines={3}
+                  value={cancelNote}
+                  onChangeText={setCancelNote}
+                  maxLength={1000}
+                  testID="handback-note"
+                />
+                {handbackErr ? <Text style={[s.noShowDesc, { color: TOKENS.bad }]} accessibilityRole="alert">{handbackErr}</Text> : null}
+                <TouchableOpacity
+                  style={[s.notifyBtn, { height: 48 }, (!cancelReason || handingBack) && { opacity: 0.4 }]}
+                  onPress={submitHandback}
+                  disabled={!cancelReason || handingBack}
+                  activeOpacity={0.7}
+                  accessibilityState={{ disabled: !cancelReason || handingBack }}
+                  testID="handback-submit"
+                >
+                  {handingBack
+                    ? <ActivityIndicator size="small" color={TOKENS.moon} />
+                    : <Text style={s.notifyBtnText}>Hand back job</Text>}
+                </TouchableOpacity>
+              </ScrollView>
             </SheetEnter>
           </View>
         </KeyboardAvoidingView>
@@ -1042,6 +1150,15 @@ const s = StyleSheet.create({
     paddingVertical: 11, paddingHorizontal: 14,
   },
   reportBtnText: { fontSize: 14, color: TOKENS.bad, fontWeight: '500' as const },
+  handbackLabel: { fontFamily: TYPOGRAPHY.heading, fontSize: 15, color: TOKENS.moon, marginBottom: 8 },
+  handbackPick: { fontSize: 13, color: TOKENS.moonMute, marginBottom: 8 },
+  reasonList: { borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: TOKENS.radius, marginBottom: 14 },
+  reasonRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 46, paddingHorizontal: 14, paddingVertical: 10 },
+  reasonSep: { borderTopWidth: 1, borderTopColor: TOKENS.nightHair },
+  reasonText: { flex: 1, fontSize: 14, color: TOKENS.moonSoft },
+  radio: { width: 18, height: 18, borderRadius: 9, borderWidth: 1, borderColor: TOKENS.moonMute, alignItems: 'center', justifyContent: 'center' },
+  radioOn: { borderColor: TOKENS.moon },
+  radioDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: TOKENS.moon },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalSheet: {
     backgroundColor: TOKENS.nightSoft, borderTopLeftRadius: TOKENS.radius, borderTopRightRadius: TOKENS.radius,

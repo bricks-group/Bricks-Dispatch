@@ -11,6 +11,7 @@ import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { formatShootWindow, minutesUntilShoot } from '../../lib/shoot-window';
 import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
 import { EnterFadeDown, PressScale } from '../../components/motion';
+import { AmendmentBanner } from '../../components/AmendmentBanner';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 const VENDOR_RATE = 0.62;
@@ -167,6 +168,7 @@ export default function TodayScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={TOKENS.brick} />}
         contentContainerStyle={s.scroll}
       >
+        <AmendmentBanner />
         <EnterFadeDown distance={8} duration={240}>
         {/* Header */}
         <View style={s.header}>
