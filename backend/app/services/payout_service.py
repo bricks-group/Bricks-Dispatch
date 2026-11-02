@@ -236,6 +236,50 @@ async def _db_update_job_payout_amount(db, job_id: str, payout_amount: int) -> N
         raise
 
 
+def travel_payout_cents(add_ons) -> int:
+    """Travel fee recorded on the job by the booking webhook ({key: travel, amount_cents})."""
+    import json
+    raw = add_ons
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return 0
+    total = 0
+    for rec in raw if isinstance(raw, list) else []:
+        if isinstance(rec, dict) and str(rec.get("key") or "").strip().lower() in ("travel", "travel_fee"):
+            try:
+                total += max(0, int(rec.get("amount_cents") or 0))
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
+def ledger_fields(job: dict, payout_cents: int) -> dict:
+    """jobs.vendor_payout / platform_margin in dollars (package_price is dollars)."""
+    from .client_service_payouts import net_price_cents
+    vendor = round(int(payout_cents or 0) / 100.0, 2)
+    paid = net_price_cents(job)
+    fields = {"payout_amount": int(payout_cents or 0), "vendor_payout": vendor}
+    if paid is not None:
+        fields["platform_margin"] = round(paid / 100.0 - vendor, 2)
+    return fields
+
+
+async def _db_update_job_fields(db, job_id: str, fields: dict) -> None:
+    """Best-effort job ledger write; never raises (a payout already moved)."""
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+    try:
+        await db.table("jobs").update(fields).eq("id", job_id).execute()
+    except Exception as e:
+        try:
+            if _is_rest_quota_error(e) and pg_update_job(job_id, fields):
+                return
+        except Exception:
+            pass
+        logger.error(f"Job {job_id}: ledger update {sorted(fields)} failed: {e}")
+
+
 def noshow_payout_cents(base_cents: int) -> int:
     """Half the job's base payout, rounded to the nearest cent (half-cent up)."""
     return (int(base_cents or 0) + 1) // 2
@@ -316,6 +360,15 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         payout_amount = int(payout_amount or 0) + addon_payout_cents(
             job.get("add_ons"), job.get("sqft"), vendor_tier
         )
+        # Travel billed to the client from the assigned photographer's distance
+        # is theirs (pass-through), then the whole payout is capped at 50% of
+        # what the client actually paid (E2E BUG 3).
+        payout_amount += travel_payout_cents(job.get("add_ons"))
+        from .client_service_payouts import cap_cents
+        capped = cap_cents(job, payout_amount)
+        if capped < payout_amount:
+            logger.info(f"Job {job_id}: payout {payout_amount} capped to {capped} (50% of paid)")
+        payout_amount = capped
     if noshow_claim_id:
         base_full = payout_amount
         payout_amount = noshow_payout_cents(base_full)
@@ -369,6 +422,9 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
                 })
             except Exception as e:
                 logger.error(f"Reconciliation update failed for payout {existing_payout_id}: {e}")
+            await _db_update_job_fields(db, job_id, {
+                "payout_status": "paid", "payout_transfer_id": existing_transfer_id,
+            })
             return {
                 "payout_id": existing_payout_id,
                 "status": "paid",
@@ -393,6 +449,11 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
                     })
                 except Exception as e:
                     logger.error(f"No-show claim close-out failed for {noshow_claim_id}: {e}")
+            if existing_status == "paid" and str(job.get("payout_status") or "") != "paid":
+                await _db_update_job_fields(db, job_id, {
+                    "payout_status": "paid",
+                    "payout_transfer_id": existing_data.get("stripe_transfer_id"),
+                })
             return {
                 "payout_id": existing_payout_id,
                 "status": existing_status,
@@ -443,8 +504,9 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             return {"error": "payout_record_creation_failed", "job_id": job_id}
         payout_id = inserted["id"]
 
-    # Update job with payout_amount
+    # Update job with payout_amount (+ ledger: vendor_payout, platform_margin)
     await _db_update_job_payout_amount(db, job_id, payout_amount)
+    await _db_update_job_fields(db, job_id, {**ledger_fields(job, payout_amount), "payout_status": "pending"})
 
     # Attempt Stripe transfer — separate try/except so post-Stripe DB failures
     # don't roll back a transfer that already cleared.
@@ -461,6 +523,7 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         logger.error(f"Stripe transfer failed for payout {payout_id} job {job_id}: {e}")
         # Stripe never charged — mark failed
         await _db_update_payout(db, payout_id, {"status": "failed"})
+        await _db_update_job_fields(db, job_id, {"payout_status": "failed"})
         return {
             "payout_id": payout_id,
             "status": "failed",
@@ -485,6 +548,9 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
                 "paid_at": now,
             })
 
+        await _db_update_job_fields(db, job_id, {
+            "payout_status": "paid", "payout_transfer_id": stripe_transfer_id, "payout_at": now,
+        })
     except Exception as e:
         # Transfer cleared — log for manual reconciliation; do NOT revert payout status
         logger.error(

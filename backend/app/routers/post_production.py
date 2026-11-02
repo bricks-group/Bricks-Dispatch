@@ -34,7 +34,9 @@ from ..services.media_intake import (
 )
 from ..services.qc_agent import run_qc_for_job
 from ..services.qc_media_kinds import (
+    QC_HELD,
     has_qc_verdict,
+    is_qc_held,
     is_legacy_non_image_asset_pass,
     is_enhance_people_prestamp,
     is_legacy_unavailable_skip_pass,
@@ -286,7 +288,7 @@ def _delivery_prune_upload_ids(uploads: list | None) -> set[str]:
         if not uid:
             continue
         status = str(u.get("qc_status") or "").strip().lower()
-        if status == "rejected" or not has_qc_verdict(u):
+        if status in QC_HELD or not has_qc_verdict(u):
             out.add(uid)
     return out
 
@@ -467,7 +469,7 @@ async def _listing_still_delivery_urls(uploads: list) -> list[dict]:
     for u in uploads or []:
         if not isinstance(u, dict):
             continue
-        if u.get("qc_status") == "rejected":
+        if is_qc_held(u):
             continue
         # Null/''/pending = never reviewed (DB default). QC-fail "continuing to
         # merge" used to fold these onto the listing unreviewed — hold back.
@@ -799,6 +801,10 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
             logger.warning(
                 f"Job {job_id}: fold late stills/capture into existing media_delivery failed: {e}"
             )
+        # Re-completing a delivered job claims status=processing again; without
+        # this the job sat in 'processing' forever (E2E BUG 7). Payout is not
+        # re-run here: a failed payout goes through the admin retry route.
+        await _restore_delivered_status(job_id)
         return
 
     # Block finalization while any uploads are still in-flight or awaiting submission.
@@ -839,9 +845,12 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=SIGNED_URL_EXPIRY)).isoformat()
 
     for u in uploads:
-        # Skip rejected uploads — not delivered
-        if u.get("qc_status") == "rejected":
-            logger.info(f"Job {job_id}: upload {u['id']} ({u.get('filename')}) excluded — QC rejected")
+        # Skip QC-held uploads (rejected or flagged) — never delivered; owner
+        # was alerted by notify_owner_qc_hold and can re-edit or release.
+        if is_qc_held(u):
+            logger.info(
+                f"Job {job_id}: upload {u['id']} ({u.get('filename')}) held — QC {u.get('qc_status')}"
+            )
             continue
         # Skip unreviewed (null/''/pending). QC agent exception used to
         # "continue to delivery" with the DB default still pending — unreviewed
@@ -1018,6 +1027,30 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
     # skip the photo-delivery template so agents are not double-messaged.
     if not visit_bridge:
         await _send_delivery_notification(job_id, delivery_urls)
+
+
+async def _restore_delivered_status(job_id: str) -> bool:
+    """A job that already has media_delivery is delivered. Put it back when a
+    re-complete moved it to completed/processing. Returns True if a row moved."""
+    db = await get_db()
+    fields = {"status": "delivered", "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        res = await db.table("jobs").update(fields).eq("id", job_id).in_(
+            "status", ["processing", "completed"]
+        ).execute()
+        moved = bool(getattr(res, "data", None))
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id, pg_update_job
+        if not _is_rest_quota_error(e):
+            logger.warning(f"Job {job_id}: restore delivered status failed: {e}")
+            return False
+        row = pg_select_job_by_id(job_id) or {}
+        if str(row.get("status") or "") not in ("processing", "completed"):
+            return False
+        moved = bool(pg_update_job(job_id, fields))
+    if moved:
+        logger.info(f"Job {job_id}: media_delivery exists — status restored to delivered")
+    return moved
 
 
 async def _patch_media_delivery(job_id: str, fields: dict) -> None:

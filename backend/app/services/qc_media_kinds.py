@@ -73,6 +73,16 @@ def qc_kind_for_upload(upload: Optional[dict]) -> str:
 
 # public.uploads.qc_status column default — "not reviewed yet", not a verdict.
 QC_UNREVIEWED = ("", "pending")
+# Kam rule: a QC-flagged still never reaches the client. Flagged (soft fail,
+# incl. PropTx people/faces) is held exactly like rejected until the owner
+# re-edits or releases it (POST /api/admin/qc-holds/{upload_id}/release).
+QC_HELD = ("rejected", "flagged")
+
+
+def is_qc_held(upload: Optional[dict]) -> bool:
+    """True when QC held this upload back from client delivery (rejected or flagged)."""
+    row = upload if isinstance(upload, dict) else {}
+    return str(row.get("qc_status") or "").strip().lower() in QC_HELD
 
 
 def has_qc_verdict(upload: Optional[dict]) -> bool:

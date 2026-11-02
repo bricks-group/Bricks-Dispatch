@@ -241,7 +241,8 @@ def test_trigger_payout_for_job_pg_on_402(monkeypatch):
     )
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_update_job",
-        lambda jid, fields: pg_calls.__setitem__("job_upd", pg_calls["job_upd"] + 1) or True,
+        lambda jid, fields: pg_calls.__setitem__("job_upd", pg_calls["job_upd"] + 1)
+        or pg_calls.setdefault("job_fields", []).append(fields) or True,
     )
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_update_payout",
@@ -264,7 +265,14 @@ def test_trigger_payout_for_job_pg_on_402(monkeypatch):
     assert result["base_amount"] == 10465
     assert pg_calls["job"] >= 1
     assert pg_calls["insert"] == 1
-    assert pg_calls["job_upd"] == 1
+    # payout_amount, then ledger (pending), then paid (E2E BUG 3).
+    assert pg_calls["job_upd"] == 3
+    merged = {}
+    for f in pg_calls["job_fields"]:
+        merged.update(f)
+    assert merged["vendor_payout"] == 104.65
+    assert merged["payout_status"] == "paid"
+    assert merged["payout_transfer_id"] == "tr_fu_1"
     assert any(f.get("status") == "paid" for _pid, f in pg_calls["payout_upd"])
 
 

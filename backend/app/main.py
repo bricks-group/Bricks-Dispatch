@@ -36,7 +36,9 @@ app.add_middleware(SlowAPIMiddleware)
 
 async def get_db() -> Client:
     supabase_url = os.environ.get("SUPABASE_URL")
-    supabase_key = os.environ.get("SUPABASE_KEY")
+    # Same key order as shared.database: the service key, so RLS on jobs
+    # cannot make the readiness probe lie (E2E BUG 5 pattern).
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_KEY")
     if not supabase_url or not supabase_key:
         raise HTTPException(status_code=500, detail="Supabase credentials not found")
     return create_client(supabase_url, supabase_key)

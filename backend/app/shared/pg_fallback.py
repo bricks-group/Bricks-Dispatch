@@ -3158,7 +3158,9 @@ def pg_select_contractor_by_vendor_id(vendor_id: str) -> Optional[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, stripe_account_id, connect_status, vendor_id, full_name, email, member_id "
-                "FROM public.contractors WHERE vendor_id = %s AND member_id IS NULL LIMIT 1",
+                "FROM public.contractors WHERE member_id IS NULL AND (vendor_id = %s OR (vendor_id IS NULL "
+                "AND (SELECT count(*) FROM public.contractors c2 WHERE c2.vendor_id IS NULL AND c2.member_id IS NULL) = 1)) "
+                "ORDER BY (vendor_id IS NULL) LIMIT 1",
                 (vid,),
             )
             row = _row_from_cursor(cur)
