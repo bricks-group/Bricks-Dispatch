@@ -1427,7 +1427,13 @@ async def update_vendor_availability(
     }
 
     try:
-        await (await get_db()).table("vendor_availability").upsert(row).execute()
+        db = await get_db()
+        # id is NOT NULL with no default; keep the existing row's id so the
+        # upsert updates it instead of inserting a NULL id.
+        existing = await db.table("vendor_availability").select("id").eq("vendor_id", vendor_id).eq("member_id", actor_id).limit(1).execute()
+        rows = getattr(existing, "data", None) or []
+        row["id"] = (rows[0].get("id") if rows else None) or str(uuid.uuid4())
+        await db.table("vendor_availability").upsert(row, on_conflict="vendor_id,member_id").execute()
     except Exception as e:
         if not _is_rest_quota_error(e):
             raise

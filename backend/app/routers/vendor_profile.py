@@ -29,6 +29,14 @@ from ..shared.vendor_identity import (
     rack_dollars,
 )
 
+def _unique_name(prefix: str, filename: str) -> str:
+    """Storage name that can't collide. Re-uploading the same file name hit a
+    storage duplicate and lost the upload."""
+    import re as _re
+    base = _re.sub(r"[^A-Za-z0-9._-]+", "-", filename or "file").strip("-.") or "file"
+    return f"{prefix}-{uuid.uuid4().hex[:8]}-{base[-80:]}"
+
+
 router = APIRouter(tags=["vendor-profile"])
 os_router = APIRouter(prefix="/api/vendor-os", tags=["vendor-os-profile"])
 
@@ -269,7 +277,7 @@ async def upload_rpas_impl(
     filename = os.path.basename(file.filename or "rpas-certificate.pdf").lstrip(".") or "rpas-certificate.pdf"
     mime = file.content_type or "application/pdf"
     from ..services.storage import upload_file
-    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], filename, mime)
+    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], _unique_name("rpas", filename), mime)
     db = await get_db()
     doc_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -345,7 +353,7 @@ async def upload_insurance_impl(
     filename = os.path.basename(file.filename or "certificate-of-insurance.pdf").lstrip(".") or "certificate-of-insurance.pdf"
     mime = file.content_type or "application/pdf"
     from ..services.storage import upload_file
-    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], filename, mime)
+    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], _unique_name("coi", filename), mime)
     db = await get_db()
     doc_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -497,7 +505,7 @@ async def upload_photo_impl(
     filename = os.path.basename(file.filename or "profile.jpg").lstrip(".") or "profile.jpg"
     mime = file.content_type or "image/jpeg"
     from ..services.storage import upload_file
-    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], filename, mime)
+    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], _unique_name("avatar", filename), mime)
     db = await get_db()
     updated = (await _persist_safe(db, member["id"], {"avatar_url": file_key})) or {**member, "avatar_url": file_key}
     profile = await build_profile(updated)

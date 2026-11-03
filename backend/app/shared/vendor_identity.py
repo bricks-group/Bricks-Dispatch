@@ -218,6 +218,26 @@ async def photographer_payout_cents(db, job: dict, member: Optional[dict]) -> in
     return int(amount or 0)
 
 
+def assignable_reason(member: dict, assignable: bool, onboarded: bool) -> Optional[str]:
+    """Plain reason a vendor can't get jobs. None when they can."""
+    if assignable and onboarded:
+        return None
+    if assignable:
+        return "Finish setup to get jobs"
+    status = (member.get("onboarding_status") or "")
+    if status == "pending":
+        return "Pending — not assignable"
+    if status == "rejected":
+        return "Not approved"
+    if not member.get("is_active"):
+        return "Account inactive"
+    if member.get("paused_at"):
+        return "Paused"
+    if is_vendor_paused(member):
+        return "Your trade isn't taking jobs yet"
+    return "Not approved"
+
+
 def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
     owner = is_owner_member(member)
     title = member_title(member)
@@ -250,12 +270,7 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "onboarding_status": member.get("onboarding_status") or "pending",
         "is_active": bool(member.get("is_active")),
         "assignable": assignable and onboarded,
-        "assignable_reason": (
-            None if (assignable and onboarded)
-            else "Pending — not assignable" if (member.get("onboarding_status") or "") == "pending"
-            else "Finish setup to get jobs" if assignable
-            else "Not approved"
-        ),
+        "assignable_reason": assignable_reason(member, assignable, onboarded),
         "onboarding_complete": onboarded,
         "payout_model": payout_model(member),
         "payout_label": (

@@ -161,6 +161,9 @@ def test_get_vendor_availability_falls_back_on_402(monkeypatch):
         def maybe_single(self):
             return self
 
+        def limit(self, *_a, **_k):
+            return self
+
         async def execute(self):
             raise _QuotaErr()
 
@@ -198,6 +201,9 @@ def test_get_vendor_availability_creates_default_via_pg(monkeypatch):
             return self
 
         def maybe_single(self):
+            return self
+
+        def limit(self, *_a, **_k):
             return self
 
         async def execute(self):
@@ -247,6 +253,9 @@ def test_update_vendor_availability_falls_back_on_402(monkeypatch):
             return self
 
         def maybe_single(self):
+            return self
+
+        def limit(self, *_a, **_k):
             return self
 
         async def execute(self):
@@ -330,6 +339,15 @@ def test_update_vendor_availability_reraises_non_quota(monkeypatch):
 
     class Chain:
         def upsert(self, *_a, **_k):
+            return self
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
             return self
 
         async def execute(self):

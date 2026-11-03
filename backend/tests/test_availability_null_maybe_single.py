@@ -34,12 +34,15 @@ class _Chain:
     def maybe_single(self):
         return self
 
+    def limit(self, *a, **k):
+        return self
+
     def insert(self, row):
         self._db.inserted.append(row)
         self._result = SimpleNamespace(data=[row])
         return self
 
-    def upsert(self, row):
+    def upsert(self, row, **kw):
         self._db.upserted.append(row)
         self._result = SimpleNamespace(data=[row])
         return self
