@@ -1,7 +1,7 @@
 {
   "expo": {
     "owner": "akashorter",
-    "name": "Bricks GO",
+    "name": "Bricks",
     "slug": "bricks-dispatch",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -221,6 +221,6 @@
     "updates": {
       "url": "https://u.expo.dev/73175818-4388-41fd-82fa-0b2e48a666ed"
     },
-    "description": "Bricks is the field app for Bricks photographers and vendors: jobs, schedule, capture, uploads, and payouts."
+    "description": "Bricks is the field app for photographers and vendors: jobs, schedule, capture, uploads and payouts."
   }
 }
