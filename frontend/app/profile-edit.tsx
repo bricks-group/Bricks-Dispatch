@@ -260,7 +260,7 @@ export default function ProfileEditScreen() {
             <Group>
               <Row
                 title="Available for assignments"
-                subtitle="Connect Google, Outlook, Apple, or ICS in Settings so auto-assign skips slots you’re already busy."
+                subtitle="Connecting a calendar tells Bricks when you’re free so auto-assign only offers jobs that fit. Manual hours still apply if none is connected."
                 right={
                   <Toggle value={availability} onValueChange={setAvailability} accessibilityLabel="Available for assignments" />
                 }

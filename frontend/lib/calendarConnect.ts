@@ -28,7 +28,34 @@ export type CalendarsResponse = {
     google_connect_via?: string | null;
   };
   copy?: string;
+  used_for_offers?: string;
+  nudge?: string;
 };
+
+/** Connecting a calendar drives auto-assign — not a hidden setting. */
+export const CALENDAR_EDU_LINES = [
+  'Connecting a calendar tells Bricks when you’re free so native auto-assign only offers you jobs that fit your real schedule.',
+  'Busy on any connected calendar = you won’t get that slot.',
+  'Manual hours and the available toggle still apply if no calendar is connected.',
+] as const;
+export const CALENDAR_USED_FOR_OFFERS = 'Used for job offers.';
+export const CALENDAR_NUDGE_TITLE = 'Connect a calendar so we don’t double-book you.';
+export const CALENDAR_NUDGE_BODY =
+  'Connecting a calendar is how Dispatch knows your availability for auto-assign.';
+
+export function anyCalendarConnected(data: CalendarsResponse | CalendarConnection[] | null | undefined): boolean {
+  const rows = Array.isArray(data) ? data : data?.connections;
+  return (rows || []).some((c) => c.connected);
+}
+
+export function calendarRowSubtitle(c: CalendarConnection | null, title: string): string {
+  const used = CALENDAR_USED_FOR_OFFERS;
+  if (c?.connected) return `${used} Connected. Auto-assign skips slots that are busy here.`;
+  if (c?.status === 'needs_env') {
+    return `${used} ${c.detail || `${title} is not configured on this environment.`}`;
+  }
+  return `${used} ${c?.detail || 'Not connected.'}`;
+}
 
 export const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google Calendar',

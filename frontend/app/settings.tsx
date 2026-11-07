@@ -4,6 +4,10 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Bell, Calendar, CreditCard } from 'lucide-react-native';
 import { actorHeaders } from '../lib/api';
 import {
+  anyCalendarConnected,
+  CALENDAR_EDU_LINES,
+  CALENDAR_USED_FOR_OFFERS,
+  calendarRowSubtitle,
   connectAppleCalendar,
   connectGoogleCalendar,
   connectIcsCalendar,
@@ -17,6 +21,7 @@ import {
 } from '../lib/calendarConnect';
 import { color, type as T, space } from '../theme';
 import { Screen, NavBar, Section, Group, Row, Pill, Field } from '../components/ui';
+import { CalendarConnectNudge } from '../components/CalendarConnectNudge';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
@@ -27,7 +32,7 @@ export default function SettingsScreen() {
   const [stripeBusy, setStripeBusy] = useState(false);
   const [stripeErr, setStripeErr] = useState('');
   const [connections, setConnections] = useState<CalendarConnection[]>([]);
-  const [calCopy, setCalCopy] = useState('');
+  const [calsLoaded, setCalsLoaded] = useState(false);
   const [calBusy, setCalBusy] = useState('');
   const [calErr, setCalErr] = useState('');
   const [appleUrl, setAppleUrl] = useState('https://caldav.icloud.com/');
@@ -60,9 +65,10 @@ export default function SettingsScreen() {
     try {
       const data = await fetchVendorCalendars();
       setConnections(data.connections || []);
-      setCalCopy(data.copy || '');
+      setCalsLoaded(true);
     } catch {
       setConnections([]);
+      setCalsLoaded(false);
     }
   }, []);
 
@@ -149,11 +155,7 @@ export default function SettingsScreen() {
     const c = row(provider);
     const connected = !!c?.connected;
     const title = PROVIDER_LABELS[provider];
-    const subtitle = connected
-      ? 'Connected. Auto-assign skips slots that are busy here.'
-      : c?.status === 'needs_env'
-        ? (c.detail || `${title} is not configured on this environment.`)
-        : (c?.detail || `Connect so auto-assign respects busy time on ${title}.`);
+    const subtitle = calendarRowSubtitle(c, title);
     return (
       <>
         <Row
@@ -222,6 +224,12 @@ export default function SettingsScreen() {
         </Section>
       ) : null}
       <Section first={!stripeVisible} label="Calendars">
+        {calsLoaded && !anyCalendarConnected(connections) ? <CalendarConnectNudge /> : null}
+        <View style={s.edu} testID="calendar-edu">
+          {CALENDAR_EDU_LINES.map((line) => (
+            <Text key={line} style={[T.bodySm, s.eduLine]}>{line}</Text>
+          ))}
+        </View>
         <Group>
           {oauthBlock('google')}
           {oauthBlock('microsoft')}
@@ -232,8 +240,8 @@ export default function SettingsScreen() {
             title="Apple Calendar"
             subtitle={
               apple?.connected
-                ? 'Connected via iCloud CalDAV. Auto-assign skips busy slots.'
-                : 'iCloud CalDAV + app-specific password — not your Apple ID password.'
+                ? calendarRowSubtitle(apple, 'Apple Calendar')
+                : `${CALENDAR_USED_FOR_OFFERS} iCloud CalDAV + app-specific password — not your Apple ID password.`
             }
             right={apple?.connected ? <Pill label="Connected" tone="ok" /> : undefined}
           />
@@ -266,8 +274,8 @@ export default function SettingsScreen() {
             title="Other calendar (ICS)"
             subtitle={
               ics?.connected
-                ? 'Connected. Auto-assign skips busy slots on this feed.'
-                : 'Paste a public ICS URL from Fastmail, Proton, or another provider.'
+                ? calendarRowSubtitle(ics, 'Other calendar (ICS)')
+                : `${CALENDAR_USED_FOR_OFFERS} Paste a public ICS URL from Fastmail, Proton, or another provider.`
             }
             right={ics?.connected ? <Pill label="Connected" tone="ok" /> : undefined}
           />
@@ -288,7 +296,6 @@ export default function SettingsScreen() {
             </>
           )}
         </Group>
-        {calCopy ? <Text style={[T.caption, s.hint]}>{calCopy}</Text> : null}
         {calErr ? <Text style={[T.caption, s.err]}>{calErr}</Text> : null}
       </Section>
       <Section label="Notifications">
@@ -309,7 +316,8 @@ export default function SettingsScreen() {
 const s = StyleSheet.create({
   top: { height: space[24] },
   err: { color: color.bad, marginTop: space[8] },
-  hint: { color: color.textMuted, marginTop: space[8] },
   gap: { marginTop: space[16] },
+  edu: { gap: space[8], marginBottom: space[16] },
+  eduLine: { color: color.textBody },
   fields: { gap: space[12], paddingHorizontal: space[16], paddingTop: space[8] },
 });

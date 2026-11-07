@@ -1536,10 +1536,18 @@ async def list_vendor_calendars(
 ):
     """List calendar connection status for the actor — honest Connected only."""
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    from ..services.vendor_calendars import list_vendor_calendar_status, google_oauth_configured, microsoft_oauth_configured
+    from ..services.vendor_calendars import (
+        list_vendor_calendar_status,
+        google_oauth_configured,
+        microsoft_oauth_configured,
+        google_connect_via,
+        google_direct_oauth,
+        VENDOR_CALENDAR_EDU_COPY,
+        VENDOR_CALENDAR_USED_FOR_OFFERS,
+        VENDOR_CALENDAR_NUDGE,
+    )
     db = await get_db()
     statuses = await list_vendor_calendar_status(db, actor_id)
-    from ..services.vendor_calendars import google_connect_via, google_direct_oauth
     return {
         "connections": statuses,
         "oauth": {
@@ -1548,12 +1556,9 @@ async def list_vendor_calendars(
             "google_connect_via": google_connect_via(),
             "google_direct_oauth": google_direct_oauth(),
         },
-        "copy": (
-            "Connecting a calendar tells Bricks when you’re free so auto-assign "
-            "only offers jobs that fit your real schedule. Busy on any connected "
-            "calendar = you won’t get that slot. Manual hours still apply if no "
-            "calendar is connected."
-        ),
+        "copy": VENDOR_CALENDAR_EDU_COPY,
+        "used_for_offers": VENDOR_CALENDAR_USED_FOR_OFFERS,
+        "nudge": VENDOR_CALENDAR_NUDGE,
     }
 
 

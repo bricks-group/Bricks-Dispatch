@@ -5,7 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { VendorProfile, mediaUrl } from '../../lib/vendor';
-import { fetchVendorCalendars, PROVIDER_LABELS } from '../../lib/calendarConnect';
+import { CALENDAR_NUDGE_TITLE, fetchVendorCalendars, PROVIDER_LABELS } from '../../lib/calendarConnect';
 import { color, type as T, space, radius } from '../../theme';
 import { Screen, PageHeader, Section, Group, Row, Button, Notice, StatGrid, Avatar, LoadingState, Toggle, Pill } from '../../components/ui';
 import DeleteAccountRow from '../../components/DeleteAccountRow';
@@ -54,7 +54,7 @@ export default function AccountScreen() {
       setCalDetail(
         connected.length
           ? `${connected.map((c) => PROVIDER_LABELS[c.provider] || c.provider).join(', ')} — auto-assign skips busy slots`
-          : 'Connect Google, Outlook, Apple, or ICS in Settings',
+          : CALENDAR_NUDGE_TITLE,
       );
     } catch {
       setCalConnected(false);

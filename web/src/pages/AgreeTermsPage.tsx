@@ -39,7 +39,7 @@ export function AgreeTermsPage({ name, onAccepted, onLogout }: { name?: string; 
     <div className="agree-page" data-testid="agree-terms-page">
       <div className="agree-card">
         <h1>{first ? `Welcome, ${first}` : 'Before you start'}</h1>
-        <p className="agree-lede">Read the contractor agreement and privacy policy once before your first job.</p>
+        <p className="agree-lede">Read the contractor agreement and privacy policy once before your first job. Connecting a calendar is how Dispatch knows your availability for auto-assign — open Availability after this.</p>
         <div className="agree-rows">
           {REQUIRED_DOCS.map((k) => (
             <button key={k} type="button" className={`agree-row${read[k] ? ' is-read' : ''}`} onClick={() => setOpen(k)} aria-haspopup="dialog" data-testid={`legal-open-${k}`}>

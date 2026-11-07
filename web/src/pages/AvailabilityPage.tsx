@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { startGoogleCalendarOAuth } from '../lib/googleCalendarConnect';
 import BricksLoader from '../components/BricksLoader';
+import { CalendarConnectNudge } from '../components/CalendarConnectNudge';
+import { CALENDAR_EDU_LINES, CALENDAR_USED_FOR_OFFERS } from '../lib/calendarCopy';
 
 type Availability = {
   work_start: string;
@@ -144,8 +146,8 @@ export function AvailabilityPage() {
     }
   };
 
+  const calendarsLoaded = cals !== null;
   const anyConnected = (cals?.connections || []).some((c) => c.connected);
-  const assignable = !!data?.available;
 
   return (
     <div className="page-content">
@@ -156,23 +158,16 @@ export function AvailabilityPage() {
         </div>
       </div>
 
-      <section className="card full">
+      <section className="card full" data-testid="calendar-edu">
         <h3>How auto-assign uses your calendar</h3>
-        <p className="muted" style={{ margin: 0, padding: '14px 20px 18px', maxWidth: 680, fontSize: 13 }}>
-          {cals?.copy ||
-            'Connecting a calendar tells Bricks when you’re free so auto-assign only offers jobs that fit your real schedule. If you’re busy on any connected calendar, you won’t be offered that slot. Manual hours still apply if no calendar is connected.'}
-        </p>
+        <ul className="muted" style={{ margin: 0, padding: '14px 20px 18px 36px', maxWidth: 680, fontSize: 13, lineHeight: 1.55 }}>
+          {CALENDAR_EDU_LINES.map((line) => (
+            <li key={line} style={{ marginBottom: 8 }}>{line}</li>
+          ))}
+        </ul>
       </section>
 
-      {assignable && !anyConnected && (
-        <section className="card full" style={{ borderColor: 'var(--brick, #c45)' }}>
-          <h3>Connect a calendar</h3>
-          <p className="muted" style={{ margin: '8px 0 0' }}>
-            You’re marked available, but no calendar is connected yet. Connect Google, Outlook, Apple, or an ICS feed
-            so auto-assign can skip slots you’re already busy.
-          </p>
-        </section>
-      )}
+      {calendarsLoaded && !anyConnected && <CalendarConnectNudge linkToAvailability={false} />}
 
       {!data && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
       {err && <p className="error">{err}</p>}
@@ -226,6 +221,9 @@ export function AvailabilityPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                 <div>
                   <strong>{PROVIDER_LABELS[c.provider] || c.provider}</strong>
+                  <p className="muted" style={{ margin: '4px 0 0', padding: 0 }}>
+                    {CALENDAR_USED_FOR_OFFERS}
+                  </p>
                   <p className="muted" style={{ margin: '4px 0 0', padding: 0 }}>
                     {c.connected ? `Connected · ${syncedLabel(c)}` : c.detail}
                     {c.status === 'needs_env' ? ' · OAuth not configured on this environment' : ''}
