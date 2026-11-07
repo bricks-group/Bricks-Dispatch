@@ -344,11 +344,57 @@ async def create_connect_account_and_link(
             else:
                 raise
 
-    account_link = stripe_lib.AccountLink.create(
-        account=stripe_account_id,
-        refresh_url=refresh_url,
-        return_url=return_url,
-        type="account_onboarding",
-        collection_options={"fields": "currently_due"},
+    return payout_setup_url(
+        stripe_account_id,
+        refresh_url,
+        return_url,
+        connected=(contractor.get("connect_status") or "") == "connected",
     )
-    return account_link.url
+
+
+def _stripe_refused_onboarding_link(err: Exception) -> bool:
+    """Express accounts that already finished onboarding reject account_onboarding."""
+    text = f"{getattr(err, 'code', '')} {getattr(err, 'user_message', '')} {err}".lower()
+    return "account_onboarding" in text or "already completed" in text or "already been onboarded" in text
+
+
+def payout_setup_url(
+    stripe_account_id: str, refresh_url: str, return_url: str, *, connected: bool
+) -> str:
+    """Onboarding link while Stripe still wants details. Login link once payout-ready.
+
+    A second account_onboarding link on a finished Express account is a Stripe
+    400, which the vendor sees as being unable to finish payout setup.
+    """
+    def _login() -> str:
+        link = stripe_lib.Account.create_login_link(stripe_account_id)
+        url = getattr(link, "url", None)
+        if not url:
+            raise ValueError("Stripe did not return a payout link")
+        return url
+
+    def _onboard() -> str:
+        link = stripe_lib.AccountLink.create(
+            account=stripe_account_id,
+            refresh_url=refresh_url,
+            return_url=return_url,
+            type="account_onboarding",
+            collection_options={"fields": "currently_due"},
+        )
+        url = getattr(link, "url", None)
+        if not url:
+            raise ValueError("Stripe did not return a payout link")
+        return url
+
+    if connected:
+        try:
+            return _login()
+        except Exception as e:
+            logger.warning("Stripe Express login link failed: %s", type(e).__name__)
+    try:
+        return _onboard()
+    except Exception as e:
+        if not _stripe_refused_onboarding_link(e):
+            raise
+        logger.warning("Stripe refused a second onboarding link; opening the Express login link")
+        return _login()
