@@ -7,8 +7,14 @@ Honest Connect status only — never report Connected without a real token/URL.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import os
+import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -173,6 +179,118 @@ def google_supabase_redirect_uri() -> str:
     ).strip()
 
 
+OAUTH_STATE_TTL_SECONDS = 10 * 60
+_CONSUMED_OAUTH_STATES: set[str] = set()
+
+
+class OAuthStateError(ValueError):
+    """Signed calendar OAuth state is missing, expired, tampered, or already used."""
+
+
+def oauth_state_secret() -> bytes:
+    """Signing key already on the API. Fail closed if none is set."""
+    for name in (
+        "CALENDAR_OAUTH_STATE_SECRET",
+        "CALENDAR_TOKEN_ENCRYPTION_KEY",
+        "SUPABASE_JWT_SECRET",
+    ):
+        raw = (os.environ.get(name) or "").strip()
+        if raw:
+            return raw.encode()
+    raise OAuthStateError("Calendar OAuth state signing is not configured")
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _b64decode(text: str) -> bytes:
+    pad = "=" * (-len(text) % 4)
+    return base64.urlsafe_b64decode(text + pad)
+
+
+def mint_oauth_state(member_id: str, provider: str, *, now: Optional[int] = None) -> str:
+    """State bound to the vendor who started Connect. Not a bare member id."""
+    member = str(member_id or "").strip()
+    prov = str(provider or "").strip().lower()
+    if not member or prov not in ("google", "microsoft"):
+        raise OAuthStateError("OAuth state is invalid")
+    payload = {
+        "m": member,
+        "p": prov,
+        "n": secrets.token_urlsafe(16),
+        "e": int(now if now is not None else time.time()) + OAUTH_STATE_TTL_SECONDS,
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    sig = hmac.new(oauth_state_secret(), raw, hashlib.sha256).digest()
+    return _b64(raw) + "." + _b64(sig)
+
+
+def read_oauth_state(state: str, provider: str, *, now: Optional[int] = None) -> dict:
+    """Verify signature, provider, and expiry. Does not consume the nonce."""
+    prov = str(provider or "").strip().lower()
+    text = str(state or "").strip()
+    if "." not in text:
+        raise OAuthStateError("OAuth state is invalid")
+    body, sig_text = text.rsplit(".", 1)
+    try:
+        raw = _b64decode(body)
+        sig = _b64decode(sig_text)
+        payload = json.loads(raw.decode())
+    except Exception as e:
+        raise OAuthStateError("OAuth state is invalid") from e
+    expect = hmac.new(oauth_state_secret(), raw, hashlib.sha256).digest()
+    if not hmac.compare_digest(sig, expect):
+        raise OAuthStateError("OAuth state is invalid")
+    if not isinstance(payload, dict):
+        raise OAuthStateError("OAuth state is invalid")
+    if payload.get("p") != prov or not str(payload.get("m") or "").strip():
+        raise OAuthStateError("OAuth state is invalid")
+    if not str(payload.get("n") or "").strip():
+        raise OAuthStateError("OAuth state is invalid")
+    try:
+        exp = int(payload.get("e"))
+    except (TypeError, ValueError) as e:
+        raise OAuthStateError("OAuth state is invalid") from e
+    if int(now if now is not None else time.time()) > exp:
+        raise OAuthStateError("OAuth state expired")
+    return payload
+
+
+async def consume_oauth_state(state: str, provider: str, db=None, *, now: Optional[int] = None) -> str:
+    """Return the member id once. A replay, on this process or in audit_events, is rejected."""
+    payload = read_oauth_state(state, provider, now=now)
+    nonce = str(payload["n"])
+    member_id = str(payload["m"])
+    if nonce in _CONSUMED_OAUTH_STATES:
+        raise OAuthStateError("OAuth state already used")
+    if db is not None:
+        try:
+            res = await db.table("audit_events").select("id").eq(
+                "entity_type", "calendar_oauth_state"
+            ).eq("entity_id", nonce).limit(1).execute()
+            rows = getattr(res, "data", None) or []
+            if rows:
+                _CONSUMED_OAUTH_STATES.add(nonce)
+                raise OAuthStateError("OAuth state already used")
+            from ..shared.schemas import AuditEvent
+            event = AuditEvent(
+                actor_id=member_id,
+                entity_type="calendar_oauth_state",
+                entity_id=nonce,
+                action="consume",
+                details={"provider": provider},
+            )
+            await db.table("audit_events").insert(event.model_dump()).execute()
+        except OAuthStateError:
+            raise
+        except Exception as e:
+            logger.warning("calendar oauth state consume failed: %s", type(e).__name__)
+            raise OAuthStateError("Could not record OAuth state") from e
+    _CONSUMED_OAUTH_STATES.add(nonce)
+    return member_id
+
+
 def build_google_authorize_url(member_id: str) -> str:
     params = {
         "client_id": google_client_id(),
@@ -182,7 +300,7 @@ def build_google_authorize_url(member_id: str) -> str:
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",
-        "state": member_id,
+        "state": mint_oauth_state(member_id, "google"),
     }
     return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
 
@@ -229,7 +347,7 @@ def build_microsoft_authorize_url(member_id: str) -> str:
         "response_type": "code",
         "redirect_uri": microsoft_redirect_uri(),
         "scope": MICROSOFT_CAL_SCOPE,
-        "state": member_id,
+        "state": mint_oauth_state(member_id, "microsoft"),
         "prompt": "consent",
     }
     return "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?" + urlencode(params)
@@ -258,49 +376,50 @@ async def apple_caldav_ping(url: str, password: str, username: str) -> dict:
     if not (url or "").strip() or not (password or "").strip():
         return {"ok": False, "status": 0, "via": "caldav"}
     now = datetime.now(timezone.utc)
+    body = (
+        '<?xml version="1.0" encoding="utf-8" ?>'
+        '<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
+        "<D:prop><D:getetag/></D:prop>"
+        "<C:filter><C:comp-filter name=\"VCALENDAR\">"
+        f'<C:comp-filter name="VEVENT">'
+        f'<C:time-range start="{now.strftime("%Y%m%dT%H%M%SZ")}" '
+        f'end="{(now + timedelta(minutes=30)).strftime("%Y%m%dT%H%M%SZ")}"/>'
+        "</C:comp-filter></C:comp-filter></C:filter>"
+        "</C:calendar-query>"
+    )
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.request(
-                "REPORT",
-                url.strip(),
-                content=(
-                    '<?xml version="1.0" encoding="utf-8" ?>'
-                    '<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
-                    "<D:prop><D:getetag/></D:prop>"
-                    "<C:filter><C:comp-filter name=\"VCALENDAR\">"
-                    f'<C:comp-filter name="VEVENT">'
-                    f'<C:time-range start="{now.strftime("%Y%m%dT%H%M%SZ")}" '
-                    f'end="{(now + timedelta(minutes=30)).strftime("%Y%m%dT%H%M%SZ")}"/>'
-                    "</C:comp-filter></C:comp-filter></C:filter>"
-                    "</C:calendar-query>"
-                ),
-                headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
-                auth=(username or "user", password),
-            )
-            if resp.status_code < 400:
-                return {"ok": True, "status": resp.status_code, "via": "caldav"}
-            return {"ok": False, "status": resp.status_code, "via": "caldav"}
+        from .calendar_url_guard import guarded_request
+        resp = await guarded_request(
+            "REPORT",
+            url.strip(),
+            content=body.encode(),
+            headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
+            auth=(username or "user", password),
+        )
+        if resp.status_code < 400:
+            return {"ok": True, "status": resp.status_code, "via": "caldav"}
+        return {"ok": False, "status": resp.status_code, "via": "caldav"}
     except Exception as e:
-        logger.warning("Apple CalDAV ping error: %s", e)
+        logger.warning("Apple CalDAV ping error: %s", type(e).__name__)
         return {"ok": False, "status": 0, "via": "caldav"}
 
 
 async def ics_feed_ping(url: str) -> dict:
-    """GET the feed — Connected only if the URL returns ICS."""
+    """GET the feed — Connected only if the URL returns ICS over a public HTTPS host."""
     u = (url or "").strip()
-    if not u.lower().startswith(("http://", "https://")):
+    if not u.lower().startswith("https://"):
         return {"ok": False, "status": 0, "via": "ics"}
     try:
-        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
-            resp = await client.get(u)
-            text = (resp.text or "").upper()
-            if resp.status_code >= 400:
-                return {"ok": False, "status": resp.status_code, "via": "ics"}
-            if "BEGIN:VCALENDAR" not in text and "BEGIN:VEVENT" not in text:
-                return {"ok": False, "status": resp.status_code or 200, "via": "ics"}
-            return {"ok": True, "status": resp.status_code, "via": "ics"}
+        from .calendar_url_guard import guarded_request
+        resp = await guarded_request("GET", u)
+        text = (resp.text or "").upper()
+        if resp.status_code >= 400:
+            return {"ok": False, "status": resp.status_code, "via": "ics"}
+        if "BEGIN:VCALENDAR" not in text and "BEGIN:VEVENT" not in text:
+            return {"ok": False, "status": resp.status_code or 200, "via": "ics"}
+        return {"ok": True, "status": resp.status_code, "via": "ics"}
     except Exception as e:
-        logger.warning("ICS ping error: %s", e)
+        logger.warning("ICS ping error: %s", type(e).__name__)
         return {"ok": False, "status": 0, "via": "ics"}
 
 
@@ -1184,12 +1303,13 @@ def _parse_ics_busy(text: str, start: datetime, end: datetime) -> Optional[bool]
 
 async def _ics_busy(url: str, start: datetime, end: datetime) -> Optional[bool]:
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return _parse_ics_busy(resp.text, start, end)
+        from .calendar_url_guard import guarded_request
+        resp = await guarded_request("GET", url, timeout=10.0)
+        if resp.status_code >= 400:
+            return None
+        return _parse_ics_busy(resp.text, start, end)
     except Exception as e:
-        logger.debug("ICS fetch failed (soft): %s", e)
+        logger.debug("ICS fetch failed (soft): %s", type(e).__name__)
         return None
 
 
@@ -1209,29 +1329,29 @@ async def _apple_caldav_busy(url: str, password: str, username: str, start: date
   </C:filter>
 </C:calendar-query>"""
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.request(
-                "REPORT",
-                url,
-                content=body,
-                headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
-                auth=(username or "user", password),
-            )
-            if resp.status_code in (401, 403):
-                return None
-            if resp.status_code >= 400:
-                return None
-            # Any VEVENT in response → busy for the window
-            if "BEGIN:VEVENT" in resp.text:
+        from .calendar_url_guard import guarded_request
+        resp = await guarded_request(
+            "REPORT",
+            url,
+            content=body.encode(),
+            headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
+            auth=(username or "user", password),
+        )
+        if resp.status_code in (401, 403):
+            return None
+        if resp.status_code >= 400:
+            return None
+        # Any VEVENT in response → busy for the window
+        if "BEGIN:VEVENT" in resp.text:
+            return True
+        # Empty multistatus
+        try:
+            root = ET.fromstring(resp.text)
+            if list(root):
                 return True
-            # Empty multistatus
-            try:
-                root = ET.fromstring(resp.text)
-                if list(root):
-                    return True
-            except ET.ParseError:
-                pass
-            return False
+        except ET.ParseError:
+            pass
+        return False
     except Exception as e:
         logger.debug("Apple CalDAV busy check failed (soft): %s", e)
         return None

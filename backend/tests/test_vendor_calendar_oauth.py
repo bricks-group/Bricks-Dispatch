@@ -85,9 +85,12 @@ def test_build_google_authorize_url_encodes_redirect(monkeypatch):
         "GOOGLE_OAUTH_REDIRECT_URI",
         "https://dispatch-api.brxs.ca/api/vendor-os/calendars/google/callback",
     )
+    monkeypatch.setenv("CALENDAR_OAUTH_STATE_SECRET", "test-state-secret")
+    from app.services.vendor_calendars import read_oauth_state
     url = build_google_authorize_url("member-123")
     qs = parse_qs(urlparse(url).query)
-    assert qs["state"] == ["member-123"]
+    assert qs["state"] != ["member-123"]
+    assert read_oauth_state(qs["state"][0], "google")["m"] == "member-123"
     assert qs["redirect_uri"] == [
         "https://dispatch-api.brxs.ca/api/vendor-os/calendars/google/callback"
     ]
