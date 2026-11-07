@@ -3,7 +3,7 @@
  *
  * Only a `?code=` on exactly the redirect we opened is exchanged. Scheme, host,
  * port and path must all match the redirect passed to the provider. Provider
- * errors, missing codes, implicit hash tokens and any other URL are rejected and
+ * errors, missing codes, credentials in the fragment and any other URL are rejected and
  * must never reach exchangeCodeForSession.
  *
  * Production builds use the app scheme in app.json, so Supabase Auth URL
@@ -64,6 +64,11 @@ export function parseAuthCallback(callbackUrl: string, expectedRedirect: string)
   if (actual.username || actual.password) return { ok: false, reason: 'unexpected_callback' };
 
   const hash = hashParams(actual);
+  // A code flow never carries credentials in the fragment; mixed returns are forged or confused.
+  const fragmentCredential = ['access_token', 'refresh_token', 'id_token', 'provider_token', 'provider_refresh_token', 'code'].some(
+    (k) => hash.has(k),
+  );
+  if (fragmentCredential) return { ok: false, reason: 'unexpected_callback' };
   const errored = ['error', 'error_code', 'error_description'].some(
     (k) => actual.searchParams.has(k) || hash.has(k),
   );

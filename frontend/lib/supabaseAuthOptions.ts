@@ -36,3 +36,19 @@ export const SSR_AUTH_OPTIONS = {
   detectSessionInUrl: false,
   flowType: 'pkce' as const,
 };
+
+/**
+ * Throwaway client for Google Calendar connect. It runs its own PKCE round trip
+ * with in-memory storage under a unique storage key, so the vendor's signed-in
+ * session (and its PKCE verifier) is never read, replaced or restored, and two
+ * attempts never share a verifier.
+ */
+export function calendarOAuthAuthOptions(storageKey: string) {
+  return {
+    storageKey,
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+    flowType: 'pkce' as const,
+  };
+}

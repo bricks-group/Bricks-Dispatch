@@ -5,7 +5,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
-import { AUTH_CALLBACK_MESSAGES, parseAuthCallback } from '../../lib/oauthCallback';
+import { completeGoogleSignIn } from '../../lib/googleSignIn';
 import { color, type as T, space, radius, layout } from '../../theme';
 import { Field, Button, Notice, Divider, TextLink } from '../../components/ui';
 import BricksWordmark from '../../components/BricksWordmark';
@@ -173,20 +173,10 @@ export default function LoginScreen() {
       });
       if (oauthError || !data?.url) throw oauthError ?? new Error('No OAuth URL');
       const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-      if (result.type === 'success' && result.url) {
-        // Exchange only a code returned on exactly the redirect we opened.
-        const callback = parseAuthCallback(result.url, redirectTo);
-        if (!callback.ok) {
-          setError(AUTH_CALLBACK_MESSAGES[callback.reason]);
-          return;
-        }
-        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(callback.code);
-        if (exchangeError) {
-          setError('Google sign-in didn’t finish. Please try again.');
-          return;
-        }
-        router.replace('/(tabs)');
-      }
+      // Exchanges only a code returned on exactly the redirect we opened.
+      const done = await completeGoogleSignIn(supabase.auth, result, redirectTo);
+      if (done.ok) router.replace('/(tabs)');
+      else if (done.message) setError(done.message);
     } catch (e: any) {
       setError(e.message || 'Google sign-in failed');
     } finally {

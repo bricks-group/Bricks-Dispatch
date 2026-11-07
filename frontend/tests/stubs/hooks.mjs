@@ -8,7 +8,9 @@ const STUBS = {
 };
 export async function resolve(specifier, context, next) {
   const stub = STUBS[specifier];
-  if (stub && (!specifier.startsWith('.') || context.parentURL?.includes('/lib/calendarConnect.ts'))) {
+  const parent = context.parentURL || '';
+  const stubbedParent = parent.includes('/lib/calendarConnect.ts') || parent.includes('/lib/calendarAuthClient.ts');
+  if (stub && (!specifier.startsWith('.') || stubbedParent)) {
     return { url: new URL(stub, import.meta.url).href, shortCircuit: true };
   }
   if (specifier.startsWith('.') && !/\.[cm]?[jt]sx?$/.test(specifier) && context.parentURL?.endsWith('.ts')) {

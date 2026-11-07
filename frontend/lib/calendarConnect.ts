@@ -3,6 +3,7 @@ import * as Linking from 'expo-linking';
 import { supabase } from './supabase';
 import { actorHeaders } from './api';
 import { AUTH_CALLBACK_MESSAGES, parseAuthCallback } from './oauthCallback';
+import { createCalendarOAuthClient } from './calendarAuthClient';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -103,13 +104,6 @@ export async function disconnectVendorCalendar(provider: string): Promise<void> 
   if (data.connected) throw new Error(data.detail || 'Could not disconnect');
 }
 
-async function restoreSession(original: { access_token: string; refresh_token?: string | null }) {
-  await supabase.auth.setSession({
-    access_token: original.access_token,
-    refresh_token: original.refresh_token || original.access_token,
-  });
-}
-
 async function syncCalendarsSoft() {
   try {
     const headers = await actorHeaders({ 'Content-Type': 'application/json' });
@@ -146,10 +140,50 @@ async function finishOauthInBrowser(oauthUrl: string, provider: CalendarProvider
   };
 }
 
-/** Honest Google Calendar Connect — Connected only if the API ping succeeded. */
-export async function connectGoogleCalendar(): Promise<{ connected: boolean; error?: string }> {
+export const CALENDAR_SIGN_IN_AGAIN = 'Your sign-in changed while connecting your calendar. Please sign in again.';
+const GOOGLE_CONNECT_FAILED = 'Could not finish Google Calendar connect. Please try again.';
+
+type ConnectResult = { connected: boolean; error?: string };
+
+/**
+ * The vendor's own session must still be the one we started with. If it is
+ * not, sign out locally and stop: never continue or report success under
+ * another account.
+ */
+async function vendorSessionIntact(originalUserId: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (!error && data?.session?.user?.id === originalUserId) return true;
+  } catch {
+    /* fall through to sign out */
+  }
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch {
+    /* best effort; the caller still fails closed */
+  }
+  return false;
+}
+
+let googleConnectInFlight: Promise<ConnectResult> | null = null;
+
+/**
+ * Honest Google Calendar Connect — Connected only if the API ping succeeded.
+ * A second tap while one connect is open joins it instead of starting another.
+ */
+export async function connectGoogleCalendar(): Promise<ConnectResult> {
+  if (!googleConnectInFlight) {
+    googleConnectInFlight = runGoogleCalendarConnect().finally(() => {
+      googleConnectInFlight = null;
+    });
+  }
+  return googleConnectInFlight;
+}
+
+async function runGoogleCalendarConnect(): Promise<ConnectResult> {
   const { data: { session: original } } = await supabase.auth.getSession();
-  if (!original?.access_token) return { connected: false, error: 'Sign in first' };
+  if (!original?.access_token || !original.user?.id) return { connected: false, error: 'Sign in first' };
+  const originalUserId = original.user.id;
 
   const start = await postConnect('google');
   if (start.connected) return { connected: true };
@@ -162,55 +196,63 @@ export async function connectGoogleCalendar(): Promise<{ connected: boolean; err
   }
 
   if (start.mode === 'supabase' || start.connect_via === 'supabase') {
-    const redirectTo = Linking.createURL('auth-callback');
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo,
-        skipBrowserRedirect: true,
-        scopes: start.scope || GOOGLE_CAL_SCOPE,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
-          ...(start.query_params || {}),
-        },
-      },
-    });
-    if (error || !data?.url) {
-      await WebBrowser.openBrowserAsync(WEB_AVAILABILITY);
-      return {
-        connected: false,
-        error: 'Opened Availability on the web to finish Connect. Return here after Google confirms.',
-      };
-    }
-    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-    if (result.type !== 'success' || !('url' in result) || !result.url) {
-      await restoreSession(original);
-      if (result.type === 'cancel') return { connected: false, error: 'Connect cancelled' };
-      return { connected: false, error: 'Could not finish Google Calendar connect' };
-    }
+    // Separate in-memory client: the vendor's session and PKCE verifier are never touched.
+    const oauth = createCalendarOAuthClient();
+    let providerToken = '';
+    let providerRefresh = '';
     try {
+      const redirectTo = Linking.createURL('auth-callback');
+      const { data, error } = await oauth.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+          scopes: start.scope || GOOGLE_CAL_SCOPE,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+            ...(start.query_params || {}),
+          },
+        },
+      });
+      if (error || !data?.url) {
+        await WebBrowser.openBrowserAsync(WEB_AVAILABILITY);
+        return {
+          connected: false,
+          error: 'Opened Availability on the web to finish Connect. Return here after Google confirms.',
+        };
+      }
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      if (result.type !== 'success' || !('url' in result) || !result.url) {
+        if (result.type === 'cancel') return { connected: false, error: 'Connect cancelled' };
+        return { connected: false, error: GOOGLE_CONNECT_FAILED };
+      }
       // Exchange only a code returned on exactly the redirect we opened.
       const callback = parseAuthCallback(result.url, redirectTo);
       if (!callback.ok) {
         return { connected: false, error: AUTH_CALLBACK_MESSAGES[callback.reason] };
       }
-      const code = callback.code;
-      let providerToken = '';
-      let providerRefresh = '';
-      try {
-        const { data: exchanged, error: exErr } = await supabase.auth.exchangeCodeForSession(code);
-        providerToken = exchanged?.session?.provider_token || '';
-        providerRefresh = exchanged?.session?.provider_refresh_token || '';
-        if (exErr || !providerRefresh) {
-          return {
-            connected: false,
-            error: 'Google Calendar permission is required. Approve calendar access and try again.',
-          };
-        }
-      } finally {
-        await restoreSession(original);
+      const { data: exchanged, error: exErr } = await oauth.auth.exchangeCodeForSession(callback.code);
+      providerToken = exchanged?.session?.provider_token || '';
+      providerRefresh = exchanged?.session?.provider_refresh_token || '';
+      if (exErr || !providerRefresh) {
+        return {
+          connected: false,
+          error: 'Google Calendar permission is required. Approve calendar access and try again.',
+        };
       }
+    } catch {
+      return { connected: false, error: GOOGLE_CONNECT_FAILED };
+    } finally {
+      // Drop the temporary Google session; it only existed in this client's memory.
+      await oauth.auth.signOut({ scope: 'local' }).catch(() => undefined);
+    }
+
+    if (!(await vendorSessionIntact(originalUserId))) {
+      return { connected: false, error: CALENDAR_SIGN_IN_AGAIN };
+    }
+
+    try {
       const completeRes = await fetch(`${API}/api/vendor-os/calendars/google/complete-session`, {
         method: 'POST',
         headers: {
@@ -229,9 +271,8 @@ export async function connectGoogleCalendar(): Promise<{ connected: boolean; err
         return { connected: true };
       }
       return { connected: false, error: complete.detail || 'Could not verify Google Calendar access' };
-    } catch (e: any) {
-      await restoreSession(original);
-      return { connected: false, error: e?.message || 'Could not finish Google Calendar connect' };
+    } catch {
+      return { connected: false, error: GOOGLE_CONNECT_FAILED };
     }
   }
 
