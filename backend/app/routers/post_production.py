@@ -751,9 +751,14 @@ async def _fulfillment_gate_allows(db, job_id: str, delivery_urls: list, *, visi
     if fg.is_trade_job(job):
         return True
     verdict = fg.evaluate(job, delivery_urls, visit_present=visit_present)
+    if not verdict["ready"]:
+        previous = job.get("fulfillment_gate") or {}
+        verdict["held_at"] = (previous.get("held_at") if isinstance(previous, dict) else None) or datetime.now(timezone.utc).isoformat()
     await _record_fulfillment_gate(db, job_id, verdict)
     if verdict["ready"]:
         return True
+    from ..services.editor_review import alert_editor_hold
+    await alert_editor_hold(job, verdict)
     logger.info(
         f"Job {job_id}: fulfillment gate HOLD — {'; '.join(verdict['reasons'])} "
         f"(required={verdict['required']} present={verdict['present']}); "

@@ -75,23 +75,24 @@ def test_hold_writes_fields_and_alerts_except_budget(monkeypatch):
 
 
 def test_alert_sent_once_per_job(monkeypatch):
-    from app.services import editor_ledger as el
-    events, sent = {}, []
+    from app.services import editor_review as er, notifications
+    events, sent = set(), []
 
-    async def get_event(eid):
-        return events.get(eid)
+    async def claim(eid, *args):
+        if eid in events:
+            return False
+        events.add(eid)
+        return True
 
-    async def upsert(eid, *a):
-        events[eid] = {"id": eid}
-
-    async def notify(*a):
-        sent.append(a)
-    monkeypatch.setattr(el, "_get_event", get_event)
-    monkeypatch.setattr(el, "_upsert_event", upsert)
-    monkeypatch.setattr(el, "_notify_kam", notify)
+    async def notify(**kwargs):
+        sent.append(kwargs)
+        return True
+    monkeypatch.setattr(er, "_claim_alert", claim)
+    monkeypatch.setattr(notifications, "send_email_via_resend", notify)
     assert _run(pp.alert_autoenhance_hold("J9", "No Plan")) is True
     assert _run(pp.alert_autoenhance_hold("J9", "No Plan")) is False
-    assert len(sent) == 1 and "J9" in sent[0][1] and sent[0][4]["job_id"] == "J9"
+    assert len(sent) == 1 and "J9" in sent[0]["subject"]
+    assert sent[0]["to"] == "raph@brxs.ca"
 
 
 def test_held_stills_block_finalize_and_are_not_already_processed():

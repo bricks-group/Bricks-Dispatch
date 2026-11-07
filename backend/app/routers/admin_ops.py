@@ -1256,3 +1256,15 @@ async def editor_approve_job(
             "job_status": (fresh or {}).get("status"),
             "fulfillment_gate": (fresh or {}).get("fulfillment_gate"),
             "payout": payout}
+
+
+@router.get("/editor-review")
+async def list_editor_review(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Read-only queue. Does not approve, finalize, pay or send mail."""
+    await _require_admin(authorization, x_user_id)
+    from ..services.editor_review import list_review_items
+    from ..services.fulfillment_gate import gate_enabled
+    return {"items": await list_review_items(await get_db()), "gate_enabled": gate_enabled()}

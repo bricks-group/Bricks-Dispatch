@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { EditorReviewPage } from './pages/EditorReviewPage';
 import { AgreeTermsPage } from './pages/AgreeTermsPage';
 import { needsTermsStep, type TermsMember } from './lib/legal-docs';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
@@ -169,7 +170,7 @@ function ProtectedLayout() {
 
   return (
     <div className="app-shell">
-      <Sidebar />
+      <Sidebar isAdmin={/owner|admin|manager/i.test(`${member?.role || ""} ${member?.title || ""}`)} />
       <main className="main">
         <TopBar name={name} onLogout={onLogout} />
         <OfflineBar />
@@ -178,6 +179,7 @@ function ProtectedLayout() {
         <Routes>
           <Route path="/"                element={isOnboarding(member) ? <OnboardingPage onLive={refreshSession} /> : <OverviewPage />} />
           <Route path="/onboarding"     element={<OnboardingPage onLive={() => { refreshSession(); navigate('/', { replace: true }); }} />} />
+          <Route path="/admin/review" element={<EditorReviewPage />} />
           <Route path="/jobs"           element={<JobsPage />} />
           <Route path="/notifications"  element={<NotificationsPage />} />
           <Route path="/profile"        element={<ProfilePage />} />

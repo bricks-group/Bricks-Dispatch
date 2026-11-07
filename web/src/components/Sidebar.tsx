@@ -35,10 +35,13 @@ const HELP_URL = 'https://www.brxs.ca/help/photographers';
 
 const linkClass = (base: string) => ({ isActive }: { isActive: boolean }) => `${base}${isActive ? ' active' : ''}`;
 
-export function Sidebar() {
+export function Sidebar({ isAdmin = false }: { isAdmin?: boolean }) {
+  const reviewLink = { path: "/admin/review", label: "Editor review", end: false };
+  const visibleItems = isAdmin ? [...items, reviewLink] : items;
+  const visibleMore = isAdmin ? [...moreItems, reviewLink] : moreItems;
   const { pathname } = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
-  const inMore = moreItems.some((i) => pathname === i.path || pathname.startsWith(i.path + '/'));
+  const inMore = visibleMore.some((i) => pathname === i.path || pathname.startsWith(i.path + '/'));
 
   useEffect(() => { setMoreOpen(false); }, [pathname]);
   useEffect(() => {
@@ -57,7 +60,7 @@ export function Sidebar() {
         </div>
       </div>
       <nav className="nav" aria-label="Main">
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <NavLink key={item.path} to={item.path} end={item.end} className={linkClass('nav-link')}>
             {item.label}
           </NavLink>
@@ -88,7 +91,7 @@ export function Sidebar() {
         <>
           <div className="more-scrim" onClick={() => setMoreOpen(false)} aria-hidden="true" />
           <div className="more-sheet" id="tabbar-more" role="dialog" aria-label="More">
-            {moreItems.map((item) => (
+            {visibleMore.map((item) => (
               <NavLink key={item.path} to={item.path} className={linkClass('more-link')}>
                 {item.label}
               </NavLink>

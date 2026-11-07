@@ -415,21 +415,21 @@ def autoenhance_hold_fields(reason: str) -> dict:
 async def alert_autoenhance_hold(job_id: str, reason: str) -> bool:
     """Tell Kam once per job (existing ops_alert path). Never raises."""
     try:
-        from .editor_ledger import _get_event, _notify_kam, _upsert_event
+        from .editor_review import _claim_alert, alert_email
+        from .notifications import send_email_via_resend
+        from html import escape
         event_id = f"ae-hold-{job_id}"
-        if await _get_event(event_id):
+        if not await _claim_alert(event_id, job_id, {"job_id": job_id, "reason": reason[:300]}):
             return False
-        await _upsert_event(event_id, "job", job_id, "autoenhance_hold", {"job_id": job_id, "reason": reason[:300]})
         body = (f"Autoenhance could not edit job {job_id}: {reason}. The stills are held, not delivered. "
                 "They re-run automatically on the next ops sweep once Autoenhance works "
                 "(or POST /api/v1/post-production/autoenhance-holds/retry).")
-        html = (f"<p>Autoenhance could not edit job <b>{job_id}</b>.</p><p>Reason: {reason[:300]}</p>"
+        html = (f"<p>Autoenhance could not edit job <b>{escape(job_id)}</b>.</p><p>Reason: {escape(reason[:300])}</p>"
                 "<p>The stills are held and were not delivered. They re-run automatically on the next ops "
                 "sweep once Autoenhance works.</p>")
-        await _notify_kam("Stills held: Autoenhance unavailable", body,
-                          f"Stills held for job {job_id}: Autoenhance unavailable", html,
-                          {"job_id": job_id, "reason": reason[:300]})
-        return True
+        return bool(await send_email_via_resend(to=alert_email(),
+                          subject=f"Stills held for job {job_id}: Autoenhance unavailable",
+                          html=html, text=body))
     except Exception as e:
         logger.error(f"Job {job_id}: Autoenhance hold alert failed: {e}")
         return False
