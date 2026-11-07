@@ -51,6 +51,13 @@ class Job(BaseModel):
     # Package context
     package_id: Optional[str] = None
     package_name: Optional[str] = None
+    subtotal_cents: Optional[int] = None
+    tax_cents: Optional[int] = None
+    total_cents: Optional[int] = None
+    tax_rate: Optional[float] = None
+    tax_province: Optional[str] = None
+    tax_jurisdiction: Optional[str] = None
+    price_basis: str = "legacy"
     package_price: Optional[int] = None
     rack_price: Optional[int] = None  # undiscounted rate; vendor payout must always be computed off this, never package_price once discounted billing ships
     add_ons: list = []
@@ -133,6 +140,13 @@ class JobIntakeRequest(BaseModel):
     agent_brokerage: Optional[str] = None
     package_id: Optional[str] = None
     package_name: Optional[str] = None
+    subtotal_cents: Optional[int] = None
+    tax_cents: Optional[int] = None
+    total_cents: Optional[int] = None
+    tax_rate: Optional[float] = None
+    tax_province: Optional[str] = None
+    tax_jurisdiction: Optional[str] = None
+    price_basis: str = "legacy"
     package_price: Optional[int] = None
     rack_price: Optional[int] = None  # undiscounted rate; vendor payout must always be computed off this, never package_price once discounted billing ships
     add_ons: list = []
@@ -602,6 +616,13 @@ class JobCreate(BaseModel):
     vendor_id: str = "default_vendor"
     package_id: Optional[str] = None
     package_name: Optional[str] = None
+    subtotal_cents: Optional[int] = None
+    tax_cents: Optional[int] = None
+    total_cents: Optional[int] = None
+    tax_rate: Optional[float] = None
+    tax_province: Optional[str] = None
+    tax_jurisdiction: Optional[str] = None
+    price_basis: str = "legacy"
     package_price: Optional[int] = None
     rack_price: Optional[int] = None  # undiscounted rate; vendor payout must always be computed off this, never package_price once discounted billing ships
 

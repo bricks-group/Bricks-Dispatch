@@ -769,6 +769,9 @@ def rack_to_cents(rack_price: Any) -> int:
 
 def owner_payout_cents(job: Any) -> int:
     j = _as_dict(job)
+    # Canonical cents include every add-on and exclude client GST/HST.
+    if j.get("subtotal_cents") is not None:
+        return max(0, int(j["subtotal_cents"]))
     rack = j.get("rack_price")
     if rack is None:
         rack = j.get("package_price")

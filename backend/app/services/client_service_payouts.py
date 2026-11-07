@@ -90,6 +90,9 @@ def _add_on_keys(raw: Any) -> set[str]:
 def net_price_cents(job: Any) -> Optional[int]:
     """What the client paid for this job, in cents (package_price is dollars). None if unknown."""
     j = _as_dict(job)
+    # Canonical cents include every add-on and exclude client GST/HST.
+    if j.get("subtotal_cents") is not None:
+        return max(0, int(j["subtotal_cents"]))
     raw = j.get("package_price")
     if raw is None or raw == "":
         return None

@@ -180,6 +180,7 @@ def pg_insert_job_assigned_to_owner(job: dict) -> Optional[str]:
         "assignee_id", "vendor_id", "scheduled_date", "agent_name",
         "agent_email", "agent_brokerage", "agent_user_id", "brokerage_id",
         "package_id", "package_name", "package_price", "rack_price",
+        "subtotal_cents", "tax_cents", "total_cents", "tax_rate", "tax_province", "tax_jurisdiction", "price_basis",
         "add_ons", "billing_type", "created_at", "updated_at",
         "payout_status", "min_tier_required", "preferred_tier", "vendor_tier",
         "is_rush",

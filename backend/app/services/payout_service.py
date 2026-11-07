@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # HST rate applied when photographer has an HST number.
 # GTA-based: Ontario 13%. Adjust per photographer province when province tracking
 # is added. For now, 13% is the correct rate for the vast majority of Bricks contractors.
-_PHOTOGRAPHER_HST_RATE = 0.13
+from .tax_policy import property_tax_rate
 
 # Tier percentage mapping: tier number -> percentage of package price
 # 1=Tier C (entry,35%), 2=Tier B (core,45%), 3=Tier A (elite,55%)
@@ -411,7 +411,7 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
     hst_paid_cents = 0
     contractor_hst_rate = 0.0
     if (not owner_job) and _member_hst_number and assignee_id and assignee_id != "default_user":
-        contractor_hst_rate = _PHOTOGRAPHER_HST_RATE
+        contractor_hst_rate = property_tax_rate(job)
         hst_paid_cents = round(payout_amount * contractor_hst_rate)
         logger.info(
             f"Photographer {assignee_id} is HST-registered (#{_member_hst_number}); "
@@ -434,6 +434,7 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             "amount": payout_amount,
             "hst_paid_cents": hst_paid_cents,
             "contractor_hst_rate": contractor_hst_rate,
+            "payout_basis_cents": job.get("subtotal_cents"),
             "contractor_id": contractor_id or "",
             "status": "held",
         }
@@ -542,6 +543,7 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             "amount": payout_amount,
             "hst_paid_cents": hst_paid_cents,
             "contractor_hst_rate": contractor_hst_rate,
+            "payout_basis_cents": job.get("subtotal_cents"),
             "contractor_id": contractor_id or "",
             "status": "pending",
         })
@@ -558,6 +560,7 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             "amount": payout_amount,
             "hst_paid_cents": hst_paid_cents,
             "contractor_hst_rate": contractor_hst_rate,
+            "payout_basis_cents": job.get("subtotal_cents"),
             "status": "pending",
             "created_at": now,
         }

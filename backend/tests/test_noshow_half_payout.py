@@ -24,7 +24,7 @@ def test_noshow_payout_is_half_rounded_half_up():
 
 
 def _patches(member, existing_payout=None):
-    job = {"id": JOB_ID, "vendor_id": "vendor_1", "assignee_id": "member_1",
+    job = {"state": "ON", "id": JOB_ID, "vendor_id": "vendor_1", "assignee_id": "member_1",
            "booking_id": "bk_1", "rack_price": 299, "package_id": "essentials"}
     claim_updates = []
 
