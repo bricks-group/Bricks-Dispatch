@@ -12,6 +12,7 @@ Runs entirely server-side, with no bot or box involved:
 """
 from __future__ import annotations
 
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 import html as _html
 import logging
 import os
@@ -29,7 +30,7 @@ ACTIONS = {
     "release": "Release payout and resume vendor",
     "keep": "Keep vendor paused and payout blocked",
 }
-ADMIN_EMAIL = "raphael@brxs.ca"
+ADMIN_EMAIL = SYSTEM_ALERT_EMAIL
 OPEN_DISPUTE_CLOSED = {"resolved", "closed", "rejected", "dismissed", "withdrawn", "cancelled", "canceled"}
 
 

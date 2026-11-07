@@ -1,3 +1,4 @@
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 from datetime import datetime, timezone
 import logging
 import os
@@ -25,7 +26,7 @@ from ..shared.portfolio import (
     supplemental_links_from_samples,
 )
 
-ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
+ADMIN_NOTIFICATION_EMAIL = SYSTEM_ALERT_EMAIL
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
@@ -587,7 +588,7 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
         background_tasks.add_task(review_application, result["member_id"], notify=True, trigger="apply")
 
     found = found_us_line(getattr(application, "source", None), getattr(application, "source_detail", None))
-    # In-app record only. Kam's text and raphael@brxs.ca email are the notify above.
+    # In-app record only. Kam's text and raph@brxs.ca email are the notify above.
     # Do not email ADMIN_NOTIFICATION_EMAIL — that env is unset, and this path
     # must not fall through to a personal mailbox.
     background_tasks.add_task(

@@ -1,3 +1,4 @@
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 import logging
 import os
 import uuid
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/dispatch", tags=["dispatch"])
 
-ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "akashorter@gmail.com")
+ADMIN_NOTIFICATION_EMAIL = SYSTEM_ALERT_EMAIL
 
 
 async def _note_jev_hold(db, job_id: str, yes_probability: float | None) -> None:

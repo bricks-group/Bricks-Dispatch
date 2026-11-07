@@ -33,6 +33,7 @@ Env (all optional):
 """
 from __future__ import annotations
 
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 import json
 import logging
 import os
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 SUBSCRIBE_URL = "https://app.autoenhance.ai/settings?setting=subscription"
 PRICING_URL = "https://www.autoenhance.ai/pricing"
-KAM_EMAIL = "akashorter@gmail.com"
+KAM_EMAIL = SYSTEM_ALERT_EMAIL
 PROMPT_ID = "ae-plan-prompt"
 _LIVE_SESSION = re.compile(r"\bstripe\s+cs_live_[A-Za-z0-9]+")
 

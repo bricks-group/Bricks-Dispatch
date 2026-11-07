@@ -1,3 +1,4 @@
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -24,7 +25,7 @@ from ..services.notifications import create_notification
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin-ops"])
-ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
+ADMIN_NOTIFICATION_EMAIL = SYSTEM_ALERT_EMAIL
 
 @router.post("/leads")
 async def create_lead(

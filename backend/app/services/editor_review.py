@@ -6,6 +6,7 @@ A claimed send is never retried automatically, even after an ambiguous failure.
 """
 from __future__ import annotations
 
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 import json
 import logging
 import os
@@ -21,7 +22,7 @@ DIGEST_KEY = "editor-review-initial-digest-2026-11-07"
 
 
 def alert_email() -> str:
-    return os.environ.get("EDITOR_ALERT_EMAIL", "raph@brxs.ca").strip() or "raph@brxs.ca"
+    return SYSTEM_ALERT_EMAIL
 
 
 def queue_url(job_id: str = "") -> str:

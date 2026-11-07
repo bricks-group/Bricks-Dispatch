@@ -4,18 +4,19 @@ www /photographers promises construction work only goes to pilots with
 "verified drone liability insurance of at least $2M" on "a certificate Bricks
 verifies". Uploads land as pending vendor_documents rows, but nobody was told
 one had arrived, so a pilot could wait indefinitely for a review. This sends a
-short internal email to raphael@brxs.ca on each upload. It never raises and never
+short internal email to raph@brxs.ca on each upload. It never raises and never
 contacts the photographer.
 """
 from __future__ import annotations
 
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 import asyncio
 import logging
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-CREDENTIAL_ADMIN_EMAIL = "raphael@brxs.ca"
+CREDENTIAL_ADMIN_EMAIL = SYSTEM_ALERT_EMAIL
 REVIEW_URL = "https://app.brxs.ca/hiring"
 MIN_CONSTRUCTION_LIABILITY_CAD = 2_000_000
 SEND_TIMEOUT_S = 8.0

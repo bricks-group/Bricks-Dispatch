@@ -1,11 +1,12 @@
 """Load an applicant, run the automatic review, store it, notify Kam.
 
-Kam alone gets the notification (raphael@brxs.ca + his profile phone). The
+Kam alone gets the notification (raph@brxs.ca + his profile phone). The
 applicant is never emailed from here. Approve / reject stays manual in OS.
 """
 
 from __future__ import annotations
 
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 import logging
 import posixpath
 from typing import Optional
@@ -16,7 +17,7 @@ from .applicant_review import review_input_from_member, run_review
 
 logger = logging.getLogger(__name__)
 
-OWNER_EMAIL = "raphael@brxs.ca"
+OWNER_EMAIL = SYSTEM_ALERT_EMAIL
 THUMB_LINK_TTL = 7 * 24 * 3600
 
 
@@ -174,7 +175,7 @@ def render_all(member: dict, result: dict, thumb_urls: list, resume_url: str = "
 
 
 async def notify_owner(member: dict, result: dict) -> None:
-    """Text Kam's profile phone and email raphael@brxs.ca. Never raises."""
+    """Text Kam's profile phone and email raph@brxs.ca. Never raises."""
     try:
         rendered = render_all(member, result, await signed_thumb_urls(result), await signed_resume_url(member))
     except Exception as e:
@@ -191,7 +192,7 @@ async def notify_owner(member: dict, result: dict) -> None:
     try:
         from .notifications import send_email_via_resend
 
-        if OWNER_EMAIL != "raphael@brxs.ca":
+        if OWNER_EMAIL != SYSTEM_ALERT_EMAIL:
             raise RuntimeError("applicant email recipient drifted")
         await send_email_via_resend(to=OWNER_EMAIL, subject=rendered["subject"], html=rendered["html"], text=rendered["text"])
     except Exception as e:

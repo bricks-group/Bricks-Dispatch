@@ -46,9 +46,11 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
+
 logger = logging.getLogger(__name__)
 
-KAM_EMAIL_DEFAULT = "akashorter@gmail.com"
+KAM_EMAIL_DEFAULT = SYSTEM_ALERT_EMAIL
 JOB_LOOKBACK_DAYS = 3
 PAYOUT_LOOKBACK_DAYS = 14
 NOSHOW_GRACE_MIN = 30
@@ -75,7 +77,7 @@ HEALTH_URLS = [
 
 
 def kam_email() -> str:
-    return (os.environ.get("OPS_ALERT_EMAIL") or os.environ.get("ADMIN_NOTIFICATION_EMAIL") or KAM_EMAIL_DEFAULT).strip()
+    return SYSTEM_ALERT_EMAIL
 
 
 def external_sends_enabled() -> bool:
