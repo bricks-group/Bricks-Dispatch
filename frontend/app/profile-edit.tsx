@@ -260,14 +260,14 @@ export default function ProfileEditScreen() {
             <Group>
               <Row
                 title="Available for assignments"
-                subtitle="Connect Google Calendar in Settings so auto-assign skips slots you’re already busy."
+                subtitle="Connect Google, Outlook, Apple, or ICS in Settings so auto-assign skips slots you’re already busy."
                 right={
                   <Toggle value={availability} onValueChange={setAvailability} accessibilityLabel="Available for assignments" />
                 }
               />
               <Row
-                title="Google Calendar"
-                subtitle="Connect or disconnect — never shown as Connected without a Calendar ping."
+                title="Calendars"
+                subtitle="Google, Outlook, Apple, or ICS — never shown as Connected without a real ping."
                 chevron
                 onPress={() => router.push('/settings')}
               />

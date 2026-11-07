@@ -5,7 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { VendorProfile, mediaUrl } from '../../lib/vendor';
-import { fetchVendorCalendars, googleConnection } from '../../lib/googleCalendarConnect';
+import { fetchVendorCalendars, PROVIDER_LABELS } from '../../lib/calendarConnect';
 import { color, type as T, space, radius } from '../../theme';
 import { Screen, PageHeader, Section, Group, Row, Button, Notice, StatGrid, Avatar, LoadingState, Toggle, Pill } from '../../components/ui';
 import DeleteAccountRow from '../../components/DeleteAccountRow';
@@ -27,8 +27,8 @@ export default function AccountScreen() {
   const [error, setError] = useState(false);
   const [availability, setAvailability] = useState(true);
   const [togglingAvail, setTogglingAvail] = useState(false);
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [googleDetail, setGoogleDetail] = useState('');
+  const [calConnected, setCalConnected] = useState(false);
+  const [calDetail, setCalDetail] = useState('');
 
   const fetchProfile = useCallback(async () => {
     setError(false);
@@ -49,12 +49,16 @@ export default function AccountScreen() {
   const fetchCalendars = useCallback(async () => {
     try {
       const data = await fetchVendorCalendars();
-      const g = googleConnection(data);
-      setGoogleConnected(!!g?.connected);
-      setGoogleDetail(g?.connected ? 'Connected — auto-assign skips busy slots' : (g?.detail || 'Connect in Settings'));
+      const connected = (data.connections || []).filter((c) => c.connected);
+      setCalConnected(connected.length > 0);
+      setCalDetail(
+        connected.length
+          ? `${connected.map((c) => PROVIDER_LABELS[c.provider] || c.provider).join(', ')} — auto-assign skips busy slots`
+          : 'Connect Google, Outlook, Apple, or ICS in Settings',
+      );
     } catch {
-      setGoogleConnected(false);
-      setGoogleDetail('Connect in Settings');
+      setCalConnected(false);
+      setCalDetail('Connect calendars in Settings');
     }
   }, []);
 
@@ -164,10 +168,10 @@ export default function AccountScreen() {
         <Group>
           <Row
             icon={Calendar}
-            title="Google Calendar"
-            subtitle={googleDetail}
+            title="Calendars"
+            subtitle={calDetail}
             chevron
-            right={googleConnected ? <Pill label="Connected" tone="ok" /> : undefined}
+            right={calConnected ? <Pill label="Connected" tone="ok" /> : undefined}
             onPress={() => router.push('/settings')}
           />
         </Group>
