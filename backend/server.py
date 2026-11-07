@@ -71,6 +71,7 @@ from app.routers.onboarding import router as onboarding_router
 from app.routers.admin_ops import router as admin_ops_router
 from app.routers.uploads import router as uploads_router
 from app.routers.payouts import router as payouts_router
+from app.routers.payment_events import router as payment_events_router
 from app.routers.post_production import router as post_production_router
 from app.routers.vendor_profile import router as vendor_profile_router, os_router as vendor_profile_os_router
 from app.routers.notifications import router as notifications_router
@@ -189,6 +190,7 @@ app.include_router(onboarding_router)
 app.include_router(admin_ops_router)
 app.include_router(uploads_router)
 app.include_router(payouts_router)
+app.include_router(payment_events_router)  # OS -> refund holds payout (2026-11-07)
 app.include_router(post_production_router)
 app.include_router(vendor_profile_router)
 app.include_router(vendor_profile_os_router)

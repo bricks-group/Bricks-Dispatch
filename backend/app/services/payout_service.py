@@ -313,6 +313,15 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         logger.error(f"Payout trigger failed: job {job_id} not found")
         return {"error": "job_not_found", "job_id": job_id}
 
+    # Money source (Kam 2026-11-07): a Stripe sandbox booking never moves live
+    # money, and a refunded booking never pays out. Applies to no-show halves too.
+    from .payout_source import booking_source, payout_block_reason
+    source = await booking_source(db, job)
+    blocked = payout_block_reason(source)
+    if blocked:
+        logger.warning(f"Payout for job {job_id} blocked: {blocked} (source={source.get('source')})")
+        return {"skipped": blocked, "job_id": job_id, "livemode": source.get("livemode")}
+
     # Fulfillment gate: pay only after a complete, editor-approved delivery.
     # Approved client no-show claims pay half without delivery (Kam 2026-10-30).
     if not noshow_claim_id:
@@ -572,6 +581,7 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             amount=net_payout,
             booking_id=job.get("booking_id", job_id),
             payout_id=payout_id,
+            source_charge_id=source.get("charge_id") or "",
         )
     except Exception as e:
         logger.error(f"Stripe transfer failed for payout {payout_id} job {job_id}: {e}")

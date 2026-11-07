@@ -203,7 +203,8 @@ def load_contractor_row(vendor_id: str, member_id: str | None = None) -> dict | 
         raise
 
 
-async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, payout_id: str = "", contractor_id: str = "") -> str:
+async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, payout_id: str = "", contractor_id: str = "",
+                                  source_charge_id: str = "") -> str:
     """
     Transfer funds to the vendor's connected Stripe account.
     Amount must be in cents. Returns the Stripe transfer ID.
@@ -256,13 +257,44 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
 
     idempotency_key = f"payout_{payout_id}" if payout_id else f"payout_{booking_id}"
 
-    transfer = stripe_lib.Transfer.create(
-        amount=amount,
-        currency="cad",
-        destination=stripe_account_id,
-        metadata={"booking_id": booking_id, "payout_id": payout_id, "vendor_id": vendor_id},
-        idempotency_key=idempotency_key,
-    )
+    metadata = {"booking_id": booking_id, "payout_id": payout_id, "vendor_id": vendor_id}
+    if source_charge_id:
+        # Tie the transfer to the booking's own charge (Kam 2026-11-07): funds
+        # come from that charge and the link survives for refund reconciliation.
+        metadata["source_charge"] = source_charge_id
+        try:
+            transfer = stripe_lib.Transfer.create(
+                amount=amount,
+                currency="cad",
+                destination=stripe_account_id,
+                source_transaction=source_charge_id,
+                transfer_group=f"booking_{booking_id}",
+                metadata=metadata,
+                idempotency_key=idempotency_key,
+            )
+        except stripe_lib.error.InvalidRequestError as e:
+            # e.g. transfer larger than the charge (owner jobs, travel) or a
+            # charge in another currency. Pay from balance as before.
+            logger.warning(
+                f"source_transaction {source_charge_id} rejected for payout {payout_id} "
+                f"({getattr(e, 'param', None) or type(e).__name__}); paying from balance"
+            )
+            transfer = stripe_lib.Transfer.create(
+                amount=amount,
+                currency="cad",
+                destination=stripe_account_id,
+                transfer_group=f"booking_{booking_id}",
+                metadata=metadata,
+                idempotency_key=f"{idempotency_key}_bal",
+            )
+    else:
+        transfer = stripe_lib.Transfer.create(
+            amount=amount,
+            currency="cad",
+            destination=stripe_account_id,
+            metadata=metadata,
+            idempotency_key=idempotency_key,
+        )
 
     logger.info(f"Transfer {transfer.id} created: ${amount/100:.2f} to vendor {vendor_id} ({stripe_account_id})")
     return transfer.id
