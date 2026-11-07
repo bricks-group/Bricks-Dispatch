@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { COLORS, FONTS } from '../../constants/CaptureTheme';
+import { color, type as T, space } from '../../theme';
+import { Box } from 'lucide-react-native';
+import { Screen, NavBar, Section, Group, Row, Button, TextLink, Notice, Pill, StatGrid, Footer, EmptyState, LoadingState } from '../../components/ui';
+import { PipelineSteps } from '../../components/capture-hud';
 import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer, submitCaptureSession } from '../../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
 import { captureStatusCopy } from '../../lib/capture-modes';
 import { TourTagEditor } from '../../components/TourTagEditor';
 
-const TONE_COLOR: Record<string, string> = { ok: COLORS.ok, warn: COLORS.warn, bad: COLORS.bad };
 
 export default function ReviewScreen() {
   const router = useRouter();
@@ -103,259 +104,138 @@ export default function ReviewScreen() {
   const canSubmit = pipeline.length > 0 && stationCount > 0 && thinStations.length === 0;
   const status = (session?.status || '').toLowerCase();
   const statusLine = captureStatusCopy(status, kind);
-  const kindLabel = kind === 'floorplan' ? 'FLOOR PLAN' : '3D TOUR';
 
   if (!jobId) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.body}>
-          <Text style={styles.emptyText}>Missing jobId</Text>
-          <TouchableOpacity style={styles.resultBtn} onPress={() => router.back()}>
-            <Text style={styles.resultBtnText}>Back</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
+      <Screen header={<NavBar title="Review" onBack={() => router.back()} />}>
+        <EmptyState icon={Box} title="No job selected" body="Open capture from a job." />
+      </Screen>
     );
   }
+
+  const kindName = kind === 'floorplan' ? 'Floor plan' : '360° tour';
 
   if (submitted) {
     const failed = status === 'failed' || !!submitError;
-    const compiling = ['submitted', 'splatting', 'tracing'].includes(status);
     const ready = status === 'delivered';
-    const resultTone = failed ? styles.resultFailed : ready ? styles.resultReady : styles.resultCompiling;
-    const title = failed ? 'Compile failed' : ready ? 'Submitted · ready' : 'Submitted · compiling';
+    const tone = failed ? 'bad' : ready ? 'ok' : 'accent';
+    const title = failed ? 'Compile failed' : ready ? `${kindName} is ready` : `${kindName} is compiling`;
     const body = failed
-      ? (submitError || statusLine || 'Compile failed — try again from review or recapture stations.')
-      : (statusLine || (ready
-        ? `${kind === 'floorplan' ? 'Floor plan' : '3D tour'} is ready on the job.`
-        : `${kind === 'floorplan' ? 'Floor plan' : '3D tour'} is compiling. This usually takes a few minutes.`));
+      ? (submitError || statusLine || 'Try again, or recapture the thin stations.')
+      : (statusLine || (ready ? `The ${kindName.toLowerCase()} is on the job.` : 'This usually takes a few minutes. You can leave this screen.'));
+    const rebuildOk = !!rebuildMsg && (rebuildMsg.startsWith('Tour player rebuilt') || rebuildMsg.startsWith('Floor plan PNG rebuilt'));
 
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <ScrollView>
-          <View style={styles.hero}>
-            <TouchableOpacity style={styles.backChip} onPress={goBackToJob}>
-              <Text style={styles.backChipText}>‹</Text>
-            </TouchableOpacity>
-            <Text style={styles.heroAddress}>{address}</Text>
-            <Text style={styles.heroMeta}>
-              {[meta, kindLabel].filter(Boolean).join(' · ')}
-            </Text>
+      <Screen header={<NavBar title={kindName} onBack={goBackToJob} />} contentStyle={styles.body}>
+        <>
+          <View style={styles.head}>
+            <Text style={[T.title, { color: color.text }]}>{address}</Text>
+            {meta ? <Text style={[T.dataSm, { color: color.textMuted }]}>{meta}</Text> : null}
           </View>
-
-          <View style={styles.body}>
-            <View style={[styles.resultCard, resultTone]}>
-              <Text style={styles.resultTitle}>{title}</Text>
-              <Text style={styles.resultBody}>{body}</Text>
-              {rebuildMsg ? (
-                <Text style={[styles.rebuildMsg, (rebuildMsg.startsWith('Tour player rebuilt') || rebuildMsg.startsWith('Floor plan PNG rebuilt')) ? styles.rebuildOk : styles.rebuildErr]}>
-                  {rebuildMsg}
-                </Text>
-              ) : null}
-              <View style={styles.resultActions}>
-                <TouchableOpacity style={styles.resultBtn} onPress={goBackToJob}>
-                  <Text style={styles.resultBtnText}>Back to job</Text>
-                </TouchableOpacity>
-                {failed ? (
-                  <TouchableOpacity
-                    style={[styles.resultBtnPrimary, (submitting || !canSubmit) && { opacity: 0.5 }]}
-                    onPress={handleSubmit}
-                    disabled={submitting || !canSubmit}
-                  >
-                    <Text style={styles.resultBtnPrimaryText}>
-                      {submitting ? 'Retrying…' : 'Retry compile'}
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-                {ready && (kind === 'splat' || kind === 'floorplan') ? (
-                  <TouchableOpacity
-                    style={[styles.resultBtn, rebuilding && { opacity: 0.5 }]}
-                    onPress={handleRebuild}
-                    disabled={rebuilding}
-                  >
-                    <Text style={styles.resultBtnText}>
-                      {rebuilding ? 'Rebuilding…' : (kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-                <TouchableOpacity style={styles.resultLink} onPress={goRecapture}>
-                  <Text style={styles.resultLinkText}>
-                    {failed ? 'Recapture' : 'Continue capture'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-            {kind === 'splat' && session ? (
-              <TourTagEditor jobId={jobId} session={session} onSession={setSession} />
+          <Notice tone={tone} title={title}>{body}</Notice>
+          {rebuildMsg ? <Notice tone={rebuildOk ? 'ok' : 'bad'}>{rebuildMsg}</Notice> : null}
+          <View style={styles.actions}>
+            {failed ? (
+              <Button title={submitting ? 'Retrying…' : 'Retry compile'} onPress={handleSubmit} loading={submitting} disabled={!canSubmit} />
             ) : null}
+            {ready && (kind === 'splat' || kind === 'floorplan') ? (
+              <Button
+                variant="secondary"
+                title={kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player'}
+                onPress={handleRebuild}
+                loading={rebuilding}
+              />
+            ) : null}
+            <Button variant="secondary" title="Back to job" onPress={goBackToJob} />
+            <TextLink title={failed ? 'Recapture' : 'Continue capture'} tone="accent" onPress={goRecapture} />
           </View>
-        </ScrollView>
-      </SafeAreaView>
+          {kind === 'splat' && session ? (
+            <TourTagEditor jobId={jobId} session={session} onSession={setSession} />
+          ) : null}
+        </>
+      </Screen>
     );
   }
 
+  const blocker = !loading && (stationCount === 0 || thinStations.length > 0)
+    ? (stationCount === 0
+      ? (kind === 'floorplan'
+        ? 'Shoot at least one room’s four corners before sending.'
+        : 'Shoot at least one full 360 station before sending.')
+      : (kind === 'floorplan'
+        ? `Station ${thinStations[0].station_index} needs all four corners.`
+        : `Station ${thinStations[0].station_index} is thin. Fill the ring (8+ overlapping frames).`))
+    : null;
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {loading && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color={COLORS.brick} />
-          <Text style={styles.loadingText}>Loading capture…</Text>
-        </View>
-      )}
-
-      <ScrollView>
-        <View style={styles.hero}>
-          <TouchableOpacity style={styles.backChip} onPress={() => router.back()}>
-            <Text style={styles.backChipText}>‹</Text>
-          </TouchableOpacity>
-          <Text style={styles.heroAddress}>{address}</Text>
-          <Text style={styles.heroMeta}>
-            {[meta, kindLabel, `${stationCount} STATION${stationCount === 1 ? '' : 'S'}`, `${totalFrames.toLocaleString()} PANS`].filter(Boolean).join(' · ')}
-          </Text>
-        </View>
-
-        <View style={styles.body}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionLabel}>Coverage by room</Text>
-            <Text style={styles.sectionNote}>{coveredCount} / {totalCount} captured</Text>
-          </View>
-          <View style={styles.roomGrid}>
-            {rooms.length === 0 && !loading ? (
-              <Text style={styles.emptyText}>No rooms recorded yet.</Text>
-            ) : (
-              rooms.map(r => (
-                <View key={r.id ?? r.name} style={styles.roomCell}>
-                  <View style={[styles.dot, { backgroundColor: TONE_COLOR[r.tone] ?? COLORS.bad }]} />
-                  <Text style={styles.roomName}>{r.name}</Text>
-                  <Text style={styles.roomCount}>{r.n}</Text>
-                </View>
-              ))
-            )}
-          </View>
-
-          {!loading && (stationCount === 0 || thinStations.length > 0) && (
-            <View style={styles.warnBanner}>
-              <Text style={styles.warnText}>
-                {stationCount === 0
-                  ? (kind === 'floorplan'
-                    ? 'Submit needs at least one station with room corners, not snapshot stills.'
-                    : 'Submit needs at least one 360 station (coverage dome), not snapshot stills.')
-                  : (kind === 'floorplan'
-                    ? `Station ${thinStations[0].station_index} needs more corners — capture 4 corners of the room.`
-                    : `Station ${thinStations[0].station_index} sweep is thin — fill the dome (8+ overlapping pans) or capture an equirect.`)}
+    <Screen
+      scroll={!loading}
+      contentStyle={styles.body}
+      header={<NavBar title={`Review ${kindName.toLowerCase()}`} onBack={() => router.back()} />}
+      footer={(
+        <Footer>
+          <View style={styles.footerRow}>
+            <View>
+              <Text style={[T.overline, { color: color.textMuted }]}>Est. delivery</Text>
+              <Text style={[T.dataLg, { color: color.text }]}>
+                {session?.estimatedDeliveryHours != null ? `~${session.estimatedDeliveryHours} h` : '—'}
               </Text>
             </View>
-          )}
-
-          <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Pipeline</Text>
-          <View style={{ marginTop: 12 }}>
-            {pipeline.length === 0 && !loading ? (
-              <Text style={styles.emptyText}>No pipeline yet — submit is unavailable until a session exists.</Text>
-            ) : (
-              pipeline.map((p, i) => {
-                const done = p.status === 'done', active = p.status === 'active';
-                return (
-                  <View key={p.title} style={styles.pipeRow}>
-                    <View style={{ alignItems: 'center', width: 22 }}>
-                      <View style={[styles.pipeDot, done && { backgroundColor: COLORS.ok }, active && { backgroundColor: COLORS.brick }]} />
-                      {i !== pipeline.length - 1 && <View style={[styles.pipeLine, done && { backgroundColor: COLORS.ok }]} />}
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={[styles.pipeTitle, p.status === 'todo' && { color: COLORS.ink3 }]}>{p.title}</Text>
-                      <Text style={styles.pipeDetail}>{p.detail}</Text>
-                    </View>
-                    {active && <Text style={styles.runningBadge}>In progress</Text>}
-                  </View>
-                );
-              })
-            )}
+            <Button style={styles.flex} title="Send to pipeline" onPress={handleSubmit} loading={submitting} disabled={loading || !canSubmit} />
           </View>
-        </View>
-      </ScrollView>
-
-      <View style={styles.submitBar}>
-        <View>
-          <Text style={styles.submitLabel}>Est. delivery</Text>
-          <Text style={styles.submitEta}>
-            {session?.estimatedDeliveryHours != null
-              ? `~${session.estimatedDeliveryHours} hrs`
-              : '—'}
-          </Text>
-        </View>
-        <TouchableOpacity
-          style={[styles.submitBtn, (submitting || !canSubmit) && { opacity: 0.5 }]}
-          onPress={handleSubmit}
-          disabled={submitting || loading || !canSubmit}
-        >
-          <Text style={styles.submitBtnText}>
-            {submitting ? 'Submitting…' : 'Submit to pipeline →'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {submitError && (
-        <View style={styles.errorBar}>
-          <Text style={styles.errorText}>{submitError}</Text>
-        </View>
+        </Footer>
       )}
-    </SafeAreaView>
+    >
+      {loading ? <LoadingState label="Loading capture" /> : (
+        <>
+          <View style={styles.head}>
+            <Text style={[T.title, { color: color.text }]}>{address}</Text>
+            {meta ? <Text style={[T.dataSm, { color: color.textMuted }]}>{meta}</Text> : null}
+          </View>
+          <StatGrid
+            large
+            items={[
+              { label: 'Stations', value: String(stationCount) },
+              { label: kind === 'floorplan' ? 'Corners' : 'Frames', value: totalFrames.toLocaleString() },
+              { label: 'Rooms', value: `${coveredCount}/${totalCount}` },
+            ]}
+          />
+          {blocker ? <Notice tone="warn">{blocker}</Notice> : null}
+
+          <Section first label="Rooms">
+            {rooms.length === 0 ? (
+              <Text style={[T.bodySm, { color: color.textMuted }]}>No rooms yet.</Text>
+            ) : (
+              <Group>
+                {rooms.map(r => (
+                  <Row
+                    key={r.id ?? r.name}
+                    title={r.name}
+                    right={<Pill label={`${r.n} ${kind === 'floorplan' ? 'corners' : 'frames'}`} tone={(r.tone as any) === 'ok' ? 'ok' : r.tone === 'warn' ? 'warn' : 'bad'} />}
+                  />
+                ))}
+              </Group>
+            )}
+          </Section>
+
+          <Section first label="Pipeline">
+            {pipeline.length === 0 ? (
+              <Text style={[T.bodySm, { color: color.textMuted }]}>Starts when the session does.</Text>
+            ) : (
+              <PipelineSteps steps={pipeline} />
+            )}
+          </Section>
+          {submitError ? <Notice tone="bad">{submitError}</Notice> : null}
+        </>
+      )}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.paper },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(12,11,9,0.6)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10,
-  },
-  loadingText: { fontFamily: FONTS.mono, fontSize: 12, color: COLORS.ink, marginTop: 12, letterSpacing: 1 },
-  hero: { height: 200, backgroundColor: '#0C0B09', justifyContent: 'flex-end', padding: 18 },
-  backChip: { position: 'absolute', top: 14, left: 18, width: 32, height: 32, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
-  backChipText: { color: '#F4F1EB', fontSize: 18 },
-  heroAddress: { fontFamily: FONTS.bodySemibold, fontSize: 19, color: '#F4F1EB' },
-  heroMeta: { fontFamily: FONTS.mono, fontSize: 11, color: '#F4F1EBBB', marginTop: 2, letterSpacing: 0.5 },
-  body: { padding: 22 },
-  sectionHead: { flexDirection: 'row', justifyContent: 'space-between' },
-  sectionLabel: { fontFamily: FONTS.mono, fontSize: 10, letterSpacing: 2, textTransform: 'uppercase', color: COLORS.ink3 },
-  sectionNote: { fontFamily: FONTS.mono, fontSize: 11, color: COLORS.ink3 },
-  roomGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12, borderWidth: 1, borderColor: COLORS.hair, borderRadius: 2 },
-  roomCell: { width: '25%', paddingVertical: 12, alignItems: 'center', borderWidth: 0.5, borderColor: COLORS.hair },
-  dot: { width: 8, height: 8, borderRadius: 4, marginBottom: 7 },
-  roomName: { fontFamily: FONTS.bodySemibold, fontSize: 11.5, textAlign: 'center' },
-  roomCount: { fontFamily: FONTS.mono, fontSize: 10, color: COLORS.ink3, marginTop: 3 },
-  emptyText: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.ink3, width: '100%', textAlign: 'center', paddingVertical: 20 },
-  warnBanner: { marginTop: 10, flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#8C2F2418', borderRadius: 2 },
-  warnText: { fontFamily: FONTS.body, fontSize: 11.5, color: COLORS.ink2, flex: 1 },
-  pipeRow: { flexDirection: 'row', paddingBottom: 16 },
-  pipeDot: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: COLORS.ink3 },
-  pipeLine: { width: 1.5, flex: 1, minHeight: 22, backgroundColor: COLORS.ink3, marginTop: 2 },
-  pipeTitle: { fontFamily: FONTS.bodySemibold, fontSize: 14, color: COLORS.ink },
-  pipeDetail: { fontFamily: FONTS.body, fontSize: 11.5, color: COLORS.ink3, marginTop: 2 },
-  runningBadge: { fontFamily: FONTS.mono, fontSize: 9.5, color: COLORS.brick, alignSelf: 'flex-start' },
-  submitBar: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 18, borderTopWidth: 1, borderTopColor: COLORS.hair, backgroundColor: COLORS.paper },
-  submitLabel: { fontFamily: FONTS.mono, fontSize: 9.5, letterSpacing: 1.5, textTransform: 'uppercase', color: COLORS.ink3 },
-  submitEta: { fontFamily: FONTS.mono, fontSize: 17, color: COLORS.ink, marginTop: 2 },
-  submitBtn: { marginLeft: 'auto', backgroundColor: COLORS.brick, borderRadius: 2, paddingHorizontal: 20, paddingVertical: 13 },
-  submitBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 14, color: '#fff' },
-  errorBar: { position: 'absolute', bottom: 100, left: 20, right: 20, backgroundColor: COLORS.bad, padding: 12, borderRadius: 2 },
-  errorText: { fontFamily: FONTS.body, fontSize: 12, color: '#fff', textAlign: 'center' },
-  resultCard: { borderWidth: 1, borderRadius: 2, padding: 18, gap: 10 },
-  resultCompiling: { borderColor: 'rgba(210, 84, 43, 0.55)', backgroundColor: 'rgba(210, 84, 43, 0.08)' },
-  resultReady: { borderColor: 'rgba(47, 107, 79, 0.55)', backgroundColor: 'rgba(47, 107, 79, 0.08)' },
-  resultFailed: { borderColor: 'rgba(139, 46, 31, 0.7)', backgroundColor: 'rgba(139, 46, 31, 0.08)' },
-  resultTitle: { fontFamily: FONTS.bodySemibold, fontSize: 18, color: COLORS.ink },
-  resultBody: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.ink2, lineHeight: 18 },
-  resultActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  resultBtn: { borderWidth: 1, borderColor: COLORS.hair, borderRadius: 2, paddingHorizontal: 14, paddingVertical: 10 },
-  resultBtnText: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: COLORS.ink },
-  resultBtnPrimary: { backgroundColor: COLORS.brick, borderRadius: 2, paddingHorizontal: 14, paddingVertical: 10 },
-  resultBtnPrimaryText: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#fff' },
-  resultLink: { paddingHorizontal: 8, paddingVertical: 10 },
-  resultLinkText: { fontFamily: FONTS.body, fontSize: 13, color: COLORS.brick },
-  rebuildMsg: { fontFamily: FONTS.body, fontSize: 12, lineHeight: 17 },
-  rebuildOk: { color: COLORS.ok },
-  rebuildErr: { color: COLORS.bad },
+  body: { paddingTop: space[12], gap: space[20] },
+  head: { gap: space[4] },
+  actions: { gap: space[10] },
+  footerRow: { flexDirection: 'row', alignItems: 'center', gap: space[16] },
+  flex: { flex: 1 },
 });

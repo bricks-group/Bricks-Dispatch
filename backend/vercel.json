@@ -11,6 +11,19 @@
     }
   ],
   "routes": [
-    { "src": "/(.*)", "dest": "api/index.py" }
+    {
+      "src": "/(.*)",
+      "dest": "api/index.py"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/vendor-os/calendars/sync-cron",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/onboarding/review-backlog",
+      "schedule": "0 10 * * *"
+    }
   ]
 }

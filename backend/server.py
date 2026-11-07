@@ -13,9 +13,8 @@ import sentry_sdk
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
-from app.shared.rate_limit import RateLimitMiddleware
+from app.shared.cors_config import install_browser_middleware
 from pythonjsonlogger import jsonlogger
 
 _SEED_ENABLED = os.environ.get("SEED_ENABLED", "false").lower() == "true"
@@ -76,6 +75,7 @@ from app.routers.vendor_profile import router as vendor_profile_router, os_route
 from app.routers.notifications import router as notifications_router
 from app.routers.jobs import router as jobs_router
 from app.routers.capture import router as capture_router
+from app.routers.capture_visit_video import router as capture_visit_video_router
 from app.shared.database import get_db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -191,11 +191,10 @@ app.include_router(vendor_profile_os_router)
 app.include_router(notifications_router)
 app.include_router(jobs_router)
 app.include_router(capture_router)
+app.include_router(capture_visit_video_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
-_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://brokerage.brxs.ca,https://dispatch-api.brxs.ca,https://www.brxs.ca,https://brxs.ca,https://bricks-dispatch-web.vercel.app,https://app.brxs.ca").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=_ALLOWED_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allow_headers=["*"])
-app.add_middleware(RateLimitMiddleware)
+install_browser_middleware(app)
 
 # ── Structured JSON Logging ────────────────────────────────────────────────────────
 log_handler = logging.StreamHandler()

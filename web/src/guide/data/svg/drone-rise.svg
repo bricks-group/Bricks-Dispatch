@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 288" width="480" height="288" role="img" aria-labelledby="t">
+<title id="t">Drone rise from 3 metres to 30 to 45 metres at 1 metre per second maximum</title>
+<rect id="bg" width="480" height="288" fill="#F4F1EB"/>
+<g fill="none" stroke="#14110E" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="10">
+<line x1="24.0" y1="252.0" x2="456.0" y2="252.0" vector-effect="non-scaling-stroke"/>
+<path d="M312 252V192L360.0 156L408 192V252" vector-effect="non-scaling-stroke"/>
+<path d="M350.0 222h20v30h-20z" vector-effect="non-scaling-stroke"/>
+<path d="M326 206h18v18h-18z" vector-effect="non-scaling-stroke"/>
+<path d="M376 206h18v18h-18z" vector-effect="non-scaling-stroke"/>
+<line x1="96.0" y1="24.0" x2="96.0" y2="252.0" stroke="#B7B2AA" stroke-dasharray="2 4" vector-effect="non-scaling-stroke"/>
+<path d="M150 222h20v8h-20z" vector-effect="non-scaling-stroke"/>
+<line x1="138.0" y1="218.0" x2="182.0" y2="218.0" vector-effect="non-scaling-stroke"/>
+<line x1="146.0" y1="222.0" x2="146.0" y2="218.0" vector-effect="non-scaling-stroke"/>
+<line x1="174.0" y1="222.0" x2="174.0" y2="218.0" vector-effect="non-scaling-stroke"/>
+<path d="M156 230h8v6h-8z" vector-effect="non-scaling-stroke"/>
+<path d="M150 68h20v8h-20z" vector-effect="non-scaling-stroke"/>
+<line x1="138.0" y1="64.0" x2="182.0" y2="64.0" vector-effect="non-scaling-stroke"/>
+<line x1="146.0" y1="68.0" x2="146.0" y2="64.0" vector-effect="non-scaling-stroke"/>
+<line x1="174.0" y1="68.0" x2="174.0" y2="64.0" vector-effect="non-scaling-stroke"/>
+<path d="M156 76h8v6h-8z" vector-effect="non-scaling-stroke"/>
+<line x1="160.0" y1="210.0" x2="160.0" y2="96.0" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/><path d="M163.4 102.1L160.0 96.0L156.6 102.1" vector-effect="non-scaling-stroke"/>
+<line x1="178.0" y1="72.0" x2="300.0" y2="72.0" stroke="#97928A" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<line x1="178.0" y1="226.0" x2="300.0" y2="226.0" stroke="#97928A" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+<line x1="90.0" y1="226.0" x2="102.0" y2="226.0" stroke="#615D57" vector-effect="non-scaling-stroke"/>
+<text x="84" y="230" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="end">3 m</text>
+<line x1="90.0" y1="72.0" x2="102.0" y2="72.0" stroke="#615D57" vector-effect="non-scaling-stroke"/>
+<text x="84" y="70" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="end">30–45 m</text>
+<line x1="90.0" y1="30.0" x2="102.0" y2="30.0" stroke="#615D57" vector-effect="non-scaling-stroke"/>
+<text x="84" y="34" fill="#615D57" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="end">122 m</text>
+<text x="108" y="34" fill="#97928A" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="start">Legal limit</text>
+<text x="176" y="150" fill="#14110E" stroke="none" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="400" text-anchor="start">Rise 1 m/s max</text>
+<text x="176" y="166" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="11" font-weight="400" text-anchor="start">Camera level</text>
+<text x="24" y="276" fill="#615D57" stroke="none" font-family="'General Sans', Inter, system-ui, sans-serif" font-size="12" font-weight="400" text-anchor="start">Drone rise: straight up, facing the home. Never descend.</text>
+</g>
+</svg>

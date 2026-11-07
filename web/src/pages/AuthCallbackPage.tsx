@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { me } from '../lib/api';
+import { isPhoneUser, isVendorMemberMissing, me } from '../lib/api';
 import { supabase } from '../lib/supabase';
 
 function oauthErrorFromLocation(): string | null {
@@ -67,10 +67,16 @@ export function AuthCallbackPage() {
         navigate('/', { replace: true });
         return true;
       } catch (e) {
+        // Phone-OTP account (e.g. after the add-email confirmation link): GO shows
+        // Add your email / Not on the team instead of a Google-specific error.
+        if (isVendorMemberMissing(e) && await isPhoneUser()) {
+          if (!cancelled) navigate('/', { replace: true });
+          return true;
+        }
         const msg = (e as Error).message || 'Could not load your account.';
         // Honest: Google worked but vendor member row missing / forbidden.
         fail(msg.includes('Vendor member')
-          ? 'Google signed you in, but this email is not on the GO team yet. Ask an owner to add you.'
+          ? 'Google signed you in, but this email isn’t on the team yet. Ask an owner to add you.'
           : msg);
         return true;
       }

@@ -37,6 +37,11 @@ async def send_dispatch_status_update_webhook(
     had no /v1/ (corrected 2026-07-27) but this caller was never updated to match --
     found and fixed 2026-08-03.
     """
+    # Builder/developer bookings from www live in Bricks OS
+    # (public.commercial_bookings, booking_id "cb_<id>"), not in Companion's
+    # bookings table, so there is no Companion booking to update.
+    if str(booking_id or "").startswith("cb_"):
+        return False
     webhook_url = f"{BOOKING_API_URL}/api/dispatch-jobs/{booking_id}/status"
 
     payload = {

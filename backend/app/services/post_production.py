@@ -13,12 +13,342 @@ _AUTOENHANCE_API_KEY_ENV = "AUTOENHANCE_API_KEY"
 
 logger = logging.getLogger(__name__)
 
+
+async def _safe_update_upload(db, upload_id: str, update: dict) -> None:
+    """Update uploads row via REST; Postgres on Fair-Use 402 (enhance→listing)."""
+    try:
+        await db.table("uploads").update(update).eq("id", upload_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_upload
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_upload(upload_id, update):
+            raise
+
+
+def _qc_variant_fields(provider: str, qc_path, asset: dict) -> dict:
+    """qc_variant_url for an auto-edited still — QC must review the delivered edit.
+
+    Intake stores a QC variant of the vendor's raw upload. When post-prod made a
+    new edit but its own variant upload failed (upload_qc_variant → None), the
+    stale raw variant stayed and QC (which prefers qc_variant_url) scored the
+    unedited source instead of the still the client receives. Clear it so QC
+    falls back to processed_url. Held originals keep their raw variant.
+    """
+    if qc_path:
+        return {"qc_variant_url": qc_path}
+    if str(provider or "").lower() in ("original", "as_is"):
+        return {}
+    if asset.get("qc_variant_url"):
+        return {"qc_variant_url": None}
+    return {}
+
+
+def _as_is_qc_variant_fields(processed_url, file_path, asset: dict) -> dict:
+    """as_is HEIC→JPEG / PropTx 4:3 export delivers new bytes — drop raw variant.
+
+    The intake variant is the uncropped raw; QC would judge a composition the
+    listing never shows. Without a fresh variant QC reviews processed_url.
+    """
+    if processed_url and processed_url != file_path and asset.get("qc_variant_url"):
+        return {"qc_variant_url": None}
+    return {}
+
+
 # --- Config ---
 # BoxBrownie / third-party virtual staging is intentionally disabled (Kam 2026-09-12).
 # Staging uploads deliver originals to the listing file — never call vendors or claim furniture was staged.
 # Owned Bricks staging ships later. Fotello/Autoenhance remain optional HDR enhance only.
+# POSTPROD_STILLS_PROVIDER selects leftover stills editor (Kam: AE is NOT locked).
+#   inhouse (default) — bricks_inhouse / Enfuse path; never call Autoenhance
+#   autoenhance       — prefer AE when key+plan available; soft-fail to inhouse
+# Aliases: ae→autoenhance; bricks_inhouse→inhouse. Unknown values → inhouse.
+_POSTPROD_STILLS_PROVIDER_ENV = "POSTPROD_STILLS_PROVIDER"
 AUTOENHANCE_API_KEY = os.environ.get("AUTOENHANCE_API_KEY")
 FOTELLO_API_KEY = os.environ.get("FOTELLO_API_KEY")
+
+
+def stills_provider_preference() -> str:
+    """Return 'inhouse' or 'autoenhance' for leftover vendor stills.
+
+    Default is inhouse so production does not treat Autoenhance as the locked
+    stills editor. Set POSTPROD_STILLS_PROVIDER=autoenhance to prefer AE.
+    """
+    raw = (os.environ.get(_POSTPROD_STILLS_PROVIDER_ENV) or "inhouse").strip().lower()
+    if raw in ("autoenhance", "ae"):
+        return "autoenhance"
+    if raw in ("inhouse", "bricks_inhouse", ""):
+        return "inhouse"
+    logger.warning(
+        f"Unknown {_POSTPROD_STILLS_PROVIDER_ENV}={raw!r} — using inhouse"
+    )
+    return "inhouse"
+
+
+UNEDITED_ORIGINAL_QC_NOTE = (
+    "Auto-edit failed — unedited original held. Every listing still must be "
+    "auto-edited before client delivery."
+)
+
+
+def unedited_original_hold() -> dict:
+    """QC hold for a listing still whose auto-edit failed (provider=original).
+
+    Kam rule: every client deliverable is auto-edited; automatic QC can hold a
+    file back. run_qc_for_job preserves this hold (does not re-score it to pass).
+    """
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": UNEDITED_ORIGINAL_QC_NOTE,
+    }
+
+
+def raw_review_hold() -> dict:
+    """QC hold for a camera RAW that could not be decoded (never delivered).
+
+    provider=original keeps run_qc_for_job from re-scoring it; the note tells
+    the reviewer it is a RAW decode problem, not a bad edit.
+    """
+    from .raw_decode import RAW_REVIEW_QC_NOTE
+
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": RAW_REVIEW_QC_NOTE,
+    }
+
+
+async def _hold_raw_for_review(db, job_id: str, upload_id: str, file_path: str, now: str, err: Exception) -> None:
+    logger.warning(
+        f"Job {job_id}: RAW {upload_id} ({file_path}) could not be decoded ({err}) — held for review"
+    )
+    await _safe_update_upload(db, upload_id, {
+        "processing_status": "done",
+        "processed_url": file_path,
+        "provider": "original",
+        "processed_at": now,
+        **raw_review_hold(),
+    })
+
+
+EQUIRECT_360_QC_NOTE = (
+    "360° equirectangular panorama — held uncropped, not a listing still. "
+    "Listing export would crop it to a warped 4:3 slice; deliver it through "
+    "Visit / tour instead."
+)
+
+
+def equirect_360_hold() -> dict:
+    """QC hold for a 360° sphere uploaded as a listing still (kept uncropped)."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": EQUIRECT_360_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: source is a 360 sphere — hold, no crop.
+_EQUIRECT_360 = "__equirect_360__"
+
+
+WIDE_PANO_QC_NOTE = (
+    "Wide panorama (2.5:1 or wider) — held uncropped for review. Listing export "
+    "would centre-crop it to 4:3 and discard most of the frame; deliver a "
+    "framed still or the full panorama by hand."
+)
+
+
+def wide_pano_hold() -> dict:
+    """QC hold for a wide stitched panorama uploaded as a listing still."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": WIDE_PANO_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: wide stitched pano — hold, no crop.
+_WIDE_PANO = "__wide_pano__"
+
+
+LOW_RES_QC_NOTE = (
+    "Low resolution (long edge under 1024 px) — held for review, not delivered. "
+    "Likely a thumbnail, screenshot or messaging-app copy; ask the vendor for "
+    "the original camera file."
+)
+
+
+def low_res_hold() -> dict:
+    """QC hold for a listing still too small to be a camera original."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": LOW_RES_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: source is a thumbnail — hold, no edit.
+_LOW_RES = "__low_res__"
+
+
+TALL_PANO_QC_NOTE = (
+    "Tall vertical panorama (1:2.5 or taller) — held uncropped for review. "
+    "Listing export forces landscape 4:3 and would keep only a thin band of "
+    "the frame; deliver a framed still or the full panorama by hand."
+)
+
+
+def tall_pano_hold() -> dict:
+    """QC hold for a tall vertical panorama uploaded as a listing still."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": TALL_PANO_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: tall vertical pano — hold, no crop.
+_TALL_PANO = "__tall_pano__"
+
+
+TRUNCATED_QC_NOTE = (
+    "Truncated image file (pixel data cut off mid-file) — held, not edited or "
+    "delivered. The upload stopped before the end of the photo; ask the vendor "
+    "to re-upload the original."
+)
+
+
+def truncated_still_hold() -> dict:
+    """QC hold for a listing still whose file was cut off mid-upload."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": TRUNCATED_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: file cut off — hold, no edit.
+_TRUNCATED = "__truncated_still__"
+
+
+ANIMATED_QC_NOTE = (
+    "Animated image (GIF / APNG / animated WebP) — held, not edited or "
+    "delivered. Editing and listing export keep only the first frame; ask the "
+    "vendor for the camera still, or deliver the clip as video."
+)
+
+
+def animated_still_hold() -> dict:
+    """QC hold for an animated image uploaded as a listing still."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": ANIMATED_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: animated clip — hold, no edit.
+_ANIMATED = "__animated_still__"
+
+
+BLANK_QC_NOTE = (
+    "Blank frame (one flat tone — lens cap / closed shutter black, blown-out "
+    "white, or placeholder) — held, not edited or delivered. Ask the vendor "
+    "to re-upload the real still."
+)
+
+
+def blank_still_hold() -> dict:
+    """QC hold for a listing still that is a blank (single flat tone) frame."""
+    return {
+        "qc_status": "rejected",
+        "qc_score": 0,
+        "qc_notes": BLANK_QC_NOTE,
+    }
+
+
+# Sentinel from _listing_export_as_is_url: blank frame — hold, no edit.
+_BLANK = "__blank_still__"
+_PANO_SENTINELS = (_EQUIRECT_360, _WIDE_PANO, _TALL_PANO, _LOW_RES, _TRUNCATED, _ANIMATED, _BLANK)
+
+
+def _pano_hold_kind(original: Optional[bytes]) -> Optional[str]:
+    """Sentinel for a panorama the 4:3 listing export must not crop, else None."""
+    if not original:
+        return None
+    from .image_io import is_equirect_360, is_tall_panorama, is_wide_panorama
+
+    if is_equirect_360(original):
+        return _EQUIRECT_360
+    if is_wide_panorama(original):
+        return _WIDE_PANO
+    if is_tall_panorama(original):
+        return _TALL_PANO
+    from .image_io import is_low_resolution_still
+
+    if is_low_resolution_still(original):
+        return _LOW_RES
+    from .image_io import is_truncated_still
+
+    if is_truncated_still(original):
+        return _TRUNCATED
+    from .image_io import is_animated_still
+
+    if is_animated_still(original):
+        return _ANIMATED
+    from .image_io import is_blank_still
+
+    if is_blank_still(original):
+        return _BLANK
+    return None
+
+
+async def _hold_equirect_360(
+    db, job_id: str, upload_id: str, file_path: str, now: str, kind: str = _EQUIRECT_360
+) -> None:
+    if kind == _BLANK:
+        hold = blank_still_hold()
+    elif kind == _ANIMATED:
+        hold = animated_still_hold()
+    elif kind == _TRUNCATED:
+        hold = truncated_still_hold()
+    elif kind == _LOW_RES:
+        hold = low_res_hold()
+    elif kind == _WIDE_PANO:
+        hold = wide_pano_hold()
+    elif kind == _TALL_PANO:
+        hold = tall_pano_hold()
+    else:
+        hold = equirect_360_hold()
+    await _safe_update_upload(db, upload_id, {
+        "processing_status": "done",
+        "processed_url": file_path,
+        "provider": "as_is",
+        "processed_at": now,
+        **hold,
+    })
+    what = (
+        "a blank frame (one flat tone) — held, not edited or delivered"
+        if kind == _BLANK
+        else "an animated image (GIF/APNG/WebP) — held, not edited or delivered"
+        if kind == _ANIMATED
+        else "a truncated image file (pixel data cut off) — held, not edited or delivered"
+        if kind == _TRUNCATED
+        else "low resolution (long edge < 1024 px) — held, not edited or delivered"
+        if kind == _LOW_RES
+        else "a wide panorama — held uncropped (4:3 crop would discard most of the frame)"
+        if kind == _WIDE_PANO
+        else "a tall vertical panorama — held uncropped (landscape 4:3 crop would keep a thin band)"
+        if kind == _TALL_PANO
+        else "a 360° equirect panorama — held uncropped (not a listing still; route via Visit/tour)"
+    )
+    logger.warning(f"Job {job_id}: upload {upload_id} is {what}")
+
+
+def prefer_autoenhance_stills() -> bool:
+    """True only when env explicitly selects Autoenhance for leftover stills."""
+    return stills_provider_preference() == "autoenhance"
 
 
 async def trigger_boxbrownie_staging(source_url: str, room_type: str = "Living Room", style_preset: str = "modern") -> Optional[str]:
@@ -101,21 +431,42 @@ async def process_job_assets(job_id: str):
     # 0 rows updated here and bail out early, preventing double-submission to providers.
     # NOTE: "completed" is the expected input state (shoot done, post-production starting),
     # so it must NOT be in the exclusion list.
-    gate = await db.table("jobs").update({
-        "status": "processing",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", job_id).not_.in_("status", ["processing", "delivered", "cancelled", "agent_no_show", "dispatch_failed"]).execute()
-    if not (gate.data):
+    claimed = False
+    try:
+        gate = await db.table("jobs").update({
+            "status": "processing",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", job_id).not_.in_("status", ["processing", "delivered", "cancelled", "agent_no_show", "dispatch_failed"]).execute()
+        claimed = bool(gate.data)
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_claim_job_for_processing
+        if not _is_rest_quota_error(e):
+            raise
+        claimed = pg_claim_job_for_processing(job_id)
+    if not claimed:
         logger.info(f"Job {job_id}: skipping process_job_assets — already processing or terminal")
         return
 
-    res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    try:
+        from ..shared.database import maybe_single_row
+        res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        job = maybe_single_row(res_job) or None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        job = pg_select_job_by_id(job_id)
+    if not job:
         return
 
-    job = res_job.data
-    res_assets = await db.table("uploads").select("*").eq("job_id", job_id).execute()
-    assets = res_assets.data
+    try:
+        res_assets = await db.table("uploads").select("*").eq("job_id", job_id).execute()
+        assets = res_assets.data
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+        if not _is_rest_quota_error(e):
+            raise
+        assets = pg_select_uploads_by_job_id(job_id)
 
     logger.info(f"Starting post-production for job {job_id}")
 
@@ -147,33 +498,30 @@ async def process_job_assets(job_id: str):
             leftover.append(asset)
             continue
 
-        if FOTELLO_API_KEY:
-            ft_id = await trigger_fotello_edit(provider_url)
-            if ft_id:
-                results.append({"asset_id": asset["id"], "provider": "fotello", "provider_job_id": ft_id})
-            else:
-                leftover.append(asset)
-        elif AUTOENHANCE_API_KEY:
-            ae_id = await trigger_autoenhance_edit(provider_url)
-            if ae_id:
-                results.append({"asset_id": asset["id"], "provider": "autoenhance", "provider_job_id": ae_id})
-            else:
-                leftover.append(asset)
-        else:
+        if route == "twilight":
+            # Real dusk shots — never Fotello/Autoenhance/BoxBrownie (those invent day-to-dusk / blue sky).
             leftover.append(asset)
+            continue
+
+        # Launch path: sync leftover enhance (provider via POSTPROD_STILLS_PROVIDER;
+        # default inhouse; autoenhance only when env selects it + key/plan ok).
+        # Do NOT submit vendor_photo to async Fotello/AE v2 — that leaves rows
+        # in processing waiting for callbacks and skips bracket HDR merge.
+        leftover.append(asset)
+        _ = provider_url  # signed URL kept for future async providers
 
     for res in results:
-        await db.table("uploads").update({
+        await _safe_update_upload(db, res["asset_id"], {
             "processing_status": "processing",
             "provider": res["provider"],
-            "provider_job_id": res["provider_job_id"]
-        }).eq("id", res["asset_id"]).execute()
+            "provider_job_id": res["provider_job_id"],
+        })
 
     # Without vendor keys (or for drone/reel), leftover stills used to sit in
     # processing forever — finalize never ran. Deliver them now so the listing
     # file / client share is not a hollow path.
-    for asset in leftover:
-        await deliver_asset_without_vendor(db, job_id, asset)
+    # Group photo leftovers by bracket stem so +/-EV bursts HDR-merge once.
+    await _deliver_leftovers_with_brackets(db, job_id, leftover)
 
     if not results:
         try:
@@ -183,11 +531,407 @@ async def process_job_assets(job_id: str):
             logger.error(f"Job {job_id}: finalize after local deliver failed: {e}")
 
 
+
+async def _deliver_leftovers_with_brackets(db, job_id: str, leftover: list) -> None:
+    """Deliver leftovers; fuse photo/twilight brackets into one listing still per stem."""
+    from .media_intake import delivery_route
+    from .photo_enhance_service import group_assets_by_bracket
+
+    photos = []
+    twilight = []
+    others = []
+    for asset in leftover:
+        route = delivery_route(asset)
+        # Twilight must NEVER enter vendor_photo group (apply_sky=True) — that path
+        # may invent blue sky / day-to-dusk. Twilight gets its own bracket merge with
+        # apply_sky=False. Staging / drone-aerial / reel stay out of both bracket paths.
+        if route == "vendor_photo":
+            photos.append(asset)
+        elif route == "twilight":
+            twilight.append(asset)
+        else:
+            others.append(asset)
+
+    for asset in others:
+        await deliver_asset_without_vendor(db, job_id, asset)
+
+    for group in group_assets_by_bracket(photos):
+        if len(group) <= 1:
+            await deliver_asset_without_vendor(db, job_id, group[0])
+            continue
+        # Primary = closest to 0 EV (or middle); siblings share processed_url.
+        await deliver_bracket_group_without_vendor(db, job_id, group, apply_sky=True)
+
+    # Real dusk brackets: HDR-merge with apply_sky=False (len<=1 → single-frame polish).
+    if twilight:
+        for group in group_assets_by_bracket(twilight):
+            if len(group) <= 1:
+                await deliver_asset_without_vendor(db, job_id, group[0])
+                continue
+            await deliver_bracket_group_without_vendor(
+                db, job_id, group, apply_sky=False
+            )
+
+
+async def deliver_bracket_group_without_vendor(
+    db, job_id: str, group: list, *, apply_sky: bool = True
+) -> None:
+    """HDR-merge + window-pull a +/-EV set; mark all siblings done.
+
+    apply_sky=True for vendor_photo brackets; False for twilight (preserve real dusk).
+    """
+    from .photo_enhance_service import (
+        apply_listing_export,
+        enhance_bracket,
+        exposure_bias_from_name,
+        upload_enhanced,
+        upload_qc_variant,
+    )
+    from .raw_working import RawDecodeError, load_still_source
+
+    now = datetime.now(timezone.utc).isoformat()
+    frames = []
+    filenames = []
+    loaded = []
+    raw_failed = []
+    for asset in group:
+        path = asset.get("file_url")
+        if not path:
+            continue
+        # Camera RAW → working JPEG (RAW stays the master, never merged raw).
+        try:
+            raw = await load_still_source(asset, path)
+        except RawDecodeError as e:
+            logger.warning(f"Job {job_id}: bracket RAW {asset.get('id')} undecodable ({e}) — left out of merge")
+            raw_failed.append(asset)
+            continue
+        if not raw:
+            continue
+        frames.append(raw)
+        filenames.append(str(asset.get("filename") or ""))
+        loaded.append(asset)
+
+    async def _fold_siblings(primary_asset, primary_processed) -> None:
+        # Exposures that are not the primary share its result and never reach
+        # the listing. Includes frames whose download failed — left "pending"
+        # they block _finalize_job_if_complete (in_flight) until reconcile.
+        pid = primary_asset.get("id")
+        for asset in group:
+            uid = asset.get("id")
+            if not uid or uid == pid:
+                continue
+            await _safe_update_upload(db, uid, {
+                "processing_status": "done",
+                "processed_url": primary_processed or primary_asset.get("file_url"),
+                "provider": "bracket_sibling",
+                "processed_at": now,
+            })
+
+    def _bias_key(item):
+        b = exposure_bias_from_name(str(item.get("filename") or ""))
+        return (999.0 if b is None else abs(b), str(item.get("filename") or ""))
+
+    if not loaded and raw_failed:
+        # Every exposure is a RAW we cannot decode: hold the angle for a human.
+        primary = sorted(raw_failed, key=_bias_key)[0]
+        await _hold_raw_for_review(
+            db, job_id, primary.get("id"), primary.get("file_url"), now,
+            RawDecodeError("no exposure in this bracket decoded"),
+        )
+        await _fold_siblings(primary, primary.get("file_url"))
+        return
+    if not loaded:
+        # Every exposure download missed: single-frame path on the primary
+        # (retries download; holds the unedited original if it misses again).
+        candidates = [a for a in group if a.get("id") and a.get("file_url")]
+        if not candidates:
+            return
+        primary = sorted(candidates, key=_bias_key)[0]
+        primary_processed = await deliver_asset_without_vendor(db, job_id, primary)
+        await _fold_siblings(primary, primary_processed)
+        return
+    if len(frames) == 1:
+        primary_processed = await deliver_asset_without_vendor(db, job_id, loaded[0])
+        await _fold_siblings(loaded[0], primary_processed)
+        return
+
+    # Pick primary: bias closest to 0, else middle of sorted group.
+    primary = sorted(loaded, key=_bias_key)[0]
+    primary_id = primary.get("id")
+
+    # Same still holds as the single-frame path. AEB shooters fire 3–5 frames
+    # per press, so a lens-cap / 360 / pano / thumbnail-export accident lands
+    # here as a bracket — and used to be HDR-merged, 4:3-cropped and delivered.
+    # The primary (closest to 0 EV) decides for the whole angle.
+    primary_bytes = frames[loaded.index(primary)]
+    hold_kind = _pano_hold_kind(primary_bytes)
+    if hold_kind:
+        primary_raw = primary.get("file_url")
+        await _hold_equirect_360(db, job_id, primary_id, primary_raw, now, hold_kind)
+        await _fold_siblings(primary, primary_raw)
+        return
+
+    # A sibling exposure cut off mid-upload fails the whole merge (decode raises)
+    # and the angle fell back to a single-frame edit with no HDR. Drop it from
+    # the merge; it still folds into the primary below like a download miss.
+    from .image_io import is_truncated_still
+
+    kept = [
+        (asset, raw, name)
+        for asset, raw, name in zip(loaded, frames, filenames)
+        if asset is primary or not is_truncated_still(raw)
+    ]
+    if len(kept) < len(loaded):
+        logger.warning(
+            f"Job {job_id}: {len(loaded) - len(kept)} truncated bracket exposure(s) "
+            f"dropped from the {primary_id} merge"
+        )
+        loaded = [k[0] for k in kept]
+        frames = [k[1] for k in kept]
+        filenames = [k[2] for k in kept]
+    if len(frames) == 1:
+        primary_processed = await deliver_asset_without_vendor(db, job_id, primary)
+        await _fold_siblings(primary, primary_processed)
+        return
+
+    enhanced = None
+    enhance_meta = {}
+    provider = "bricks_inhouse"
+    # Day vendor brackets: Autoenhance only when POSTPROD_STILLS_PROVIDER=autoenhance
+    # (mls_safe: no invent sky). Default inhouse. Twilight stays in-house.
+    # Fail-fast to bricks_inhouse on No Plan / errors so listing never hangs.
+    if apply_sky and prefer_autoenhance_stills():
+        try:
+            from . import autoenhance_service as ae
+            if ae.is_available():
+                enhanced, enhance_meta = ae.enhance_brackets_sync(
+                    frames, filenames, apply_sky=False
+                )
+                # AE full-res skips inhouse format_listing_ready — apply PropTx
+                # 4:3 + long-edge ≤2400 before upload (live Fuze was 2800×1870 3:2).
+                # Soft-fail: keep AE bytes if export throws (do not discard AE → inhouse).
+                provider = "autoenhance"
+                try:
+                    enhanced, export_meta = apply_listing_export(enhanced)
+                    enhance_meta = {**enhance_meta, **export_meta}
+                    exp = (enhance_meta.get("export") or {})
+                    logger.info(
+                        f"Job {job_id}: Autoenhance HDR ok order={enhance_meta.get('order_id')} "
+                        f"listing_export={exp.get('width')}x{exp.get('height')} "
+                        f"aspect_ok={exp.get('aspect_ok')} long_ok={exp.get('long_edge_ok')}"
+                    )
+                except Exception as export_err:
+                    logger.warning(
+                        f"Job {job_id}: listing_export after Autoenhance HDR failed "
+                        f"({export_err}) — keeping enhanced"
+                    )
+        except Exception as e:
+            logger.warning(
+                f"Job {job_id}: Autoenhance skipped ({e}) — bricks_inhouse fallback"
+            )
+            enhanced = None
+
+    try:
+        if enhanced is None:
+            enhanced, enhance_meta = enhance_bracket(
+                frames, filenames, apply_sky=apply_sky, return_meta=True
+            )
+            provider = "bricks_inhouse"
+            # PropTx MLS geometry — same export AE path applies (soft-fail keep enhanced)
+            try:
+                enhanced, export_meta = apply_listing_export(enhanced)
+                enhance_meta = {**(enhance_meta or {}), **export_meta}
+                exp = (enhance_meta.get("export") or {})
+                logger.info(
+                    f"Job {job_id}: inhouse bracket listing_export="
+                    f"{exp.get('width')}x{exp.get('height')} "
+                    f"aspect_ok={exp.get('aspect_ok')} long_ok={exp.get('long_edge_ok')}"
+                )
+            except Exception as export_err:
+                logger.warning(
+                    f"Job {job_id}: listing_export after inhouse bracket failed "
+                    f"({export_err}) — keeping enhanced"
+                )
+        processed = await upload_enhanced(db.storage, job_id, primary_id, enhanced)
+        qc_path = await upload_qc_variant(db.storage, job_id, primary_id, enhanced)
+    except Exception as e:
+        # Never spray every exposure (−2…+2 EV) onto the listing as separate stills.
+        # Single-frame auto-edit the primary (closest to 0 EV); siblings share its
+        # result. If single-frame enhance also fails, the primary is QC-held
+        # (unedited original) by deliver_asset_without_vendor.
+        logger.error(
+            f"Bracket enhance failed for job {job_id}: {e} — single-frame primary "
+            f"{primary_id}; {len(loaded) - 1} sibling(s) folded"
+        )
+        primary_processed = await deliver_asset_without_vendor(db, job_id, primary)
+        await _fold_siblings(primary, primary_processed)
+        return
+
+    for asset in loaded:
+        uid = asset.get("id")
+        is_primary = uid == primary_id
+        update = {
+            "processing_status": "done",
+            "processed_url": processed,
+            "provider": provider if is_primary else "bracket_sibling",
+            "processed_at": now,
+        }
+        if is_primary:
+            # QC must score the delivered merge. A failed variant upload clears
+            # the intake variant (downsized 0 EV raw) so QC falls back to
+            # processed_url instead of passing/failing the unedited exposure.
+            update["qc_variant_url"] = qc_path or None
+        # PropTx people soft-fail: flag primary for GO/MLS quarantine (not hard-fail)
+        if is_primary and enhance_meta.get("mls_quarantine"):
+            update["qc_status"] = "flagged"
+            update["qc_notes"] = (
+                "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
+                f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
+            )[:500]
+        await _safe_update_upload(db, uid, update)
+
+    # Exposures whose download missed fold into the merged primary too.
+    loaded_ids = {a.get("id") for a in loaded}
+    for asset in group:
+        uid = asset.get("id")
+        if not uid or uid in loaded_ids:
+            continue
+        await _safe_update_upload(db, uid, {
+            "processing_status": "done",
+            "processed_url": processed,
+            "provider": "bracket_sibling",
+            "processed_at": now,
+        })
+
+
+
+async def _heic_as_is_jpeg_url(db, job_id: str, upload_id: str, asset: dict, file_path: str):
+    """If staging/as_is still is HEIC/HEIF, convert to sRGB JPEG for browser listing.
+
+    Format-only — no HDR/sky/staging invent. PDF/video untouched. On decode failure
+    returns None so caller keeps the original path (honest fallback).
+    """
+    import io
+    from .media_intake import is_pdf_file, is_video_file
+
+    filename = asset.get("filename")
+    mime_type = asset.get("mime_type")
+    if is_pdf_file(filename, mime_type):
+        return None
+    if is_video_file(filename, mime_type, asset.get("media_type")):
+        return None
+    from .raw_working import ensure_working_jpeg, is_raw_asset
+
+    if is_raw_asset(asset, file_path):
+        # RAW master stays put; the browser/listing gets the working JPEG.
+        # RawDecodeError propagates — callers hold the file for review.
+        jpeg, meta = await ensure_working_jpeg(file_path)
+        if not jpeg:
+            return None
+        if meta.get("work_path"):
+            return meta["work_path"]
+        from .photo_enhance_service import upload_enhanced
+
+        return await upload_enhanced(db.storage, job_id, upload_id, jpeg)
+    name = str(filename or file_path or "").lower()
+    mime = str(mime_type or "").lower()
+    is_heic = (
+        name.endswith(".heic")
+        or name.endswith(".heif")
+        or "heic" in mime
+        or "heif" in mime
+    )
+    if not is_heic:
+        return None
+    try:
+        from .image_io import open_rgb
+        from .photo_enhance_service import upload_enhanced
+        from .storage import download_bytes
+
+        original = await download_bytes(file_path)
+        if not original:
+            return None
+        img = open_rgb(original)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=92)
+        jpeg = buf.getvalue()
+        if not jpeg.startswith(b"\xff\xd8"):
+            return None
+        path = await upload_enhanced(db.storage, job_id, upload_id, jpeg)
+        logger.info(
+            f"Job {job_id}: HEIC→JPEG delivery for {upload_id} → {path} (provider stays as_is)"
+        )
+        return path
+    except Exception as e:
+        logger.warning(
+            f"Job {job_id}: HEIC→JPEG failed for {upload_id}: {e} — keeping original"
+        )
+        return None
+
+
+async def _listing_export_as_is_url(db, job_id: str, upload_id: str, asset: dict, file_path: str):
+    """PropTx MLS geometry on as_is drone/reel/staging stills — crop/JPEG only, no HDR.
+
+    Skip PDF / video / floorplan / non-image. download → apply_listing_export →
+    upload_enhanced. On failure return None so caller keeps the current path.
+    Provider stays as_is (format export only). Reel video (mp4/mov) stays untouched
+    via is_video_file; reel_/cinematic_/staging_ JPEG stills get the same PropTx
+    export as drone (no virtual staging, no HDR enhance).
+    """
+    from .media_intake import IMAGE_EXTS, is_pdf_file, is_video_file, infer_media_type
+
+    filename = asset.get("filename")
+    mime_type = asset.get("mime_type")
+    if is_pdf_file(filename, mime_type):
+        return None
+    # Mime/ext only — do not pass media_type=drone/reel (is_video_file treats those as video).
+    if is_video_file(filename, mime_type, None):
+        return None
+    mt = infer_media_type(
+        filename, mime_type, asset.get("media_type"), file_url=file_path
+    )
+    if mt == "floorplan":
+        return None
+    name = str(filename or file_path or "").lower().replace("\\", "/").split("/")[-1]
+    mime = str(mime_type or "").lower()
+    from .raw_decode import is_camera_raw_name
+
+    is_image = name.endswith(IMAGE_EXTS) or mime.startswith("image/") or is_camera_raw_name(name)
+    if not is_image:
+        return None
+    try:
+        from .photo_enhance_service import apply_listing_export, upload_enhanced
+        from .raw_working import load_still_source
+
+        original = await load_still_source(asset, file_path)
+        if not original:
+            return None
+        pano = _pano_hold_kind(original)
+        if pano:
+            return pano
+        exported, export_meta = apply_listing_export(original)
+        if not exported:
+            return None
+        path = await upload_enhanced(db.storage, job_id, upload_id, exported)
+        exp = (export_meta or {}).get("export") or {}
+        logger.info(
+            f"Job {job_id}: listing_export as_is for {upload_id} → {path} "
+            f"{exp.get('width')}x{exp.get('height')} (provider stays as_is; no HDR)"
+        )
+        return path
+    except Exception as e:
+        logger.warning(
+            f"Job {job_id}: listing_export as_is failed for {upload_id}: {e} — keeping current"
+        )
+        return None
+
+
 async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     """Mark an upload done so listing delivery can proceed without vendor APIs.
 
     Photos get in-house enhance when possible; drone/reel/video stay as-is.
     Staging always delivers the original (honest — not virtually staged; no third-party).
+    Twilight gets in-house enhance with apply_sky=False (preserve real dusk; no blue-sky invention).
     """
     from .media_intake import delivery_route
     from .storage import download_bytes
@@ -198,31 +942,304 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     route = delivery_route(asset)
     if not upload_id or not file_path:
         return
+    # Visit (.splat/.ply/.spz) is not a listing still, but must leave "pending"
+    # or finalize blocks forever on in_flight. Mark done with the raw path;
+    # _finalize_job_if_complete still excludes these from photo delivery_urls
+    # and registers property_visits from the Visit row separately.
     if route == "visit":
+        await _safe_update_upload(db, upload_id, {
+            "processing_status": "done",
+            "processed_url": file_path,
+            "provider": "visit",
+            "processed_at": now,
+        })
+        return
+
+    # Staging: honest original only — no in-house enhance, no third-party virtual staging.
+    # HEIC/HEIF → sRGB JPEG for browser listing (format only; provider stays as_is).
+    # PropTx MLS listing_export (4:3 / le2400) — same as drone/reel stills; HDR OFF.
+    if route == "staging":
+        processed_url = file_path
+        from .raw_working import RawDecodeError
+
+        try:
+            jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
+        except RawDecodeError as e:
+            await _hold_raw_for_review(db, job_id, upload_id, file_path, now, e)
+            return
+        if jpeg_url:
+            processed_url = jpeg_url
+        listing_url = await _listing_export_as_is_url(
+            db, job_id, upload_id, asset, processed_url
+        )
+        if listing_url in _PANO_SENTINELS:
+            await _hold_equirect_360(db, job_id, upload_id, file_path, now, listing_url)
+            return
+        if listing_url:
+            processed_url = listing_url
+        await _safe_update_upload(db, upload_id, {
+            "processing_status": "done",
+            "processed_url": processed_url,
+            "provider": "as_is",
+            "processed_at": now,
+            **_as_is_qc_variant_fields(processed_url, file_path, asset),
+        })
+        logger.info(
+            f"Job {job_id}: staging upload {upload_id} delivered as_is "
+            "(PropTx listing_export when image; no enhance, no virtual staging; "
+            "owned pipeline later)"
+        )
+        return
+
+    # Floorplan / drone / reel / PDF: original only — never HDR enhance / sky invent.
+    # HEIC/HEIF stills convert to sRGB JPEG for browser listing (format only).
+    if route == "as_is":
+        from .media_intake import infer_media_type, is_pdf_file
+
+        mt = infer_media_type(
+            asset.get("filename"),
+            asset.get("mime_type"),
+            asset.get("media_type"),
+            file_url=file_path,
+        )
+        label = (
+            "floorplan"
+            if mt == "floorplan"
+            or is_pdf_file(asset.get("filename"), asset.get("mime_type"))
+            else "as_is"
+        )
+        processed_url = file_path
+        from .raw_working import RawDecodeError, is_raw_asset
+
+        try:
+            jpeg_url = await _heic_as_is_jpeg_url(db, job_id, upload_id, asset, file_path)
+        except RawDecodeError as e:
+            await _hold_raw_for_review(db, job_id, upload_id, file_path, now, e)
+            return
+        if is_raw_asset(asset, file_path) and not jpeg_url:
+            # Never deliver a RAW as is (drone DNG, mis-tagged frame).
+            await _hold_raw_for_review(
+                db, job_id, upload_id, file_path, now, RawDecodeError("RAW source missing")
+            )
+            return
+        if jpeg_url:
+            processed_url = jpeg_url
+        # Drone / reel stills: PropTx MLS listing_export (4:3 / le2400 / sRGB JPEG).
+        # HDR enhance stays OFF — provider remains as_is. Reel video (mp4) skipped
+        # by still_image / is_video_file; floorplan never enters this branch.
+        if mt in ("drone", "reel"):
+            from .media_intake import IMAGE_EXTS, is_video_file
+
+            name = str(asset.get("filename") or processed_url or "").lower()
+            mime = str(asset.get("mime_type") or "").lower()
+            still_image = (
+                name.endswith(IMAGE_EXTS)
+                or mime.startswith("image/")
+                or str(processed_url or "").lower().endswith(IMAGE_EXTS)
+            )
+            # Mime/ext only — media_type=reel would make is_video_file True for JPEGs.
+            if (
+                still_image
+                and not is_pdf_file(asset.get("filename"), asset.get("mime_type"))
+                and not is_video_file(asset.get("filename"), asset.get("mime_type"), None)
+            ):
+                listing_url = await _listing_export_as_is_url(
+                    db, job_id, upload_id, asset, processed_url
+                )
+                if listing_url in _PANO_SENTINELS:
+                    await _hold_equirect_360(db, job_id, upload_id, file_path, now, listing_url)
+                    return
+                if listing_url:
+                    processed_url = listing_url
+        await _safe_update_upload(db, upload_id, {
+            "processing_status": "done",
+            "processed_url": processed_url,
+            "provider": "as_is",
+            "processed_at": now,
+            **_as_is_qc_variant_fields(processed_url, file_path, asset),
+        })
+        logger.info(
+            f"Job {job_id}: {label} upload {upload_id} delivered as_is "
+            "(no HDR enhance)"
+        )
         return
 
     processed = file_path
     provider = "as_is"
     qc_path = asset.get("qc_variant_url")
+    enhance_meta = {}
 
-    if route in ("vendor_photo", "staging"):
+    # Twilight: polish only — never blue-sky replacement or day-to-dusk invention.
+    if route == "twilight":
         try:
-            from .photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
-            original = await download_bytes(file_path)
+            from .photo_enhance_service import (
+                apply_listing_export,
+                enhance_bracket,
+                upload_enhanced,
+                upload_qc_variant,
+            )
+            from .raw_working import RawDecodeError, load_still_source
+
+            try:
+                original = await load_still_source(asset, file_path)
+            except RawDecodeError as raw_err:
+                await _hold_raw_for_review(db, job_id, upload_id, file_path, now, raw_err)
+                return file_path
+            pano = _pano_hold_kind(original)
+            if pano:
+                await _hold_equirect_360(db, job_id, upload_id, file_path, now, pano)
+                return file_path
             if original:
-                enhanced = enhance_image(original)
+                enhanced, enhance_meta = enhance_bracket(
+                    [original], apply_sky=False, return_meta=True
+                )
+                # PropTx MLS 4:3 / le≤2400 — match AE vendor_photo + as_is honesty
+                try:
+                    enhanced, export_meta = apply_listing_export(enhanced)
+                    enhance_meta = {**(enhance_meta or {}), **export_meta}
+                    exp = (enhance_meta.get("export") or {})
+                    logger.info(
+                        f"Job {job_id}: twilight listing_export="
+                        f"{exp.get('width')}x{exp.get('height')} "
+                        f"aspect_ok={exp.get('aspect_ok')} long_ok={exp.get('long_edge_ok')}"
+                    )
+                except Exception as export_err:
+                    logger.warning(
+                        f"Job {job_id}: twilight listing_export failed for {upload_id}: "
+                        f"{export_err} — keeping enhanced"
+                    )
                 processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
                 qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
                 provider = "bricks_inhouse"
+            else:
+                # Source bytes missing (Storage 402 + Blob miss) — nothing was
+                # auto-edited. Hold the unedited original; never deliver raw as_is.
+                logger.warning(
+                    f"Job {job_id}: twilight source download failed for {upload_id} "
+                    "— unedited original held"
+                )
+                processed = file_path
+                provider = "original"
+                enhance_meta = {}
+        except Exception as e:
+            logger.error(
+                f"Twilight enhance failed for {upload_id}: {e} — delivering original"
+            )
+            processed = file_path
+            provider = "original"
+            enhance_meta = {}
+
+        update = {
+            "processing_status": "done",
+            "processed_url": processed,
+            "provider": provider,
+            "processed_at": now,
+        }
+        update.update(_qc_variant_fields(provider, qc_path, asset))
+        if enhance_meta.get("mls_quarantine"):
+            update["qc_status"] = "flagged"
+            update["qc_notes"] = (
+                "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
+                f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
+            )[:500]
+        if provider == "original":
+            update.update(unedited_original_hold())
+        await _safe_update_upload(db, upload_id, update)
+        logger.info(
+            f"Job {job_id}: twilight upload {upload_id} delivered "
+            f"provider={provider} (apply_sky=False)"
+        )
+        return processed
+
+    if route == "vendor_photo":
+        try:
+            from . import autoenhance_service as ae
+            from .photo_enhance_service import (
+                apply_listing_export,
+                enhance_image,
+                upload_enhanced,
+                upload_qc_variant,
+            )
+            from .raw_working import RawDecodeError, load_still_source
+
+            try:
+                original = await load_still_source(asset, file_path)
+            except RawDecodeError as raw_err:
+                await _hold_raw_for_review(db, job_id, upload_id, file_path, now, raw_err)
+                return file_path
+            enhance_meta = {}
+            pano = _pano_hold_kind(original)
+            if pano:
+                await _hold_equirect_360(db, job_id, upload_id, file_path, now, pano)
+                return file_path
+            if original:
+                enhanced = None
+                filename = str(asset.get("filename") or "still.jpg")
+                # Autoenhance single-frame only when POSTPROD_STILLS_PROVIDER=autoenhance.
+                if prefer_autoenhance_stills() and ae.is_available():
+                    try:
+                        enhanced, enhance_meta = ae.enhance_brackets_sync(
+                            [original], [filename], apply_sky=False
+                        )
+                        # Soft-fail: keep AE bytes if export throws (exterior/single
+                        # HDR leftovers too — do not discard AE → inhouse).
+                        provider = "autoenhance"
+                        try:
+                            enhanced, export_meta = apply_listing_export(enhanced)
+                            enhance_meta = {**enhance_meta, **export_meta}
+                            exp = (enhance_meta.get("export") or {})
+                            logger.info(
+                                f"Job {job_id}: Autoenhance single-frame ok "
+                                f"order={enhance_meta.get('order_id')} "
+                                f"listing_export={exp.get('width')}x{exp.get('height')}"
+                            )
+                        except Exception as export_err:
+                            logger.warning(
+                                f"Job {job_id}: listing_export after Autoenhance "
+                                f"single-frame failed ({export_err}) — keeping enhanced"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Job {job_id}: Autoenhance single-frame skipped ({e}) "
+                            "— bricks_inhouse fallback"
+                        )
+                        enhanced = None
+                        enhance_meta = {}
+                if enhanced is None:
+                    enhanced, enhance_meta = enhance_image(original, return_meta=True)
+                    provider = "bricks_inhouse"
+                    # PropTx MLS export — parity with AE single-frame path (soft-fail keep)
+                    try:
+                        enhanced, export_meta = apply_listing_export(enhanced)
+                        enhance_meta = {**(enhance_meta or {}), **export_meta}
+                        exp = (enhance_meta.get("export") or {})
+                        logger.info(
+                            f"Job {job_id}: inhouse single-frame listing_export="
+                            f"{exp.get('width')}x{exp.get('height')}"
+                        )
+                    except Exception as export_err:
+                        logger.warning(
+                            f"Job {job_id}: listing_export after inhouse single-frame "
+                            f"failed ({export_err}) — keeping enhanced"
+                        )
+                processed = await upload_enhanced(db.storage, job_id, upload_id, enhanced)
+                qc_path = await upload_qc_variant(db.storage, job_id, upload_id, enhanced)
+            else:
+                # Source bytes missing (Storage 402 + Blob miss) — nothing was
+                # auto-edited. Used to fall through as provider=as_is with the raw
+                # path (no hold) so QC could pass an unedited still onto the listing.
+                logger.warning(
+                    f"Job {job_id}: source download failed for {upload_id} "
+                    "— unedited original held"
+                )
+                processed = file_path
+                provider = "original"
+                enhance_meta = {}
         except Exception as e:
             logger.error(f"In-house enhance failed for {upload_id}: {e} — delivering original")
             processed = file_path
             provider = "original"
-        if route == "staging":
-            logger.info(
-                f"Job {job_id}: staging upload {upload_id} delivered as original "
-                "(no third-party virtual staging — owned pipeline later)"
-            )
+            enhance_meta = {}
 
     update = {
         "processing_status": "done",
@@ -230,6 +1247,18 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
         "provider": provider,
         "processed_at": now,
     }
-    if qc_path:
-        update["qc_variant_url"] = qc_path
-    await db.table("uploads").update(update).eq("id", upload_id).execute()
+    update.update(_qc_variant_fields(provider, qc_path, asset))
+    if enhance_meta.get("mls_quarantine"):
+        update["qc_status"] = "flagged"
+        update["qc_notes"] = (
+            "PropTx 5.01(d) persons/faces — mls_quarantine soft-fail; "
+            f"qc_face_count={enhance_meta.get('qc_face_count', 0)}"
+        )[:500]
+    if provider == "original":
+        update.update(unedited_original_hold())
+        logger.warning(
+            f"Job {job_id}: upload {upload_id} auto-edit failed — unedited original "
+            "QC-held (not delivered to client)"
+        )
+    await _safe_update_upload(db, upload_id, update)
+    return processed

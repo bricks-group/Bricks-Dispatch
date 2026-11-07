@@ -536,6 +536,35 @@ def test_rebuild_floorplan_from_stations_uses_tracer_no_stitch():
         ) = orig
 
 
+
+def test_upload_floorplan_png_refuses_stub():
+    """69-byte 1×1 PNG stubs must not be marked delivered (OS public host 404s them)."""
+    import asyncio
+    import app.services.capture_worker as cw
+
+    stub = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de0000000c49444154789c63f8cfc0000003010100c9fe92ef0000000049454e44ae426082")
+    assert len(stub) == 69
+    assert len(stub) < cw.MIN_FLOORPLAN_PNG_BYTES
+
+    async def boom_upload(*a, **k):
+        raise AssertionError("stub must not reach upload_bytes")
+
+    orig = cw.upload_bytes
+    cw.upload_bytes = boom_upload
+    try:
+        try:
+            asyncio.run(cw._upload_floorplan_png(
+                {"id": "job1"},
+                {"id": "sess1", "output_storage_path": "visits/job1/floorplan-sess1.png"},
+                stub,
+            ))
+            assert False, "expected CaptureWorkerError"
+        except cw.CaptureWorkerError as e:
+            assert "stub" in str(e).lower() or "too small" in str(e).lower()
+    finally:
+        cw.upload_bytes = orig
+
+
 def test_rebuild_floorplan_fails_honestly_without_input():
     import asyncio
     import app.services.capture_worker as cw
@@ -691,6 +720,105 @@ def test_floorplan_roomplan_path_still_works_without_stations():
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
     src = (ROOT / "app/services/floorplan_tracer.py").read_text()
     assert "from_roomplan" in src
+
+
+def test_floorplan_checklist_notes_after_deliver_not_before_compile():
+    """Failed compile must not leave 'Floor plan capture submitted' on the job.
+
+    Same class as Visit finalize early-exit: never mark complete before the
+    deliverable lands. Note runs inside _compile_or_fail after _deliver_session.
+    """
+    src = (ROOT / "app/routers/capture.py").read_text()
+    submit = src.split("async def submit_session")[1].split("async def _session_by_id")[0]
+    # submit no longer notes before compile
+    assert "_note_floorplan_on_job" not in submit
+    assert "_compile_or_fail" in submit
+    compile_fn = src.split("async def _compile_or_fail")[1].split("async def submit_session")[0]
+    deliver_idx = compile_fn.find("await _deliver_session")
+    note_idx = compile_fn.find("await _note_floorplan_on_job")
+    fail_idx = compile_fn.find("await _fail_session")
+    assert deliver_idx != -1 and note_idx != -1
+    assert deliver_idx < note_idx
+    # Fail path still exists before deliver
+    assert fail_idx != -1 and fail_idx < deliver_idx
+    assert 'kind == "floorplan"' in compile_fn[note_idx - 80 : note_idx + 40]
+    doc = src.split("async def _note_floorplan_on_job")[1].split('"""', 2)[1]
+    assert "after successful" in doc.lower() or "never before compile" in doc.lower()
+
+
+def test_compile_or_fail_notes_floorplan_only_on_success(monkeypatch):
+    """Runtime: CaptureWorkerError skips checklist note; success notes once."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.routers import capture as cap
+    from app.services.capture_worker import CaptureWorkerError
+
+    note_calls = []
+
+    async def fake_note(db, job, job_id, sid, n, now):
+        note_calls.append({"job_id": job_id, "sid": sid, "n": n})
+
+    async def boom(*_a, **_k):
+        raise CaptureWorkerError("stub refuse")
+
+    async def ok_process(*_a, **_k):
+        return "visits/job-fp/floorplan-sess.png"
+
+    deliver_calls = []
+
+    async def fake_deliver(db, sid, output, kind, now, *, job=None, notify=False):
+        deliver_calls.append({"sid": sid, "kind": kind, "output": output, "notify": notify})
+
+    async def fake_fail(db, sid, stage, error, now):
+        return None
+
+    # Pipeline/session updates are no-ops
+    class Chain:
+        def update(self, *_a, **_k):
+            return self
+        def eq(self, *_a, **_k):
+            return self
+        async def execute(self):
+            return MagicMock(data=None)
+
+    class Db:
+        def table(self, *_a, **_k):
+            return Chain()
+
+    job = {"id": "job-fp", "checklist": []}
+    session = {"id": "sess-1", "frame_count": 4, "kind": "floorplan"}
+    now = "2026-09-24T12:00:00+00:00"
+
+    monkeypatch.setattr(cap, "_note_floorplan_on_job", fake_note)
+    monkeypatch.setattr(cap, "_deliver_session", fake_deliver)
+    monkeypatch.setattr(cap, "_fail_session", fake_fail)
+    monkeypatch.setattr(cap, "process_capture_session", boom)
+
+    try:
+        asyncio.run(cap._compile_or_fail(Db(), job, session, "floorplan", now))
+        assert False, "expected CaptureWorkerError"
+    except CaptureWorkerError:
+        pass
+    assert note_calls == []
+    assert deliver_calls == []
+
+    monkeypatch.setattr(cap, "process_capture_session", ok_process)
+    out = asyncio.run(cap._compile_or_fail(Db(), job, dict(session), "floorplan", now))
+    assert out == "visits/job-fp/floorplan-sess.png"
+    assert len(deliver_calls) == 1 and deliver_calls[0]["kind"] == "floorplan"
+    assert len(note_calls) == 1
+    assert note_calls[0]["job_id"] == "job-fp"
+    assert note_calls[0]["sid"] == "sess-1"
+    assert note_calls[0]["n"] == 4
+
+    # Tour compile must not note floorplan checklist
+    note_calls.clear()
+    deliver_calls.clear()
+    out2 = asyncio.run(cap._compile_or_fail(Db(), job, {"id": "sess-t", "frame_count": 2}, "splat", now))
+    assert out2 == "visits/job-fp/floorplan-sess.png"
+    assert note_calls == []
+    assert deliver_calls[0]["kind"] == "splat"
 
 
 def test_deliver_session_notifies_on_compile_not_rebuild():

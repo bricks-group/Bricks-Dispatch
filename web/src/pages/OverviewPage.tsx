@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { api, Job, PaginatedJobsResponse } from '../lib/api';
 import { captureNeitherCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
+import BricksLoader from '../components/BricksLoader';
+import { captureLinks } from '../components/CaptureLinks';
+import { CalendarConnectNudge } from '../components/CalendarConnectNudge';
 
 type Overview = {
   jobs_assigned_today: number;
@@ -27,6 +30,7 @@ export function OverviewPage() {
   const [data, setData] = useState<Overview | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState('');
+  const [needCalendar, setNeedCalendar] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -38,6 +42,11 @@ export function OverviewPage() {
         setJobs(jobData.items || []);
       })
       .catch((e) => setError(e.message));
+    api.get<{ connections?: Array<{ connected?: boolean }> }>('/api/vendor-os/calendars')
+      .then((cals) => {
+        setNeedCalendar(!(cals.connections || []).some((c) => c.connected));
+      })
+      .catch(() => setNeedCalendar(false));
   }, []);
 
   const today = calendarToday();
@@ -50,54 +59,50 @@ export function OverviewPage() {
       <div className="page-header">
         <div>
           <h1>Today</h1>
-          <p>Your jobs and capacity for today</p>
+          <p>Your jobs and the week ahead</p>
         </div>
       </div>
 
       {error && <p className="error">{error}</p>}
+      {needCalendar ? <CalendarConnectNudge /> : null}
 
       {data && (
         <>
-          <div className="page-grid">
-            <section className="card">
-              <h3>Assigned today</h3>
-              <p className="metric">{data.jobs_assigned_today || todayJobs.length}</p>
-              <p className="muted">jobs</p>
-            </section>
-            <section className="card">
-              <h3>Assigned · week</h3>
-              <p className="metric">{data.jobs_assigned_week}</p>
-              <p className="muted">jobs</p>
-            </section>
-            <section className="card">
-              <h3>Completed · week</h3>
-              <p className="metric">{data.jobs_completed_week}</p>
-              <p className="muted">jobs</p>
-            </section>
-            <section className="card">
-              <h3>Capacity</h3>
-              <p className="metric">{data.capacity_utilization_pct}%</p>
-              <div className="bar-track"><div className="bar-fill" style={{ width: `${Math.min(data.capacity_utilization_pct, 100)}%` }} /></div>
-              <p className="muted">utilization</p>
-            </section>
+          <div className="stats">
+            <div className="stat">
+              <p className="stat-label">Today</p>
+              <p className="stat-value">{data.jobs_assigned_today || todayJobs.length}</p>
+            </div>
+            <div className="stat">
+              <p className="stat-label">This week</p>
+              <p className="stat-value">{data.jobs_assigned_week}</p>
+            </div>
+            <div className="stat">
+              <p className="stat-label">Done this week</p>
+              <p className="stat-value">{data.jobs_completed_week}</p>
+            </div>
           </div>
+          <p className="stats-foot">{data.capacity_utilization_pct}% of this week's capacity booked</p>
 
           <section className="card full">
             <h3>Today</h3>
             {todayJobs.length === 0
-              ? <p className="muted" style={{ padding: '20px' }}>No jobs today</p>
+              ? <p className="muted" style={{ padding: '20px' }}>No jobs today.</p>
               : (
                 <ul className="list">
                   {todayJobs.map((job) => (
-                    <li key={job.id} className="list-row">
+                    <li key={job.id} className="list-row today-row">
                       <button
                         type="button"
                         className="row-click today-job-main"
                         onClick={() => navigate(`/jobs?id=${encodeURIComponent(job.id)}`)}
                         style={{ all: 'unset', cursor: 'pointer', display: 'flex', width: '100%', justifyContent: 'space-between', gap: 12 }}
                       >
-                        <span>{job.address}</span>
-                        <span className="muted">{formatShootWindow(job)} · {job.status?.replace('_', ' ')}</span>
+                        <span className="row-main">
+                          <span className="row-title">{job.address}</span>
+                          <span className="row-meta">{[formatShootWindow(job), job.package_name].filter(Boolean).join(' · ')}</span>
+                        </span>
+                        <span className="badge row-end">{(job.status || '').replace('_', ' ')}</span>
                       </button>
                       {['assigned', 'in_progress'].includes(job.status || '') ? (
                         <TodayCaptureEntry job={job} />
@@ -110,9 +115,9 @@ export function OverviewPage() {
           </section>
 
           <section className="card full">
-            <h3>Upcoming Schedule</h3>
+            <h3>Upcoming</h3>
             {data.upcoming_jobs.length === 0
-              ? <p className="muted" style={{ padding: '20px' }}>No upcoming jobs</p>
+              ? <p className="muted" style={{ padding: '20px' }}>Nothing upcoming.</p>
               : (
                 <ul className="list">
                   {data.upcoming_jobs.map((job) => (
@@ -121,8 +126,10 @@ export function OverviewPage() {
                       className="list-row row-click"
                       onClick={() => navigate(`/jobs?id=${encodeURIComponent(job.id)}`)}
                     >
-                      <span>{job.address}</span>
-                      <span className="muted">{formatShootWhen(job)}</span>
+                      <span className="row-main">
+                        <span className="row-title">{job.address}</span>
+                        <span className="row-meta">{[formatShootWhen(job), job.package_name].filter(Boolean).join(' · ')}</span>
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -131,7 +138,7 @@ export function OverviewPage() {
         </>
       )}
 
-      {!data && !error && <p className="muted">Loading…</p>}
+      {!data && !error && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
     </div>
   );
 }
@@ -152,9 +159,7 @@ function ShootChecklist({ job }: { job: Job }) {
   if (!items.length) return null;
   return (
     <div className="today-checklist" style={{ width: '100%', marginTop: 8 }}>
-      <p className="muted" style={{ margin: 0, padding: 0, fontSize: 11, letterSpacing: '0.06em' }}>
-        SHOOT CHECKLIST · ONE VISIT
-      </p>
+      <p className="label">{job.checklist_title || 'Shoot checklist'}</p>
       <ol style={{ margin: '6px 0 0', paddingLeft: 18 }}>
         {items.map((item) => (
           <li key={item.id} className={item.completed ? 'muted' : undefined} style={{ marginBottom: 2 }}>
@@ -177,24 +182,9 @@ function TodayCaptureEntry({ job }: { job: Job }) {
       </div>
     );
   }
-  const links = [];
-  if (flags.tour) {
-    links.push(
-      <Link key="tour" className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=splat`}>Start Capture · 3D tour</Link>
-    );
-  }
-  if (flags.floorplan) {
-    links.push(
-      <Link key="fp" className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=floorplan`}>Start Capture · Floor plan</Link>
-    );
-  }
-  if (flags.visit) {
-    links.push(
-      <Link key="visit" className="btn-capture" to={`/capture/visit?jobId=${encodeURIComponent(job.id)}`}>Deliver Visit</Link>
-    );
-  }
+  const links = captureLinks(job);
   return (
-    <div className="today-capture row" style={{ flexWrap: 'wrap', gap: 8 }}>
+    <div className="today-capture actions">
       {links}
     </div>
   );

@@ -26,7 +26,7 @@ All schema migrations live in `ruletheworld/bricks-os/supabase/migrations/` — 
 - `jobs` — create, assign, all status transitions. **Corrected 2026-07-27, then corrected again (date unknown): `services/qc_agent.py`'s `dispatch_jobs` lookup was already fixed to `jobs` by the time this session checked** (`qc_agent.py:152`: `db.table("jobs").select("package_name")...`) — a repo-wide grep for `dispatch_jobs` now hits nothing outside this file's own history. The "one exception" this line used to describe no longer exists in code; don't re-apply this fix.
 - Assignment is **not** a separate table — it's an `assignee_id` update directly on the `jobs` row (`services/vendor_selection.py:127-131`). No `vendor_assignments` table exists or is ever queried; corrected 2026-07-27.
 - Payout records live on the `jobs`/`payouts` tables (`services/payout_service.py` writes to a table literally called `payouts`, not `payout_records`); corrected 2026-07-27.
-- `agent_noshow_trip_fees` — $60 trip fee per validated claim
+- `agent_noshow_trip_fees` — no-show claim record (legacy name; `amount_cents` is 0 until an admin approves the claim, then half the job's base payout)
 - `agent_noshow_escalations` — Twilio SMS attempt log
 - `reconciliation_events` — fee vs booking mismatch log
 - `media_delivery` — signed delivery URLs + Resend trigger
@@ -86,7 +86,7 @@ API base: `https://dispatch-api.brxs.ca`
 - `backend/app/services/qc_agent.py` — Gemini vision QC agent (scores uploaded photos 0-100)
 - `backend/app/services/post_production.py` — Fotello/Autoenhance/BoxBrownie integration
 - `backend/app/services/payout_service.py` — Stripe Connect transfers, tier percentages
-- `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (T+15 before claim)
+- `backend/app/services/sms_escalation.py` — Twilio SMS: agent no-show escalation (a sent SMS counts as the call attempt)
 - `backend/app/shared/schemas.py` — Pydantic models
 - `backend/migrations/20260601_agent_noshow_escalations.sql` — new tables: agent_noshow_escalations, reconciliation_events
 
@@ -137,14 +137,14 @@ pick_vendor_rule_based(job, vendors)
 - `min_tier_required` on job is a hard gate — never assigned below it
 
 ## Vendor Model: Snappr/Homejab IC Model
-- IC agreement **v1.5** (effective 2026-09-06) — source of truth is `_IC_AGREEMENT_TEXT` in `backend/app/routers/onboarding.py`. Rate-card language matches www à-la-carte media (Photos only / Essentials / Story / Showcase / Full suite), not Standard–Estate. Virtual Visit is always a paid add-on. Do not restore v1.1 clauses or % of rack add-on language.
-- Contracting party: **Bricks Group**. Contact: `booking@brxs.ca` (no legal@ mailbox).
-- Insurance/WSIB proof is **not a gate** for apply, approval, assignment, or dispatch. Optional COI/WSIB uploads may still be stored (`coi_expires_on` / `wsib_expires_on` are historical only). Missing, expired, or unverified proof must not suspend, reject, or hold a job. RPAS/drone legal duty is unchanged. The v1.5 agreement text still mentions insurance; dispatch does not enforce that clause.
+- IC agreement **v1.8** (effective 2026-10-03) — source of truth is `_IC_AGREEMENT_TEXT` in `backend/app/routers/onboarding.py` (matches www.brxs.ca/legal/ic-agreement.txt). Rate-card language matches www à-la-carte media (Photos only / Essentials / Story / Showcase / Full suite), not Standard–Estate. Virtual Visit is always a paid add-on. Do not restore older clauses or % of rack add-on language.
+- Contracting party: **Bricks Group**. Contact: `raphael@brxs.ca` (agreement questions and payout disputes; no legal@ mailbox).
+- Insurance/WSIB proof is **not a gate** for apply, approval, assignment, or dispatch. Optional COI/WSIB uploads may still be stored (`coi_expires_on` / `wsib_expires_on` are historical only). Missing, expired, or unverified proof must not suspend, reject, or hold a job. RPAS/drone legal duty is unchanged. IC v1.8 Clause 6 states COI/WSIB are not required for apply or first dispatch.
 - Payouts are a **fixed vendor rate card** by media package / sqft band / tier, not a % of what the client was charged. www catalog ids alias to existing `vendor_payout_rates` cells (no invented dollars). Add-ons (including Virtual Visit) are fixed published dollar amounts by tier (never % of rack).
 - No binding arbitration; Ontario courts. Either party may terminate on written notice (email is enough).
-- `GET /api/onboarding/ic-agreement` — `{ version: "1.5", effective_date: "2026-09-06", text }` — live photographer apply form on www.brxs.ca binds applicants to this JSON.
-- Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`. `/apply` stamps the live server version (`1.5`), not a stale client default.
-- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.5"`
+- `GET /api/onboarding/ic-agreement` — `{ version: "1.8", effective_date: "2026-10-03", text }` — live photographer apply form on www.brxs.ca binds applicants to this JSON.
+- Stored on `vendor_members`: `ic_agreement_version`, `terms_accepted_at`, `hst_number`. `/apply` stamps the live server version (`1.8`), not a stale client default.
+- `VendorApplicationCreate.ic_agreement_version` defaults to `"1.8"`
 - `ic_agreement_version='0.0'` = pre-dates new agreement; re-prompt on next login
 - `REQUIRE_VENDOR_COMPLIANCE` remains absent from dispatch scoring code. `member_eligible_for_job` does not read `coi_expires_on` or `wsib_expires_on`.
 
@@ -209,29 +209,36 @@ The other half of the developer/REIT vertical alongside CGI rendering above — 
 - Never hardcode secrets as default values in `os.environ.get()`
 - Storage is Supabase Storage (`db.storage.from_(STORAGE_BUCKET)`), bucket `brxs-deliverables` — NOT AWS S3
 - `time_window_start` is stored as `"HH:MM"` string — **always combine with `scheduled_date` before datetime math**. `datetime.fromisoformat("HH:MM")` raises ValueError. Gate 4 is fail-closed.
-- Trip fees flow: `pending` → `reserved` (before Stripe) → `paid_out` (after Stripe). Never go pending→paid_out directly.
+- No flat no-show fee (the $60 was removed 2026-10-30, Kam). An approved client no-show pays the vendor half the job's base payout, HST on top as usual: `trigger_payout_for_job(db, job_id, noshow_claim_id=...)`, called from the admin approve endpoint. A normal payout does not read `agent_noshow_trip_fees`.
 - `assign_vendor_for_job(job_id)` has an internal 3-attempt retry loop — callers do not need to retry
 - IC Clause 8 lists Bricks' platform FEE (45%/55%/65% for A/B/C, corrected 2026-07-20), not vendor payout — intentionally inverse of TIER_PERCENTAGES (35%/45%/55% for C/B/A)
 
-## No-Show Policy (Snappr model)
+## No-Show Policy
 
-**Agent/client no-show** → photographer gets $60 trip fee from Bricks margin:
-- `POST /api/vendor-os/jobs/{job_id}/escalate-absent-agent` — sends Twilio SMS to agent (attempt 1 + 2); must be called before claiming when Twilio is configured
-- `POST /api/vendor-os/jobs/{job_id}/agent-no-show` — files the claim (accepts JSON body: notes, photographer_lat, photographer_lng)
-- 8 validation gates: ownership, active state, idempotency, time window (T-15→T+90), GPS proximity (>500m → hold), escalation check (15 min wait after SMS), booking not pre-cancelled, rate limits
-- GPS gate: if photographer submits lat/lng and is >500m from property → held for review (not hard rejected)
-- Escalation gate: if `TWILIO_ACCOUNT_SID` set, must have called `escalate-absent-agent` + waited 15 min; gracefully degrades if Twilio not configured
-- Rate limit: 2nd+ claim in 30 days → `pending_review` (held for admin before payout released)
-- On pass: `agent_noshow_trip_fees` record created, Booking notified via status webhook
+**Agent/client no-show** (Kam, 2026-10-30) → the vendor checks in through the app at the property, waits 20 minutes, takes a photo and tries to call the client, then reports it. The 20-minute wait starts at check-in or the booked start, whichever is later. Bricks reviews the report within 2 business days; the vendor can appeal via help@brxs.ca within 7 days. When an admin approves the claim, the vendor is paid half the job's base payout (HST on top as usual); a rejected claim pays nothing. Vendor copy: "If the client doesn't show, you're paid half the job's payout." The client cancellation policy is unchanged: no refund on a no-show, no callout fee.
+
+All four conditions are enforced server-side; the rules live in one place, `backend/app/shared/noshow_policy.py` (`readiness(job)`), and both apps read them from `GET /noshow-status`:
+1. **Check-in** — `POST /api/vendor-os/jobs/{id}/check-in` with `{lat, lng, accuracy_m}`. Location is required to check in (used only to confirm the vendor is at the property). Rejected (422 `checkin_too_far`) beyond `CHECKIN_RADIUS_M` of the job's geocoded address — ONE config value, env `NOSHOW_CHECKIN_RADIUS_M` on the API, default 250 m. Jobs without coords record the GPS with no distance and the report is held for review. Stored on `jobs.checked_in_at / check_in_lat / check_in_lng / check_in_accuracy_m / check_in_distance_m` (first check-in only).
+2. **Wait** — 20 min from max(check-in, booked start). Report window closes 90 min after the wait starts (then: email help@brxs.ca).
+3. **Photo** — `POST /jobs/{id}/noshow-photo` (multipart `photo`, ≤4 MB; clients compress) → private Storage bucket `noshow-evidence` (service role only). Must be uploaded after check-in.
+4. **Call attempt** — `POST /jobs/{id}/call-attempt` `{method: dialer|no_number}`; the in-app Call client button opens the dialer and logs it (no Twilio needed). A sent Twilio SMS from escalate-absent-agent also counts (`sms`). `GET /noshow-status` returns `client_phone` to the assigned vendor after check-in.
+
+The claim row copies the evidence (`checked_in_at`, `check_in_*`, `wait_started_at`, `photo_*`, `call_*`). `GET /api/admin/noshow-claims` adds `photo_url` (1 h signed URL), `check_in_distance_label` and `checkin_radius_m` for the reviewer. Migration: `supabase/migrations/0019_noshow_checkin_evidence.sql`.
+
+- `POST /api/vendor-os/jobs/{job_id}/escalate-absent-agent` — sends Twilio SMS to agent (attempt 1 + 2); optional, a sent SMS counts as the call attempt
+- `POST /api/vendor-os/jobs/{job_id}/agent-no-show` — files the claim (JSON body: notes; photographer_lat/lng optional, the check-in GPS is the proof)
+- Validation gates: ownership, active state, checked in, idempotency, the four no-show conditions (check-in, 20-min wait, photo, call), GPS proximity hold (report GPS >500 m, or no verified check-in distance), booking not pre-cancelled, rate limits
+- Rate limit: 2nd+ claim in 30 days → `pending_review` (held for admin review)
+- On pass: `agent_noshow_trip_fees` claim record created (`amount_cents` 0), Booking notified via status webhook (held claims: on approval)
+- Admin approve (flagged `pending_review` claims, or auto-recorded `pending` claims not yet reviewed) → half-base payout, claim `paid_out`
 - Booking applies 100% retention penalty (no refund, no credit returned); sends agent email
 - Estate/high-value cap: max $500 retention on no-shows (chargeback protection)
-- $60 added to photographer's next payout cycle by `payout_service.py`
-- Payout earnings endpoint returns `pending_trip_fees` list and `pending_trip_fees_total` ✅
+- Nothing is added to the photographer's payout. Earnings endpoint still returns `pending_trip_fees: []` / `pending_trip_fees_total: 0` for old app builds.
 
 **Admin review queue:**
-- `GET /api/admin/noshow-claims?status=pending_review`
+- `GET /api/admin/noshow-claims` (default `status=open`: held `pending_review` plus clean `pending` claims not yet reviewed; `status=all` for everything)
 - `POST /api/admin/noshow-claims/{id}/review?action=approve|reject`
-- `GET /api/admin/reconcile-noshow?dry_run=true` — matches trip fees vs booking retention status
+- `GET /api/admin/reconcile-noshow?dry_run=true` — matches no-show claims vs booking retention status
 
 **Contractor no-show** (photographer ghosts) → `cancel_rate` penalty only, no cash, job re-dispatched.
 
@@ -257,21 +264,20 @@ The other half of the developer/REIT vertical alongside CGI rendering above — 
 - Rate limiting + Sentry ✅
 - Custom domains: `dispatch-api.brxs.ca`, `dispatch.brxs.ca` ✅
 - Vendor tier payouts: Tier C=35% (entry), B=45% (core), A=55% (elite) ✅
-- **Snappr/Homejab IC model: IC agreement v1.5 (Bricks Group, Ontario; www à-la-carte rate card; Virtual Visit paid add-on). Insurance/WSIB proof does not block apply or first dispatch.** ✅
+- **Snappr/Homejab IC model: IC agreement v1.8 (Bricks Group, Ontario; www à-la-carte rate card; Virtual Visit paid add-on). Insurance/WSIB proof does not block apply or first dispatch.** ✅
 - **AI RPAS certificate validator (Gemini Vision + TC registry, outcomes: verified/extracted/suspicious/failed)** ✅
 - **Agent no-show: claim validation gates + admin review queue + Booking penalty callback** ✅
-- **Payout service: trip fees added to photographer payout (not deducted); correct table name** ✅
-- **Stripe Connect E2E test suite (idempotency, zero-amount, trip fee addition logic)** ✅
+- **Payout service: no flat no-show fee (removed 2026-10-30); approved no-show pays half the base (2026-10-30)** ✅
+- **Stripe Connect E2E test suite (idempotency, zero-amount, normal payouts ignore no-show claims); tests/test_noshow_half_payout.py** ✅
 - **Weather context: Open-Meteo API for outdoor/drone jobs** ✅
 - **BoxBrownie virtual staging: fully active (photo editing, retouching, day-to-dusk, item removal, virtual staging)** ✅
 - app.json bundle IDs + EAS project ID configured (`com.bricks.go`) ✅
-- **GPS geofence gate: >500m from property → hold_for_review (soft gate, coordinates optional)** ✅
-- **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; gate in no-show claim flow (15-min wait after first SMS); graceful no-op if Twilio not configured** ✅
+- **Check-in geofence: location required to check in, rejected beyond NOSHOW_CHECKIN_RADIUS_M (250 m) of the property** ✅
+- **SMS escalation (Twilio): POST /api/vendor-os/jobs/{id}/escalate-absent-agent sends 2 attempts; a sent SMS counts as the no-show call attempt; graceful no-op if Twilio not configured** ✅
 - **Reconcile-noshow: GET /api/admin/reconcile-noshow detects fee/booking mismatches; writes reconciliation_events on dry_run=false** ✅
-- **Trip fee pending total in earnings API (pending_trip_fees + pending_trip_fees_total)** ✅
 - **PR #2 bug fixes (2026-06-01)** ✅
   - Gate 4 fail-closed: `time_window_start` ("HH:MM") combined with `scheduled_date` before fromisoformat; missing/invalid → 400 (not silent pass)
-  - Trip fee double-payout prevented: fees reserved before Stripe, released on failure, promoted to paid_out on success
+  - (Superseded 2026-10-30: trip fees removed) Trip fee double-payout prevented
   - `assign_vendor_for_job` has internal 3-attempt retry loop; escalation is now reachable
   - `_get_agent_email_for_job` annotation fixed: `Optional[str]` → `Optional[tuple]`
   - `VendorApplicationCreate.ic_agreement_version` default `"1.0"` → `"1.1"`

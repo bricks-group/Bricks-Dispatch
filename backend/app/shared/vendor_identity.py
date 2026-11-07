@@ -16,6 +16,9 @@ IC_TITLES = {
     "photographer": "Photographer IC",
     "stager": "Stager IC",
     "cleaner": "Cleaner IC",
+    "inspector": "Inspector IC",
+    "measurer": "Measurer IC",
+    "handyman": "Repairs IC",
 }
 VENDOR_SKILLS = ("photo", "drone", "reel", "tour", "twilight")
 TIER_LABELS = {1: "C", 2: "B", 3: "A"}
@@ -34,6 +37,18 @@ def is_owner_member(member: Optional[dict]) -> bool:
     return title == "owner" or role == "owner"
 
 
+def needs_terms(member: Optional[dict]) -> bool:
+    """A contractor who reached GO without accepting the IC agreement and privacy policy.
+
+    Applicants accept on the www application. Members an owner added from the
+    team screen (and older rows) never did, so GO asks them once before the app
+    opens. Owners are not contractors and are never asked.
+    """
+    if not member or is_owner_member(member):
+        return False
+    return not member.get("terms_accepted_at")
+
+
 def member_title(member: Optional[dict]) -> str:
     if is_owner_member(member):
         return OWNER_TITLE
@@ -46,6 +61,14 @@ def member_title(member: Optional[dict]) -> str:
     except Exception:
         vtype = "photographer"
     return IC_TITLES.get(vtype, IC_TITLE)
+
+
+def _vendor_type_of(member: dict) -> str:
+    try:
+        from ..services.vendor_profile import member_vendor_type
+        return member_vendor_type(member)
+    except Exception:
+        return (member.get("vendor_type") or "photographer").strip().lower() or "photographer"
 
 
 def is_assignable(member: Optional[dict]) -> bool:
@@ -133,9 +156,17 @@ async def photographer_payout_cents(db, job: dict, member: Optional[dict]) -> in
     if is_owner_member(member):
         return int(round(rack_dollars(job) * 100))
 
+    from ..services.commercial_jobs import is_employee
+    from ..services.client_service_payouts import set_payout_cents
+    if is_employee(member):
+        return 0  # in-house staff: salary handled outside Dispatch
+    tier = (member or {}).get("tier") or job.get("vendor_tier") or 1
+    fixed = set_payout_cents(job, tier)
+    if fixed is not None:
+        return int(fixed)
+
     package_id = job.get("package_id")
     sqft = job.get("sqft")
-    tier = (member or {}).get("tier") or job.get("vendor_tier") or 1
     amount = await get_fixed_payout_amount(db, package_id, sqft, tier)
     if amount is None:
         amount = calculate_payout_amount(
@@ -159,14 +190,7 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "phone": member.get("phone") or "",
         "role": title,
         "title": title,
-        "vendor_type": (
-            "photographer" if owner else (
-                (member.get("vendor_type") or "").strip().lower()
-                or ("stager" if "stager" in (member.get("role") or "").lower()
-                    else "cleaner" if "cleaner" in (member.get("role") or "").lower()
-                    else "photographer")
-            )
-        ),
+        "vendor_type": "photographer" if owner else _vendor_type_of(member),
         "availability": (member.get("status") or "") == "available",
         "status": member.get("status") or "offline",
         "skills": member_skills(member),
@@ -209,6 +233,15 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "portfolio_links": member.get("portfolio_links") or [],
         "portfolio_samples": member.get("portfolio_samples") or [],
     }
+    # Commercial gate visibility (flag only; never demotes or notifies).
+    from ..services.commercial_jobs import insurance_status, is_employee, top_tier_insurance_flag
+    out["worker_type"] = "employee" if is_employee(member) else "contractor"
+    if out["worker_type"] == "employee" and not owner:
+        out["payout_model"] = "employee_salaried"
+        out["payout_label"] = "In-house staff · salaried (no per-job payout)"
+    out["insurance"] = insurance_status(member)
+    out["top_tier_insurance_missing"] = top_tier_insurance_flag({**member, "tier": tier})
+    out["mapping_qualified"] = "mapping" in ((member.get("skills") or []) if isinstance(member.get("skills"), list) else [])
     if extra:
         out.update(extra)
     # Prefer assembled samples when caller passed documents via extra.

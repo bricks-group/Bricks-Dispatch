@@ -18,7 +18,8 @@ import math
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
+from fastapi.responses import Response
 
 from ..services.capture_entitlements import (
     capture_forbidden_message,
@@ -46,7 +47,15 @@ from ..services.capture_worker import (
     save_session_tags,
     stations_have_compile_input,
 )
-from ..services.storage import STORAGE_BUCKET, create_signed_upload_url, get_signed_download_url, upload_bytes
+from ..services.storage import (
+    STORAGE_BUCKET,
+    _blob_get,
+    _blob_put,
+    create_signed_upload_url,
+    get_signed_download_url,
+    upload_bytes,
+    verify_capture_hmac,
+)
 from ..services.tour_builder import normalize_tag, normalize_tags
 from ..shared.auth import get_vendor_member, is_vendor_admin, resolve_vendor_actor_id, verify_internal_api_key
 from ..shared.database import get_db
@@ -92,7 +101,14 @@ def _missing_table(exc: Exception) -> bool:
     Do NOT match generic "does not exist" — PostgREST/Postgres column errors
     ("column X does not exist") would otherwise return an empty session with
     sessionId=null and silently block every GO capture start.
+
+    Fair-Use / 402 / exceed_storage must NEVER be treated as missing tables —
+    those need Postgres fallback, not an empty session.
     """
+    from ..shared.pg_fallback import _is_rest_quota_error
+
+    if _is_rest_quota_error(exc):
+        return False
     text = str(exc).lower()
     if "42p01" in text or "undefined_table" in text or "undefined table" in text:
         return True
@@ -231,6 +247,12 @@ def _shape_session(
     }
 
 
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row."""
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
+
 async def _actor_and_job(
     authorization: Optional[str],
     x_user_id: Optional[str],
@@ -241,11 +263,30 @@ async def _actor_and_job(
     if not job_id:
         api_error(400, "job_id is required", "missing_job_id")
     db = await get_db()
-    res = await db.table("jobs").select(
-        "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id, "
-        "package_id, package_name, add_ons, client_instructions, property_details"
-    ).eq("id", job_id).maybe_single().execute()
-    job = res.data or {}
+    job: dict = {}
+    try:
+        res = await db.table("jobs").select(
+            "id, address, job_type, sqft, vendor_id, assignee_id, status, checklist, booking_id, "
+            "package_id, package_name, add_ons, client_instructions, property_details"
+        ).eq("id", job_id).maybe_single().execute()
+        # maybe_single().execute() returns None when PostgREST has no row
+        # (and .data can be null). None.data is AttributeError, which the
+        # global handler turns into HTTP 500 with no CORS headers — the
+        # browser reports net::ERR_FAILED. Treat null/missing data as no row
+        # so the existing empty-job path (PG fallback, then the route's
+        # empty session or job_not_found) runs instead.
+        data = getattr(res, "data", None) if res is not None else None
+        job = data if isinstance(data, dict) else {}
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        logger.warning("capture job fetch REST 402 — PG fallback job_id=%s", job_id)
+        job = pg_select_job_by_id(job_id) or {}
+    if not job.get("id"):
+        # Empty REST body can also mean Fair-Use silent failure; try PG once.
+        from ..shared.pg_fallback import pg_select_job_by_id
+        job = pg_select_job_by_id(job_id) or job
     if not job.get("id"):
         api_error(404, "Job not found", "job_not_found")
     if verify_internal_api_key(x_internal_api_key):
@@ -280,19 +321,32 @@ async def _load_session_bundle(
     if not session:
         return _empty_session(job)
     sid = session["id"]
-    rooms = await db.table("capture_rooms").select("id, name, frames, tone, position").eq(
-        "session_id", sid
-    ).order("position", desc=False).execute()
-    pipeline = await db.table("capture_pipeline").select("title, detail, status, position").eq(
-        "session_id", sid
-    ).order("position", desc=False).execute()
+    rooms_data: list = []
+    pipeline_data: list = []
+    try:
+        rooms = await db.table("capture_rooms").select("id, name, frames, tone, position").eq(
+            "session_id", sid
+        ).order("position", desc=False).execute()
+        rooms_data = rooms.data or []
+        pipeline = await db.table("capture_pipeline").select("title, detail, status, position").eq(
+            "session_id", sid
+        ).order("position", desc=False).execute()
+        pipeline_data = pipeline.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_rooms, pg_select_pipeline
+        if not _is_rest_quota_error(e):
+            raise
+        logger.warning("capture bundle REST 402 — PG rooms/pipeline sid=%s", sid)
+        rooms_data = pg_select_rooms(sid)
+        pipeline_data = pg_select_pipeline(sid)
     stations_pub = []
     try:
-        raw = await load_station_records(db, sid, rooms.data or [])
+        raw = await load_station_records(db, sid, rooms_data)
         stations_pub = [_station_public(s) for s in raw]
     except Exception:
         stations_pub = []
-    payload = _shape_session(job, session, rooms.data or [], pipeline.data or [], preferred_room_id, stations_pub)
+    payload = _shape_session(job, session, rooms_data, pipeline_data, preferred_room_id, stations_pub)
     try:
         loaded = await load_session_tags(sid)
         tags = loaded if loaded is not None else []
@@ -314,19 +368,33 @@ async def _load_session_bundle(
 
 
 async def _latest_session(db, job_id: str, kind: str) -> Optional[dict]:
-    res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
-        "kind", kind
-    ).order("created_at", desc=True).limit(1).execute()
-    rows = res.data or []
-    return rows[0] if rows else None
+    try:
+        res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
+            "kind", kind
+        ).order("created_at", desc=True).limit(1).execute()
+        rows = res.data or []
+        return rows[0] if rows else None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_session_latest
+        if not _is_rest_quota_error(e):
+            raise
+        return pg_select_session_latest(job_id, kind)
 
 
 async def _in_progress_session(db, job_id: str, kind: str) -> Optional[dict]:
-    res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
-        "status", "in_progress"
-    ).eq("kind", kind).order("created_at", desc=True).limit(1).execute()
-    rows = res.data or []
-    return rows[0] if rows else None
+    try:
+        res = await db.table("capture_sessions").select("*").eq("job_id", job_id).eq(
+            "status", "in_progress"
+        ).eq("kind", kind).order("created_at", desc=True).limit(1).execute()
+        rows = res.data or []
+        return rows[0] if rows else None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_session_in_progress
+        if not _is_rest_quota_error(e):
+            raise
+        return pg_select_session_in_progress(job_id, kind)
 
 
 @router.get("/sessions")
@@ -374,38 +442,52 @@ async def ensure_session(
             return await _load_session_bundle(db, job_id, existing, job)
 
         now = datetime.now(timezone.utc).isoformat()
-        inserted = await db.table("capture_sessions").insert({
-            "job_id": job_id,
-            "status": "in_progress",
-            "kind": kind,
-            "frame_count": 0,
-            "created_at": now,
-            "updated_at": now,
-        }).execute()
-        session = (inserted.data or [None])[0]
-        if not session:
-            api_error(500, "Could not create capture session", "session_create_failed")
+        session = None
+        try:
+            inserted = await db.table("capture_sessions").insert({
+                "job_id": job_id,
+                "status": "in_progress",
+                "kind": kind,
+                "frame_count": 0,
+                "created_at": now,
+                "updated_at": now,
+            }).execute()
+            session = (inserted.data or [None])[0]
+            if not session:
+                api_error(500, "Could not create capture session", "session_create_failed")
 
-        sid = session["id"]
-        await db.table("capture_pipeline").insert([
-            {
+            sid = session["id"]
+            await db.table("capture_pipeline").insert([
+                {
+                    "session_id": sid,
+                    "job_id": job_id,
+                    "title": title,
+                    "detail": detail,
+                    "status": status,
+                    "position": i,
+                }
+                for i, (title, detail, status) in enumerate(_PIPELINES[kind])
+            ]).execute()
+            await db.table("capture_rooms").insert({
                 "session_id": sid,
                 "job_id": job_id,
-                "title": title,
-                "detail": detail,
-                "status": status,
-                "position": i,
-            }
-            for i, (title, detail, status) in enumerate(_PIPELINES[kind])
-        ]).execute()
-        await db.table("capture_rooms").insert({
-            "session_id": sid,
-            "job_id": job_id,
-            "name": "Room 1",
-            "frames": 0,
-            "tone": "bad",
-            "position": 0,
-        }).execute()
+                "name": "Room 1",
+                "frames": 0,
+                "tone": "bad",
+                "position": 0,
+            }).execute()
+        except Exception as create_err:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_create_session_with_defaults
+            if not _is_rest_quota_error(create_err):
+                raise
+            logger.warning(
+                "ensure_session REST 402 — PG create job_id=%s kind=%s", job_id, kind
+            )
+            session = pg_create_session_with_defaults(job_id, kind, list(_PIPELINES[kind]))
+            if not session:
+                api_error(500, "Could not create capture session", "session_create_failed")
+
         session = await _in_progress_session(db, job_id, kind) or session
         return await _load_session_bundle(db, job_id, session, job)
     except Exception as e:
@@ -433,22 +515,40 @@ async def add_room(
         if not session:
             api_error(409, "No in-progress capture session", "session_not_found")
         sid = session["id"]
-        existing = await db.table("capture_rooms").select("id, name, position").eq(
-            "session_id", sid
-        ).order("position", desc=False).execute()
-        rows = existing.data or []
+        rows: list = []
+        try:
+            existing = await db.table("capture_rooms").select("id, name, position").eq(
+                "session_id", sid
+            ).order("position", desc=False).execute()
+            rows = existing.data or []
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_select_rooms
+            if not _is_rest_quota_error(e):
+                raise
+            rows = pg_select_rooms(sid)
         next_pos = (max((r.get("position") or 0) for r in rows) + 1) if rows else 0
         if not name:
             name = f"Room {len(rows) + 1}"
-        inserted = await db.table("capture_rooms").insert({
-            "session_id": sid,
-            "job_id": job_id,
-            "name": name,
-            "frames": 0,
-            "tone": "bad",
-            "position": next_pos,
-        }).execute()
-        room = (inserted.data or [None])[0]
+        room = None
+        try:
+            inserted = await db.table("capture_rooms").insert({
+                "session_id": sid,
+                "job_id": job_id,
+                "name": name,
+                "frames": 0,
+                "tone": "bad",
+                "position": next_pos,
+            }).execute()
+            room = (inserted.data or [None])[0]
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_insert_room
+            if not _is_rest_quota_error(e):
+                raise
+            room = pg_insert_room(
+                sid, job_id, name=name, frames=0, tone="bad", position=next_pos,
+            )
         return await _load_session_bundle(
             db, job_id, session, job, preferred_room_id=(room or {}).get("id"),
         )
@@ -626,10 +726,20 @@ async def sign_frame_upload(
                 "Could not mint a signed upload URL for capture frames",
                 "signed_upload_unavailable",
             )
-        rooms = await db.table("capture_rooms").select("id").eq("session_id", sid).order(
-            "position", desc=False
-        ).limit(1).execute()
-        room_id = (payload or {}).get("room_id") or ((rooms.data or [{}])[0].get("id") if rooms.data else None)
+        room_id = (payload or {}).get("room_id")
+        if not room_id:
+            try:
+                rooms = await db.table("capture_rooms").select("id").eq("session_id", sid).order(
+                    "position", desc=False
+                ).limit(1).execute()
+                room_id = ((rooms.data or [{}])[0].get("id") if rooms.data else None)
+            except Exception as e:
+                from ..shared.pg_fallback import _is_rest_quota_error
+                from ..shared.pg_capture import pg_select_rooms
+                if not _is_rest_quota_error(e):
+                    raise
+                rooms_pg = pg_select_rooms(sid)
+                room_id = (rooms_pg[0].get("id") if rooms_pg else None)
         return {
             "session_id": sid,
             "room_id": room_id,
@@ -672,10 +782,18 @@ async def commit_frame(
         api_error(400, "Upload must land under capture/{session}/stations/{n}/", "bad_storage_path")
     try:
         db = await get_db()
-        session_res = await db.table("capture_sessions").select("*").eq("id", session_id).eq(
-            "job_id", job_id
-        ).maybe_single().execute()
-        session = session_res.data or {}
+        session = None
+        try:
+            session_res = await db.table("capture_sessions").select("*").eq("id", session_id).eq(
+                "job_id", job_id
+            ).maybe_single().execute()
+            session = _maybe_single_row(session_res)
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_select_session_by_id
+            if not _is_rest_quota_error(e):
+                raise
+            session = pg_select_session_by_id(session_id, job_id) or {}
         if not session or session.get("status") != "in_progress":
             api_error(409, "No in-progress capture session", "session_not_found")
         kind = session.get("kind") or "splat"
@@ -697,28 +815,71 @@ async def commit_frame(
             "content_type": _content_type_for(role, payload),
             "role": role,
         }.items() if v is not None}
+        frame_ok = False
         try:
             await db.table("capture_frames").insert({**row, **extra}).execute()
-        except Exception:
-            await db.table("capture_frames").insert(row).execute()
+            frame_ok = True
+        except Exception as e1:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            if _is_rest_quota_error(e1):
+                from ..shared.pg_capture import pg_insert_frame
+                frame_ok = bool(pg_insert_frame({**row, **extra}))
+            else:
+                try:
+                    await db.table("capture_frames").insert(row).execute()
+                    frame_ok = True
+                except Exception as e2:
+                    if _is_rest_quota_error(e2):
+                        from ..shared.pg_capture import pg_insert_frame
+                        frame_ok = bool(pg_insert_frame(row))
+                    else:
+                        raise
+        if not frame_ok:
+            api_error(500, "Could not record capture frame", "frame_insert_failed")
 
         new_count = int(session.get("frame_count") or 0) + 1
-        await db.table("capture_sessions").update({
-            "frame_count": new_count,
-            "updated_at": now,
-        }).eq("id", session_id).execute()
+        try:
+            await db.table("capture_sessions").update({
+                "frame_count": new_count,
+                "updated_at": now,
+            }).eq("id", session_id).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_session
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(session_id, {"frame_count": new_count, "updated_at": now})
 
         if room_id:
-            room_res = await db.table("capture_rooms").select("id, frames").eq("id", room_id).eq(
-                "session_id", session_id
-            ).maybe_single().execute()
-            room = room_res.data or {}
+            room = {}
+            try:
+                room_res = await db.table("capture_rooms").select("id, frames").eq("id", room_id).eq(
+                    "session_id", session_id
+                ).maybe_single().execute()
+                room = _maybe_single_row(room_res)
+            except Exception as e:
+                from ..shared.pg_fallback import _is_rest_quota_error
+                from ..shared.pg_capture import pg_select_rooms
+                if not _is_rest_quota_error(e):
+                    raise
+                room = next((r for r in pg_select_rooms(session_id) if str(r.get("id")) == str(room_id)), {})
             if room:
                 room_frames = int(room.get("frames") or 0) + 1
-                await db.table("capture_rooms").update({
-                    "frames": room_frames,
-                    "tone": _tone(room_frames, kind),
-                }).eq("id", room_id).execute()
+                try:
+                    await db.table("capture_rooms").update({
+                        "frames": room_frames,
+                        "tone": _tone(room_frames, kind),
+                    }).eq("id", room_id).execute()
+                except Exception as e:
+                    from ..shared.pg_fallback import _is_rest_quota_error
+                    from ..shared.pg_capture import pg_update_room
+                    if not _is_rest_quota_error(e):
+                        raise
+                    pg_update_room(
+                        room_id,
+                        {"frames": room_frames, "tone": _tone(room_frames, kind)},
+                        session_id=session_id,
+                    )
 
         if idx is None:
             idx = parse_station_index_from_path(storage_path) or 0
@@ -748,10 +909,20 @@ async def commit_frame(
             pass
         await upload_bytes(man_path, json.dumps(meta).encode("utf-8"), "application/json", upsert=True)
 
-        await db.table("capture_pipeline").update({
-            "detail": f"{new_count} frames",
-            "status": "active",
-        }).eq("session_id", session_id).eq("title", "Captured").execute()
+        try:
+            await db.table("capture_pipeline").update({
+                "detail": f"{new_count} frames",
+                "status": "active",
+            }).eq("session_id", session_id).eq("title", "Captured").execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_pipeline
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_pipeline(
+                session_id, "Captured",
+                {"detail": f"{new_count} frames", "status": "active"},
+            )
 
         session["frame_count"] = new_count
         bundle = await _load_session_bundle(db, job_id, session, job, preferred_room_id=room_id)
@@ -766,31 +937,65 @@ async def commit_frame(
 
 
 async def _note_floorplan_on_job(db, job: dict, job_id: str, sid: str, n: int, now: str) -> None:
-    """Checklist only. Phone-origin plans are Bricks-generated, not BoxBrownie."""
+    """Checklist only — call after successful floorplan deliver, never before compile.
+
+    Phone-origin plans are Bricks-generated, not BoxBrownie. Fair-Use: when
+    PostgREST is 402, write via Postgres so the visit checklist still marks
+    floor-plan capture complete and bumps jobs.updated_at.
+    """
+    import json as _json
     checklist = job.get("checklist") or []
+    if isinstance(checklist, str):
+        try:
+            checklist = _json.loads(checklist)
+        except Exception:
+            checklist = []
     if not isinstance(checklist, list):
         checklist = []
     already = any(
         isinstance(c, dict) and (c.get("label") or "") == _FLOORPLAN_NOTE
         for c in checklist
     )
-    if not already:
-        checklist = list(checklist) + [{"label": _FLOORPLAN_NOTE, "completed": True}]
-        await db.table("jobs").update({
-            "checklist": checklist,
-            "updated_at": now,
-        }).eq("id", job_id).execute()
+    if already:
+        return
+    checklist = list(checklist) + [{"label": _FLOORPLAN_NOTE, "completed": True}]
+    fields = {"checklist": checklist, "updated_at": now}
+    try:
+        await db.table("jobs").update(fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, fields):
+            import logging
+            logging.getLogger(__name__).warning(
+                "Job %s: floorplan checklist PG fallback failed", job_id
+            )
+        else:
+            job["checklist"] = checklist
+            job["updated_at"] = now
 
 
 async def _fail_session(db, sid: str, stage_title: str, error: str, now: str) -> None:
-    await db.table("capture_sessions").update({
-        "status": "failed",
-        "updated_at": now,
-    }).eq("id", sid).execute()
-    await db.table("capture_pipeline").update({
-        "status": "todo",
-        "detail": (error or "compile failed")[:500],
-    }).eq("session_id", sid).eq("title", stage_title).execute()
+    try:
+        await db.table("capture_sessions").update({
+            "status": "failed",
+            "updated_at": now,
+        }).eq("id", sid).execute()
+        await db.table("capture_pipeline").update({
+            "status": "todo",
+            "detail": (error or "compile failed")[:500],
+        }).eq("session_id", sid).eq("title", stage_title).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_update_session, pg_update_pipeline
+        if not _is_rest_quota_error(e):
+            raise
+        pg_update_session(sid, {"status": "failed", "updated_at": now})
+        pg_update_pipeline(
+            sid, stage_title,
+            {"status": "todo", "detail": (error or "compile failed")[:500]},
+        )
 
 
 _PRODUCT_LABEL = {"splat": "3D tour", "floorplan": "Floor plan", "visit": "Virtual Visit"}
@@ -804,7 +1009,11 @@ async def _first_delivered_of_kind(db, job_id: str, kind: str) -> bool:
         ).eq("status", "delivered").execute()
         rows = getattr(res, "data", None) or []
         return len(rows) <= 1
-    except Exception:
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_count_delivered
+        if _is_rest_quota_error(e):
+            return pg_count_delivered(job_id, kind) <= 1
         return True
 
 
@@ -823,7 +1032,18 @@ async def _notify_capture_session_delivered(db, job: dict, sid: str, kind: str, 
     try:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+        try:
+            await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+            if _is_rest_quota_error(e):
+                if not pg_update_job(job_id, {"updated_at": now}):
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Job %s: capture deliver updated_at PG fallback failed", job_id
+                    )
+            else:
+                raise
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(
@@ -836,12 +1056,17 @@ async def _notify_capture_session_delivered(db, job: dict, sid: str, kind: str, 
             from ..services.capture_worker import public_tour_embed_url
             url = public_tour_embed_url(job_id, sid)
             if url:
-                delivery_urls.append({"url": url, "filename": "3D tour"})
-        elif kind == "floorplan" and output_path:
-            from ..services.storage import get_signed_download_url
-            signed = await get_signed_download_url(output_path, expiry=60 * 60 * 24)
-            if signed:
-                delivery_urls.append({"url": signed, "filename": "Floor plan"})
+                delivery_urls.append({"url": url, "filename": "3D tour", "kind": "splat"})
+        elif kind == "floorplan":
+            from ..services.capture_worker import public_floorplan_url
+            url = public_floorplan_url(job_id, sid)
+            if url:
+                delivery_urls.append({"url": url, "filename": "Floor plan", "kind": "floorplan"})
+            elif output_path:
+                from ..services.storage import get_signed_download_url
+                signed = await get_signed_download_url(output_path, expiry=60 * 60 * 24)
+                if signed:
+                    delivery_urls.append({"url": signed, "filename": "Floor plan", "kind": "floorplan"})
     except Exception:
         delivery_urls = []
     try:
@@ -870,34 +1095,58 @@ async def _deliver_session(
     job: dict | None = None,
     notify: bool = False,
 ) -> None:
-    await db.table("capture_sessions").update({
+    from ..shared.pg_fallback import _is_rest_quota_error
+    from ..shared.pg_capture import pg_update_session, pg_update_pipeline
+
+    async def _sess_upd(fields: dict):
+        try:
+            await db.table("capture_sessions").update(fields).eq("id", sid).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(sid, fields)
+
+    async def _pipe_upd(title: str, fields: dict):
+        try:
+            q = db.table("capture_pipeline").update(fields).eq("session_id", sid).eq("title", title)
+            await q.execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_pipeline(sid, title, fields)
+
+    await _sess_upd({
         "status": "delivered",
         "output_storage_path": output_path,
         "updated_at": now,
-    }).eq("id", sid).execute()
-    await db.table("capture_pipeline").update({"title": "Building tour"}).eq(
-        "session_id", sid
-    ).eq("title", "Splatting").execute()
+    })
+    await _pipe_upd("Splatting", {"title": "Building tour"})
     stage = "Tracing" if kind == "floorplan" else "Building tour"
     for title, detail in (
         (stage, "Compiled from 360 stations"),
         ("QC", "Skipped — Bricks-generated"),
         ("Delivered", "On listing file"),
     ):
-        await db.table("capture_pipeline").update({
-            "status": "done",
-            "detail": detail,
-        }).eq("session_id", sid).eq("title", title).execute()
+        await _pipe_upd(title, {"status": "done", "detail": detail})
     # Agent email only on submit/compile first deliver — never on rebuild (avoid spam).
     if notify and job is not None:
         await _notify_capture_session_delivered(db, job, sid, kind, output_path)
 
 
 async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
+    from ..shared.pg_fallback import _is_rest_quota_error
+    from ..shared.pg_capture import pg_update_session, pg_update_pipeline
+
     sid = session["id"]
-    await db.table("capture_pipeline").update({"title": "Building tour"}).eq(
-        "session_id", sid
-    ).eq("title", "Splatting").execute()
+    try:
+        await db.table("capture_pipeline").update({"title": "Building tour"}).eq(
+            "session_id", sid
+        ).eq("title", "Splatting").execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            pg_update_pipeline(sid, "Splatting", {"title": "Building tour"})
+        else:
+            raise
     stage = "Tracing" if kind == "floorplan" else "Building tour"
     processing = "tracing" if kind == "floorplan" else "splatting"
     try:
@@ -905,16 +1154,35 @@ async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
             "status": processing,
             "updated_at": now,
         }).eq("id", sid).execute()
-    except Exception:
-        await db.table("capture_sessions").update({
-            "status": "splatting",
-            "updated_at": now,
-        }).eq("id", sid).execute()
-        processing = "splatting"
-    await db.table("capture_pipeline").update({
-        "status": "active",
-        "detail": "Stitching 360 stations" if kind != "floorplan" else "Deriving plan from stations",
-    }).eq("session_id", sid).eq("title", stage).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            if not pg_update_session(sid, {"status": processing, "updated_at": now}):
+                pg_update_session(sid, {"status": "splatting", "updated_at": now})
+                processing = "splatting"
+        else:
+            try:
+                await db.table("capture_sessions").update({
+                    "status": "splatting",
+                    "updated_at": now,
+                }).eq("id", sid).execute()
+                processing = "splatting"
+            except Exception as e2:
+                if _is_rest_quota_error(e2):
+                    pg_update_session(sid, {"status": "splatting", "updated_at": now})
+                    processing = "splatting"
+                else:
+                    raise
+    detail = "Stitching 360 stations" if kind != "floorplan" else "Deriving plan from stations"
+    try:
+        await db.table("capture_pipeline").update({
+            "status": "active",
+            "detail": detail,
+        }).eq("session_id", sid).eq("title", stage).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            pg_update_pipeline(sid, stage, {"status": "active", "detail": detail})
+        else:
+            raise
     try:
         output = await process_capture_session(db, job, session, kind)
     except CaptureWorkerError as e:
@@ -923,10 +1191,34 @@ async def _compile_or_fail(db, job: dict, session: dict, kind: str, now: str):
     except Exception as e:
         await _fail_session(db, sid, stage, str(e), datetime.now(timezone.utc).isoformat())
         raise CaptureWorkerError(str(e)) from e
+    delivered_at = datetime.now(timezone.utc).isoformat()
     await _deliver_session(
-        db, sid, output, kind, datetime.now(timezone.utc).isoformat(),
+        db, sid, output, kind, delivered_at,
         job=job, notify=True,
     )
+    # Checklist only AFTER successful deliver — same class as Visit finalize:
+    # never mark floor-plan "submitted" when compile failed / stub refused.
+    if kind == "floorplan":
+        n = int(session.get("frame_count") or 0)
+        await _note_floorplan_on_job(
+            db, job, job.get("id") or "", sid, n, delivered_at,
+        )
+    # Always finalize after successful compile deliver:
+    # - Capture-only (no uploads): creates media_delivery + payout.
+    # - Stills already delivered: folds floor/tour into existing media_delivery
+    #   (no duplicate QC / email / payout — see _fold_capture_into_existing_delivery).
+    # - Stills still in-flight: finalize waits; stills path will pick up capture later.
+    try:
+        jid = job.get("id") or ""
+        if jid:
+            from .post_production import _finalize_job_if_complete
+            await _finalize_job_if_complete(jid)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Job %s: finalize after capture deliver failed: %s",
+            job.get("id"), e,
+        )
     session["status"] = "delivered"
     session["output_storage_path"] = output
     return output
@@ -971,16 +1263,25 @@ async def submit_session(
             api_error(400, "Submit needs equirects or a stitchable 360 pan at each station", "no_equirects")
 
         n = int(session.get("frame_count") or 0)
-        await db.table("capture_sessions").update({
-            "submitted_at": now,
-            "updated_at": now,
-        }).eq("id", sid).execute()
-        await db.table("capture_pipeline").update({
-            "status": "done",
-            "detail": f"{len(stations)} stations · {n} frames",
-        }).eq("session_id", sid).eq("title", "Captured").execute()
-        if kind == "floorplan":
-            await _note_floorplan_on_job(db, job, job_id, sid, n, now)
+        try:
+            await db.table("capture_sessions").update({
+                "submitted_at": now,
+                "updated_at": now,
+            }).eq("id", sid).execute()
+            await db.table("capture_pipeline").update({
+                "status": "done",
+                "detail": f"{len(stations)} stations · {n} frames",
+            }).eq("session_id", sid).eq("title", "Captured").execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_session, pg_update_pipeline
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(sid, {"submitted_at": now, "updated_at": now})
+            pg_update_pipeline(
+                sid, "Captured",
+                {"status": "done", "detail": f"{len(stations)} stations · {n} frames"},
+            )
         try:
             await _compile_or_fail(db, job, session, kind, now)
             return {"ok": True, "session": await _load_session_bundle(db, job_id, session, job)}
@@ -996,8 +1297,15 @@ async def submit_session(
 
 
 async def _session_by_id(db, session_id: str) -> Optional[dict]:
-    res = await db.table("capture_sessions").select("*").eq("id", session_id).maybe_single().execute()
-    return res.data or None
+    try:
+        res = await db.table("capture_sessions").select("*").eq("id", session_id).maybe_single().execute()
+        return _maybe_single_row(res) or None
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_session_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        return pg_select_session_by_id(session_id)
 
 
 async def _run_rebuild_tour(db, job: dict, session: dict) -> dict:
@@ -1016,10 +1324,17 @@ async def _run_rebuild_tour(db, job: dict, session: dict) -> dict:
         await _deliver_session(db, session["id"], output, "splat", now)
         session["status"] = "delivered"
     else:
-        await db.table("capture_sessions").update({
-            "output_storage_path": output,
-            "updated_at": now,
-        }).eq("id", session["id"]).execute()
+        try:
+            await db.table("capture_sessions").update({
+                "output_storage_path": output,
+                "updated_at": now,
+            }).eq("id", session["id"]).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_session
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(session["id"], {"output_storage_path": output, "updated_at": now})
     bundle = await _load_session_bundle(db, job["id"], session, job)
     return {
         "ok": True,
@@ -1046,10 +1361,17 @@ async def _run_rebuild_floorplan(db, job: dict, session: dict) -> dict:
         await _deliver_session(db, session["id"], output, "floorplan", now)
         session["status"] = "delivered"
     else:
-        await db.table("capture_sessions").update({
-            "output_storage_path": output,
-            "updated_at": now,
-        }).eq("id", session["id"]).execute()
+        try:
+            await db.table("capture_sessions").update({
+                "output_storage_path": output,
+                "updated_at": now,
+            }).eq("id", session["id"]).execute()
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_update_session
+            if not _is_rest_quota_error(e):
+                raise
+            pg_update_session(session["id"], {"output_storage_path": output, "updated_at": now})
     bundle = await _load_session_bundle(db, job["id"], session, job)
     return {
         "ok": True,
@@ -1307,11 +1629,19 @@ def _normalize_visit_url(raw: str) -> str:
     return url
 
 
+# PlayCanvas SOG (.sog, zip of webp + meta.json) joins .spz/.ply/.splat
+# 2026-10-11: owned Visit pipeline outputs SOG per room; OS Spark viewer reads all four.
+VISIT_FILE_EXTS = ("sog", "spz", "ply", "splat")
+
+
+VISIT_FLOOR_PLAN_EXTS = ("svg", "png", "webp")
+
+
 def _visit_ext(filename: str) -> str:
     name = (filename or "").strip()
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    if ext not in ("splat", "ply", "spz"):
-        api_error(400, "Only .splat, .ply, or .spz files are supported", "bad_visit_file")
+    if ext not in VISIT_FILE_EXTS:
+        api_error(400, "Only .sog, .spz, .ply, or .splat files are supported", "bad_visit_file")
     return ext
 
 
@@ -1320,30 +1650,93 @@ async def sign_visit_upload(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
-    """Signed PUT for a .ply/.splat/.spz Virtual Visit file (bypasses 4.5MB Vercel body)."""
+    """Signed PUT for a .sog/.spz/.ply/.splat Virtual Visit file (bypasses 4.5MB Vercel body).
+
+    The owned Visit pipeline worker signs with X-Internal-Api-Key, one call per
+    room, plus ``kind: "floor_plan"`` for the generated floor plan image
+    (.svg/.png/.webp) that the manifest references.
+    """
     import uuid as _uuid
 
     job_id = (payload or {}).get("job_id") or ""
     filename = str((payload or {}).get("filename") or "visit.splat")
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    kind = str((payload or {}).get("kind") or "splat").strip().lower()
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     flags = job_capture_entitlements(job)
     if not kind_purchased(job, "visit"):
         api_error(403, capture_forbidden_message("visit", flags), "capture_kind_not_purchased")
-    ext = _visit_ext(filename)
     visit_id = str(_uuid.uuid4())
-    storage_path = f"visits/{job_id}/{visit_id}.{ext}"
+    if kind == "floor_plan":
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in VISIT_FLOOR_PLAN_EXTS:
+            api_error(400, "Floor plan must be .svg, .png or .webp", "bad_visit_file")
+        storage_path = f"visits/{job_id}/{visit_id}-floor.{ext}"
+    else:
+        ext = _visit_ext(filename)
+        storage_path = f"visits/{job_id}/{visit_id}.{ext}"
     signed = await create_signed_upload_url(storage_path)
     if not signed or not signed.get("signed_url"):
         api_error(502, "Could not mint visit upload URL", "visit_sign_failed")
+    from ..services.storage import STORAGE_BUCKET
     return {
         "ok": True,
         "storage_path": storage_path,
         "signed_url": signed.get("signed_url"),
         "token": signed.get("token"),
         "path": signed.get("path") or storage_path,
-        "content_type": "application/octet-stream",
+        "bucket": STORAGE_BUCKET,
+        "content_type": {"svg": "image/svg+xml", "png": "image/png", "webp": "image/webp"}.get(ext, "application/octet-stream"),
     }
+
+
+async def _visit_file_get_url(storage_path: str) -> Optional[str]:
+    """Long-lived GET (7d) for a GO Visit file; HMAC Blob proxy under Fair Use.
+
+    Share/desk late-fold must outlive a 24h signed URL. None when neither
+    Storage signing nor the Blob proxy is available.
+    """
+    from ..services.storage import MAX_GET_EXPIRY, blob_fallback_enabled, build_hmac_proxy_url
+
+    signed = None
+    try:
+        signed = await get_signed_download_url(storage_path, expiry=MAX_GET_EXPIRY)
+    except Exception:
+        signed = None
+    if signed:
+        return signed
+    if blob_fallback_enabled():
+        try:
+            return build_hmac_proxy_url("GET", storage_path, MAX_GET_EXPIRY)
+        except Exception:
+            return None
+    return None
+
+
+async def _visit_file_qc(url: Optional[str], storage_path: str) -> dict:
+    """Same first-bytes Visit container check job QC runs on Visit uploads.
+
+    Holds (rejected + image_unavailable) when the file cannot be signed or
+    fetched — parity with run_visit_qc / listing stills. Deliver path already
+    422s on rejected so an unchecked Visit never lands on the listing.
+    Never judges scan quality (no auto-edit claim).
+    """
+    from ..services.qc_media_kinds import _media_unavailable_hold, run_visit_qc
+
+    if not url:
+        return _media_unavailable_hold(
+            "could not sign Visit for QC review"
+        )
+    try:
+        return await run_visit_qc(storage_path, url, filename=storage_path)
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "Visit file QC hold (check error) for %s: %s", storage_path, type(e).__name__
+        )
+        return _media_unavailable_hold(
+            f"Visit QC check error ({type(e).__name__})"
+        )
 
 
 @router.post("/visit/deliver")
@@ -1351,19 +1744,50 @@ async def deliver_virtual_visit(
     payload: dict = Body(default={}),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
 ):
     """Vendor delivers Virtual Visit from GO onto the listing file.
 
     Body: job_id + either polycam_url / embed_url OR storage_path from /visit/sign.
-    Bridge until owned GPU cook: Polycam share URL or uploaded .ply/.splat/.spz.
+    Files: .sog / .spz / .ply / .splat.
+
+    Owned Visit pipeline (2026-10-11): ``rooms`` = [{storage_path, name,
+    floor_index, transform, bbox, entry_pose, hotspot, format}] for a
+    multi-room streamed Visit, plus optional ``manifest`` (floor plan, base
+    splat, start room) and ``pipeline_qc`` ({passed, checks:[...]}) from the
+    GPU worker. Every room file gets the container check; a failed pipeline
+    QC or any rejected room holds the whole Visit (422) — nothing lands on
+    the listing. The worker authenticates with X-Internal-Api-Key.
     """
     job_id = (payload or {}).get("job_id") or ""
+    raw_rooms = (payload or {}).get("rooms") or []
+    rooms: list = []
+    if raw_rooms:
+        if not isinstance(raw_rooms, list) or len(raw_rooms) > 40:
+            api_error(400, "rooms must be a list of at most 40 rooms", "bad_visit_rooms")
+        for i, r in enumerate(raw_rooms):
+            sp = str((r or {}).get("storage_path") or "").strip() if isinstance(r, dict) else ""
+            if not sp:
+                api_error(400, f"Room {i + 1} needs a storage_path", "bad_visit_rooms")
+            rooms.append({**r, "storage_path": sp})
+        if not (payload or {}).get("storage_path"):
+            payload = {**payload, "storage_path": rooms[0]["storage_path"]}
+    pipeline_qc = (payload or {}).get("pipeline_qc")
+    if isinstance(pipeline_qc, dict) and pipeline_qc.get("passed") is False:
+        failed = [c.get("name") for c in (pipeline_qc.get("checks") or []) if isinstance(c, dict) and not c.get("passed")]
+        api_error(
+            422,
+            "Automatic Visit QC held this capture"
+            + (f" ({', '.join(str(f) for f in failed if f)})" if failed else "")
+            + ". Nothing was added to the listing — re-shoot or re-process.",
+            "visit_pipeline_qc_held",
+        )
     title = str((payload or {}).get("title") or "Virtual Visit").strip() or "Virtual Visit"
     polycam_url = _normalize_visit_url(
         str((payload or {}).get("polycam_url") or (payload or {}).get("embed_url") or "")
     )
     storage_path = str((payload or {}).get("storage_path") or "").strip()
-    _, job = await _actor_and_job(authorization, x_user_id, job_id)
+    _, job = await _actor_and_job(authorization, x_user_id, job_id, x_internal_api_key)
     flags = job_capture_entitlements(job)
     if not kind_purchased(job, "visit"):
         api_error(403, capture_forbidden_message("visit", flags), "capture_kind_not_purchased")
@@ -1375,8 +1799,47 @@ async def deliver_virtual_visit(
         if not storage_path.startswith(f"visits/{job_id}/"):
             api_error(400, "storage_path must be under visits/{job_id}/", "bad_visit_path")
         ext = storage_path.rsplit(".", 1)[-1].lower()
-        if ext not in ("splat", "ply", "spz"):
-            api_error(400, "Visit file must be .splat, .ply, or .spz", "bad_visit_file")
+        if ext not in VISIT_FILE_EXTS:
+            api_error(400, "Visit file must be .sog, .spz, .ply, or .splat", "bad_visit_file")
+    for i, r in enumerate(rooms):
+        sp = r["storage_path"]
+        if not sp.startswith(f"visits/{job_id}/") or ".." in sp:
+            api_error(400, f"Room {i + 1} storage_path must be under visits/{{job_id}}/", "bad_visit_path")
+        if sp.rsplit(".", 1)[-1].lower() not in VISIT_FILE_EXTS:
+            api_error(400, f"Room {i + 1} must be .sog, .spz, .ply, or .splat", "bad_visit_file")
+
+    # Visit file bridge: sign the GET first so the container check runs BEFORE
+    # anything lands on the listing (property_visits, media_delivery, client
+    # email, payout). This GO path writes no uploads row, so job QC never sees
+    # it — without this an empty / error-page / still-as-.splat file was
+    # delivered to the client as their Virtual Visit.
+    visit_file_url = await _visit_file_get_url(storage_path) if storage_path else None
+    if storage_path:
+        qc = await _visit_file_qc(visit_file_url, storage_path)
+        if str(qc.get("qc_status") or "") == "rejected":
+            api_error(
+                422,
+                f"{qc.get('qc_notes') or 'Visit file is not a Visit asset.'} "
+                "Nothing was added to the listing — re-export the scan as "
+                ".sog, .spz, .ply, or .splat and upload it again.",
+                "visit_file_rejected",
+            )
+    # Multi-room: every room file passes the same container check.
+    room_qc: list = []
+    for i, r in enumerate(rooms):
+        if r["storage_path"] == storage_path:
+            room_qc.append({"room": r.get("name") or f"Room {i + 1}", "qc_status": "passed"})
+            continue
+        r_url = await _visit_file_get_url(r["storage_path"])
+        rq = await _visit_file_qc(r_url, r["storage_path"])
+        if str(rq.get("qc_status") or "") == "rejected":
+            api_error(
+                422,
+                f"Room {i + 1} ({r.get('name') or 'unnamed'}): "
+                f"{rq.get('qc_notes') or 'not a Visit asset.'} Nothing was added to the listing.",
+                "visit_file_rejected",
+            )
+        room_qc.append({"room": r.get("name") or f"Room {i + 1}", "qc_status": rq.get("qc_status")})
 
     from ..services.client_comms import notify_capture_delivered, register_property_visit
 
@@ -1388,22 +1851,33 @@ async def deliver_virtual_visit(
             visit_type="url",
         )
         # type=url is also used for hosted tours; title Virtual Visit keeps VisitViewer honest.
-        delivery_urls = [{"url": polycam_url, "filename": "Virtual Visit"}]
+        delivery_urls = [{"url": polycam_url, "filename": "Virtual Visit", "kind": "visit"}]
         output = polycam_url
     else:
+        visit_qc = None
+        if rooms or isinstance(pipeline_qc, dict):
+            visit_qc = {"rooms": room_qc, "pipeline": pipeline_qc if isinstance(pipeline_qc, dict) else None}
         ok = await register_property_visit(
             job_id,
             storage_path=storage_path,
             title=title,
             visit_type="file",
+            rooms=rooms or None,
+            manifest=(payload or {}).get("manifest") if isinstance((payload or {}).get("manifest"), dict) else None,
+            qc=visit_qc,
         )
+        # Parity with Polycam URL: always fold kind=visit into media_delivery.
+        # Prefer long-lived GET (7d) so share/desk late-fold outlives a 24h signed URL.
+        # Keep storage_path on the row so OS can re-sign when property_visits is empty.
         delivery_urls = []
-        try:
-            signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24)
-            if signed:
-                delivery_urls.append({"url": signed, "filename": "Virtual Visit"})
-        except Exception:
-            pass
+        entry = {
+            "filename": "Virtual Visit",
+            "kind": "visit",
+            "storage_path": storage_path,
+        }
+        if visit_file_url:
+            entry["url"] = visit_file_url
+        delivery_urls.append(entry)
         output = storage_path
 
     if not ok:
@@ -1414,8 +1888,10 @@ async def deliver_virtual_visit(
     now = datetime.now(timezone.utc).isoformat()
     try:
         await db.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if _is_rest_quota_error(e):
+            pg_update_job(job_id, {"updated_at": now})
     try:
         await notify_capture_delivered(
             job_id,
@@ -1430,6 +1906,22 @@ async def deliver_virtual_visit(
             "Job %s: Virtual Visit delivery notification failed: %s", job_id, e
         )
 
+    # Mirror floor/tour compile: finalize after successful Visit deliver.
+    # Polycam bridge creates no uploads row — without visit_bridge, finalize
+    # would unstick processing and skip media_delivery / delivered / payout.
+    try:
+        from .post_production import _finalize_job_if_complete
+        await _finalize_job_if_complete(
+            job_id,
+            visit_bridge=True,
+            visit_delivery_urls=delivery_urls,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Job %s: finalize after Visit deliver failed: %s", job_id, e
+        )
+
     return {
         "ok": True,
         "job_id": job_id,
@@ -1438,3 +1930,70 @@ async def deliver_virtual_visit(
         "output": output,
         "mode": "url" if polycam_url else "file",
     }
+
+
+# ---------------------------------------------------------------------------
+# Fair-Use private Blob proxy — HMAC is the auth (no JWT). GO clients PUT/GET
+# here because private Blob URLs require Authorization the phone cannot send.
+# ---------------------------------------------------------------------------
+
+@router.put("/blob-put/{path:path}")
+async def blob_put_proxy(
+    path: str,
+    request: Request,
+    exp: int = Query(...),
+    sig: str = Query(...),
+):
+    """Accept capture bytes into Vercel Blob when signed with CAPTURE_PUT_SECRET."""
+    try:
+        if not verify_capture_hmac("PUT", path, exp, sig):
+            api_error(403, "Invalid or expired upload signature", "bad_blob_sig")
+    except ValueError:
+        api_error(400, "Invalid path", "bad_blob_path")
+    body = await request.body()
+    if not body:
+        api_error(400, "Empty body", "empty_body")
+    content_type = request.headers.get("content-type") or "application/octet-stream"
+    ok = await _blob_put(path, body, content_type=content_type, upsert=True)
+    if not ok:
+        api_error(502, "Blob upload failed", "blob_put_failed")
+    return {"ok": True, "path": path.lstrip("/"), "bytes": len(body)}
+
+
+@router.get("/blob-get/{path:path}")
+async def blob_get_proxy(
+    path: str,
+    exp: int = Query(...),
+    sig: str = Query(...),
+):
+    """Stream capture bytes from Vercel Blob when signed with CAPTURE_PUT_SECRET."""
+    try:
+        if not verify_capture_hmac("GET", path, exp, sig):
+            api_error(403, "Invalid or expired download signature", "bad_blob_sig")
+    except ValueError:
+        api_error(400, "Invalid path", "bad_blob_path")
+    data = await _blob_get(path)
+    if data is None:
+        api_error(404, "Not found", "blob_not_found")
+    # Guess content-type from extension for tour HTML / floor-plan PNG.
+    lower = path.lower()
+    if lower.endswith(".html") or lower.endswith(".htm"):
+        ctype = "text/html; charset=utf-8"
+    elif lower.endswith(".png"):
+        ctype = "image/png"
+    elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        ctype = "image/jpeg"
+    elif lower.endswith(".json"):
+        ctype = "application/json"
+    elif lower.endswith(".svg"):
+        ctype = "image/svg+xml"
+    else:
+        ctype = "application/octet-stream"
+    headers = {"X-Content-Type-Options": "nosniff"}
+    # Active content (html/svg/xml) must never render inline on the API origin.
+    if lower.endswith((".html", ".htm", ".svg", ".xml", ".xhtml")) or any(
+        t in ctype for t in ("html", "svg", "xml")
+    ):
+        fname = (path.rsplit("/", 1)[-1] or "download").replace('"', "")
+        headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+    return Response(content=data, media_type=ctype, headers=headers)

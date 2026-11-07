@@ -98,7 +98,7 @@ def test_supabase_connect_payload(monkeypatch):
 
     body = build_google_supabase_connect_payload()
     assert body["mode"] == "supabase"
-    assert "calendar.readonly" in body["scope"]
+    assert body["scope"] == "https://www.googleapis.com/auth/calendar.freebusy"
     assert body["redirect_uri"].endswith("/auth/google-calendar")
 
 
@@ -237,3 +237,96 @@ def test_calendar_success_redirect_default():
     from app.services.vendor_calendars import calendar_success_redirect_base
 
     assert calendar_success_redirect_base() == "https://go.brxs.ca/availability"
+
+
+@pytest.mark.asyncio
+async def test_persist_google_oauth_requires_ping_and_refresh():
+    """Connected is only returned after refresh token + Calendar ping. Token dump is not enough."""
+    from app.services.vendor_calendars import persist_google_oauth_if_verified
+
+    db = MagicMock()
+
+    no_refresh = await persist_google_oauth_if_verified(
+        db,
+        member_id="m1",
+        vendor_id="default_vendor",
+        access_token="atok",
+        refresh_token="",
+    )
+    assert no_refresh["connected"] is False
+    assert no_refresh["status"] == "noscope"
+    db.table.assert_not_called()
+
+    with patch(
+        "app.services.vendor_calendars.google_calendar_ping",
+        AsyncMock(return_value={"ok": False, "status": 403, "via": "freebusy"}),
+    ):
+        ping_fail = await persist_google_oauth_if_verified(
+            db,
+            member_id="m1",
+            vendor_id="default_vendor",
+            access_token="atok",
+            refresh_token="rtok",
+        )
+    assert ping_fail["connected"] is False
+    assert ping_fail["status"] == "noscope"
+    db.table.assert_not_called()
+
+    upserted = []
+
+    async def fake_upsert(*_a, **kw):
+        upserted.append(kw)
+        return {
+            "member_id": kw["member_id"],
+            "provider": "google",
+            "access_token": kw["token_payload"]["access_token"],
+            "refresh_token": kw["token_payload"]["refresh_token"],
+        }
+
+    with patch(
+        "app.services.vendor_calendars.google_calendar_ping",
+        AsyncMock(return_value={"ok": True, "status": 200, "via": "freebusy"}),
+    ), patch(
+        "app.services.vendor_calendars.upsert_oauth_connection",
+        side_effect=fake_upsert,
+    ):
+        ok = await persist_google_oauth_if_verified(
+            db,
+            member_id="m1",
+            vendor_id="default_vendor",
+            access_token="atok",
+            refresh_token="rtok",
+        )
+    assert ok["connected"] is True
+    assert ok["ping"] == "freebusy"
+    assert len(upserted) == 1
+
+
+@pytest.mark.asyncio
+async def test_google_connect_payload_does_not_fake_connected(monkeypatch):
+    """POST /calendars/google/connect with tokens still requires ping — never fake Connected."""
+    from app.routers import vendor_os as vos
+
+    actor = "photog-google-1"
+    monkeypatch.setattr(vos, "resolve_vendor_actor_id", AsyncMock(return_value=actor))
+    monkeypatch.setattr(
+        vos,
+        "get_vendor_member",
+        AsyncMock(return_value={"id": actor, "vendor_id": "default_vendor"}),
+    )
+    monkeypatch.setattr(vos, "get_db", AsyncMock(return_value=MagicMock()))
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sec")
+
+    with patch(
+        "app.services.vendor_calendars.google_calendar_ping",
+        AsyncMock(return_value={"ok": False, "status": 500, "via": "freebusy"}),
+    ):
+        out = await vos.connect_vendor_calendar(
+            "google",
+            payload={"access_token": "atok", "refresh_token": "rtok"},
+            authorization="Bearer x",
+            x_user_id=None,
+        )
+    assert out["connected"] is False
+    assert out["status"] == "error"

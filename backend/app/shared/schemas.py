@@ -1,5 +1,5 @@
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 from pydantic import BaseModel, Field
@@ -88,6 +88,12 @@ class Job(BaseModel):
     dev_project_id: Optional[str] = None
     dev_phase_id: Optional[str] = None
     dev_capture_visit_id: Optional[str] = None
+    # Commercial jobs: minimum verified drone/aviation liability (CAD) the
+    # assignee must hold; None = $2M default (5_000_000 for CCDC 41 contracts).
+    min_insurance_cad: Optional[int] = None
+    # Commercial jobs default to Advanced RPAS; False only when the site is
+    # confirmed outside controlled airspace / away from people.
+    requires_rpas_advanced: Optional[bool] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -153,6 +159,12 @@ class JobIntakeRequest(BaseModel):
     dev_project_id: Optional[str] = None
     dev_phase_id: Optional[str] = None
     dev_capture_visit_id: Optional[str] = None
+    # Commercial jobs: minimum verified drone/aviation liability (CAD) the
+    # assignee must hold; None = $2M default (5_000_000 for CCDC 41 contracts).
+    min_insurance_cad: Optional[int] = None
+    # Commercial jobs default to Advanced RPAS; False only when the site is
+    # confirmed outside controlled airspace / away from people.
+    requires_rpas_advanced: Optional[bool] = None
 
 
 class JobStatusUpdate(BaseModel):
@@ -325,7 +337,9 @@ class VendorMember(BaseModel):
     phone: str = ""
     role: str = "Photographer IC"
     title: str = "Photographer IC"
-    # Wave A: photographer | stager | cleaner. Drone/RPAS is a photographer capability.
+    # photographer | stager | cleaner (DB check). inspector | measurer | handyman
+    # are stored in application_profile.trade until the widening migration.
+    # Drone/RPAS is a photographer capability.
     vendor_type: str = "photographer"
     specialty: str = "photo"
     skills: List[str] = []
@@ -354,11 +368,23 @@ class VendorMember(BaseModel):
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     insurance_policy_number: Optional[str] = None
-    # Optional copies of a verified COI/WSIB expiry (admin_ops.verify_document).
-    # Historical storage only. Apply, approval, assignment, and dispatch do
-    # not read these fields and do not require a COI or WSIB record.
+    # Verified expiry copied by admin_ops.verify_document.
+    # Listing jobs do not read these. Commercial jobs read coi_expires_on
+    # with the verified-liability fields below. wsib_expires_on is history only.
     coi_expires_on: Optional[str] = None
     wsib_expires_on: Optional[str] = None
+    # Commercial gate (Kam, 2026-10-17): listing jobs still ignore insurance.
+    # Commercial jobs and Tier A require coi_verified + coi_aviation_covered +
+    # unexpired coi_expires_on + coi_liability_cad >= job minimum (default $2M).
+    # Set only by an admin verify (OS /admin/vendors/{id}/insurance or
+    # Dispatch admin_ops.verify_document), never by the vendor.
+    coi_verified: Optional[bool] = False
+    coi_liability_cad: Optional[int] = None
+    coi_aviation_covered: Optional[bool] = False
+    coi_verified_at: Optional[str] = None
+    # contractor (default) | employee (in-house staff: company policy covers
+    # commercial insurance; no per-job payout; salary handled outside Dispatch)
+    worker_type: Optional[str] = "contractor"
     internal_notes: str = ""
     completion_rate: float = 1.0
     avg_turnaround_days: float = 0.0
@@ -378,6 +404,11 @@ class VendorMember(BaseModel):
     # session to check against yet. Only set for applicants created via
     # /apply -- None for members created directly by an admin (create_vendor_member).
     application_token: Optional[str] = None
+    # How the applicant heard about Bricks. Null for older applicants.
+    source: Optional[str] = None
+    source_detail: Optional[str] = None
+    # Structured application (migration 0017). Null for older applicants.
+    application_profile: Optional[Dict[str, Any]] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -400,7 +431,7 @@ class VendorApplicationCreate(BaseModel):
     # Ontario Regions: GTA, York, Peel, Halton, Durham, Hamilton, Waterloo, Ottawa, etc.
     preferred_regions: List[str] = []
     accepted_terms: bool
-    ic_agreement_version: str = "1.5"
+    ic_agreement_version: str = "1.9"
     hst_number: Optional[str] = None
     # CRA small-supplier exemption: under $30,000 CAD/year across all clients,
     # registration for GST/HST isn't legally required. Lets an applicant pass
@@ -412,6 +443,38 @@ class VendorApplicationCreate(BaseModel):
     # Honeypot: real users never see/fill this (off-screen). Bots that autofill
     # every field will, and we reject silently-ish on the server.
     company_website: Optional[str] = None
+    # "How did you hear about Bricks?" (www form). Optional here so older
+    # clients still apply; see app/shared/applicant_source.py.
+    source: Optional[str] = None
+    source_detail: Optional[str] = None
+    # Evidence (2026-10-12). Photographers upload 8-15 sample photos straight
+    # to storage via POST /api/onboarding/sample-uploads, then send the paths
+    # here with the signed session id. See app/services/applicant_evidence.py.
+    sample_upload_session: Optional[str] = None
+    sample_paths: List[str] = []
+    rpas_cert_path: Optional[str] = None
+    # {camera_body, lenses, drone_model, lighting, tripod}
+    equipment: Optional[Dict[str, Any]] = None
+    # {days_of_week, time_windows, weekends, earliest_start_date,
+    #  shoots_per_week, max_shoots_per_day, notice_hours, has_car, has_licence}
+    availability: Optional[Dict[str, Any]] = None
+    # Non-media trades (2026-10-26). {cgl_confirmed, cgl_limit_cents,
+    # insurer, wsib_number, years_experience, licences, team_size, service_notes}.
+    # Repairs and inspections must confirm $2M CGL; the COI file goes to
+    # POST /api/onboarding/documents (doc_type=coi) after /apply.
+    trade_credentials: Optional[Dict[str, Any]] = None
+
+
+class SampleUploadFile(BaseModel):
+    name: str = ""
+    type: str
+    size: int
+    kind: str = "sample"  # sample | rpas_cert
+
+
+class SampleUploadRequest(BaseModel):
+    files: List[SampleUploadFile]
+    session: Optional[str] = None
 
 
 class VendorDocument(BaseModel):

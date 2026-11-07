@@ -22,3 +22,12 @@ async def get_db() -> AsyncClient:
         _db = await create_async_client(url, key)
     return _db
 
+def maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row.
+
+    Reading .data on that None is AttributeError (CORS-less HTTP 500). Callers
+    that need a missing-row signal use ``row or None`` / ``if not row``.
+    """
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+

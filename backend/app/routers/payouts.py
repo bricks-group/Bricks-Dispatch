@@ -74,8 +74,16 @@ async def list_payouts(
     if status:
         query = query.eq("status", status)
 
-    result = await query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
-    return result.data or []
+    try:
+        result = await query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+        return result.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_list_payouts
+        if _is_rest_quota_error(e):
+            return pg_list_payouts(
+                vendor_id=vendor_id, status=status, limit=limit, offset=offset
+            )
+        raise
 
 
 @router.get("/summary", summary="Payout summary for office dashboard")
@@ -92,8 +100,15 @@ async def payout_summary(
 
     db = await get_db()
 
-    result = await db.table("payouts").select("status, amount").execute()
-    payouts = result.data or []
+    try:
+        result = await db.table("payouts").select("status, amount").execute()
+        payouts = result.data or []
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_payouts_status_amounts
+        if _is_rest_quota_error(e):
+            payouts = pg_select_payouts_status_amounts()
+        else:
+            raise
 
     summary = {
         "total_payouts": len(payouts),

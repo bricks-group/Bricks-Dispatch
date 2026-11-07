@@ -1,25 +1,71 @@
-import { useState } from 'react';
-import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
-} from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
-import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { color, type as T, space, radius, layout } from '../../theme';
+import { Field, Button, Notice, Divider, TextLink } from '../../components/ui';
 import BricksWordmark from '../../components/BricksWordmark';
+import { EnterFadeDown } from '../../components/motion';
+import { APPLE_SIGN_IN_ENABLED, AppleAuthentication, appleSignInAvailable, signInWithApple } from '../../lib/apple-auth';
 
 WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const router = useRouter();
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleReady, setAppleReady] = useState(false);
+  // App Store 4.8: on iOS, Google sign-in is only offered alongside Sign in with Apple.
+  const showGoogle = Platform.OS !== 'ios' || APPLE_SIGN_IN_ENABLED;
+
+  useEffect(() => { appleSignInAvailable().then(setAppleReady); }, []);
+
+  const handleApple = async () => {
+    setError('');
+    try {
+      const ok = await signInWithApple();
+      if (ok) router.replace('/(tabs)');
+    } catch (e: any) {
+      setError(e?.message || 'Apple sign-in failed');
+    }
+  };
+
+  const isFairUseAuthError = (authError: any) => {
+    const msg = `${authError?.message || ''} ${authError?.status || ''}`.toLowerCase();
+    return (
+      msg.includes('402')
+      || msg.includes('exceed_storage')
+      || msg.includes('fair-use')
+      || msg.includes('fair use')
+      || msg.includes('restricted')
+      || authError?.status === 402
+    );
+  };
+
+  const applyFairUseSession = async (body: any, verb: string) => {
+    const access = body.access_token;
+    const refresh = body.refresh_token || access;
+    if (!access) throw new Error(`Fair-Use ${verb} returned no token`);
+    const { error: sessionError } = await supabase.auth.setSession({
+      access_token: access,
+      refresh_token: refresh,
+    });
+    if (sessionError) throw sessionError;
+  };
+
+  const fairUseDetail = (body: any, status: number, fallback: string) => {
+    const detail = body?.detail;
+    if (typeof detail === 'string') return detail;
+    return detail?.message || body?.message || `${fallback} (${status})`;
+  };
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -29,14 +75,87 @@ export default function LoginScreen() {
     setError('');
     setLoading(true);
     try {
+      const trimmed = email.trim().toLowerCase();
       const { error: authError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: trimmed,
         password,
       });
-      if (authError) throw authError;
+      if (authError) {
+        if (!isFairUseAuthError(authError)) throw authError;
+        const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+        const res = await fetch(`${API}/api/vendor-os/auth/fair-use-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: trimmed, password }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Login failed'));
+        await applyFairUseSession(body, 'login');
+      }
       router.replace('/(tabs)');
     } catch (e: any) {
       setError(e.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignup = async () => {
+    if (!email.trim() || !password) {
+      setError('Enter your email and password');
+      return;
+    }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      const trimmed = email.trim().toLowerCase();
+      const display = name.trim();
+      const { data, error: authError } = await supabase.auth.signUp({
+        email: trimmed,
+        password,
+        options: display ? { data: { full_name: display } } : undefined,
+      });
+      if (authError) {
+        if (!isFairUseAuthError(authError)) throw authError;
+        const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+        const res = await fetch(`${API}/api/vendor-os/auth/fair-use-signup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: trimmed, password, name: display }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Sign up failed'));
+        await applyFairUseSession(body, 'signup');
+      } else if (data?.session) {
+        // immediate session (email confirm off)
+      } else {
+        // No session yet — try password sign-in (or Fair-Use path)
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: trimmed,
+          password,
+        });
+        if (signInError) {
+          if (!isFairUseAuthError(signInError)) {
+            throw new Error('Account created — check your email to confirm, then sign in.');
+          }
+          const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
+          const res = await fetch(`${API}/api/vendor-os/auth/fair-use-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: trimmed, password }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Sign in after signup failed'));
+          await applyFairUseSession(body, 'login');
+        }
+      }
+      router.replace('/(tabs)');
+    } catch (e: any) {
+      setError(e.message || 'Sign up failed');
     } finally {
       setLoading(false);
     }
@@ -68,97 +187,106 @@ export default function LoginScreen() {
     }
   };
 
+  const busy = loading || googleLoading;
+
   return (
     <SafeAreaView style={s.safe}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={s.flex}
-      >
-        <ScrollView
-          contentContainerStyle={s.scroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={s.wordmarkWrap}>
-            <BricksWordmark size={1.0} color={TOKENS.brick} pressable />
-          </View>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.flex}>
+        <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <EnterFadeDown style={s.flex}>
+            <View style={s.wordmarkWrap}>
+              <BricksWordmark size={1.0} color={color.accent} pressable />
+            </View>
 
-          <Text style={s.eyebrow}>DISPATCH</Text>
-          <Text style={s.heading}>Sign in.</Text>
-          <Text style={s.sub}>Manage jobs, uploads, and payouts.</Text>
+            <Text style={[T.display, { color: color.text }]} accessibilityRole="header">
+              {mode === 'signin' ? 'Sign in' : 'Create your account'}
+            </Text>
+            <Text style={[T.body, s.sub]}>
+              {mode === 'signin' ? 'Your jobs, uploads and payouts.' : 'Shoot, upload, get paid.'}
+            </Text>
 
-          <View style={s.form}>
-            {!!error && (
-              <View style={s.errorBox}>
-                <Text style={s.errorText}>{error}</Text>
-              </View>
-            )}
+            <View style={s.form}>
+              {!!error && <Notice tone="bad">{error}</Notice>}
 
-            <View style={s.fieldGroup}>
-              <Text style={s.label}>EMAIL</Text>
-              <TextInput
-                style={s.input}
+              {mode === 'signup' && (
+                <Field
+                  label="Name"
+                  value={name}
+                  onChangeText={setName}
+                  placeholder="Your name"
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                  textContentType="name"
+                />
+              )}
+              <Field
+                label="Email"
                 value={email}
                 onChangeText={setEmail}
                 placeholder="you@example.com"
-                placeholderTextColor={TOKENS.moonFaint}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
+                textContentType="emailAddress"
               />
-            </View>
-
-            <View style={s.fieldGroup}>
-              <Text style={s.label}>PASSWORD</Text>
-              <TextInput
-                style={s.input}
+              <Field
+                label="Password"
                 value={password}
                 onChangeText={setPassword}
-                placeholder="Enter password"
-                placeholderTextColor={TOKENS.moonFaint}
+                placeholder={mode === 'signin' ? 'Your password' : 'At least 8 characters'}
                 secureTextEntry
                 autoCapitalize="none"
+                textContentType={mode === 'signin' ? 'password' : 'newPassword'}
               />
+
+              <Button
+                title={mode === 'signin' ? 'Sign in' : 'Create account'}
+                onPress={mode === 'signin' ? handleLogin : handleSignup}
+                loading={loading}
+                disabled={busy}
+                style={s.primary}
+              />
+
+              {(appleReady || showGoogle) ? (
+                <View style={s.divider}>
+                  <Divider style={s.flex} />
+                  <Text style={[T.caption, { color: color.textFaint }]}>or</Text>
+                  <Divider style={s.flex} />
+                </View>
+              ) : null}
+
+              {appleReady ? (
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+                  cornerRadius={radius.sm}
+                  style={s.apple}
+                  onPress={handleApple}
+                />
+              ) : null}
+
+              {showGoogle ? (
+                <Button variant="secondary" title="Continue with Google" onPress={handleGoogle} loading={googleLoading} disabled={busy} />
+              ) : null}
             </View>
 
-            <TouchableOpacity
-              style={[s.primaryBtn, loading && s.btnDisabled]}
-              onPress={handleLogin}
-              disabled={loading || googleLoading}
-              activeOpacity={0.85}
-            >
-              {loading
-                ? <ActivityIndicator color={TOKENS.night} />
-                : <Text style={s.primaryBtnText}>Sign in</Text>
-              }
-            </TouchableOpacity>
-
-            <View style={s.divider}>
-              <View style={s.dividerLine} />
-              <Text style={s.dividerLabel}>OR</Text>
-              <View style={s.dividerLine} />
+            <View style={s.footer}>
+              {mode === 'signin' ? (
+                <>
+                  <View style={s.footerLine}>
+                    <Text style={[T.bodySm, { color: color.textMuted }]}>New to Bricks?</Text>
+                    <TextLink tone="accent" title="Create account" onPress={() => { setMode('signup'); setError(''); }} />
+                  </View>
+                  <TextLink title="Apply to shoot with Bricks" onPress={() => router.push('/onboarding/slides')} />
+                </>
+              ) : (
+                <View style={s.footerLine}>
+                  <Text style={[T.bodySm, { color: color.textMuted }]}>Already have an account?</Text>
+                  <TextLink tone="accent" title="Sign in" onPress={() => { setMode('signin'); setError(''); }} />
+                </View>
+              )}
             </View>
-
-            <TouchableOpacity
-              style={[s.ghostBtn, googleLoading && s.btnDisabled]}
-              onPress={handleGoogle}
-              disabled={loading || googleLoading}
-              activeOpacity={0.8}
-            >
-              {googleLoading
-                ? <ActivityIndicator color={TOKENS.moon} size="small" />
-                : <Text style={s.ghostBtnText}>Continue with Google</Text>
-              }
-            </TouchableOpacity>
-          </View>
-
-          <View style={s.footer}>
-            <Text style={s.footerText}>New to Bricks GO?{'  '}</Text>
-            <TouchableOpacity onPress={() => router.push('/onboarding/slides')} activeOpacity={0.7}>
-              <Text style={s.footerLink}>Apply</Text>
-            </TouchableOpacity>
-          </View>
-
+          </EnterFadeDown>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -166,112 +294,15 @@ export default function LoginScreen() {
 }
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: TOKENS.night },
+  safe: { flex: 1, backgroundColor: color.bg },
   flex: { flex: 1 },
-  scroll: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 40 },
-
-  wordmarkWrap: { paddingTop: 28, paddingBottom: 32 },
-
-  eyebrow: {
-    fontFamily: TYPOGRAPHY.mono,
-    fontSize: 10,
-    color: TOKENS.moonFaint,
-    letterSpacing: 2,
-    marginBottom: 10,
-  },
-  heading: {
-    fontFamily: TYPOGRAPHY.heading,
-    fontSize: 34,
-    fontWeight: '500',
-    letterSpacing: -1,
-    color: TOKENS.moon,
-  },
-  sub: {
-    fontFamily: TYPOGRAPHY.body,
-    fontSize: 14,
-    color: TOKENS.moonMute,
-    marginTop: 6,
-    marginBottom: 36,
-  },
-
-  form: { gap: 14 },
-
-  errorBox: {
-    backgroundColor: '#2A1510',
-    borderRadius: TOKENS.radius,
-    padding: 12,
-  },
-  errorText: { color: '#F4A195', fontSize: 13, fontFamily: TYPOGRAPHY.body },
-
-  fieldGroup: { gap: 6 },
-  label: {
-    fontFamily: TYPOGRAPHY.mono,
-    fontSize: 10,
-    color: TOKENS.moonMute,
-    letterSpacing: 1.4,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: TOKENS.nightHairS,
-    borderRadius: TOKENS.radius,
-    padding: 14,
-    fontSize: 15,
-    color: TOKENS.moon,
-    backgroundColor: TOKENS.nightSoft,
-    fontFamily: TYPOGRAPHY.body,
-  },
-
-  primaryBtn: {
-    marginTop: 4,
-    backgroundColor: TOKENS.brick,
-    borderRadius: TOKENS.radius,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryBtnText: {
-    color: TOKENS.moon,
-    fontSize: 15,
-    fontWeight: '500',
-    fontFamily: TYPOGRAPHY.body,
-  },
-  btnDisabled: { opacity: 0.5 },
-
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginVertical: 2,
-  },
-  dividerLine: { flex: 1, height: 1, backgroundColor: TOKENS.nightHairS },
-  dividerLabel: {
-    fontFamily: TYPOGRAPHY.mono,
-    fontSize: 10,
-    color: TOKENS.moonFaint,
-    letterSpacing: 1.4,
-  },
-
-  ghostBtn: {
-    borderWidth: 1,
-    borderColor: TOKENS.nightHairS,
-    borderRadius: TOKENS.radius,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ghostBtnText: {
-    color: TOKENS.moonSoft,
-    fontSize: 14,
-    fontFamily: TYPOGRAPHY.body,
-  },
-
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 'auto',
-    paddingTop: 40,
-  },
-  footerText: { fontSize: 13, color: TOKENS.moonMute, fontFamily: TYPOGRAPHY.body },
-  footerLink: { fontSize: 13, color: TOKENS.brick, fontFamily: TYPOGRAPHY.body },
+  scroll: { flexGrow: 1, paddingHorizontal: layout.gutter, paddingBottom: space[24] },
+  wordmarkWrap: { paddingTop: space[24], paddingBottom: space[48] },
+  sub: { color: color.textMuted, marginTop: space[8], marginBottom: space[32] },
+  form: { gap: space[16] },
+  primary: { marginTop: space[8] },
+  divider: { flexDirection: 'row', alignItems: 'center', gap: space[12] },
+  apple: { height: layout.control },
+  footer: { marginTop: 'auto', paddingTop: space[36], alignItems: 'center' },
+  footerLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' },
 });

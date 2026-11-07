@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
-  ActivityIndicator, Alert, Switch, Image,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, Pressable, Alert, Image } from 'react-native';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Check, Camera } from 'lucide-react-native';
+import { Camera, FileCheck } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { actorHeaders } from '../lib/api';
 import { SKILLS, VendorProfile, mediaUrl } from '../lib/vendor';
-import { TOKENS, TYPOGRAPHY } from '../constants/Theme';
+import { color, type as T, space, radius, layout } from '../theme';
+import {
+  Screen, NavBar, Section, Group, Row, Field, Chip, ChipRow, Segmented, StatGrid, Pill, Notice, TextLink, LoadingState, Toggle,
+} from '../components/ui';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
@@ -185,226 +184,124 @@ export default function ProfileEditScreen() {
   const isOwner = (data?.title || '').toLowerCase() === 'owner' || data?.payout_model === 'owner_full';
 
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
-      <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} style={s.back}>
-          <ArrowLeft size={18} color={TOKENS.moon} strokeWidth={1.5} />
-        </TouchableOpacity>
-        <Text style={s.title}>Edit Profile</Text>
-        <TouchableOpacity onPress={save} activeOpacity={0.7} style={s.saveBtn} disabled={saving || loading}>
-          {saving
-            ? <ActivityIndicator size="small" color={TOKENS.brick} />
-            : <Check size={18} color={TOKENS.brick} strokeWidth={2} />}
-        </TouchableOpacity>
-      </View>
-
+    <Screen
+      header={
+        <NavBar
+          title="Edit profile"
+          onBack={() => router.back()}
+          right={<TextLink tone="accent" title={saving ? 'Saving…' : 'Save'} onPress={saving || loading ? undefined : save} />}
+        />
+      }
+    >
       {loading ? (
-        <View style={s.center}>
-          <ActivityIndicator size="small" color={TOKENS.brick} />
-        </View>
+        <LoadingState />
       ) : (
-        <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
-          {error ? <Text style={s.err}>{error}</Text> : null}
+        <>
+          <View style={s.top} />
+          {error ? <View style={s.gapBottom}><Notice tone="bad">{error}</Notice></View> : null}
 
-          <View style={s.metrics}>
-            <View style={s.metric}>
-              <Text style={s.metricLabel}>TITLE</Text>
-              <Text style={s.metricVal}>{data?.title || 'Photographer IC'}</Text>
-              {isOwner ? <Text style={s.metricSub}>Locked · Owner</Text> : <Text style={s.metricSub}>Photographer IC</Text>}
-            </View>
-            <View style={s.metric}>
-              <Text style={s.metricLabel}>TIER</Text>
-              <Text style={s.metricVal}>{data?.tier_label || '—'}</Text>
-              <Text style={s.metricSub}>{isOwner ? 'Highest · Owner' : `Tier ${data?.tier_label || ''}`}</Text>
-            </View>
-            <View style={[s.metric, { flex: 1.2 }]}>
-              <Text style={s.metricLabel}>PAYOUTS</Text>
-              <Text style={s.metricValSm}>{data?.payout_label || 'Fixed rate card'}</Text>
-              <Text style={s.metricSub}>{isOwner ? '$0 deduction' : 'Fixed rate card'}</Text>
-            </View>
-          </View>
+          <StatGrid items={[
+            { label: isOwner ? 'Title · locked' : 'Title', value: data?.title || 'Photographer IC' },
+            { label: 'Tier', value: data?.tier_label || '—' },
+            { label: 'Payouts', value: isOwner ? '$0 deduction' : (data?.payout_label || 'Rate card') },
+          ]} />
 
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>IDENTITY</Text>
-            <TouchableOpacity style={s.photoRow} onPress={onPhoto} activeOpacity={0.7} disabled={uploading}>
+          <Section label="Identity">
+            <Pressable style={s.photoRow} onPress={onPhoto} disabled={uploading} accessibilityRole="button">
               {avatar ? (
                 <Image source={{ uri: avatar }} style={s.avatar} />
               ) : (
-                <View style={s.avatarFallback}>
-                  <Camera size={16} color={TOKENS.moonMute} strokeWidth={1.5} />
-                </View>
+                <View style={s.avatarFallback}><Camera size={layout.icon} color={color.textMuted} strokeWidth={layout.iconStroke} /></View>
               )}
-              <View style={{ flex: 1 }}>
-                <Text style={s.menuLabel}>{avatar ? 'Change photo' : 'Add profile photo'}</Text>
-                <Text style={s.hint}>{uploading ? 'Uploading…' : 'Camera or library'}</Text>
+              <View style={s.flex}>
+                <Text style={[T.bodyMedium, { color: color.text }]}>{avatar ? 'Change photo' : 'Add profile photo'}</Text>
+                <Text style={[T.caption, { color: color.textMuted }]}>{uploading ? 'Uploading…' : 'Camera or library'}</Text>
               </View>
-            </TouchableOpacity>
-            <Text style={s.fieldLabel}>DISPLAY NAME</Text>
-            <TextInput
-              style={s.input}
-              value={name}
-              onChangeText={setName}
-              placeholderTextColor={TOKENS.moonFaint}
-              selectionColor={TOKENS.brick}
-            />
-            <Text style={s.fieldLabel}>PHONE</Text>
-            <TextInput
-              style={s.input}
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-              placeholderTextColor={TOKENS.moonFaint}
-              selectionColor={TOKENS.brick}
-            />
-            <Text style={s.fieldLabel}>EMAIL</Text>
-            <TextInput style={[s.input, s.inputDisabled]} value={data?.email || ''} editable={false} />
-            <Text style={s.hint}>Email cannot be changed here.</Text>
-          </View>
-
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>SKILLS</Text>
-            <View style={s.chipRow}>
-              {SKILLS.map((sk) => {
-                const on = skills.includes(sk.id);
-                return (
-                  <TouchableOpacity
-                    key={sk.id}
-                    style={[s.chip, on && s.chipOn]}
-                    onPress={() => toggleSkill(sk.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[s.chipText, on && s.chipTextOn]}>{sk.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
+            </Pressable>
+            <View style={s.fields}>
+              <Field label="Display name" value={name} onChangeText={setName} textContentType="name" />
+              <Field label="Phone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" textContentType="telephoneNumber" />
+              <Field label="Email" value={data?.email || ''} editable={false} hint="Email can’t be changed here." style={s.disabled} />
             </View>
-          </View>
+          </Section>
 
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>ADVANCED RPAS</Text>
-            <Text style={s.hint}>
-              Transport Canada Advanced certificate. Stored on your member record for the hiring file.
-            </Text>
-            <View style={s.chipRow}>
-              {(['basic', 'advanced'] as const).map((lvl) => {
-                const on = rpasLevel === lvl;
-                return (
-                  <TouchableOpacity
-                    key={lvl}
-                    style={[s.chip, on && s.chipOn]}
-                    onPress={() => setRpasLevel(lvl)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[s.chipText, on && s.chipTextOn]}>{lvl === 'advanced' ? 'Advanced' : 'Basic'}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <Text style={s.fieldLabel}>CERTIFICATE NUMBER</Text>
-            <TextInput
-              style={s.input}
-              value={rpasNumber}
-              onChangeText={setRpasNumber}
-              placeholder="TC number"
-              placeholderTextColor={TOKENS.moonFaint}
-              selectionColor={TOKENS.brick}
-              autoCapitalize="characters"
+          <Section label="Skills">
+            <ChipRow>
+              {SKILLS.map((sk) => (
+                <Chip key={sk.id} label={sk.label} selected={skills.includes(sk.id)} onPress={() => toggleSkill(sk.id)} />
+              ))}
+            </ChipRow>
+          </Section>
+
+          <Section label="Drone certificate">
+            <Text style={[T.bodySm, s.hintTop]}>Transport Canada RPAS certificate, kept on your member record.</Text>
+            <Segmented
+              options={[{ value: 'basic', label: 'Basic' }, { value: 'advanced', label: 'Advanced' }]}
+              value={(rpasLevel === 'basic' ? 'basic' : 'advanced') as 'basic' | 'advanced'}
+              onChange={setRpasLevel}
             />
-            <Text style={s.fieldLabel}>CERTIFICATE PHOTO</Text>
-            {data?.rpas_certificate_url ? (
-              <Text style={s.onFile}>On file</Text>
-            ) : (
-              <Text style={s.hint}>No certificate uploaded yet</Text>
-            )}
-            <TouchableOpacity style={s.uploadBtn} onPress={onRpas} disabled={uploading} activeOpacity={0.7}>
-              {uploading
-                ? <ActivityIndicator size="small" color={TOKENS.moon} />
-                : <Text style={s.uploadBtnText}>{data?.rpas_certificate_url ? 'Replace certificate' : 'Upload certificate'}</Text>}
-            </TouchableOpacity>
-          </View>
-
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>SERVICE AREA</Text>
-            <View style={s.toggleRow}>
-              <Text style={s.toggleLabel}>Available for assignments</Text>
-              <Text style={{ color: TOKENS.moonMute, fontSize: 12, marginTop: 8, lineHeight: 16 }}>
-                Connect a calendar (Google, Apple, or ICS) on web Availability so auto-assign only offers jobs that fit your real schedule.
-              </Text>
-              <Switch
-                value={availability}
-                onValueChange={setAvailability}
-                trackColor={{ false: TOKENS.nightDeep, true: TOKENS.ok + '66' }}
-                thumbColor={availability ? TOKENS.ok : TOKENS.moonFaint}
-                ios_backgroundColor={TOKENS.nightDeep}
+            <View style={s.fields}>
+              <Field label="Certificate number" value={rpasNumber} onChangeText={setRpasNumber} placeholder="TC number" autoCapitalize="characters" />
+            </View>
+            <Group style={s.gapTop}>
+              <Row
+                icon={FileCheck}
+                title={data?.rpas_certificate_url ? 'Certificate on file' : 'No certificate yet'}
+                subtitle={data?.rpas_certificate_url ? 'Tap to replace' : 'Photograph or upload it'}
+                tone={data?.rpas_certificate_url ? 'default' : 'accent'}
+                chevron
+                loading={uploading}
+                onPress={onRpas}
               />
+            </Group>
+          </Section>
+
+          <Section label="Availability & area">
+            <Group>
+              <Row
+                title="Available for assignments"
+                subtitle="Connecting a calendar tells Bricks when you’re free so auto-assign only offers jobs that fit. Manual hours still apply if none is connected."
+                right={
+                  <Toggle value={availability} onValueChange={setAvailability} accessibilityLabel="Available for assignments" />
+                }
+              />
+              <Row
+                title="Calendars"
+                subtitle="Google, Outlook, Apple, or ICS — never shown as Connected without a real ping."
+                chevron
+                onPress={() => router.push('/settings')}
+              />
+            </Group>
+            <View style={s.fields}>
+              <Field label="Home city" value={homeCity} onChangeText={setHomeCity} placeholder="Mississauga" />
+              <Field label="Service areas" value={areasRaw} onChangeText={setAreasRaw} placeholder="Toronto, Mississauga, GTA" hint="Separate with commas." />
             </View>
-            <Text style={s.fieldLabel}>HOME CITY</Text>
-            <TextInput
-              style={s.input}
-              value={homeCity}
-              onChangeText={setHomeCity}
-              placeholder="Mississauga"
-              placeholderTextColor={TOKENS.moonFaint}
-              selectionColor={TOKENS.brick}
-            />
-            <Text style={s.fieldLabel}>SERVICE AREAS</Text>
-            <TextInput
-              style={s.input}
-              value={areasRaw}
-              onChangeText={setAreasRaw}
-              placeholder="Toronto, Mississauga, GTA"
-              placeholderTextColor={TOKENS.moonFaint}
-              selectionColor={TOKENS.brick}
-            />
-            <Text style={s.hint}>Comma-separated. Office field layer, not a public marketplace.</Text>
-          </View>
+          </Section>
 
           {data ? (
-            <Text style={s.hint}>
-              {data.assignable ? 'Assignable' : (data.assignable_reason || 'Not assignable')}
-            </Text>
+            <View style={s.gapTopLg}>
+              <Pill label={data.assignable ? 'Assignable' : 'Not assignable'} tone={data.assignable ? 'ok' : 'warn'} dot />
+              {!data.assignable && data.assignable_reason ? (
+                <Text style={[T.caption, s.hintTop]}>{data.assignable_reason}</Text>
+              ) : null}
+            </View>
           ) : null}
-
-          <View style={{ height: 80 }} />
-        </ScrollView>
+        </>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: TOKENS.night },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  back: { width: 36, height: 36, justifyContent: 'center' },
-  title: { flex: 1, fontSize: 16, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, textAlign: 'center' },
-  saveBtn: { width: 36, height: 36, justifyContent: 'center', alignItems: 'flex-end' },
-  scroll: { padding: 24 },
-  err: { color: TOKENS.bad, fontSize: 13, marginBottom: 16, fontFamily: TYPOGRAPHY.body },
-  metrics: { flexDirection: 'row', gap: 8, marginBottom: 28 },
-  metric: { flex: 1, backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, padding: 12 },
-  metricLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 8, color: TOKENS.moonFaint, letterSpacing: 1.4, marginBottom: 6 },
-  metricVal: { fontFamily: TYPOGRAPHY.heading, fontSize: 16, color: TOKENS.moon, marginBottom: 4 },
-  metricValSm: { fontFamily: TYPOGRAPHY.heading, fontSize: 13, color: TOKENS.moon, marginBottom: 4 },
-  metricSub: { fontFamily: TYPOGRAPHY.body, fontSize: 11, color: TOKENS.moonFaint },
-  section: { marginBottom: 24 },
-  sectionLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.8, marginBottom: 10 },
-  fieldLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.8, marginTop: 14, marginBottom: 8 },
-  input: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, paddingHorizontal: 16, paddingVertical: 14, color: TOKENS.moon, fontSize: 15, fontFamily: TYPOGRAPHY.mono },
-  inputDisabled: { opacity: 0.4 },
-  hint: { marginTop: 6, fontSize: 11, color: TOKENS.moonFaint, fontFamily: TYPOGRAPHY.body, lineHeight: 16 },
-  onFile: { marginTop: 4, fontSize: 13, color: TOKENS.ok, fontFamily: TYPOGRAPHY.body },
-  photoRow: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, padding: 12, marginBottom: 4 },
-  avatar: { width: 56, height: 56, borderRadius: 28 },
-  avatarFallback: { width: 56, height: 56, borderRadius: 28, backgroundColor: TOKENS.nightDeep, alignItems: 'center', justifyContent: 'center' },
-  menuLabel: { fontFamily: TYPOGRAPHY.heading, fontSize: 14, color: TOKENS.moon, marginBottom: 2 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  chip: { borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: 2, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: TOKENS.nightSoft },
-  chipOn: { borderColor: TOKENS.brick, backgroundColor: TOKENS.brick + '22' },
-  chipText: { fontFamily: TYPOGRAPHY.body, fontSize: 13, color: TOKENS.moonMute },
-  chipTextOn: { color: TOKENS.moon },
-  uploadBtn: { marginTop: 12, height: 44, borderRadius: TOKENS.radius, backgroundColor: TOKENS.brick, alignItems: 'center', justifyContent: 'center' },
-  uploadBtnText: { fontSize: 14, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2, paddingHorizontal: 16, paddingVertical: 12 },
-  toggleLabel: { fontFamily: TYPOGRAPHY.body, fontSize: 14, color: TOKENS.moon, flex: 1, paddingRight: 12 },
+  flex: { flex: 1, gap: 2 },
+  top: { height: space[20] },
+  gapBottom: { marginBottom: space[16] },
+  gapTop: { marginTop: space[16] },
+  gapTopLg: { marginTop: layout.section, gap: space[8] },
+  fields: { gap: space[16], marginTop: space[16] },
+  hintTop: { color: color.textMuted, marginBottom: space[12] },
+  disabled: { color: color.textMuted },
+  photoRow: { flexDirection: 'row', alignItems: 'center', gap: space[14], minHeight: layout.rowMin },
+  avatar: { width: 56, height: 56, borderRadius: radius.sm },
+  avatarFallback: { width: 56, height: 56, borderRadius: radius.sm, backgroundColor: color.surface, alignItems: 'center', justifyContent: 'center' },
 });

@@ -7,7 +7,7 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -15,7 +15,7 @@ from ..services.capture_entitlements import stamp_capture
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
-from ..shared.auth import ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
+from ..shared.auth import can_access_stripe_connect, ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.vendor_identity import is_owner_member, photographer_payout_cents, public_profile
 from ..shared.job_scope import (
     ORG_VENDOR_ID,
@@ -32,6 +32,7 @@ from ..routers.vendor_profile import earnings_impl
 from ..shared.database import get_db
 from ..services.webhooks import send_dispatch_status_update_webhook
 from ..shared.job_timezone import tz_abbrev, zoneinfo_for_job
+from ..shared import noshow_policy
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import (
@@ -61,6 +62,17 @@ class AgentNoShowReport(BaseModel):
     notes: Optional[str] = None
     photographer_lat: Optional[float] = None
     photographer_lng: Optional[float] = None
+
+
+class CheckInRequest(BaseModel):
+    """Device GPS at check-in. Required when the job has a geocoded address."""
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    accuracy_m: Optional[float] = None
+
+
+class CallAttemptRequest(BaseModel):
+    method: Optional[str] = "dialer"
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -118,10 +130,21 @@ async def _listings_by_ids(db, ids) -> dict:
 
 
 
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row.
+
+    Reading .data on that None is AttributeError. The global handler turns it
+    into HTTP 500 with no CORS, so the browser shows net::ERR_FAILED instead
+    of the route's 404 or Postgres fallback.
+    """
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
+
 async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, *, admin_all: bool = False) -> dict:
     try:
         res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        job = res.data or {}
+        job = _maybe_single_row(res)
     except Exception as e:
         # Fair-Use: PostgREST job reads 402 — load via Postgres so confirm-arrive /
         # check-in / status can still authorize against the assigned row.
@@ -129,21 +152,450 @@ async def _load_visible_job(db, job_id: str, actor_id: str, actor_member: dict, 
         if not _is_rest_quota_error(e):
             raise
         job = pg_select_job_by_id(job_id) or {}
+    if not job.get("id"):
+        # Empty REST body can also mean Fair-Use silent failure (no exception).
+        from ..shared.pg_fallback import pg_select_job_by_id
+        job = pg_select_job_by_id(job_id) or job
     allow_all = admin_all and is_vendor_admin(actor_member)
     if not job_visible_to(job, actor_id, actor_member, assigned_only=not allow_all, admin_all=allow_all):
         api_error(404, "Job not found", "job_not_found")
     return job
 
 
+async def _update_job_fields(db, job_id: str, fields: dict) -> None:
+    """jobs UPDATE with the Postgres fallback for Fair-Use 402s."""
+    try:
+        await db.table("jobs").update(fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, fields):
+            raise HTTPException(status_code=503, detail="Saving is unavailable right now; try again shortly")
+
+
+def _valid_coord(lat, lng) -> bool:
+    try:
+        return lat is not None and lng is not None and -90 <= float(lat) <= 90 and -180 <= float(lng) <= 180
+    except (TypeError, ValueError):
+        return False
+
+
 @router.post("/jobs/{job_id}/check-in")
 async def check_in_job(
+    job_id: str,
+    payload: Optional[CheckInRequest] = Body(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Vendor checks in at the property. Records the time and device GPS.
+
+    Location is required to check in when the job has a geocoded address, and the
+    device must be within noshow_policy.CHECKIN_RADIUS_M of it. Jobs without
+    coordinates record the GPS with no distance; a no-show on such a job is held
+    for review. The first check-in time is kept; later calls do not move it.
+    """
+    payload = payload or CheckInRequest()
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    ensure_assigned_to_actor(job, actor_id, actor_member)
+
+    has_gps = _valid_coord(payload.lat, payload.lng)
+    radius = noshow_policy.CHECKIN_RADIUS_M
+    distance_m = noshow_policy.checkin_distance_m(job, payload.lat, payload.lng) if has_gps else None
+    if noshow_policy.job_has_coords(job):
+        if not has_gps:
+            api_error(
+                422,
+                "Location is required to check in. Turn on location for Bricks and try again.",
+                "checkin_location_required",
+            )
+        if distance_m is not None and distance_m > radius:
+            api_error(
+                422,
+                f"You're about {int(round(distance_m))} m from the property. Check in when you're there (within {radius} m).",
+                "checkin_too_far",
+            )
+
+    result: dict = {"status": "updated", "job_id": job_id, "new_status": job.get("status")}
+    if job.get("status") != "in_progress":
+        result = await update_vendor_job_status(
+            job_id, JobStatusUpdate(status="in_progress"), authorization, x_user_id
+        )
+
+    now = datetime.now(timezone.utc)
+    if not job.get("checked_in_at"):
+        fields = {
+            "checked_in_at": now.isoformat(),
+            "check_in_lat": float(payload.lat) if has_gps else None,
+            "check_in_lng": float(payload.lng) if has_gps else None,
+            "check_in_accuracy_m": float(payload.accuracy_m) if payload.accuracy_m is not None else None,
+            "check_in_distance_m": distance_m,
+            "updated_at": now.isoformat(),
+        }
+        await _update_job_fields(db, job_id, fields)
+        job.update(fields)
+    job["status"] = "in_progress"
+    out = dict(result or {})
+    out["checked_in_at"] = job.get("checked_in_at")
+    out["check_in_distance_m"] = job.get("check_in_distance_m")
+    out["noshow"] = noshow_policy.readiness(job, now)
+    return out
+
+
+@router.get("/jobs/{job_id}/noshow-status")
+async def get_noshow_status(
     job_id: str,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    payload = JobStatusUpdate(status="in_progress")
-    return await update_vendor_job_status(job_id, payload, authorization, x_user_id)
+    """The four no-show conditions for this job, plus the wait and radius rules."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    out = noshow_policy.readiness(job)
+    # The client's number is shared with the assigned vendor once they've checked in,
+    # so the in-app Call client button can open the dialer.
+    out["client_phone"] = None
+    if job.get("checked_in_at"):
+        try:
+            ensure_assigned_to_actor(job, actor_id, actor_member)
+            out["client_phone"] = await _client_phone(db, job)
+        except HTTPException:
+            pass
+    return out
 
+
+async def _client_phone(db, job: dict) -> Optional[str]:
+    """Booking contact phone, then guest phone, then the booking user's phone."""
+    booking_id = job.get("booking_id")
+    user_id = job.get("agent_user_id")
+    try:
+        if booking_id:
+            res = await db.table("bookings").select("contact_phone, guest_phone, user_id").eq(
+                "id", booking_id
+            ).maybe_single().execute()
+            bk = _maybe_single_row(res)
+            for key in ("contact_phone", "guest_phone"):
+                if str(bk.get(key) or "").strip():
+                    return str(bk[key]).strip()
+            user_id = bk.get("user_id") or user_id
+        if user_id:
+            res_u = await db.table("users").select("phone").eq("id", user_id).maybe_single().execute()
+            phone = str(_maybe_single_row(res_u).get("phone") or "").strip()
+            return phone or None
+    except Exception as e:
+        logger.warning(f"Client phone lookup failed for job {job.get('id')}: {e}")
+    return None
+
+
+async def _record_call_attempt(db, job: dict, method: str) -> dict:
+    now = datetime.now(timezone.utc)
+    fields = {
+        "noshow_call_attempted_at": now.isoformat(),
+        "noshow_call_method": method,
+        "updated_at": now.isoformat(),
+    }
+    await _update_job_fields(db, job["id"], fields)
+    job.update(fields)
+    return job
+
+
+@router.post("/jobs/{job_id}/call-attempt")
+async def log_call_attempt(
+    job_id: str,
+    payload: Optional[CallAttemptRequest] = Body(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Log that the vendor tried to call the client (the in-app Call client button).
+
+    Works without Twilio: the app opens the phone dialer and logs the attempt here.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    ensure_assigned_to_actor(job, actor_id, actor_member)
+    if not job.get("checked_in_at"):
+        api_error(409, "Check in at the property before calling the client.", "noshow_not_checked_in")
+    method = ((payload.method if payload else None) or "dialer").strip().lower()
+    if method not in noshow_policy.CALL_METHODS or method == "sms":
+        method = "dialer"
+    if method == "no_number" and await _client_phone(db, job):
+        method = "dialer"
+    await _record_call_attempt(db, job, method)
+    return noshow_policy.readiness(job)
+
+
+def _photo_ext(content_type: str) -> str:
+    return {"image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}.get(
+        (content_type or "").lower(), "jpg"
+    )
+
+
+@router.post("/jobs/{job_id}/noshow-photo")
+async def upload_noshow_photo(
+    job_id: str,
+    photo: UploadFile = File(...),
+    taken_at: Optional[str] = Form(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """On-site photo for a no-show report. Stored in the private evidence bucket.
+
+    The server stamps the upload time; `taken_at` (from the camera) is kept for the
+    reviewer. The photo must be uploaded after check-in.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
+    ensure_assigned_to_actor(job, actor_id, actor_member)
+    if not job.get("checked_in_at"):
+        api_error(409, "Check in at the property before taking the photo.", "noshow_not_checked_in")
+
+    content_type = (photo.content_type or "image/jpeg").lower()
+    if not content_type.startswith("image/"):
+        api_error(400, "That file isn't a photo. Take a photo of the property.", "noshow_photo_not_image")
+    data = await photo.read()
+    if not data:
+        api_error(400, "The photo was empty. Take it again.", "noshow_photo_empty")
+    if len(data) > noshow_policy.PHOTO_MAX_BYTES:
+        api_error(413, "That photo is too large. Take it again.", "noshow_photo_too_large")
+
+    now = datetime.now(timezone.utc)
+    path = f"{job_id}/{now.strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}.{_photo_ext(content_type)}"
+    from ..services.storage import upload_to_bucket
+    if not await upload_to_bucket(noshow_policy.EVIDENCE_BUCKET, path, data, content_type):
+        api_error(503, "Couldn't save the photo. Try again.", "noshow_photo_upload_failed")
+
+    taken = noshow_policy.parse_ts(taken_at)
+    fields = {
+        "noshow_photo_path": path,
+        "noshow_photo_taken_at": taken.isoformat() if taken else None,
+        "noshow_photo_uploaded_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+    await _update_job_fields(db, job_id, fields)
+    job.update(fields)
+    return noshow_policy.readiness(job, now)
+
+
+
+# ---------------------------------------------------------------------------
+# Trade job checklist: saved ticks and proof (Kam, 2026-10-31).
+# Media jobs keep their read-only shoot checklist; these routes refuse them.
+# ---------------------------------------------------------------------------
+
+
+class ChecklistInventoryRow(BaseModel):
+    item: Optional[str] = None
+    room: Optional[str] = None
+    note: Optional[str] = None
+
+
+class ChecklistItemPatch(BaseModel):
+    completed: Optional[bool] = None
+    note: Optional[str] = None
+    none_found: Optional[bool] = None
+    inventory: Optional[list[ChecklistInventoryRow]] = None
+
+
+async def _checklist_view(job: dict, items: list[dict]) -> dict:
+    from ..services import job_checklist as jc
+    from ..services.storage import signed_url_in_bucket
+
+    signed: dict = {}
+    for path in jc.storage_paths(items):
+        signed[path] = await signed_url_in_bucket(jc.PROOF_BUCKET, path, 3600)
+    return jc.view(job, items, signed)
+
+
+async def _load_trade_checklist_job(job_id: str, authorization, x_user_id, *, edit: bool):
+    from ..services import job_checklist as jc
+
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    db = await get_db()
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=not edit)
+    if edit:
+        ensure_assigned_to_actor(job, actor_id, actor_member)
+    if not jc.is_trade_job(job):
+        api_error(409, "This job uses the shoot checklist, which Bricks ticks for you.", "checklist_not_trade_job")
+    if edit and str(job.get("status") or "") not in jc.EDITABLE_STATUSES:
+        api_error(409, "This job is closed, so its checklist can't be changed.", "checklist_locked")
+    return db, job, actor_id, jc.effective_checklist(job)
+
+
+async def _save_checklist(db, job: dict, items: list[dict]) -> None:
+    stored = [{k: v for k, v in item.items() if k not in ("proof", "missing")} for item in items]
+    now = datetime.now(timezone.utc).isoformat()
+    await _update_job_fields(db, job["id"], {"checklist": stored, "updated_at": now})
+    job["checklist"] = stored
+    job["updated_at"] = now
+
+
+def _checklist_item_or_404(items: list[dict], item_id: str) -> dict:
+    from ..services import job_checklist as jc
+
+    item = jc.find_item(items, item_id)
+    if not item:
+        api_error(404, "That checklist item isn't on this job any more. Refresh the job.", "checklist_item_not_found")
+    return item
+
+
+async def _read_proof_file(upload: UploadFile, allowed: set, wrong_type: str) -> tuple[bytes, str]:
+    from ..services import job_checklist as jc
+
+    content_type = (upload.content_type or "").lower().split(";")[0].strip()
+    name = (upload.filename or "").lower()
+    if not content_type or content_type == "application/octet-stream":
+        content_type = "application/pdf" if name.endswith(".pdf") else "image/jpeg"
+    if content_type == "image/jpg":
+        content_type = "image/jpeg"
+    if content_type not in allowed:
+        api_error(400, wrong_type, "checklist_file_type")
+    data = await upload.read()
+    if not data:
+        api_error(400, "That file was empty. Try again.", "checklist_file_empty")
+    if len(data) > jc.MAX_UPLOAD_BYTES:
+        api_error(413, "That file is over 4 MB. Use a smaller photo or file.", "checklist_file_too_large")
+    return data, content_type
+
+
+@router.get("/jobs/{job_id}/checklist")
+async def get_trade_checklist(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Trade job checklist with saved ticks, proof and what's still needed."""
+    _db, job, _actor, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=False)
+    return await _checklist_view(job, items)
+
+
+@router.patch("/jobs/{job_id}/checklist/{item_id}")
+async def patch_trade_checklist_item(
+    job_id: str,
+    item_id: str,
+    payload: ChecklistItemPatch,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Tick or untick an item, or save its note, nothing-found answer or inventory.
+
+    An item can only be ticked once its proof is attached.
+    """
+    from ..services import job_checklist as jc
+
+    db, job, actor_id, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=True)
+    item = _checklist_item_or_404(items, item_id)
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    err = jc.apply_patch(item, patch, actor_id)
+    if err:
+        api_error(400, err, "checklist_proof_missing")
+    await _save_checklist(db, job, items)
+    return await _checklist_view(job, items)
+
+
+@router.post("/jobs/{job_id}/checklist/{item_id}/photos")
+async def add_trade_checklist_photo(
+    job_id: str,
+    item_id: str,
+    photo: UploadFile = File(...),
+    taken_at: Optional[str] = Form(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Add one proof photo to a checklist item (private bucket, 4 MB max)."""
+    from ..services import job_checklist as jc
+    from ..services.storage import upload_to_bucket
+
+    db, job, _actor, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=True)
+    item = _checklist_item_or_404(items, item_id)
+    if jc.proof_kind(item.get("label")) not in (jc.PROOF_PHOTO, jc.PROOF_FINDINGS):
+        api_error(400, "This item doesn't take photos.", "checklist_no_photos")
+    photos = list(item.get("photos") or [])
+    if len(photos) >= jc.MAX_PHOTOS_PER_ITEM:
+        api_error(400, f"This item already has {jc.MAX_PHOTOS_PER_ITEM} photos.", "checklist_photo_limit")
+    allowed = {t for t in jc.REPORT_TYPES if t.startswith("image/")}
+    data, content_type = await _read_proof_file(photo, allowed, "That file isn't a photo. Add a JPG, PNG or HEIC photo.")
+    path = jc.proof_path(job_id, item_id, content_type)
+    if not await upload_to_bucket(jc.PROOF_BUCKET, path, data, content_type):
+        api_error(503, "Couldn't save the photo. Try again.", "checklist_upload_failed")
+    taken = noshow_policy.parse_ts(taken_at)
+    photos.append({
+        "id": uuid.uuid4().hex,
+        "path": path,
+        "content_type": content_type,
+        "uploaded_at": jc.now_iso(),
+        "taken_at": taken.isoformat() if taken else None,
+    })
+    item["photos"] = photos
+    await _save_checklist(db, job, items)
+    return await _checklist_view(job, items)
+
+
+@router.delete("/jobs/{job_id}/checklist/{item_id}/photos/{photo_id}")
+async def delete_trade_checklist_photo(
+    job_id: str,
+    item_id: str,
+    photo_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Remove a proof photo. The item unticks if that leaves it without proof."""
+    from ..services import job_checklist as jc
+    from ..services.storage import remove_from_bucket
+
+    db, job, _actor, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=True)
+    item = _checklist_item_or_404(items, item_id)
+    photos = list(item.get("photos") or [])
+    gone = [p for p in photos if isinstance(p, dict) and str(p.get("id")) == str(photo_id)]
+    if not gone:
+        api_error(404, "That photo is already gone. Refresh the job.", "checklist_photo_not_found")
+    item["photos"] = [p for p in photos if p not in gone]
+    jc.settle_tick(item)
+    await _save_checklist(db, job, items)
+    await remove_from_bucket(jc.PROOF_BUCKET, [p.get("path") for p in gone])
+    return await _checklist_view(job, items)
+
+
+@router.post("/jobs/{job_id}/checklist/{item_id}/report")
+async def upload_trade_checklist_report(
+    job_id: str,
+    item_id: str,
+    report: UploadFile = File(...),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Upload (or replace) the report for a report item. PDF or photo, 4 MB max."""
+    from ..services import job_checklist as jc
+    from ..services.storage import remove_from_bucket, upload_to_bucket
+
+    db, job, _actor, items = await _load_trade_checklist_job(job_id, authorization, x_user_id, edit=True)
+    item = _checklist_item_or_404(items, item_id)
+    if jc.proof_kind(item.get("label")) != jc.PROOF_REPORT:
+        api_error(400, "This item doesn't take a report.", "checklist_no_report")
+    data, content_type = await _read_proof_file(report, jc.REPORT_TYPES, "Upload the report as a PDF or a photo.")
+    path = jc.proof_path(job_id, item_id, content_type)
+    if not await upload_to_bucket(jc.PROOF_BUCKET, path, data, content_type):
+        api_error(503, "Couldn't save the report. Try again.", "checklist_upload_failed")
+    old = item.get("report") if isinstance(item.get("report"), dict) else None
+    item["report"] = {
+        "path": path,
+        "filename": (report.filename or "report")[:200],
+        "content_type": content_type,
+        "uploaded_at": jc.now_iso(),
+    }
+    await _save_checklist(db, job, items)
+    if old and old.get("path"):
+        await remove_from_bucket(jc.PROOF_BUCKET, [old["path"]])
+    return await _checklist_view(job, items)
 
 
 @router.post("/jobs/{job_id}/confirm-arrive")
@@ -356,7 +808,12 @@ async def create_vendor_member(
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
-    from ..services.vendor_profile import normalize_vendor_type, role_for_vendor_type
+    from ..services.vendor_profile import (
+        ic_title_for_vendor_type,
+        normalize_vendor_type,
+        role_for_vendor_type,
+        storage_vendor_type,
+    )
     vtype = normalize_vendor_type(getattr(payload, "vendor_type", None) or "photographer")
     role = (payload.role or "").strip() or role_for_vendor_type(vtype)
     member = VendorMember(
@@ -364,7 +821,10 @@ async def create_vendor_member(
         email=payload.email.strip().lower(),
         phone=payload.phone,
         role=role,
-        vendor_type=vtype,
+        title=ic_title_for_vendor_type(vtype),
+        # inspector / measurer / handyman ride on role + title until the
+        # vendor_type check is widened (migration awaiting approval).
+        vendor_type=storage_vendor_type(vtype),
         vendor_id=actor_member.get("vendor_id", "default_vendor"),
     )
     member_dict = member.dict()
@@ -552,7 +1012,8 @@ async def get_vendor_os_job(
         job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
         listings = await _listings_by_ids(db, [job.get("transaction_id")])
         res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
-        job["assignee_name"] = (res_member.data or {}).get("name") if res_member.data else "Unassigned"
+        member_row = _maybe_single_row(res_member)
+        job["assignee_name"] = member_row.get("name") or "Unassigned"
         return _apply_listing(job, listings)
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
@@ -645,9 +1106,12 @@ async def attach_job_listing(
         if office_id:
             tq = tq.eq("brokerage_id", office_id)
         t_res = await tq.maybe_single().execute()
-        if not t_res.data:
+        # maybe_single() is None when the listing/transaction row is missing —
+        # None.data was a CORS-less 500 instead of the 404 below.
+        txn_row = _maybe_single_row(t_res)
+        if not txn_row:
             api_error(404, "Listing not found", "listing_not_found")
-        listing = _listing_public(t_res.data)
+        listing = _listing_public(txn_row)
 
     now = datetime.now(timezone.utc).isoformat()
     await db.table("jobs").update({
@@ -683,6 +1147,17 @@ async def create_job(
     from ..shared.auth import verify_internal_api_key
     if not verify_internal_api_key(x_internal_api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
+
+    from ..services.payout_service import is_retired_for_new_jobs
+    if is_retired_for_new_jobs(payload.package_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Package '{payload.package_id}' is retired for new jobs. "
+                "Use photos_only / essentials / story / showcase / full (or suite). "
+                "Legacy package_ids remain readable for historical payouts only."
+            ),
+        )
 
     job_id = payload.id or str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -759,7 +1234,7 @@ async def assign_job_to_member(
     db = await get_db()
     try:
         res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        existing_job = res_job.data or {}
+        existing_job = _maybe_single_row(res_job)
     except Exception as e:
         # Fair-Use: PostgREST job reads 402 — load via Postgres so Owner assign still works.
         if not _is_rest_quota_error(e):
@@ -770,11 +1245,13 @@ async def assign_job_to_member(
     if member_id and member_id.lower() not in ("auto", "unassign", "none", "null"):
         try:
             res_member = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-            target = res_member.data
+            target = _maybe_single_row(res_member) or None
         except Exception as e:
             if not _is_rest_quota_error(e):
                 raise
             target = pg_select_vendor_member(member_id)
+    from ..services.commercial_jobs import refresh_company_policy
+    await refresh_company_policy(db)
     status_code, err, patch = resolve_manual_assignment(
         actor_id=actor_id,
         actor_member=actor_member,
@@ -786,6 +1263,13 @@ async def assign_job_to_member(
         api_error(403, "Insufficient permissions", err)
     if status_code == 404:
         api_error(404, "Job not found" if err == "job_not_found" else "Member not found", err)
+    if status_code == 409:
+        api_error(
+            409,
+            "Commercial jobs need a Tier A vendor with verified, unexpired drone liability "
+            "insurance at or above the job minimum and Advanced RPAS",
+            err,
+        )
     vendor_id = str(existing_job.get("vendor_id") or actor_member.get("vendor_id") or ORG_VENDOR_ID)
 
     if err == "auto":
@@ -803,20 +1287,18 @@ async def assign_job_to_member(
                 )
         new_assignee_id = patch.get("assignee_id")
         if new_assignee_id:
+            # Await on Vercel serverless — create_task / BackgroundTasks freeze after the
+            # HTTP response (same hollow-notify bug as paid /book assign + Mark complete).
             try:
                 from ..services.notifications import notify_assignment
-                task = asyncio.create_task(
-                    notify_assignment({**existing_job, **patch, "id": job_id}, new_assignee_id)
-                )
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
+                await notify_assignment({**existing_job, **patch, "id": job_id}, new_assignee_id)
             except Exception as _ne:
                 logger.error("Assignment notify failed for job %s: %s", job_id, _ne)
 
     await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if member_id == "auto" else "manual"})
     try:
         res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        final = res_final.data or {}
+        final = _maybe_single_row(res_final)
     except Exception as e:
         if not _is_rest_quota_error(e):
             raise
@@ -835,7 +1317,7 @@ async def assign_job_to_member(
     if new_assignee_id:
         try:
             named = await db.table("vendor_members").select("id, name").eq("id", new_assignee_id).maybe_single().execute()
-            final["assignee_name"] = (named.data or {}).get("name") or "Unassigned"
+            final["assignee_name"] = _maybe_single_row(named).get("name") or "Unassigned"
         except Exception as e:
             if _is_rest_quota_error(e):
                 named_row = pg_select_vendor_member(new_assignee_id) or {}
@@ -873,14 +1355,48 @@ async def get_vendor_availability(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_vendor_availability,
+        pg_upsert_vendor_availability,
+    )
+
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
-    res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
-    record = res.data
+    try:
+        res = await (
+            await get_db()
+        ).table("vendor_availability").select("*").eq(
+            "vendor_id", vendor_id
+        ).eq("member_id", actor_id).maybe_single().execute()
+        # maybe_single() is None when the member has no availability row yet
+        # (every new GO photographer). None.data was a CORS-less 500 before the
+        # default-create branch below could run.
+        record = _maybe_single_row(res)
+    except Exception as e:
+        # Fair-Use: PostgREST availability read 402 — load/create via Postgres.
+        if not _is_rest_quota_error(e):
+            raise
+        record = pg_select_vendor_availability(actor_id, vendor_id)
+        if not record:
+            default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
+            pg_upsert_vendor_availability(default)
+            return default
+        return record
     if not record:
+        # Empty REST body can also be a Fair-Use silent miss: do not insert a
+        # duplicate (vendor_id, member_id) over a row Postgres already has.
+        existing = pg_select_vendor_availability(actor_id, vendor_id)
+        if existing:
+            return existing
         default = AvailabilitySettings(member_id=actor_id, vendor_id=vendor_id).dict()
-        await (await get_db()).table("vendor_availability").insert(default).execute()
+        try:
+            await (await get_db()).table("vendor_availability").insert(default).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            pg_upsert_vendor_availability(default)
         return default
     return record
 
@@ -891,6 +1407,12 @@ async def update_vendor_availability(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_vendor_availability,
+        pg_upsert_vendor_availability,
+    )
+
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
@@ -898,18 +1420,113 @@ async def update_vendor_availability(
         api_error(400, "jobs_per_day must be non-negative", "invalid_capacity")
     update_data = payload.dict()
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    
-    await (await get_db()).table("vendor_availability").upsert({
-        "vendor_id": vendor_id, 
-        "member_id": actor_id, 
-        **update_data
-    }).execute()
-    
-    await write_audit_event(actor_id, "availability", actor_id, "update", vendor_id=vendor_id, details=update_data)
-    res = await (await get_db()).table("vendor_availability").select("*").eq("vendor_id", vendor_id).eq("member_id", actor_id).maybe_single().execute()
-    return res.data
+    row = {
+        "vendor_id": vendor_id,
+        "member_id": actor_id,
+        **update_data,
+    }
+
+    try:
+        await (await get_db()).table("vendor_availability").upsert(row).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        upserted = pg_upsert_vendor_availability(row)
+        try:
+            await write_audit_event(
+                actor_id,
+                "availability",
+                actor_id,
+                "update",
+                vendor_id=vendor_id,
+                details=update_data,
+            )
+        except Exception:
+            pass
+        return upserted or pg_select_vendor_availability(actor_id, vendor_id)
+
+    try:
+        await write_audit_event(
+            actor_id,
+            "availability",
+            actor_id,
+            "update",
+            vendor_id=vendor_id,
+            details=update_data,
+        )
+    except Exception:
+        pass
+
+    try:
+        res = await (
+            await get_db()
+        ).table("vendor_availability").select("*").eq(
+            "vendor_id", vendor_id
+        ).eq("member_id", actor_id).maybe_single().execute()
+        saved = _maybe_single_row(res)
+        if saved:
+            return saved
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+    return pg_select_vendor_availability(actor_id, vendor_id) or row
 
 
+
+
+@router.get("/public/availability-days")
+async def public_availability_days(
+    start: str | None = None,
+    days: int = 42,
+    area: str = "",
+    tz: str = "America/Toronto",
+):
+    """Per-day booking availability aggregated from photographers' linked calendars,
+    work hours and booked jobs. Public (no PII): only dates + open counts."""
+    from datetime import date as _date
+    from ..services.vendor_busy_sync import availability_days
+    try:
+        d0 = _date.fromisoformat((start or "")[:10]) if start else datetime.now(timezone.utc).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="start must be YYYY-MM-DD")
+    try:
+        return await availability_days(await get_db(), d0, int(days or 42), (area or "")[:120], tz or "America/Toronto")
+    except Exception as e:
+        logger.warning("availability-days soft-fail: %s", e)
+        return {"ok": False, "source": "unavailable", "days": []}
+
+
+def _cron_authorized(authorization: str | None, x_internal_key: str | None) -> bool:
+    secret = (os.environ.get("CRON_SECRET") or "").strip()
+    if secret and (authorization or "").strip() == f"Bearer {secret}":
+        return True
+    keys = [k.strip() for k in (os.environ.get("INTERNAL_API_KEYS") or "").split(",") if k.strip()]
+    return bool(x_internal_key and x_internal_key.strip() in keys)
+
+
+@router.get("/calendars/sync-cron")
+async def calendars_sync_cron(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_internal_key: str | None = Header(default=None, alias="X-Internal-Key"),
+):
+    """Vercel cron: refresh synced free/busy for every linked photographer calendar."""
+    if not _cron_authorized(authorization, x_internal_key):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    from ..services.vendor_busy_sync import sync_all
+    res = await sync_all(await get_db())
+    return {"ok": res.get("ok"), "members": res.get("members")}
+
+
+@router.post("/calendars/sync")
+async def calendars_sync_self(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Sync the signed-in photographer's linked calendars now."""
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    from ..services.vendor_busy_sync import sync_member
+    member = await get_vendor_member(actor_id)
+    return await sync_member(await get_db(), actor_id, member)
 
 
 @router.get("/calendars")
@@ -919,10 +1536,18 @@ async def list_vendor_calendars(
 ):
     """List calendar connection status for the actor — honest Connected only."""
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    from ..services.vendor_calendars import list_vendor_calendar_status, google_oauth_configured, microsoft_oauth_configured
+    from ..services.vendor_calendars import (
+        list_vendor_calendar_status,
+        google_oauth_configured,
+        microsoft_oauth_configured,
+        google_connect_via,
+        google_direct_oauth,
+        VENDOR_CALENDAR_EDU_COPY,
+        VENDOR_CALENDAR_USED_FOR_OFFERS,
+        VENDOR_CALENDAR_NUDGE,
+    )
     db = await get_db()
     statuses = await list_vendor_calendar_status(db, actor_id)
-    from ..services.vendor_calendars import google_connect_via, google_direct_oauth
     return {
         "connections": statuses,
         "oauth": {
@@ -931,12 +1556,9 @@ async def list_vendor_calendars(
             "google_connect_via": google_connect_via(),
             "google_direct_oauth": google_direct_oauth(),
         },
-        "copy": (
-            "Connecting a calendar tells Bricks when you’re free so auto-assign "
-            "only offers jobs that fit your real schedule. Busy on any connected "
-            "calendar = you won’t get that slot. Manual hours still apply if no "
-            "calendar is connected."
-        ),
+        "copy": VENDOR_CALENDAR_EDU_COPY,
+        "used_for_offers": VENDOR_CALENDAR_USED_FOR_OFFERS,
+        "nudge": VENDOR_CALENDAR_NUDGE,
     }
 
 
@@ -955,14 +1577,12 @@ async def connect_vendor_calendar(
     payload = payload or {}
     from ..services.vendor_calendars import (
         google_oauth_configured,
-        connection_status,
         PROVIDERS,
     )
     if provider not in PROVIDERS:
         api_error(400, "Unknown calendar provider", "invalid_provider")
 
     db = await get_db()
-    now = datetime.now(timezone.utc).isoformat()
 
     if provider == "google":
         from ..services.vendor_calendars import (
@@ -971,8 +1591,7 @@ async def connect_vendor_calendar(
             build_google_supabase_connect_payload,
             google_connect_via,
             google_direct_oauth,
-            google_calendar_ping,
-            upsert_oauth_connection,
+            persist_google_oauth_if_verified,
             GOOGLE_CAL_SCOPE,
         )
         if not google_oauth_configured():
@@ -984,26 +1603,17 @@ async def connect_vendor_calendar(
                 "mode": None,
                 "connect_via": None,
             }
-        # Persist tokens only when supplied — Connected only after real tokens (and ping on complete-session).
-        if payload.get("access_token"):
-            from ..services.calendar_token_crypto import encrypt_connection_secrets
-            from ..services.vendor_calendars import _expires_at_iso
-            row = {
-                "member_id": actor_id,
-                "vendor_id": vendor_id,
-                "provider": "google",
-                "access_token": payload.get("access_token"),
-                "refresh_token": payload.get("refresh_token"),
-                "token_expires_at": _expires_at_iso(payload.get("expires_in") or 3600),
-                "updated_at": now,
-                "created_at": now,
-            }
-            stored = encrypt_connection_secrets(row)
-            try:
-                await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
-            except Exception as e:
-                logger.warning("calendar upsert soft-fail: %s", e)
-            return connection_status(stored)
+        # Persist tokens only after refresh token + Calendar ping — never fake Connected.
+        if payload.get("access_token") or payload.get("refresh_token"):
+            return await persist_google_oauth_if_verified(
+                db,
+                member_id=actor_id,
+                vendor_id=vendor_id,
+                access_token=payload.get("access_token") or "",
+                refresh_token=payload.get("refresh_token") or "",
+                expires_in=payload.get("expires_in") or 3600,
+                scope=payload.get("scope"),
+            )
 
         via = google_connect_via()
         # Default: Supabase-mediated Google OAuth (secret lives in Supabase).
@@ -1040,62 +1650,72 @@ async def connect_vendor_calendar(
         }
 
     if provider == "microsoft":
-        # Outlook Connect not offered to vendors (Azure/M365 free signup requires a card).
-        # FreeBusy + disconnect paths remain for any legacy connection.
+        from ..services.vendor_calendars import (
+            microsoft_oauth_configured,
+            microsoft_redirect_uri,
+            build_microsoft_authorize_url,
+            persist_microsoft_oauth_if_verified,
+            MICROSOFT_CAL_SCOPE,
+        )
+        if payload.get("access_token") or payload.get("refresh_token"):
+            return await persist_microsoft_oauth_if_verified(
+                db,
+                member_id=actor_id,
+                vendor_id=vendor_id,
+                access_token=payload.get("access_token") or "",
+                refresh_token=payload.get("refresh_token") or "",
+                expires_in=payload.get("expires_in") or 3600,
+                scope=payload.get("scope"),
+            )
+        if not microsoft_oauth_configured():
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "Outlook OAuth is not configured on this environment (needs Microsoft client id and secret).",
+                "oauth_url": None,
+                "mode": None,
+                "connect_via": None,
+            }
+        redirect = microsoft_redirect_uri()
+        if not redirect:
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "MICROSOFT_OAUTH_REDIRECT_URI is not set — cannot start Outlook OAuth.",
+                "oauth_url": None,
+                "mode": None,
+                "connect_via": "direct",
+            }
         return {
             "connected": False,
-            "status": "unavailable",
-            "detail": "Outlook Connect isn’t offered without an Azure directory (no card). Use Google, Apple, or an ICS feed.",
-            "oauth_url": None,
+            "status": "oauth_ready",
+            "detail": "Open Microsoft OAuth to connect Outlook / Microsoft 365",
+            "oauth_url": build_microsoft_authorize_url(actor_id),
+            "mode": "direct",
+            "connect_via": "direct",
+            "scope": MICROSOFT_CAL_SCOPE,
+            "redirect_uri": redirect,
         }
 
     if provider == "apple":
-        caldav_url = (payload.get("caldav_url") or "").strip()
-        password = (payload.get("app_password") or payload.get("caldav_password") or "").strip()
-        username = (payload.get("username") or member.get("email") or "").strip()
-        if not caldav_url or not password:
-            return {
-                "connected": False,
-                "status": "needs_app_password",
-                "detail": "Apple Calendar needs an iCloud CalDAV URL and an app-specific password. Connected is only shown after both are saved.",
-            }
-        from ..services.calendar_token_crypto import encrypt_connection_secrets
-        row = {
-            "member_id": actor_id,
-            "vendor_id": vendor_id,
-            "provider": "apple",
-            "caldav_url": caldav_url,
-            "caldav_password": password,
-            "caldav_username": username,
-            "updated_at": now,
-            "created_at": now,
-        }
-        stored = encrypt_connection_secrets(row)
-        try:
-            await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
-        except Exception as e:
-            logger.warning("calendar upsert soft-fail: %s", e)
-            return {"connected": False, "status": "error", "detail": f"Could not save CalDAV connection: {e}"}
-        return connection_status(stored)
+        from ..services.vendor_calendars import persist_apple_caldav_if_verified
+        return await persist_apple_caldav_if_verified(
+            db,
+            member_id=actor_id,
+            vendor_id=vendor_id,
+            caldav_url=payload.get("caldav_url") or "",
+            password=payload.get("app_password") or payload.get("caldav_password") or "",
+            username=payload.get("username") or member.get("email") or "",
+        )
 
     if provider == "ics":
-        ics_url = (payload.get("ics_url") or "").strip()
-        if not ics_url:
-            return {"connected": False, "status": "not_connected", "detail": "Paste a public ICS calendar URL"}
-        row = {
-            "member_id": actor_id,
-            "vendor_id": vendor_id,
-            "provider": "ics",
-            "ics_url": ics_url,
-            "updated_at": now,
-            "created_at": now,
-        }
-        try:
-            await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
-        except Exception as e:
-            logger.warning("calendar upsert soft-fail: %s", e)
-            return {"connected": False, "status": "error", "detail": f"Could not save ICS URL: {e}"}
-        return connection_status(row)
+        from ..services.vendor_calendars import persist_ics_if_verified
+        return await persist_ics_if_verified(
+            db,
+            member_id=actor_id,
+            vendor_id=vendor_id,
+            ics_url=payload.get("ics_url") or "",
+        )
 
     api_error(400, "Unsupported provider", "invalid_provider")
 
@@ -1119,69 +1739,20 @@ async def google_calendar_complete_session(
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
-    from ..services.vendor_calendars import (
-        google_calendar_ping,
-        upsert_oauth_connection,
-        connection_status,
-        GOOGLE_CAL_SCOPE,
-    )
-
-    access = (body.provider_token or "").strip()
-    refresh = (body.provider_refresh_token or "").strip()
-    scope = (body.scope or "").strip()
-    if not refresh:
-        return {
-            "connected": False,
-            "status": "noscope",
-            "detail": "Google Calendar permission is required (missing refresh token). Try Connect again and approve calendar access.",
-        }
-    if not access:
-        return {
-            "connected": False,
-            "status": "error",
-            "detail": "Could not connect Google Calendar (missing access token).",
-        }
-    if scope and "calendar" not in scope:
-        return {
-            "connected": False,
-            "status": "noscope",
-            "detail": "Google Calendar permission is required. Approve calendar access and retry.",
-        }
-    ping = await google_calendar_ping(access)
-    if not ping.get("ok"):
-        logger.warning("Google complete-session ping failed (%s via %s)", ping.get("status"), ping.get("via"))
-        if ping.get("status") in (401, 403):
-            return {
-                "connected": False,
-                "status": "noscope",
-                "detail": "Google Calendar permission is required. Approve calendar access and retry.",
-            }
-        return {
-            "connected": False,
-            "status": "error",
-            "detail": "Could not verify Google Calendar access. Try again.",
-        }
+    from ..services.vendor_calendars import persist_google_oauth_if_verified
 
     db = await get_db()
-    try:
-        row = await upsert_oauth_connection(
-            db,
-            member_id=actor_id,
-            vendor_id=vendor_id,
-            provider="google",
-            token_payload={
-                "access_token": access,
-                "refresh_token": refresh,
-                "expires_in": 3600,
-                "scope": scope or GOOGLE_CAL_SCOPE,
-            },
-        )
-    except Exception as e:
-        logger.warning("Google complete-session upsert failed: %s", e)
-        return {"connected": False, "status": "error", "detail": f"Could not save calendar connection: {e}"}
-    status = connection_status(row)
-    status["ping"] = ping.get("via")
-    status["connect_via"] = "supabase"
+    status = await persist_google_oauth_if_verified(
+        db,
+        member_id=actor_id,
+        vendor_id=vendor_id,
+        access_token=body.provider_token or "",
+        refresh_token=body.provider_refresh_token or "",
+        expires_in=3600,
+        scope=body.scope,
+    )
+    if status.get("connected"):
+        status["connect_via"] = "supabase"
     return status
 
 
@@ -1198,7 +1769,7 @@ async def google_calendar_oauth_callback(
         calendar_success_redirect_base,
         exchange_google_code,
         google_direct_oauth,
-        upsert_oauth_connection,
+        persist_google_oauth_if_verified,
     )
 
     base = calendar_success_redirect_base()
@@ -1226,28 +1797,26 @@ async def google_calendar_oauth_callback(
     vendor_id = "default_vendor"
     db = await get_db()
     try:
-        row = await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
-        if not (row and row.data):
+        row = _maybe_single_row(
+            await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
+        )
+        if not row:
             return _err("Unknown vendor member in OAuth state")
-        vendor_id = row.data.get("vendor_id") or vendor_id
+        vendor_id = row.get("vendor_id") or vendor_id
     except Exception as e:
         logger.warning("OAuth member lookup failed: %s", e)
         return _err("Could not resolve vendor member for OAuth state")
-    from ..services.vendor_calendars import google_calendar_ping
-    ping = await google_calendar_ping(tokens.get("access_token") or "")
-    if not ping.get("ok"):
-        return _err("Google Calendar permission could not be verified after OAuth")
-    try:
-        await upsert_oauth_connection(
-            db,
-            member_id=member_id,
-            vendor_id=vendor_id,
-            provider="google",
-            token_payload=tokens,
-        )
-    except Exception as e:
-        logger.warning("Google calendar upsert failed: %s", e)
-        return _err(f"Connected tokens could not be saved: {e}")
+    status = await persist_google_oauth_if_verified(
+        db,
+        member_id=member_id,
+        vendor_id=vendor_id,
+        access_token=tokens.get("access_token") or "",
+        refresh_token=tokens.get("refresh_token") or "",
+        expires_in=tokens.get("expires_in"),
+        scope=tokens.get("scope"),
+    )
+    if not status.get("connected"):
+        return _err(status.get("detail") or "Google Calendar permission could not be verified after OAuth")
     return _ok()
 
 
@@ -1264,7 +1833,7 @@ async def microsoft_calendar_oauth_callback(
         calendar_success_redirect_base,
         exchange_microsoft_code,
         microsoft_oauth_configured,
-        upsert_oauth_connection,
+        persist_microsoft_oauth_if_verified,
     )
 
     base = calendar_success_redirect_base()
@@ -1292,24 +1861,26 @@ async def microsoft_calendar_oauth_callback(
     vendor_id = "default_vendor"
     db = await get_db()
     try:
-        row = await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
-        if not (row and row.data):
+        row = _maybe_single_row(
+            await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
+        )
+        if not row:
             return _err("Unknown vendor member in OAuth state")
-        vendor_id = row.data.get("vendor_id") or vendor_id
+        vendor_id = row.get("vendor_id") or vendor_id
     except Exception as e:
         logger.warning("OAuth member lookup failed: %s", e)
         return _err("Could not resolve vendor member for OAuth state")
-    try:
-        await upsert_oauth_connection(
-            db,
-            member_id=member_id,
-            vendor_id=vendor_id,
-            provider="microsoft",
-            token_payload=tokens,
-        )
-    except Exception as e:
-        logger.warning("Microsoft calendar upsert failed: %s", e)
-        return _err(f"Connected tokens could not be saved: {e}")
+    status = await persist_microsoft_oauth_if_verified(
+        db,
+        member_id=member_id,
+        vendor_id=vendor_id,
+        access_token=tokens.get("access_token") or "",
+        refresh_token=tokens.get("refresh_token") or "",
+        expires_in=tokens.get("expires_in"),
+        scope=tokens.get("scope"),
+    )
+    if not status.get("connected"):
+        return _err(status.get("detail") or "Outlook calendar permission could not be verified after OAuth")
     return _ok()
 
 
@@ -1325,7 +1896,20 @@ async def disconnect_vendor_calendar(
     try:
         await db.table("vendor_calendar_connections").delete().eq("member_id", actor_id).eq("provider", provider).execute()
     except Exception as e:
-        logger.warning("calendar disconnect soft-fail: %s", e)
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_delete_vendor_calendar_connection,
+        )
+        if _is_rest_quota_error(e):
+            if not pg_delete_vendor_calendar_connection(actor_id, provider):
+                return {
+                    "connected": True,
+                    "provider": provider,
+                    "status": "error",
+                    "detail": "Could not disconnect calendar (Fair-Use).",
+                }
+        else:
+            logger.warning("calendar disconnect soft-fail: %s", e)
     return {"connected": False, "provider": provider, "status": "not_connected", "detail": "Disconnected"}
 
 
@@ -1363,7 +1947,7 @@ async def get_vendor_performance(
     # Recomputing from job.updated_at here is inaccurate for delivered jobs where updated_at
     # reflects delivery time (hours later), not completion time.
     res_member = await (await get_db()).table("vendor_members").select("on_time_rate").eq("id", actor_id).maybe_single().execute()
-    on_time_rate_pct = round(((res_member.data or {}).get("on_time_rate") or 0) * 100, 1)
+    on_time_rate_pct = round((_maybe_single_row(res_member).get("on_time_rate") or 0) * 100, 1)
     return {
         "completion_rate": round((len(completed) / len(week_jobs) * 100), 1) if week_jobs else 0.0,
         "on_time_rate": on_time_rate_pct,
@@ -1380,7 +1964,9 @@ async def get_vendor_settings(
     actor_member = await get_vendor_member(actor_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
     res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
-    settings = res.data
+    # New vendors have no settings row yet — None.data was a CORS-less 500
+    # before the default-insert branch could run.
+    settings = _maybe_single_row(res)
     if not settings:
         default = VendorSettings(vendor_id=vendor_id).dict()
         await (await get_db()).table("vendor_settings").insert(default).execute()
@@ -1411,7 +1997,11 @@ async def update_vendor_settings(
     
     await write_audit_event(actor_id, "settings", vendor_id, "update", vendor_id=vendor_id, details=update_data)
     res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
-    return res.data
+    # Upsert already wrote; a null re-read must not 500 — return merged defaults.
+    row = _maybe_single_row(res)
+    if row:
+        return row
+    return {**VendorSettings(vendor_id=vendor_id).dict(), **update_data}
 
 
 # ---------------------------------------------------------------------------
@@ -1450,7 +2040,9 @@ async def start_stripe_connect_onboarding(
     since it's the only side that reliably knows its own deployed origin."""
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    if not is_vendor_admin(actor_member):
+    # Active Photographer (post-approval) + Manager/Owner/Admin may start Connect.
+    # Org still shares one contractors row per vendor_id (no multi-member redesign).
+    if not can_access_stripe_connect(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
@@ -1528,7 +2120,47 @@ async def get_audit_events(
     return paginated_response(items, total, page, page_size)
 
 
-@router.put("/jobs/{job_id}/status")
+async def _refresh_decline_rate(db, assignee_id: str, now: str, job_id: str) -> None:
+    """Recompute rolling 30-day decline_rate; REST→PG under Fair Use. Soft-fail."""
+    try:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_jobs_for_assignees,
+            pg_update_vendor_member_fields,
+        )
+        _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        recent_jobs: list = []
+        try:
+            res_recent = await db.table("jobs").select("id, status, created_at").eq(
+                "assignee_id", assignee_id
+            ).gte("created_at", _thirty_days_ago).execute()
+            recent_jobs = res_recent.data or []
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            jobs, _total = pg_select_jobs_for_assignees(
+                [assignee_id], status=None, limit=500, offset=0
+            )
+            recent_jobs = [
+                j for j in (jobs or [])
+                if str(j.get("created_at") or "") >= _thirty_days_ago
+            ]
+        recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
+        total_recent = len(recent_jobs)
+        new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
+        fields = {"decline_rate": new_rate, "updated_at": now}
+        try:
+            await db.table("vendor_members").update(fields).eq("id", assignee_id).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            if not pg_update_vendor_member_fields(assignee_id, fields):
+                logger.error("decline_rate PG update failed for job %s", job_id)
+    except Exception as e:
+        logger.error(f"decline_rate update failed for job {job_id}: {e}")
+
+
+@router.api_route("/jobs/{job_id}/status", methods=["PUT", "PATCH"])
 async def update_vendor_job_status(
     job_id: str,
     payload: JobStatusUpdate,
@@ -1568,6 +2200,45 @@ async def update_vendor_job_status(
             detail=f"Status '{new_status}' cannot be set via this endpoint — it is managed by the system",
         )
 
+
+    # Trade jobs: every checklist item ticked with its proof (Kam, 2026-10-31).
+    # Media jobs return None here and keep their completion rules.
+    if new_status == "completed" and old_status != "completed":
+        from ..services.job_checklist import completion_block_message
+        blocked = completion_block_message(job)
+        if blocked:
+            api_error(400, blocked, "checklist_incomplete")
+
+    # Hard gate: HDR stills need full −/0/+ brackets before Mark complete.
+    # Mirrors web validateHdrUploadsForComplete; Visit/3D + drone/reel excluded.
+    if new_status == "completed" and old_status != "completed":
+        try:
+            from ..services.bracket_require import validate_hdr_uploads_for_complete
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_uploads_by_job_id
+            uploads_rows: list = []
+            try:
+                res_up = await db.table("uploads").select(
+                    "id, filename, mime_type, provider, file_url"
+                ).eq("job_id", job_id).limit(500).execute()
+                uploads_rows = res_up.data or []
+            except Exception as e:
+                if not _is_rest_quota_error(e):
+                    raise
+                uploads_rows = pg_select_uploads_by_job_id(job_id) or []
+            bracket_issue = validate_hdr_uploads_for_complete(uploads_rows)
+            if bracket_issue:
+                api_error(400, bracket_issue["message"], "incomplete_hdr_brackets")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("HDR bracket gate failed for job %s: %s", job_id, e)
+            # Fail closed — do not mark complete when we cannot verify brackets.
+            api_error(
+                503,
+                "Could not verify HDR brackets; try again shortly",
+                "bracket_gate_unavailable",
+            )
+
     now = datetime.now(timezone.utc).isoformat()
     status_fields = {"status": new_status, "updated_at": now}
     try:
@@ -1582,59 +2253,55 @@ async def update_vendor_job_status(
                 detail="Job status update unavailable (Fair Use); try again shortly",
             )
 
-    # When vendor marks completed, start post-production only when uploads are
+    # When vendor marks completed, run post-production only when uploads are
     # either not expected (deliverables_count=0) or already fully received.
     # For jobs with a count, uploads.py fires post-production when the count is
     # reached — this path is a safe fallback due to the atomic gate in process_job_assets.
+    # AWAIT on Vercel serverless (same class of bug as assigned notify): create_task /
+    # BackgroundTasks are frozen when the HTTP response returns, which left Mark
+    # complete advancing status while enhance→listing never ran (hollow media_delivery).
     if new_status == "completed" and old_status != "completed":
         _deliverables = job.get("deliverables_count") or 0
         _uploaded = job.get("uploaded_count") or 0
         if _deliverables == 0 or _uploaded >= _deliverables:
             try:
                 from ..services.post_production import process_job_assets
-                _t = asyncio.create_task(process_job_assets(job_id))
-                _background_tasks.add(_t)
-                _t.add_done_callback(_background_tasks.discard)
+                await process_job_assets(job_id)
             except Exception as e:
                 logger.error(f"Post-production trigger failed for job {job_id}: {e}")
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
-        try:
-            assignee_id = job.get("assignee_id")
-            if assignee_id and assignee_id != "default_user":
-                # Rolling 30-day decline rate (per IC agreement §40% threshold).
-                # Denominator = ALL jobs offered to this vendor in the last 30 days,
-                # regardless of current status (includes in-progress, assigned, completed).
-                # Using only terminal states in the denominator overstates the rate —
-                # a single decline would show 100% when active jobs are excluded.
-                # Filter by created_at (when the offer was made), not updated_at.
-                _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-                res_recent = await db.table("jobs").select("id, status").eq(
-                    "assignee_id", assignee_id
-                ).gte("created_at", _thirty_days_ago).execute()
-                recent_jobs = res_recent.data or []
-                recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
-                total_recent = len(recent_jobs)
-                new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
-                await db.table("vendor_members").update({
-                    "decline_rate": new_rate,
-                    "updated_at": now,
-                }).eq("id", assignee_id).execute()
-        except Exception as e:
-            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+        # Rolling 30-day decline rate (per IC agreement §40% threshold).
+        # Denominator = ALL jobs offered to this vendor in the last 30 days.
+        # REST→PG under Fair Use; soft-fail — never block the status response.
+        assignee_id = job.get("assignee_id")
+        if assignee_id and assignee_id != "default_user":
+            await _refresh_decline_rate(db, assignee_id, now, job_id)
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         try:
+            from ..shared.pg_fallback import (
+                _is_rest_quota_error,
+                pg_select_vendor_member,
+                pg_update_vendor_member_fields,
+            )
             assignee_id = job.get("assignee_id")
             if assignee_id and assignee_id != "default_user":
                 time_end = job.get("time_window_end", "")
                 sched_date = job.get("scheduled_date", "")
-                res_m = await db.table("vendor_members").select(
-                    "total_assignments, on_time_rate"
-                ).eq("id", assignee_id).maybe_single().execute()
-                if res_m.data:
-                    prev_total = res_m.data.get("total_assignments") or 0
-                    prev_rate = res_m.data.get("on_time_rate") or 1.0
+                member_row = None
+                try:
+                    res_m = await db.table("vendor_members").select(
+                        "total_assignments, on_time_rate"
+                    ).eq("id", assignee_id).maybe_single().execute()
+                    member_row = _maybe_single_row(res_m) or None
+                except Exception as e:
+                    if not _is_rest_quota_error(e):
+                        raise
+                    member_row = pg_select_vendor_member(assignee_id) or None
+                if member_row:
+                    prev_total = member_row.get("total_assignments") or 0
+                    prev_rate = member_row.get("on_time_rate") or 1.0
                     new_total = prev_total + 1
                     update_fields: dict = {"total_assignments": new_total, "updated_at": now}
                     if sched_date and time_end:
@@ -1662,7 +2329,13 @@ async def update_vendor_job_status(
                         prev_on_time = round(prev_rate * prev_total)
                         new_on_time = prev_on_time + (1 if was_on_time else 0)
                         update_fields["on_time_rate"] = round(new_on_time / new_total, 4)
-                    await db.table("vendor_members").update(update_fields).eq("id", assignee_id).execute()
+                    try:
+                        await db.table("vendor_members").update(update_fields).eq("id", assignee_id).execute()
+                    except Exception as e:
+                        if not _is_rest_quota_error(e):
+                            raise
+                        if not pg_update_vendor_member_fields(assignee_id, update_fields):
+                            logger.error("on_time_rate PG update failed for job %s", job_id)
         except Exception as e:
             logger.error(f"on_time_rate update failed for job {job_id}: {e}")
 
@@ -1709,20 +2382,16 @@ async def watch_job_action(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """Called by the watchOS app to accept, decline, mark on-way, or mark arrived."""
+    """Called by the watchOS / GO app to accept, decline, mark on-way, or mark arrived."""
     if body.action not in _WATCH_ACTION_STATUS_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown action '{body.action}'")
 
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
 
     db = await get_db()
-    res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = res_job.data
+    # Fair-Use: load via _load_visible_job (REST→PG) instead of raw PostgREST.
+    job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
     assignee_id = job.get("assignee_id")
     if assignee_id != actor_id:
         raise HTTPException(status_code=403, detail="You are not the assigned photographer for this job")
@@ -1737,7 +2406,18 @@ async def watch_job_action(
         return {"status": "no_change", "job_id": job_id, "current_status": old_status}
 
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({"status": new_status, "updated_at": now}).eq("id", job_id).execute()
+    status_fields = {"status": new_status, "updated_at": now}
+    try:
+        await db.table("jobs").update(status_fields).eq("id", job_id).execute()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, status_fields):
+            raise HTTPException(
+                status_code=503,
+                detail="Job status update unavailable (Fair Use); try again shortly",
+            )
 
     if new_status == "in_progress" and old_status != "in_progress":
         try:
@@ -1747,16 +2427,7 @@ async def watch_job_action(
             logger.error(f"En-route notification failed for job {job_id}: {e}")
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
-        try:
-            _thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-            res_recent = await db.table("jobs").select("id, status").eq("assignee_id", actor_id).gte("created_at", _thirty_days_ago).execute()
-            recent_jobs = res_recent.data or []
-            recent_declined = sum(1 for j in recent_jobs if j.get("status") == "declined")
-            total_recent = len(recent_jobs)
-            new_rate = round(recent_declined / total_recent, 4) if total_recent > 0 else 0.0
-            await db.table("vendor_members").update({"decline_rate": new_rate, "updated_at": now}).eq("id", actor_id).execute()
-        except Exception as e:
-            logger.error(f"decline_rate update failed for job {job_id}: {e}")
+        await _refresh_decline_rate(db, actor_id, now, job_id)
 
     booking_id = job.get("booking_id")
     if booking_id:
@@ -1773,16 +2444,23 @@ async def watch_job_action(
 
 
 # ---------------------------------------------------------------------------
-# No-show policy (Snappr model)
+# No-show policy
 # ---------------------------------------------------------------------------
-AGENT_NOSHOW_TRIP_FEE_CENTS = 6000   # $60 CAD
-_NOSHOW_WINDOW_BEFORE_MIN = 15
-_NOSHOW_WINDOW_AFTER_MIN = 90
+# Client no-show (Kam, 2026-10-30): the vendor waits 20 minutes on site, checks in,
+# takes a photo and tries to call the client, then files a report. Bricks reviews it;
+# once an admin approves it the vendor is paid half the job's normal base payout,
+# HST on top as usual (payout_service.trigger_payout_for_job(noshow_claim_id=...)).
+# Claims live in agent_noshow_trip_fees (legacy table name). amount_cents starts at
+# 0 (set explicitly: the column default is the old 6000) and is set to the half
+# payout on approval.
+AGENT_NOSHOW_CLAIM_AMOUNT_CENTS = 0
+# Wait, window and check-in radius live in shared/noshow_policy.py (one place).
+_NOSHOW_WINDOW_AFTER_MIN = noshow_policy.CLAIM_WINDOW_AFTER_MIN
 _NOSHOW_RATE_LIMIT_DAYS = 30
 _NOSHOW_RATE_LIMIT_THRESHOLD = 1
 _NOSHOW_AGENT_RATE_LIMIT_THRESHOLD = 3
 _GPS_MAX_DISTANCE_KM = 0.5            # 500m — flag if photographer is further away
-_ESCALATION_MIN_WAIT_MIN = 15         # must wait 15 min after first SMS before filing
+_ESCALATION_MIN_WAIT_MIN = noshow_policy.WAIT_MIN
 
 
 async def _validate_noshow_claim(
@@ -1794,8 +2472,8 @@ async def _validate_noshow_claim(
 ) -> dict:
     """
     Run all anti-abuse checks. Returns:
-      {"ok": True, "hold_for_review": False}                  → record claim, paid on next payout
-      {"ok": True, "hold_for_review": True, "reason": "..."}  → hold for admin review before payout
+      {"ok": True, "hold_for_review": False}                  → record claim
+      {"ok": True, "hold_for_review": True, "reason": "..."}  → hold for admin review
       {"ok": False, "reason": "..."}                          → reject outright (HTTP 422)
     """
     assignee_id = job.get("assignee_id")
@@ -1811,53 +2489,37 @@ async def _validate_noshow_claim(
     current_status = job.get("status", "")
     if current_status in ("completed", "delivered", "processing", "qc_failed", "agent_no_show", "cancelled"):
         return {"ok": False, "reason": f"Cannot report no-show on a job with status '{current_status}'"}
+    # Gate 2.5: the vendor must have checked in through the app (job in_progress).
+    if current_status != "in_progress":
+        return {"ok": False, "reason": "Check in on the job in the app before reporting a no-show"}
 
     # Gate 3: idempotency
     existing = await db.table("agent_noshow_trip_fees").select("id, status").eq(
         "job_id", job_id
     ).maybe_single().execute()
-    if existing.data:
+    if _maybe_single_row(existing):
         return {"ok": False, "reason": "A no-show claim already exists for this job"}
 
-    # Gate 4: time window — claim must be filed within T-15 to T+90 of shoot start.
-    # time_window_start is stored as "HH:MM" so we combine it with scheduled_date to
-    # build a full datetime. Fail-closed: if we cannot determine the window, reject.
-    scheduled_date_str = job.get("scheduled_date", "")
-    time_window_str = job.get("time_window_start") or ""
-    if time_window_str and not scheduled_date_str:
-        # Legacy: scheduled_at may be a full ISO datetime
-        scheduled_at_str = job.get("scheduled_at", "")
-        try:
-            shoot_start = datetime.fromisoformat(scheduled_at_str.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
-    elif scheduled_date_str and time_window_str:
-        try:
-            # time_window_start is "HH:MM" in the property timezone — localize before UTC math
-            shoot_start = datetime.fromisoformat(
-                f"{scheduled_date_str}T{time_window_str[:5]}:00"
-            ).replace(tzinfo=zoneinfo_for_job(job))
-        except (ValueError, TypeError):
-            return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
-    else:
-        return {"ok": False, "reason": "Cannot verify claim window — scheduled time is missing or invalid"}
-
-    now_utc = datetime.now(timezone.utc)
-    earliest = shoot_start - timedelta(minutes=_NOSHOW_WINDOW_BEFORE_MIN)
-    latest = shoot_start + timedelta(minutes=_NOSHOW_WINDOW_AFTER_MIN)
-    if now_utc < earliest:
-        return {
-            "ok": False,
-            "reason": f"Too early — no-show can be reported from {earliest.strftime('%H:%M')} {tz_abbrev(job)}"
-        }
-    if now_utc > latest:
-        return {
-            "ok": False,
-            "reason": (
-                f"Claim window expired — must be filed within "
-                f"{_NOSHOW_WINDOW_AFTER_MIN} minutes of scheduled shoot time"
-            )
-        }
+    # Gate 4: the four no-show conditions (shared/noshow_policy.py). The vendor
+    # checked in near the property, waited WAIT_MIN minutes from the later of
+    # check-in and the booked start, took a photo after check-in and tried to call
+    # the client. Fail closed on each one.
+    ready = noshow_policy.readiness(job)
+    if not ready["checked_in"]:
+        return {"ok": False, "reason": "Check in at the property in the app before reporting a no-show"}
+    if ready["expired"]:
+        return {"ok": False, "reason": ready["missing"][0]}
+    if not ready["waited"]:
+        return {"ok": False, "reason": ready["missing"][0]}
+    if not ready["has_photo"]:
+        return {"ok": False, "reason": "Take a photo of the property before reporting a no-show"}
+    if not ready["has_call"]:
+        return {"ok": False, "reason": "Tap Call client to try reaching the client before reporting a no-show"}
+    shoot_start = (
+        noshow_policy.booked_start(job)
+        or noshow_policy.parse_ts(ready["wait_started_at"])
+        or datetime.now(timezone.utc)
+    )
 
     # Gate 4.5: GPS proximity — soft hold if photographer is far from property.
     # Also hold when the job has known coordinates but the photographer omits their GPS:
@@ -1882,46 +2544,20 @@ async def _validate_noshow_claim(
                     )
             except (TypeError, ValueError):
                 pass
-    elif job_lat is not None and job_lng is not None:
-        # Job has a known location but photographer omitted coordinates — hold for review
-        # so proximity cannot be bypassed by calling the API directly without GPS.
+    elif job_lat is not None and job_lng is not None and job.get("check_in_distance_m") is None:
+        # Job has a known location but there's no GPS on the report and no verified
+        # check-in distance — hold for review so proximity can't be bypassed.
+        # A check-in within the radius (Gate 4) already proves the vendor was there.
         gps_hold = True
         gps_hold_reason = "GPS coordinates required for property-located jobs — held for location verification"
 
-    # Gate 4.6: escalation required — photographer must have attempted to notify agent via SMS
-    # (only enforced when Twilio is configured; gracefully degrades otherwise)
-    if os.environ.get("TWILIO_ACCOUNT_SID"):
-        try:
-            res_esc = await db.table("agent_noshow_escalations").select(
-                "id, sent_at"
-            ).eq("job_id", job_id).execute()
-            escalations = res_esc.data or []
-            if not escalations:
-                return {
-                    "ok": False,
-                    "reason": (
-                        "Tap \"Notify Agent\" first — an SMS alert will be sent to the agent. "
-                        "You may file a no-show claim 15 minutes after notification."
-                    ),
-                }
-            first_sent = min(
-                datetime.fromisoformat(e["sent_at"].replace("Z", "+00:00"))
-                for e in escalations
-            )
-            elapsed_min = (datetime.now(timezone.utc) - first_sent).total_seconds() / 60
-            if elapsed_min < _ESCALATION_MIN_WAIT_MIN:
-                wait = int(_ESCALATION_MIN_WAIT_MIN - elapsed_min) + 1
-                return {
-                    "ok": False,
-                    "reason": (
-                        f"Agent was notified — please wait {wait} more minute(s) "
-                        f"before filing a no-show claim."
-                    ),
-                }
-        except Exception as e:
-            # Twilio is configured — fail closed so the gate isn't bypassed by a transient error.
-            logger.error(f"Escalation gate check failed for job {job_id}: {e}")
-            return {"ok": False, "reason": "Escalation check unavailable — please retry in a moment"}
+    # Gate 4.6 (call attempt) is enforced in Gate 4. The Twilio SMS path
+    # (escalate-absent-agent) logs a call attempt too, so either one counts.
+    if job.get("check_in_distance_m") is None:
+        gps_hold = True
+        gps_hold_reason = "; ".join(
+            r for r in [gps_hold_reason, "Check-in distance unknown (job has no map location) — held for location verification"] if r
+        )
 
     # Gate 5: booking must not have been cancelled before shoot start
     if booking_id:
@@ -1929,16 +2565,17 @@ async def _validate_noshow_claim(
             res_b = await db.table("bookings").select("status, cancelled_at").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            if res_b.data:
-                bk_status = res_b.data.get("status", "")
-                cancelled_at = res_b.data.get("cancelled_at")
+            bk_row = _maybe_single_row(res_b)
+            if bk_row:
+                bk_status = bk_row.get("status", "")
+                cancelled_at = bk_row.get("cancelled_at")
                 if bk_status == "cancelled" and cancelled_at:
                     try:
                         cancel_dt = datetime.fromisoformat(cancelled_at.replace("Z", "+00:00"))
                         if cancel_dt < shoot_start:
                             return {
                                 "ok": False,
-                                "reason": "Booking was cancelled before the shoot — no trip fee applies"
+                                "reason": "Booking was cancelled before the shoot — a no-show does not apply"
                             }
                     except (ValueError, TypeError):
                         pass
@@ -1973,11 +2610,11 @@ async def _validate_noshow_claim(
     if booking_id:
         try:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=_NOSHOW_RATE_LIMIT_DAYS)).isoformat()
-            # Find bookings by this agent that had no-show trip fees in the window
+            # Find bookings by this agent that had no-show claims in the window
             res_this_bk = await db.table("bookings").select("user_id").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            agent_user_id = (res_this_bk.data or {}).get("user_id") if res_this_bk.data else None
+            agent_user_id = _maybe_single_row(res_this_bk).get("user_id")
             if agent_user_id:
                 res_agent_bks = await db.table("bookings").select("id").eq(
                     "user_id", agent_user_id
@@ -2010,9 +2647,10 @@ async def _validate_noshow_claim(
 
     # Combine all soft-hold flags — include all reasons in the review note.
     hold_reasons = [r for r in [rate_hold_reason, collusion_hold_reason, gps_hold_reason] if r]
+    wait_started_at = ready.get("wait_started_at")
     if rate_hold or collusion_hold or gps_hold:
-        return {"ok": True, "hold_for_review": True, "reason": "; ".join(hold_reasons)}
-    return {"ok": True, "hold_for_review": False}
+        return {"ok": True, "hold_for_review": True, "reason": "; ".join(hold_reasons), "wait_started_at": wait_started_at}
+    return {"ok": True, "hold_for_review": False, "wait_started_at": wait_started_at}
 
 
 @router.post("/jobs/{job_id}/escalate-absent-agent")
@@ -2026,15 +2664,15 @@ async def escalate_absent_agent(
 
     Must be called before report_agent_no_show when Twilio is configured.
     Two SMS attempts allowed per job (attempt 1 at arrival, attempt 2 if still absent).
-    After first SMS, photographer must wait 15 minutes before filing the no-show claim.
+    After first SMS, photographer must wait 20 minutes before filing the no-show claim.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    job = res_job.data
 
     if job.get("assignee_id") != actor_id:
         raise HTTPException(status_code=403, detail="Not assigned to this job")
@@ -2069,14 +2707,15 @@ async def escalate_absent_agent(
             res_bk = await db.table("bookings").select("user_id").eq(
                 "id", booking_id
             ).maybe_single().execute()
-            if res_bk.data:
-                user_id = res_bk.data.get("user_id")
+            bk_row = _maybe_single_row(res_bk)
+            if bk_row:
+                user_id = bk_row.get("user_id")
                 if user_id:
                     res_user = await db.table("users").select("phone").eq(
                         "id", user_id
                     ).maybe_single().execute()
-                    if res_user.data:
-                        agent_phone = res_user.data.get("phone")
+                    # Missing user row: skip SMS notify, do not 500.
+                    agent_phone = _maybe_single_row(res_user).get("phone")
         except Exception as e:
             logger.warning(f"Could not fetch agent phone for escalation (job {job_id}): {e}")
 
@@ -2102,20 +2741,28 @@ async def escalate_absent_agent(
         "delivery_status": "sent" if sms_sent else ("no_phone" if not agent_phone else "failed"),
     }).execute()
 
-    can_file_after = (datetime.now(timezone.utc) + timedelta(minutes=_ESCALATION_MIN_WAIT_MIN)).isoformat()
+    # A sent SMS counts as the call attempt (Twilio path). Dialer calls are logged
+    # by POST /jobs/{id}/call-attempt instead.
+    if sms_sent and job.get("checked_in_at"):
+        try:
+            await _record_call_attempt(db, job, "sms")
+        except Exception as e:
+            logger.warning(f"Could not log SMS call attempt for job {job_id}: {e}")
+    ready = noshow_policy.readiness(job)
+    rule = (
+        f"You can report a no-show {noshow_policy.WAIT_MIN} minutes after you check in "
+        f"or the booked start, whichever is later."
+    )
 
     return {
         "attempt_number": attempt_number,
         "sms_sent": sms_sent,
         "agent_notified": bool(agent_phone),
-        "can_file_now": False,
-        "wait_minutes": _ESCALATION_MIN_WAIT_MIN,
-        "can_file_noshow_after": can_file_after,
-        "note": (
-            f"Agent notified by SMS. You may file a no-show claim after {_ESCALATION_MIN_WAIT_MIN} minutes."
-            if sms_sent else
-            f"Escalation recorded (no phone on file). You may file a no-show claim after {_ESCALATION_MIN_WAIT_MIN} minutes."
-        ),
+        "can_file_now": bool(ready["can_report"]),
+        "wait_minutes": noshow_policy.WAIT_MIN,
+        "can_file_noshow_after": ready["ready_at"],
+        "noshow": ready,
+        "note": (f"Client notified by text. {rule}" if sms_sent else f"No text sent (no phone on file). {rule}"),
     }
 
 
@@ -2129,15 +2776,20 @@ async def report_agent_no_show(
     """
     Photographer reports that the agent/client was not home.
 
-    Trip fee ($60) paid to the photographer from Bricks margin.
+    Records the claim for ops review. Once an admin approves it, the vendor is paid
+    half the job's base payout (HST on top as usual); see admin_ops.review_noshow_claim.
+    The client pays no fee beyond the booking amount retained under the cancellation
+    policy (no refund on a no-show).
 
     Validation gates:
     - Assigned photographer only
-    - Active job state
+    - Active job state, and the vendor has checked in (job in_progress)
     - No duplicate claim
-    - T-15min → T+90min window
+    - Checked in through the app, waited 20 min from the later of check-in and the
+      booked start, photo uploaded after check-in, call attempt logged (dialer or SMS);
+      filed within 90 min of the wait starting
     - GPS proximity check: if coordinates supplied and >500m, holds for review
-    - Escalation check: if Twilio configured, must have notified agent + waited 15 min
+    - Check-in distance unknown (job has no coordinates): holds for review
     - Booking not pre-cancelled
     - Rate limit (photographer): 2nd+ claim in 30 days → held for review
     - Rate limit (agent): 3+ claims against same agent in 30 days → held for review
@@ -2146,10 +2798,10 @@ async def report_agent_no_show(
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = res_job.data
     vendor_id = job.get("vendor_id", "default_vendor")
     assignee_id = job.get("assignee_id")
     booking_id = job.get("booking_id")
@@ -2167,7 +2819,7 @@ async def report_agent_no_show(
     review_reason = validation.get("reason", "")
     claim_status = "pending_review" if hold_for_review else "pending"
 
-    # Insert trip fee BEFORE updating job status.
+    # Insert the claim record BEFORE updating job status.
     # If the insert fails we return an error and the job is still in its prior state (retryable).
     # If status were updated first and the insert then failed, Gate 2 would block any retry.
     if assignee_id and assignee_id != "default_user":
@@ -2175,12 +2827,24 @@ async def report_agent_no_show(
             "job_id": job_id,
             "member_id": assignee_id,
             "vendor_id": vendor_id,
-            "amount_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
+            "amount_cents": AGENT_NOSHOW_CLAIM_AMOUNT_CENTS,
             "booking_id": booking_id,
             "notes": payload.notes or "",
             "status": claim_status,
             "review_reason": review_reason or None,
             "created_at": now,
+            # Evidence the reviewer sees (copied from the job at report time).
+            "checked_in_at": job.get("checked_in_at"),
+            "check_in_lat": job.get("check_in_lat"),
+            "check_in_lng": job.get("check_in_lng"),
+            "check_in_accuracy_m": job.get("check_in_accuracy_m"),
+            "check_in_distance_m": job.get("check_in_distance_m"),
+            "wait_started_at": validation.get("wait_started_at"),
+            "photo_path": job.get("noshow_photo_path"),
+            "photo_taken_at": job.get("noshow_photo_taken_at"),
+            "photo_uploaded_at": job.get("noshow_photo_uploaded_at"),
+            "call_attempted_at": job.get("noshow_call_attempted_at"),
+            "call_method": job.get("noshow_call_method"),
         }).execute()
 
     await db.table("jobs").update({"status": "agent_no_show", "updated_at": now}).eq("id", job_id).execute()
@@ -2204,7 +2868,6 @@ async def report_agent_no_show(
         actor_id, "job", job_id, "agent_no_show", vendor_id=vendor_id,
         details={
             "assignee_id": assignee_id,
-            "trip_fee_cents": AGENT_NOSHOW_TRIP_FEE_CENTS,
             "claim_status": claim_status,
             "hold_for_review": hold_for_review,
             "review_reason": review_reason,
@@ -2217,7 +2880,6 @@ async def report_agent_no_show(
         return {
             "job_id": job_id,
             "photographer_id": assignee_id,
-            "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
             "claim_status": "pending_review",
             "hold_for_review": True,
             "note": review_reason,
@@ -2226,9 +2888,8 @@ async def report_agent_no_show(
     return {
         "job_id": job_id,
         "photographer_id": assignee_id,
-        "trip_fee_cad": AGENT_NOSHOW_TRIP_FEE_CENTS / 100,
         "claim_status": "pending",
-        "note": "Trip fee will be included in photographer's next payout. Client booking retained.",
+        "note": "No-show recorded. Client booking retained.",
     }
 
 
@@ -2251,10 +2912,10 @@ async def report_contractor_no_show(
     db = await get_db()
 
     res_job = await db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not res_job.data:
+    job = _maybe_single_row(res_job)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = res_job.data
     assignee_id = job.get("assignee_id")
     now = datetime.now(timezone.utc).isoformat()
 
@@ -2263,10 +2924,12 @@ async def report_contractor_no_show(
             res_m = await db.table("vendor_members").select(
                 "total_assignments, cancel_rate, on_time_rate"
             ).eq("id", assignee_id).maybe_single().execute()
-            if res_m.data:
-                prev_total = res_m.data.get("total_assignments") or 0
+            # Missing member row: skip cancel_rate update, do not 500.
+            m_row = _maybe_single_row(res_m)
+            if m_row:
+                prev_total = m_row.get("total_assignments") or 0
                 total = prev_total + 1
-                prev_cancel = res_m.data.get("cancel_rate") or 0.0
+                prev_cancel = m_row.get("cancel_rate") or 0.0
                 prev_cancels = round(prev_cancel * prev_total)
                 new_cancel_rate = round((prev_cancels + 1) / total, 4)
                 # on_time_rate is NOT updated here — contractor no-shows are cancellations,

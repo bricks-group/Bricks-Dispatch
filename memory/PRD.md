@@ -35,7 +35,7 @@ The Dispatch photographer web experience is built into the Bricks OS React app (
 3. **Navigate**: MapKit turn-by-turn to property
 4. **Shoot + upload**: Photos → Fotello AI edit → QC score → delivery to agent
 5. **Payout**: Stripe Connect transfer, tier-based % (C=35%, B=45%, A=55%)
-6. **No-show**: If agent absent → escalate via SMS → file claim → $60 trip fee
+6. **No-show**: Client absent → vendor checks in through the app at the property (location required, within 250 m), waits 20 min from check-in or the booked start (whichever is later), takes a photo, taps Call client → files claim → Bricks reviews within 2 business days (appeal via help@brxs.ca within 7 days) → on approval the vendor is paid half the job's base payout, HST as usual
 
 ## Backend API Base: `https://dispatch-api.brxs.ca`
 
@@ -44,7 +44,7 @@ Key routers:
 - `GET/PUT /api/vendor-os/jobs` — photographer job list + status updates
 - `POST /api/vendor-os/jobs/{id}/agent-no-show` — no-show claim
 - `POST /api/v1/payouts/trigger` — Stripe Connect transfer
-- `GET /api/vendor-os/earnings` — payout history + pending trip fees
+- `GET /api/vendor-os/earnings` — payout history
 - `POST /api/v1/post-production/callback` — Fotello/Autoenhance webhook
 - `GET /api/onboarding/ic-agreement` — IC agreement text v1.1
 - `GET /api/admin/noshow-claims` — admin review queue
@@ -84,7 +84,7 @@ All backend features complete. Pre-launch checklist:
 ## Rules
 - `INTERNAL_API_KEY` (`X-Internal-Api-Key`) required on dispatch intake
 - `time_window_start` is `"HH:MM"` string — always combine with `scheduled_date` before datetime math
-- Trip fees: `pending` → `reserved` → `paid_out` (never skip steps)
+- No photographer no-show fee (removed 2026-10-30); no-show claims never change a payout
 - Never hardcode secrets as default values in `os.environ.get()`
 - Stripe Connect is Express (CA) — transfers use `stripe_account` parameter
 - IC Clause 8 lists Bricks' platform FEE (60%/50%/40%), NOT vendor payout — these numbers are correct

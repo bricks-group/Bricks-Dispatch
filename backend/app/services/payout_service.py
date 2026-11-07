@@ -55,32 +55,58 @@ def calculate_payout_amount(rack_price: int | None, vendor_tier: int | None) -> 
     return int(rack_price * 100 * pct)
 
 
-_SQFT_TIER_BOUNDARIES = (1999, "small"), (3499, "mid"), (4999, "large")
+# www client footprint bands (match brxs.ca): Small ≤1,200 / Mid 1,201–2,500 /
+# Large 2,501–4,000 / XL 4,001+. Ceilings are inclusive upper bounds of each band.
+_SQFT_TIER_BOUNDARIES = (1200, "small"), (2500, "mid"), (4000, "large")
 
-# www à-la-carte catalog ids → existing vendor_payout_rates package_id cells.
-# Does not invent new dollar amounts; only remaps product naming/structure.
+# Canonical www package_ids for vendor_payout_rates (5 packages × 4 bands × 3 tiers).
+_WWW_PACKAGE_IDS = frozenset({"photos_only", "essentials", "story", "showcase", "full"})
+
+# Normalize alternate spellings onto the five www cells. Each resolves to its OWN
+# package_id — not shared standard/premium/luxury. Legacy package_ids
+# (standard/premium/luxury/estate) are intentionally absent here so they pass
+# through unchanged for historical job reads only; nothing new aliases TO estate.
 _PACKAGE_RATE_ALIASES = {
-    "photos_only": "standard",
-    "photosonly": "standard",
-    "photos": "standard",
-    "essentials": "standard",
-    "story": "premium",
-    "showcase": "premium",
-    "suite": "luxury",
-    "full": "luxury",
-    "full_suite": "luxury",
+    "photos_only": "photos_only",
+    "photosonly": "photos_only",
+    "photos": "photos_only",
+    "essentials": "essentials",
+    "story": "story",
+    "showcase": "showcase",
+    "suite": "full",
+    "full": "full",
+    "full_suite": "full",
 }
+
+# Explicit legacy map: old shared cells remain readable for jobs booked before
+# the www reprice. Not used as alias *targets* for new www catalog ids.
+_LEGACY_PACKAGE_IDS = frozenset({"standard", "premium", "luxury", "estate"})
+
+# Soft-retired for NEW job intake only. Historical jobs keep these package_ids
+# so vendor_payout_rates legacy rows still resolve. Nothing maps www IDs onto these.
+_RETIRED_FOR_NEW_JOBS = _LEGACY_PACKAGE_IDS
+
+
+def normalize_package_id_key(package_id: str | None) -> str | None:
+    if not package_id:
+        return None
+    return package_id.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def is_retired_for_new_jobs(package_id: str | None) -> bool:
+    key = normalize_package_id_key(package_id)
+    return bool(key and key in _RETIRED_FOR_NEW_JOBS)
 
 
 def _rate_card_package_id(package_id: str | None) -> str | None:
-    if not package_id:
+    key = normalize_package_id_key(package_id)
+    if not key:
         return None
-    key = package_id.strip().lower().replace("-", "_").replace(" ", "_")
     return _PACKAGE_RATE_ALIASES.get(key, key)
 
 
 def _sqft_tier(sqft: int | None) -> str:
-    """Mirrors Bricks-Companion's app/config.py sqft_tier() exactly -- same bands."""
+    """Client footprint band for vendor_payout_rates: Small≤1200 / Mid≤2500 / Large≤4000 / XL."""
     if sqft:
         for ceiling, tier in _SQFT_TIER_BOUNDARIES:
             if sqft <= ceiling:
@@ -113,10 +139,19 @@ async def get_fixed_payout_amount(db, package_id: str | None, sqft: int | None, 
         return None
     now = datetime.now(timezone.utc).timestamp()
     if not _payout_rate_cache or now - _payout_rate_cache_ts >= _PAYOUT_RATE_CACHE_TTL:
-        res = await db.table("vendor_payout_rates").select(
-            "package_id,sqft_tier,vendor_tier,amount_cents"
-        ).execute()
-        rows = res.data or []
+        rows = []
+        try:
+            res = await db.table("vendor_payout_rates").select(
+                "package_id,sqft_tier,vendor_tier,amount_cents"
+            ).execute()
+            rows = res.data or []
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_payout_rates
+            if _is_rest_quota_error(e):
+                rows = pg_select_vendor_payout_rates() or []
+                logger.warning("vendor_payout_rates Fair-Use PG fallback n=%s", len(rows))
+            else:
+                raise
         if rows:
             _payout_rate_cache = {
                 (r["package_id"], r["sqft_tier"], r["vendor_tier"]): r["amount_cents"] for r in rows
@@ -126,21 +161,109 @@ async def get_fixed_payout_amount(db, package_id: str | None, sqft: int | None, 
     return _payout_rate_cache.get((package_id, _sqft_tier(sqft), tier))
 
 
-async def trigger_payout_for_job(db, job_id: str) -> dict:
+async def _db_select_job(db, job_id: str) -> dict | None:
+    from ..shared.database import maybe_single_row
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+    try:
+        res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        return maybe_single_row(res) or None
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            return pg_select_job_by_id(job_id)
+        raise
+
+
+async def _db_select_vendor_member(db, assignee_id: str) -> dict:
+    from ..shared.database import maybe_single_row
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+    try:
+        res_m = await db.table("vendor_members").select(
+            "id, tier, hst_number, role, title, payout_mode, email"
+        ).eq("id", assignee_id).maybe_single().execute()
+        return maybe_single_row(res_m)
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            return pg_select_vendor_member(actor_id=assignee_id) or {}
+        raise
+
+
+async def _db_select_payout_by_job(db, job_id: str) -> dict | None:
+    from ..shared.database import maybe_single_row
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_select_payout_by_job_id
+    try:
+        existing = await db.table("payouts").select("*").eq("job_id", job_id).maybe_single().execute()
+        return maybe_single_row(existing) or None
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            return pg_select_payout_by_job_id(job_id)
+        raise
+
+
+async def _db_update_payout(db, payout_id: str, fields: dict) -> None:
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_payout
+    try:
+        await db.table("payouts").update(fields).eq("id", payout_id).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            if not pg_update_payout(payout_id, fields):
+                raise RuntimeError("payouts Fair-Use PG update failed") from e
+            return
+        raise
+
+
+async def _db_insert_payout(db, payout_record: dict) -> dict | None:
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_payout
+    try:
+        payout_res = await db.table("payouts").insert(payout_record).execute()
+        if payout_res.data:
+            return payout_res.data[0]
+        return None
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            return pg_insert_payout(payout_record)
+        raise
+
+
+async def _db_update_job_payout_amount(db, job_id: str, payout_amount: int) -> None:
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+    try:
+        await db.table("jobs").update({"payout_amount": payout_amount}).eq("id", job_id).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            if not pg_update_job(job_id, {"payout_amount": payout_amount}):
+                raise RuntimeError("jobs.payout_amount Fair-Use PG update failed") from e
+            return
+        raise
+
+
+def noshow_payout_cents(base_cents: int) -> int:
+    """Half the job's base payout, rounded to the nearest cent (half-cent up)."""
+    return (int(base_cents or 0) + 1) // 2
+
+
+async def _db_update_noshow_claim(db, claim_id: str, fields: dict) -> None:
+    await db.table("agent_noshow_trip_fees").update(fields).eq("id", claim_id).execute()
+
+
+async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = None) -> dict:
     """
     Trigger a payout for a completed job.
+
+    noshow_claim_id: set for an approved client no-show claim on this job. The vendor
+    is paid half the job's normal base payout (HST on top as usual) and the claim's
+    amount_cents is set to that half. Kam, 2026-10-30.
     Looks up the job, calculates the payout amount, calls Stripe Connect,
     and records the payout in the payouts table.
 
     Returns a dict with payout details.
+    Fair-Use: every PostgREST path falls back to Postgres on 402.
     """
     # Fetch the job
-    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not res or not res.data:
+    job = await _db_select_job(db, job_id)
+    if not job:
         logger.error(f"Payout trigger failed: job {job_id} not found")
         return {"error": "job_not_found", "job_id": job_id}
 
-    job = res.data
     vendor_id = job.get("vendor_id", "default_vendor")
     # Always pay off rack_price, never package_price -- package_price may reflect a
     # member discount or brokerage credit consumption once that billing logic ships,
@@ -158,10 +281,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     member = {}
     if assignee_id and assignee_id != "default_user":
         try:
-            res_m = await db.table("vendor_members").select("id, tier, hst_number, role, title, payout_mode, email").eq(
-                "id", assignee_id
-            ).maybe_single().execute()
-            member = res_m.data or {}
+            member = await _db_select_vendor_member(db, assignee_id)
             if member.get("tier"):
                 vendor_tier = member["tier"]
             _member_hst_number = member.get("hst_number")
@@ -172,37 +292,44 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     # ICs: fixed vendor_payout_rates card (never % of rack).
     from ..shared.vendor_identity import is_owner_member as _is_owner_member
     from .vendor_profile import owner_payout_cents
+    from .commercial_jobs import is_employee
+    from .client_service_payouts import set_payout_cents
     owner_job = _is_owner_member(member)
+    if (not owner_job) and member and is_employee(member):
+        # In-house staff are salaried outside Dispatch: no per-job payout row.
+        logger.info(f"Job {job_id}: assignee {assignee_id} is an employee; no per-job payout")
+        return {"skipped": "employee_salaried", "job_id": job_id, "amount": 0}
     if owner_job:
         payout_amount = owner_payout_cents(job)
         logger.info(f"Owner payout for job {job_id}: full package {payout_amount} cents, $0 deduction")
+    elif set_payout_cents(job, vendor_tier) is not None:
+        # Client service (PM / leasing / investor) or builder visit: set dollar
+        # amount, bundled deliverables included (no add-on pay on top), capped
+        # at 50% of what the client paid.
+        payout_amount = int(set_payout_cents(job, vendor_tier))
+        logger.info(f"Set payout for job {job_id} ({job.get('package_id')}): {payout_amount} cents")
     else:
         payout_amount = await get_fixed_payout_amount(db, job.get("package_id"), job.get("sqft"), vendor_tier)
         if payout_amount is None:
             payout_amount = calculate_payout_amount(rack_price, vendor_tier)
+        from .vendor_payout_rate_card import addon_payout_cents
+        payout_amount = int(payout_amount or 0) + addon_payout_cents(
+            job.get("add_ons"), job.get("sqft"), vendor_tier
+        )
+    if noshow_claim_id:
+        base_full = payout_amount
+        payout_amount = noshow_payout_cents(base_full)
+        logger.info(
+            f"No-show payout for job {job_id} (claim {noshow_claim_id}): "
+            f"half of base {base_full} = {payout_amount} cents"
+        )
+        await _db_update_noshow_claim(db, noshow_claim_id, {"amount_cents": payout_amount})
     if payout_amount <= 0:
-        # Don't bail if there are pending trip fees — a photographer who only earned a
-        # no-show trip fee on a zero-price job still needs to be paid out.
-        if assignee_id and assignee_id != "default_user":
-            _fee_check = await db.table("agent_noshow_trip_fees").select("id").eq(
-                "member_id", assignee_id
-            ).eq("status", "pending").limit(1).execute()
-            if not (_fee_check.data):
-                logger.warning(
-                    f"Payout amount is 0 for job {job_id} and no pending trip fees "
-                    f"(rack_price={rack_price}, vendor_tier={vendor_tier})"
-                )
-                return {"error": "zero_payout_amount", "job_id": job_id}
-            logger.info(
-                f"Job {job_id}: base payout is 0 but photographer {assignee_id} has pending "
-                f"trip fees — continuing to pay them out"
-            )
-        else:
-            logger.warning(
-                f"Payout amount is 0 for job {job_id} "
-                f"(rack_price={rack_price}, vendor_tier={vendor_tier})"
-            )
-            return {"error": "zero_payout_amount", "job_id": job_id}
+        logger.warning(
+            f"Payout amount is 0 for job {job_id} "
+            f"(rack_price={rack_price}, vendor_tier={vendor_tier})"
+        )
+        return {"error": "zero_payout_amount", "job_id": job_id}
 
     # HST on contractor fee (ETA principal model — paid on top of base fee)
     hst_paid_cents = 0
@@ -218,46 +345,34 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
     now = datetime.now(timezone.utc).isoformat()
 
     # Check if payout already exists for this job
-    existing = await db.table("payouts").select("*").eq("job_id", job_id).maybe_single().execute()
+    existing_data = await _db_select_payout_by_job(db, job_id)
     is_retry = False
     reuse_payout_id = None
     retry_created_at = ""  # set below when reusing an existing payout record
-    if existing.data:
-        existing_payout_id = existing.data["id"]
-        existing_status = existing.data.get("status", "pending")
-        existing_transfer_id = existing.data.get("stripe_transfer_id")
+    if existing_data:
+        existing_payout_id = existing_data["id"]
+        existing_status = existing_data.get("status", "pending")
+        existing_transfer_id = existing_data.get("stripe_transfer_id")
         logger.info(f"Payout already exists for job {job_id}: {existing_payout_id} (status={existing_status})")
 
         if existing_status == "pending" and existing_transfer_id:
             # Stripe transfer succeeded but the post-Stripe DB update was lost.
-            # Complete reconciliation now: promote to paid and finalize any reserved trip fees.
+            # Complete reconciliation now: promote to paid.
             logger.info(
                 f"Reconciling orphaned payout {existing_payout_id} for job {job_id}: "
                 f"transfer {existing_transfer_id} already succeeded"
             )
-            payout_created_at = existing.data.get("created_at", "")
             try:
-                await db.table("payouts").update({
+                await _db_update_payout(db, existing_payout_id, {
                     "status": "paid",
                     "paid_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("id", existing_payout_id).execute()
-                # Promote only trip fees that were reserved at or before this payout's created_at;
-                # fees added after payout creation belong to the next payout cycle.
-                if assignee_id and assignee_id != "default_user":
-                    q = db.table("agent_noshow_trip_fees").update({
-                        "status": "paid_out",
-                        "paid_via_payout_id": existing_payout_id,
-                        "paid_at": datetime.now(timezone.utc).isoformat(),
-                    }).eq("member_id", assignee_id).eq("status", "reserved")
-                    if payout_created_at:
-                        q = q.lte("created_at", payout_created_at)
-                    await q.execute()
+                })
             except Exception as e:
                 logger.error(f"Reconciliation update failed for payout {existing_payout_id}: {e}")
             return {
                 "payout_id": existing_payout_id,
                 "status": "paid",
-                "base_amount": existing.data.get("amount"),
+                "base_amount": existing_data.get("amount"),
                 "already_exists": True,
                 "reconciled": True,
             }
@@ -268,26 +383,20 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             existing_status == "pending" and not existing_transfer_id
         )
         if not is_retriable:
-            # Already paid — idempotent return, but reconcile any reserved trip fees
-            # that survived a prior post-Stripe DB failure (stuck in "reserved" forever
-            # because the normal L278-283 update threw and the payout is now closed).
-            if existing_status == "paid" and assignee_id and assignee_id != "default_user":
-                payout_created_at = existing.data.get("created_at", "")
+            # Already paid — idempotent return (close out the no-show claim if a prior
+            # post-Stripe update was lost).
+            if existing_status == "paid" and noshow_claim_id:
                 try:
-                    q = db.table("agent_noshow_trip_fees").update({
+                    await _db_update_noshow_claim(db, noshow_claim_id, {
                         "status": "paid_out",
                         "paid_via_payout_id": existing_payout_id,
-                        "paid_at": datetime.now(timezone.utc).isoformat(),
-                    }).eq("member_id", assignee_id).eq("status", "reserved")
-                    if payout_created_at:
-                        q = q.lte("created_at", payout_created_at)
-                    await q.execute()
+                    })
                 except Exception as e:
-                    logger.error(f"Trip-fee reconciliation failed for paid payout {existing_payout_id}: {e}")
+                    logger.error(f"No-show claim close-out failed for {noshow_claim_id}: {e}")
             return {
                 "payout_id": existing_payout_id,
                 "status": existing_status,
-                "base_amount": existing.data.get("amount"),
+                "base_amount": existing_data.get("amount"),
                 "already_exists": True,
             }
         # Failed or stale-pending payout — reuse the existing record's ID so the Stripe
@@ -297,52 +406,21 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         logger.info(f"Retrying payout for job {job_id} (status={existing_status}, reusing record {existing_payout_id})")
         is_retry = True
         reuse_payout_id = existing_payout_id
-        retry_created_at = existing.data.get("created_at", "")
+        retry_created_at = existing_data.get("created_at", "")
 
-    # Fetch pending trip fees BEFORE creating the payout record so we can compute the
-    # complete hst_paid_cents (base fee HST + trip fee HST) in the initial insert.
-    # This avoids an inconsistent state where the payout record has stale HST if the
-    # post-Stripe DB update fails.
-    pending_trip_fees_total = 0
-    pending_trip_fee_ids = []
-    if assignee_id and assignee_id != "default_user":
-        q_fees = db.table("agent_noshow_trip_fees").select("id, amount_cents").eq(
-            "member_id", assignee_id
-        ).eq("status", "pending")
-        if is_retry and retry_created_at:
-            # Cap to fees that existed when the original payout was created — Stripe
-            # idempotency requires the transfer amount to be identical on retry.
-            # Fees that arrived after the original attempt belong to the next payout cycle.
-            q_fees = q_fees.lte("created_at", retry_created_at)
-        res_fees = await q_fees.execute()
-        for fee in (res_fees.data or []):
-            pending_trip_fees_total += fee.get("amount_cents", 0)
-            pending_trip_fee_ids.append(fee["id"])
-
-    # HST on trip fees (if photographer is registered); add to base-fee HST
-    if contractor_hst_rate and pending_trip_fees_total:
-        trip_fee_hst = round(pending_trip_fees_total * contractor_hst_rate)
-        hst_paid_cents += trip_fee_hst
-
-    # net_payout = base fee + trip fees + total HST (if registered)
-    net_payout = payout_amount + pending_trip_fees_total + hst_paid_cents
-
-    if pending_trip_fees_total:
-        logger.info(
-            f"Payout for job {job_id}: adding ${pending_trip_fees_total/100:.2f} trip fee(s) "
-            f"to photographer {assignee_id} (ids: {pending_trip_fee_ids})"
-        )
+    # net_payout = base fee (half of it for an approved no-show) + HST (if registered)
+    net_payout = payout_amount + hst_paid_cents
 
     # Create or reset the payout record
     if is_retry:
         # Update existing failed record in-place — same payout_id preserves Stripe idempotency key
-        await db.table("payouts").update({
+        await _db_update_payout(db, reuse_payout_id, {
             "amount": payout_amount,
             "hst_paid_cents": hst_paid_cents,
             "contractor_hst_rate": contractor_hst_rate,
             "contractor_id": contractor_id or "",
             "status": "pending",
-        }).eq("id", reuse_payout_id).execute()
+        })
         payout_id = reuse_payout_id
     else:
         payout_record = {
@@ -355,21 +433,14 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
             "status": "pending",
             "created_at": now,
         }
-        payout_res = await db.table("payouts").insert(payout_record).execute()
-        if not payout_res.data:
+        inserted = await _db_insert_payout(db, payout_record)
+        if not inserted:
             logger.error(f"Failed to create payout record for job {job_id}")
             return {"error": "payout_record_creation_failed", "job_id": job_id}
-        payout_id = payout_res.data[0]["id"]
+        payout_id = inserted["id"]
 
     # Update job with payout_amount
-    await db.table("jobs").update({"payout_amount": payout_amount}).eq("id", job_id).execute()
-
-    # Reserve trip fees before touching Stripe to prevent double-payout on retry.
-    # If Stripe succeeds we promote to paid_out; if it fails we release the reservation.
-    if pending_trip_fee_ids:
-        await db.table("agent_noshow_trip_fees").update({
-            "status": "reserved",
-        }).in_("id", pending_trip_fee_ids).execute()
+    await _db_update_job_payout_amount(db, job_id, payout_amount)
 
     # Attempt Stripe transfer — separate try/except so post-Stripe DB failures
     # don't roll back a transfer that already cleared.
@@ -384,12 +455,8 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         )
     except Exception as e:
         logger.error(f"Stripe transfer failed for payout {payout_id} job {job_id}: {e}")
-        # Stripe never charged — safe to release trip fees and mark failed
-        if pending_trip_fee_ids:
-            await db.table("agent_noshow_trip_fees").update({
-                "status": "pending",
-            }).in_("id", pending_trip_fee_ids).execute()
-        await db.table("payouts").update({"status": "failed"}).eq("id", payout_id).execute()
+        # Stripe never charged — mark failed
+        await _db_update_payout(db, payout_id, {"status": "failed"})
         return {
             "payout_id": payout_id,
             "status": "failed",
@@ -400,21 +467,20 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
 
     # Stripe succeeded — post-Stripe DB updates; fail open (never rollback a completed transfer)
     try:
-        await db.table("payouts").update({
+        await _db_update_payout(db, payout_id, {
             "status": "paid",
             "stripe_transfer_id": stripe_transfer_id,
-            "trip_fees_total": pending_trip_fees_total,
             "hst_paid_cents": hst_paid_cents,
             "net_amount": net_payout,
             "paid_at": now,
-        }).eq("id", payout_id).execute()
-
-        if pending_trip_fee_ids:
-            await db.table("agent_noshow_trip_fees").update({
+        })
+        if noshow_claim_id:
+            await _db_update_noshow_claim(db, noshow_claim_id, {
                 "status": "paid_out",
                 "paid_via_payout_id": payout_id,
-                "paid_at": datetime.now(timezone.utc).isoformat(),
-            }).in_("id", pending_trip_fee_ids).execute()
+                "paid_at": now,
+            })
+
     except Exception as e:
         # Transfer cleared — log for manual reconciliation; do NOT revert payout status
         logger.error(
@@ -424,7 +490,7 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
 
     logger.info(
         f"Payout {payout_id} completed for job {job_id}: "
-        f"base=${payout_amount/100:.2f} trip_fees=${pending_trip_fees_total/100:.2f} "
+        f"base=${payout_amount/100:.2f} "
         f"total=${net_payout/100:.2f} to vendor {vendor_id} (transfer {stripe_transfer_id})"
     )
 
@@ -432,7 +498,6 @@ async def trigger_payout_for_job(db, job_id: str) -> dict:
         "payout_id": payout_id,
         "status": "paid",
         "base_amount": payout_amount,
-        "trip_fees_total": pending_trip_fees_total,
         "net_amount": net_payout,
         "stripe_transfer_id": stripe_transfer_id,
     }

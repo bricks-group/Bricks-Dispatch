@@ -101,7 +101,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     AsyncStorage.getItem(THEME_KEY).then(saved => {
       if (saved === 'light') setIsDark(false);
       else if (saved === 'dark') setIsDark(true);
-      else setIsDark(systemScheme !== 'light'); // default to dark unless system is explicitly light
+      else setIsDark(true); // GO is a dark app (app.json userInterfaceStyle: dark); no system-light override
     });
   }, [systemScheme]);
 

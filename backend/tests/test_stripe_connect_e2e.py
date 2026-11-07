@@ -5,8 +5,7 @@ Covers:
   - Live test-mode transfer to a Stripe Express account
   - Idempotency: duplicate booking_id returns same transfer, not a double-pay
   - Webhook duplicate handling
-  - Trip fee ADDITION to base payout (agent charged separately; photographer gets pass-through)
-  - Base-only payout when no pending trip fees
+  - A normal payout never reads no-show claims (no flat no-show fee since 2026-10-30)
 
 Run with:
     STRIPE_SECRET_KEY=sk_test_... pytest tests/test_stripe_connect_e2e.py -v
@@ -65,16 +64,24 @@ def _now_utc():
     return datetime.now(timezone.utc)
 
 
-def _job(assignee_id="member_1", status="in_progress", shoot_offset_min=0):
+def _job(assignee_id="member_1", status="in_progress", shoot_offset_min=0,
+         checked_in_min_ago=None, photo=True, call=True, distance_m=40.0):
     """Return a minimal job dict. shoot_offset_min: negative = future, positive = past.
 
     Uses the canonical DB format: scheduled_date (YYYY-MM-DD) + time_window_start (HH:MM).
     time_window_start is stored as a property-local HH:MM (province timezone).
+    Evidence defaults: checked in at the booked start (or now if the start is in the
+    future), photo and call logged right after check-in.
     """
     from zoneinfo import ZoneInfo
     _tz = ZoneInfo("America/Toronto")
-    shoot_utc = _now_utc() - timedelta(minutes=shoot_offset_min)
+    now = _now_utc()
+    shoot_utc = now - timedelta(minutes=shoot_offset_min)
     shoot_et = shoot_utc.astimezone(_tz)
+    if checked_in_min_ago is None:
+        checked_in_min_ago = max(shoot_offset_min, 0)
+    checked_in = now - timedelta(minutes=checked_in_min_ago)
+    after = (checked_in + timedelta(seconds=30)).isoformat()
     return {
         "id": str(uuid.uuid4()),
         "assignee_id": assignee_id,
@@ -83,6 +90,12 @@ def _job(assignee_id="member_1", status="in_progress", shoot_offset_min=0):
         "status": status,
         "scheduled_date": shoot_et.strftime("%Y-%m-%d"),
         "time_window_start": shoot_et.strftime("%H:%M"),
+        "checked_in_at": checked_in.isoformat(),
+        "check_in_distance_m": distance_m,
+        "noshow_photo_path": "job/photo.jpg" if photo else None,
+        "noshow_photo_uploaded_at": after if photo else None,
+        "noshow_call_attempted_at": after if call else None,
+        "noshow_call_method": "dialer" if call else None,
     }
 
 
@@ -120,25 +133,25 @@ class TestNoshowValidation:
     async def test_too_early_rejected(self):
         db = _make_db_mock()
         db.execute = AsyncMock(return_value=MagicMock(data=None))
-        # Shoot is 30 min in the FUTURE — too early to claim (window opens at T-15min)
+        # Checked in now, shoot 30 min in the FUTURE — the 20-min wait starts at the booked start
         job = _job(shoot_offset_min=-30)
         result = await _validate_noshow_claim(db, job, reporter_id="member_1")
         assert not result["ok"]
-        assert "Too early" in result["reason"]
+        assert "Wait" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_too_late_rejected(self):
         db = _make_db_mock()
         db.execute = AsyncMock(return_value=MagicMock(data=None))
-        # Shoot was 120 min AGO — outside 90-min window
+        # Shoot was 120 min AGO and check-in then — outside the 90-min window
         job = _job(shoot_offset_min=120)
         result = await _validate_noshow_claim(db, job, reporter_id="member_1")
         assert not result["ok"]
-        assert "expired" in result["reason"]
+        assert "help@brxs.ca" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_within_window_approved(self):
-        # Shoot started 20 min ago — within T+90min window, no prior claims
+        # Shoot started 30 min ago, checked in then — waited 20 min, no prior claims
         execute_calls = [
             MagicMock(data=None),   # no existing claim
             MagicMock(data=None),   # booking lookup (skipped for rate limit)
@@ -154,7 +167,7 @@ class TestNoshowValidation:
         db.table = db.select = db.eq = db.in_ = db.gte = db.maybe_single = MagicMock(return_value=db)
         db.execute = AsyncMock(side_effect=_seq)
 
-        job = _job(shoot_offset_min=20)
+        job = _job(shoot_offset_min=30)
         result = await _validate_noshow_claim(db, job, reporter_id="member_1")
         assert result["ok"]
         assert not result.get("hold_for_review")
@@ -184,98 +197,54 @@ class TestNoshowValidation:
         assert "Rate limit" in result["reason"]
 
 
-# ── Unit: trip fee addition logic ────────────────────────────────────────────
-# Trip fees are charged to the AGENT (Bricks bills the client) and added on top
-# of the photographer's base payout. Bricks is a $0 net pass-through.
-
-class TestPayoutTripFeeLogic:
-    def test_base_plus_one_trip_fee(self):
-        base = 14950    # Tier B, $299 package → 14950 cents
-        trip_fee = 6000
-        net = base + trip_fee
-        assert net == 20950
-
-    def test_base_no_trip_fees(self):
-        base = 29950
-        net = base + 0
-        assert net == base
-
-    def test_multiple_trip_fees_added(self):
-        base = 29950
-        trip_fees = 6000 + 6000   # two no-shows on separate jobs
-        net = base + trip_fees
-        assert net == 41950
-
-    def test_trip_fee_only_no_base(self):
-        # Edge: zero-base job (shouldn't happen in practice, but math should hold)
-        base = 0
-        trip_fee = 6000
-        net = base + trip_fee
-        assert net == 6000
-
-
-# ── Unit: payout service with trip fee (mocked DB + Stripe) ─────────────────
+# ── Unit: a normal payout never reads no-show claims ─────────────────────────
+# There is no flat no-show fee (removed 2026-10-30). A claim row in
+# agent_noshow_trip_fees (legacy table name) must not add to a normal transfer.
+# An approved client no-show pays half the base instead: see
+# tests/test_noshow_half_payout.py.
 
 @pytest.mark.asyncio
-async def test_payout_adds_trip_fee():
-    """
-    trigger_payout_for_job adds pending agent no-show trip fees to the transfer amount.
-    Agent was already charged separately; photographer receives the pass-through on top of base.
-    """
+async def test_payout_ignores_noshow_claims():
     job_id = str(uuid.uuid4())
     booking_id = str(uuid.uuid4())
     payout_id = str(uuid.uuid4())
 
+    tables = []
     db = MagicMock()
-    db.table = MagicMock(return_value=db)
-    db.select = db.update = db.insert = db.eq = db.in_ = db.execute = MagicMock(return_value=db)
+    db.table = MagicMock(side_effect=lambda name: (tables.append(name), db)[1])
+    db.select = db.update = db.insert = db.eq = db.in_ = db.lte = db.limit = db.maybe_single = MagicMock(return_value=db)
 
-    # Job row
     job_row = {
         "id": job_id, "vendor_id": "vendor_1", "assignee_id": "member_abc",
         "booking_id": booking_id, "package_price": 299, "vendor_tier": 2,
     }
     payout_row_initial = {"id": payout_id, "status": "pending", "amount": 14950}
-    trip_fee_rows = [{"id": "fee_1", "amount_cents": 6000}]
+    legacy_claim_rows = [{"id": "fee_1", "amount_cents": 6000}]
 
-    execute_sequence = [
-        MagicMock(data=job_row),              # fetch job
-        MagicMock(data=None),                 # no existing payout
-        MagicMock(data=[payout_row_initial]), # insert payout record
-        MagicMock(data=None),                 # update job payout_amount
-        MagicMock(data=trip_fee_rows),        # fetch pending trip fees (agent_noshow_trip_fees)
-    ]
-
-    call_count = 0
     async def _execute():
-        nonlocal call_count
-        result = execute_sequence[min(call_count, len(execute_sequence) - 1)]
-        call_count += 1
-        return result
+        if tables and tables[-1] == "agent_noshow_trip_fees":
+            return MagicMock(data=legacy_claim_rows)
+        if tables and tables[-1] == "jobs":
+            return MagicMock(data=job_row)
+        if tables and tables[-1] == "payouts":
+            return MagicMock(data=[payout_row_initial])
+        return MagicMock(data=None)
 
     db.execute = AsyncMock(side_effect=_execute)
 
-    base = calculate_payout_amount(299, 2)   # 14950
-    expected_net = base + 6000               # 20950 — trip fee ADDED, not deducted
-
     transfer_id = f"tr_{uuid.uuid4().hex[:16]}"
-
     with patch(
         "app.services.stripe_connect_service.handle_payout_to_vendor",
         new_callable=AsyncMock,
         return_value=transfer_id,
     ) as mock_transfer:
-        try:
-            await trigger_payout_for_job(db, job_id)
-        except Exception:
-            pass
+        result = await trigger_payout_for_job(db, job_id)
 
-        if mock_transfer.called:
-            _, kwargs = mock_transfer.call_args
-            amount_sent = kwargs.get("amount") or mock_transfer.call_args[0][1]
-            assert amount_sent == expected_net, (
-                f"Expected net transfer of {expected_net} cents (base + trip fee), got {amount_sent}"
-            )
+    assert "agent_noshow_trip_fees" not in tables
+    assert "trip_fees_total" not in (result or {})
+    assert mock_transfer.called
+    _, kwargs = mock_transfer.call_args
+    assert kwargs.get("amount") == result["net_amount"] == result["base_amount"]
 
 
 # ── Live Stripe Connect tests (require sk_test_...) ───────────────────────────

@@ -1,5 +1,9 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { api, VendorProfile } from '../lib/api';
+import BricksLoader from '../components/BricksLoader';
+import { InsuranceCard } from '../components/InsuranceCard';
+import { TradeCard } from '../components/TradeCard';
+import { tradeOf } from '../lib/trades';
 
 const SKILLS: { id: string; label: string }[] = [
   { id: 'photo', label: 'Photo' },
@@ -97,39 +101,22 @@ export function ProfilePage() {
       <div className="page-header">
         <div>
           <h1>Profile</h1>
-          <p>Identity, skills, RPAS, service area — the same fields the Office assigner reads</p>
+          <p>What the office sees when it assigns shoots</p>
         </div>
       </div>
 
       {error && <p className="error">{error}</p>}
-      {!data && !error && <p className="muted">Loading…</p>}
+      {!data && !error && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
 
       {data && (
         <>
-          <div className="page-grid">
-            <section className="card">
-              <h3>Title</h3>
-              <p className="metric" style={{ fontSize: 22 }}>{data.title}</p>
-              <p className="muted">{data.name}</p>
-            </section>
-            <section className="card">
-              <h3>Tier</h3>
-              <p className="metric">{data.tier_label}</p>
-              <p className="muted">{data.title === 'Owner' ? 'Highest · Owner' : `Tier ${data.tier_label}`}</p>
-            </section>
-            <section className="card">
-              <h3>Payouts</h3>
-              <p className="metric" style={{ fontSize: 18 }}>{data.payout_label}</p>
-              <p className="muted">
-                {data.payout_model === 'owner_full' ? '$0 deduction' : 'Fixed rate card — not % of rack'}
-              </p>
-            </section>
-            <section className="card">
-              <h3>Assignable</h3>
-              <p className="metric" style={{ fontSize: 18 }}>{data.assignable ? 'Yes' : 'No'}</p>
-              <p className="muted">{data.assignable_reason || 'Approved and active'}</p>
-            </section>
-          </div>
+          <p className="meta-line">
+            {[data.title, data.title === 'Owner' ? 'Owner tier' : `${data.tier_label} tier`, data.payout_model === 'owner_full' ? 'Full package payouts' : data.payout_label].filter(Boolean).join(' · ')}
+            {' · '}
+            {data.assignable
+              ? <span>Assignable</span>
+              : <span className="attn">Not assignable{data.assignable_reason ? `: ${data.assignable_reason}` : ''}</span>}
+          </p>
 
           <section className="card full">
             <h3>Identity</h3>
@@ -173,17 +160,19 @@ export function ProfilePage() {
             </div>
           </section>
 
+          <TradeCard profile={data} />
+
+          {tradeOf(data).id === 'photographer' && (
+            <>
           <section className="card full">
             <h3>Advanced RPAS</h3>
             <div className="stack">
               <p className="muted" style={{ padding: 0 }}>
-                Transport Canada Advanced certificate. Stored as a file URL on your member record.
+                Transport Canada Advanced certificate.
                 {data.rpas_certificate_level ? ` Current level: ${data.rpas_certificate_level}.` : ''}
               </p>
               {data.rpas_certificate_url ? (
-                <p style={{ margin: 0 }}>
-                  On file · <span className="muted">{data.rpas_certificate_url}</span>
-                </p>
+                <p style={{ margin: 0 }}>On file</p>
               ) : (
                 <p className="muted" style={{ padding: 0 }}>No certificate uploaded yet</p>
               )}
@@ -193,6 +182,10 @@ export function ProfilePage() {
               </div>
             </div>
           </section>
+
+          <InsuranceCard profile={data} onSaved={setData} />
+            </>
+          )}
 
           <section className="card full">
             <h3>Service area &amp; availability</h3>
@@ -215,7 +208,7 @@ export function ProfilePage() {
                 <span className="muted">Comma-separated. Office, never brokerage.</span>
               </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <button type="submit" onClick={save}>Save profile</button>
+                <button type="submit" className="btn-primary" onClick={save}>Save profile</button>
                 {saved && <span className="muted">Saved</span>}
               </div>
             </div>

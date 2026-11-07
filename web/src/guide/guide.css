@@ -1,0 +1,128 @@
+/* Vendor guide (Guide tab + job guide). Scoped gd- classes; tokens from styles.css.
+   Industrial minimal: hairlines, off-white on graphite, no gradients, no colour fills. */
+.gd-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.02em; color: var(--c-ink-mute); font-weight: 400; }
+.gd-eyebrow { margin: 0 0 8px; font-size: 12px; font-weight: 500; color: var(--c-ink-mute); }
+.gd-note { margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: var(--c-ink-mute); }
+
+/* Chips: 44px tap targets, outline only, active = off-white outline + ink */
+.gd-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 16px; }
+.gd-chips::-webkit-scrollbar { display: none; }
+.gd-chips > button {
+  flex: 0 0 auto; min-height: 44px; padding: 0 14px; border-radius: 2px; white-space: nowrap;
+  background: transparent; color: var(--c-ink-mute); border: 1px solid var(--c-hair-s); font-size: 14px; font-weight: 500;
+}
+.gd-chips > button.on { color: var(--c-ink); border-color: var(--c-ink); background: transparent; }
+.gd-chips > button:hover { background: var(--c-bg-deep); }
+
+/* ── Guide tab ── */
+.gd-page { padding: 20px 16px 48px; gap: 20px; }
+.gd-page .page-header p { font-size: 14px; line-height: 1.45; max-width: 520px; }
+.gd-page .page-header .gd-mono { margin-left: 4px; }
+.gd-layout { display: block; }
+.gd-toc { display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--c-hair); margin: 0 -16px 4px; padding: 0 8px; position: sticky; top: 0; background: var(--c-bg); z-index: 5; }
+.gd-toc::-webkit-scrollbar { display: none; }
+.gd-toc a {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px;
+  color: var(--c-ink-mute); text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap;
+}
+.gd-toc a:hover { color: var(--c-ink); }
+.gd-phases { display: flex; flex-direction: column; gap: 36px; padding-top: 12px; }
+.gd-phase { scroll-margin-top: 112px; }
+.gd-phase-title { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; font-size: 20px; font-weight: 500; letter-spacing: -0.4px; }
+.gd-phase-note { margin: -6px 0 14px; font-size: 14px; color: var(--c-ink-soft); max-width: 560px; }
+.gd-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+
+/* Step card */
+.gd-card { background: var(--c-bg-soft); border: 1px solid var(--c-hair); border-radius: 2px; padding: 16px; display: flex; flex-direction: column; gap: 14px; scroll-margin-top: 112px; min-width: 0; }
+.gd-card-hi { border-color: var(--c-ink-soft); }
+.gd-card-head { display: flex; align-items: baseline; gap: 10px; }
+.gd-num { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--c-ink-faint); flex: none; }
+.gd-title { margin: 0; font-size: 17px; font-weight: 500; letter-spacing: -0.2px; line-height: 1.3; color: var(--c-ink); }
+.gd-diagram { margin: 0; border: 1px solid var(--c-hair); border-radius: 2px; background: var(--c-bg-soft); }
+.gd-diagram svg { display: block; width: 100%; height: auto; }
+@media (max-width: 699px) {
+  /* phone: diagrams run edge to edge inside the card so the line labels stay legible */
+  .gd-diagram { margin: 0 -16px; border-left: 0; border-right: 0; border-radius: 0; }
+}
+.gd-body { margin: 0; font-size: 15px; line-height: 1.5; color: var(--c-ink-soft); }
+.gd-dodont { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.gd-dd-h { margin: 0 0 6px; font-size: 12px; font-weight: 500; color: var(--c-ink-mute); }
+.gd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.gd-list li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.45; color: var(--c-ink); }
+.gd-mark { width: 12px; height: 12px; flex: none; margin-top: 4px; }
+.gd-do .gd-mark { color: var(--c-ink); }
+.gd-dont .gd-mark { color: var(--c-ink-mute); }
+.gd-dont li { color: var(--c-ink-soft); }
+
+/* ── Job guide ── */
+.gd-job-in { padding: 16px; }
+.gd-job-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin: 0 0 14px; font-size: 14px; font-weight: 500; color: var(--c-ink); }
+.gd-seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--c-hair-s); border-radius: 2px; margin: 0 0 16px; }
+.gd-seg > button { min-height: 44px; border: 0; border-radius: 0; background: transparent; color: var(--c-ink-mute); font-size: 14px; font-weight: 500; }
+.gd-seg > button + button { border-left: 1px solid var(--c-hair-s); }
+.gd-seg > button.on { background: var(--c-ink); color: var(--c-bg); }
+.gd-job-phase { margin: 0 0 16px; }
+.gd-acc { border-top: 1px solid var(--c-hair); }
+.gd-job-phase .gd-acc:last-child { border-bottom: 1px solid var(--c-hair); }
+.gd-acc > summary {
+  list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  min-height: 52px; padding: 6px 0; cursor: pointer; font-size: 15px; font-weight: 500; color: var(--c-ink);
+}
+.gd-acc > summary::-webkit-details-marker { display: none; }
+.gd-chev { width: 14px; height: 14px; flex: none; color: var(--c-ink-mute); transition: transform 0.15s; }
+.gd-acc[open] .gd-chev { transform: rotate(180deg); }
+.gd-acc-body { display: flex; flex-direction: column; gap: 14px; padding: 2px 0 18px; }
+.gd-vv { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--c-hair); padding-top: 12px; }
+.gd-vv p { margin: 0; font-size: 14px; color: var(--c-ink); font-weight: 500; }
+.gd-vv .btn { align-self: stretch; }
+.gd-more { display: flex; align-items: center; min-height: 44px; color: var(--c-ink-soft); font-size: 14px; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--c-ink-faint); }
+.gd-clipgroup { margin: 18px 0 0; }
+.gd-clip-h { display: flex; justify-content: space-between; align-items: baseline; margin: 0; padding-bottom: 8px; border-bottom: 1px solid var(--c-hair-s); font-size: 14px; font-weight: 500; }
+.gd-clips { list-style: none; margin: 0; padding: 0; }
+.gd-clip { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; min-height: 48px; padding: 10px 0; border-bottom: 1px solid var(--c-hair); }
+.gd-clip-id { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--c-ink); }
+.gd-clip-main { display: flex; flex-direction: column; min-width: 0; }
+.gd-clip-name { font-size: 14px; font-weight: 500; color: var(--c-ink); }
+.gd-clip-meta { font-size: 13px; color: var(--c-ink-mute); line-height: 1.4; }
+.gd-clip-s { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--c-ink-soft); white-space: nowrap; }
+
+@media (min-width: 700px) {
+  .gd-dodont { grid-template-columns: 1fr 1fr; gap: 16px; }
+  .gd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gd-job-in { padding: 20px; max-width: 760px; }
+}
+@media (min-width: 861px) {
+  .gd-page { padding: 28px 28px 64px; }
+  .gd-chips { margin: 0; padding: 0; flex-wrap: wrap; }
+  .gd-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; align-items: start; }
+  .gd-toc { position: sticky; top: 72px; flex-direction: column; overflow: visible; border-bottom: 0; margin: 0; padding: 0; background: transparent; border-left: 1px solid var(--c-hair); }
+  .gd-toc a { justify-content: space-between; padding: 0 12px; min-height: 40px; }
+  .gd-phases { padding-top: 0; }
+  .gd-phase { scroll-margin-top: 72px; }
+  .gd-card { padding: 20px; }
+  .gd-dodont { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { .gd-chev { transition: none; } }
+
+/* Phone: package and section pickers as two selects side by side, no sideways scroll. */
+.gd-phonebar { display: none; }
+@media (max-width: 860px) {
+  .gd-filter, .gd-toc { display: none; }
+  .gd-phonebar {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px;
+    margin: 0 0 4px; padding: 0 0 16px; border-bottom: 1px solid var(--c-hair);
+  }
+  .gd-field { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; text-align: left; }
+  .gd-field > span { font-size: 12px; font-weight: 500; color: var(--c-ink-mute); }
+  .gd-field > select { width: 100%; min-width: 0; }
+}
+
+/* Home services trades (quote-request jobs) */
+.gd-trades { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--c-hair); }
+.gd-trade-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.gd-trade { border: 1px solid var(--c-hair); border-radius: 2px; padding: 16px; font-size: 13.5px; line-height: 1.5; }
+.gd-trade h3 { margin: 0 0 6px; font-size: 15px; font-weight: 500; }
+.gd-trade p { margin: 0 0 6px; color: var(--c-ink-soft, inherit); }
+.gd-trade strong { font-weight: 500; }
+.gd-trade ol { margin: 6px 0; padding-left: 18px; }
+.gd-trade-coi { color: var(--c-ink-mute) !important; font-size: 12.5px; }

@@ -53,6 +53,16 @@ def public_tour_embed_url(job_id: str, session_id: str) -> Optional[str]:
     return f"{os_url}/api/public/tours/{job_id}/{session_id}"
 
 
+def public_floorplan_url(job_id: str, session_id: str) -> Optional[str]:
+    """Public floor-plan PNG URL on the OS API (Blob-safe; same identity as tours)."""
+    os_url = (os.environ.get("BRICKS_OS_API_URL") or "").strip().rstrip("/")
+    if not os_url:
+        os_url = _DEFAULT_OS_API_URL
+    if not job_id or not session_id:
+        return None
+    return f"{os_url}/api/public/floorplans/{job_id}/{session_id}"
+
+
 def _data(res) -> list:
     data = getattr(res, "data", None)
     if data is None and isinstance(res, dict):
@@ -69,15 +79,27 @@ async def load_station_records(db, session_id: str, rooms: list[dict] | None = N
                 "session_id", session_id
             ).order("position", desc=False).execute()
             rooms = _data(rooms_res)
-        except Exception:
-            rooms = []
+        except Exception as e:
+            from ..shared.pg_fallback import _is_rest_quota_error
+            from ..shared.pg_capture import pg_select_rooms
+            if _is_rest_quota_error(e):
+                rooms = pg_select_rooms(session_id)
+            else:
+                rooms = []
     for r in rooms or []:
         room_name[r.get("id")] = r.get("name") or "Room"
 
-    frames_res = await db.table("capture_frames").select(
-        "id, room_id, storage_path, created_at"
-    ).eq("session_id", session_id).order("created_at", desc=False).execute()
-    frames = _data(frames_res)
+    try:
+        frames_res = await db.table("capture_frames").select(
+            "id, room_id, storage_path, created_at"
+        ).eq("session_id", session_id).order("created_at", desc=False).execute()
+        frames = _data(frames_res)
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        from ..shared.pg_capture import pg_select_frames
+        if not _is_rest_quota_error(e):
+            raise
+        frames = pg_select_frames(session_id)
 
     stations: dict[int, dict] = {}
     extras = []
@@ -185,28 +207,45 @@ async def _attach_floorplan_media(db, job: dict, storage_path: str, session_id: 
     booking_id = job.get("booking_id")
     if not booking_id:
         return
+    file_name = f"floorplan-{session_id}.png"
+    signed = None
     try:
         signed = await get_signed_download_url(storage_path, expiry=60 * 60 * 24 * 7)
+        file_url = signed or storage_path
         existing = await db.table("media_files").select("id").eq("storage_path", storage_path).limit(1).execute()
         if existing.data:
             row_id = existing.data[0].get("id")
             if row_id and signed:
                 await db.table("media_files").update({
                     "file_url": signed,
-                    "file_name": f"floorplan-{session_id}.png",
+                    "file_name": file_name,
                     "label": "Floor plan",
                 }).eq("id", row_id).execute()
             return
         await db.table("media_files").insert({
             "booking_id": booking_id,
             "file_type": "floor_plan",
-            "file_name": f"floorplan-{session_id}.png",
-            "file_url": signed or storage_path,
+            "file_name": file_name,
+            "file_url": file_url,
             "storage_path": storage_path,
             "label": "Floor plan",
             "ai_provider": "bricks",
         }).execute()
     except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error
+        if _is_rest_quota_error(e):
+            from ..shared.pg_capture import pg_upsert_media_file
+            file_url = signed or storage_path
+            if pg_upsert_media_file(
+                booking_id=booking_id,
+                storage_path=storage_path,
+                file_url=file_url,
+                file_name=file_name,
+                label="Floor plan",
+                file_type="floor_plan",
+                ai_provider="bricks",
+            ):
+                return
         logger.warning("media_files floor_plan insert skipped: %s", e)
 
 
@@ -454,8 +493,20 @@ async def rebuild_tour_from_equirects(db, job: dict, session: dict) -> str:
     return await _publish_tour_player(job, session, compiled, upload_scenes=False)
 
 
+# Match OS public floorplan host: tiny Blob stubs (e.g. 69-byte 1×1 PNG) are not deliverables.
+MIN_FLOORPLAN_PNG_BYTES = 200
+
+
 async def _upload_floorplan_png(job: dict, session: dict, png: bytes) -> str:
-    """Write PNG to the delivered path when present, else the standard visit path."""
+    """Write PNG to the delivered path when present, else the standard visit path.
+
+    Refuses stub/empty PNGs so listing + Companion never get a "delivered"
+    floor plan that 404s on /api/public/floorplans (Fair-Use Blob stubs).
+    """
+    if not png or len(png) < MIN_FLOORPLAN_PNG_BYTES:
+        raise CaptureWorkerError(
+            f"Floor-plan PNG too small ({0 if not png else len(png)} bytes) — refusing stub deliver"
+        )
     sid = session["id"]
     job_id = job["id"]
     candidates = []

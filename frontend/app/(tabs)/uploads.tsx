@@ -1,13 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Alert, Platform,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, RefreshControl, Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Upload, FileText } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
-import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { color, type as T, space, layout, type Tone } from '../../theme';
+import { Screen, PageHeader, Section, Group, Row, Button, Pill, Check, Chip, ChipRow, EmptyState, LoadingState } from '../../components/ui';
+import {
+  BRACKET_HINT,
+  cameraRawRejectionMessage,
+  isCameraRawName,
+  requiresBracketSet,
+  validateHdrBracketSelection,
+} from '../../lib/bracket-require';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
@@ -16,11 +20,13 @@ const STILLS_TYPES = [
   { id: 'drone', label: 'Drone' },
   { id: 'reel', label: 'Reel' },
   { id: 'twilight', label: 'Twilight' },
+  { id: 'staging', label: 'Staging' },
+  { id: 'floorplan', label: 'Floor plan' },
 ] as const;
 type StillsType = (typeof STILLS_TYPES)[number]['id'];
 
 async function putStill(jobId: string, asset: { uri: string; fileName?: string | null; mimeType?: string | null; fileSize?: number | null }, mediaType: StillsType, headers: Record<string, string>) {
-  const filename = asset.fileName || `upload_${Date.now()}.jpg`;
+  const filename = asset.fileName || `upload_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`;
   const mime = asset.mimeType || 'image/jpeg';
   const signRes = await fetch(`${API}/api/uploads/sign`, {
     method: 'POST',
@@ -65,7 +71,7 @@ async function putStill(jobId: string, asset: { uri: string; fileName?: string |
 
 type UploadRecord = {
   id: string; job_id: string; filename: string; file_size: number;
-  mime_type: string; created_at: string;
+  mime_type: string; created_at: string; media_type?: string;
 };
 
 type Job = {
@@ -86,17 +92,19 @@ function fmtBytes(bytes: number) {
   return `${mb.toFixed(1)} MB`;
 }
 
-function jobStatusPill(job: Job): { label: string; tone: 'ok' | 'warn' | 'brick' | 'neutral' } {
+function jobStatusPill(job: Job): { label: string; tone: Tone } {
   if (job.status === 'completed') return { label: 'Delivered', tone: 'ok' };
-  if (job.status === 'in_progress') return { label: 'In Progress', tone: 'brick' };
+  if (job.status === 'in_progress') return { label: 'In progress', tone: 'accent' };
   return { label: 'Scheduled', tone: 'neutral' };
 }
 
-const PILL_COLORS: Record<string, { bg: string; fg: string }> = {
-  ok:      { bg: TOKENS.ok + '33',      fg: '#B8CC9E' },
-  warn:    { bg: TOKENS.warn + '33',    fg: '#E6B477' },
-  brick:   { bg: TOKENS.brick + '33',   fg: TOKENS.brickSoft },
-  neutral: { bg: TOKENS.nightDeep,      fg: TOKENS.moonSoft },
+const TYPE_HINT: Record<StillsType, string> = {
+  hdr: `${BRACKET_HINT} At least 3 exposures per angle; single frames are rejected. JPEG or HEIC, no camera RAW.`,
+  twilight: `${BRACKET_HINT} Real dusk only; the dusk sky is kept, never swapped.`,
+  drone: 'JPEG or MP4 straight from the card.',
+  reel: 'MP4 straight from the card.',
+  staging: 'Delivered to the listing as the original. No enhance.',
+  floorplan: 'CubiCasa, PDF or PNG export. Delivered as the original.',
 };
 
 export default function UploadsScreen() {
@@ -150,10 +158,32 @@ export default function UploadsScreen() {
     });
     if (result.canceled || !result.assets?.length) return;
 
+    const assetNames = result.assets.map((a, i) => {
+      const fromName = a.fileName || '';
+      const fromUri = (a.uri || '').split(/[/\\]/).pop() || '';
+      return fromName || fromUri || `upload_${Date.now()}_${i}.jpg`;
+    });
+    if (assetNames.some((n) => isCameraRawName(n))) {
+      Alert.alert('Camera RAW not supported', cameraRawRejectionMessage);
+      return;
+    }
+
     setUploading(true);
     try {
+      if (requiresBracketSet(stillsType)) {
+        const existing = uploads
+          .filter((u) => u.job_id === targetJob.id)
+          .map((u) => u.filename);
+        const names = assetNames;
+        const issue = validateHdrBracketSelection(names, existing);
+        if (issue) {
+          Alert.alert('Brackets required', issue.message);
+          return;
+        }
+      }
       const headers = await actorHeaders();
       for (const asset of result.assets) {
+        // Preserve camera filename (±EV) for backend group_brackets.
         await putStill(targetJob.id, asset, stillsType, headers);
       }
       await fetchData();
@@ -177,166 +207,102 @@ export default function UploadsScreen() {
   const inProgress = groups.filter(g => g.job.status === 'in_progress');
   const recent = groups.filter(g => g.job.status !== 'in_progress');
 
+  const activeJobs = jobs.filter(j => ['in_progress', 'completed', 'processing'].includes(j.status));
+  const selectedJobId = targetJobId || activeJobs[0]?.id;
+
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
-      <ScrollView
-          showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={TOKENS.brick} />}
-          contentContainerStyle={s.scroll}
-        >
-          <Text style={s.title}>Upload</Text>
-          <Text style={s.subtitle}>Camera JPEG, drone, reel, twilight — signed upload, no 4MB cap.</Text>
+    <Screen
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={color.accent} />}
+    >
+      <PageHeader title="Upload" subtitle="Straight from your camera card." />
 
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
-            {STILLS_TYPES.map((t) => (
-              <TouchableOpacity
-                key={t.id}
-                onPress={() => setStillsType(t.id)}
-                style={{
-                  paddingHorizontal: 10, paddingVertical: 6, borderRadius: 2,
-                  borderWidth: 1,
-                  borderColor: stillsType === t.id ? TOKENS.brick : TOKENS.nightHairS,
-                  backgroundColor: stillsType === t.id ? TOKENS.brick + '22' : 'transparent',
-                }}
-              >
-                <Text style={{ color: stillsType === t.id ? TOKENS.brickSoft : TOKENS.moonFaint, fontSize: 12 }}>{t.label}</Text>
-              </TouchableOpacity>
+      <Section first label="What are you uploading?">
+        <ChipRow>
+          {STILLS_TYPES.map((t) => (
+            <Chip key={t.id} label={t.label} selected={stillsType === t.id} onPress={() => setStillsType(t.id)} />
+          ))}
+        </ChipRow>
+        <Text style={[T.bodySm, s.hint]}>{TYPE_HINT[stillsType]}</Text>
+      </Section>
+
+      {activeJobs.length > 1 ? (
+        <Section label="Job">
+          <Group>
+            {activeJobs.map((j) => (
+              <Row key={j.id} title={j.address} right={<Check checked={selectedJobId === j.id} />} onPress={() => setTargetJobId(j.id)} />
             ))}
-          </View>
+          </Group>
+        </Section>
+      ) : null}
 
-          {jobs.filter(j => ['in_progress', 'completed', 'processing'].includes(j.status)).length > 1 ? (
-            <View style={{ marginBottom: 14 }}>
-              {jobs.filter(j => ['in_progress', 'completed', 'processing'].includes(j.status)).map((j) => (
-                <TouchableOpacity key={j.id} onPress={() => setTargetJobId(j.id)} style={{ paddingVertical: 6 }}>
-                  <Text style={{ color: (targetJobId || '') === j.id || (!targetJobId && j === jobs.find(x => ['in_progress', 'completed', 'processing'].includes(x.status))) ? TOKENS.moon : TOKENS.moonFaint, fontSize: 13 }}>
-                    {(targetJobId === j.id) ? '● ' : '○ '}{j.address}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ) : null}
+      <View style={s.cta}>
+        <Button icon={Upload} title={uploading ? 'Uploading…' : 'Choose files'} onPress={pickAndUpload} loading={uploading} />
+      </View>
 
-          {/* Drop zone */}
-          <TouchableOpacity style={s.dropZone} onPress={pickAndUpload} disabled={uploading} activeOpacity={0.8}>
-            {uploading ? (
-              <ActivityIndicator size="small" color={TOKENS.brick} />
-            ) : (
-              <>
-                <Upload size={28} color={TOKENS.brick} strokeWidth={1.5} />
-                <Text style={s.dropTitle}>Tap to select files</Text>
-                <Text style={s.dropMeta}>JPEG / MP4 from the camera card · {stillsType.toUpperCase()}</Text>
-                <View style={s.chooseBtn}>
-                  <Text style={s.chooseBtnText}>CHOOSE FILES</Text>
-                </View>
-              </>
-            )}
-          </TouchableOpacity>
+      {loading && groups.length === 0 ? <LoadingState /> : null}
 
-          {/* In progress */}
-          {inProgress.length > 0 && (
-            <View style={s.section}>
-              <Text style={s.sectionLabel}>IN PROGRESS</Text>
-              {inProgress.map(({ job, uploads: ups }) => {
-                const totalBytes = ups.reduce((sum, u) => sum + u.file_size, 0);
-                const pct = job.deliverables_count > 0
-                  ? Math.round((job.uploaded_count / job.deliverables_count) * 100)
-                  : null;
-                return (
-                  <View key={job.id} style={s.progressCard}>
-                    <View style={s.progressTop}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={s.progressAddr}>{job.address.toLowerCase()}</Text>
-                        <Text style={s.progressMeta}>
-                          {ups.length} FILES · {fmtBytes(totalBytes)}
-                        </Text>
-                      </View>
-                      {pct !== null && <Text style={s.pct}>{pct}%</Text>}
+      {inProgress.length > 0 && (
+        <Section label="In progress">
+          <Group>
+            {inProgress.map(({ job, uploads: ups }) => {
+              const totalBytes = ups.reduce((sum, u) => sum + u.file_size, 0);
+              const pct = job.deliverables_count > 0
+                ? Math.round((job.uploaded_count / job.deliverables_count) * 100)
+                : null;
+              return (
+                <View key={job.id} style={s.progressRow}>
+                  <View style={s.progressTop}>
+                    <View style={s.flex}>
+                      <Text style={[T.bodyMedium, { color: color.text }]}>{job.address}</Text>
+                      <Text style={[T.dataSm, { color: color.textMuted }]}>{ups.length} files · {fmtBytes(totalBytes)}</Text>
                     </View>
-                    {pct !== null && (
-                      <View style={s.barTrack}>
-                        <View style={[s.barFill, { width: `${pct}%` as any }]} />
-                      </View>
-                    )}
+                    {pct !== null && <Text style={[T.dataMd, { color: color.accentText }]}>{pct}%</Text>}
                   </View>
-                );
-              })}
-            </View>
-          )}
-
-          {/* Recent uploads */}
-          {recent.length > 0 && (
-            <View style={s.section}>
-              <Text style={s.sectionLabel}>RECENT UPLOADS</Text>
-              <View style={s.card}>
-                {recent.map(({ job, uploads: ups }, i) => {
-                  const totalBytes = ups.reduce((sum, u) => sum + u.file_size, 0);
-                  const pill = jobStatusPill(job);
-                  const colors = PILL_COLORS[pill.tone];
-                  return (
-                    <View key={job.id} style={[s.recentRow, i < recent.length - 1 && s.rowBorder]}>
-                      <FileText size={18} color={TOKENS.moonFaint} strokeWidth={1.5} />
-                      <View style={s.recentInfo}>
-                        <Text style={s.recentAddr}>{job.address.toLowerCase()}</Text>
-                        <Text style={s.recentMeta}>
-                          {ups.length} files · {fmtBytes(totalBytes)}
-                        </Text>
-                      </View>
-                      <View style={[s.pill, { backgroundColor: colors.bg }]}>
-                        <Text style={[s.pillText, { color: colors.fg }]}>{pill.label.toUpperCase()}</Text>
-                      </View>
+                  {pct !== null && (
+                    <View style={s.barTrack}>
+                      <View style={[s.barFill, { width: `${pct}%` as any }]} />
                     </View>
-                  );
-                })}
-              </View>
-            </View>
-          )}
+                  )}
+                </View>
+              );
+            })}
+          </Group>
+        </Section>
+      )}
 
-          {!loading && groups.length === 0 && (
-            <View style={s.empty}>
-              <Text style={s.emptyText}>No uploads yet</Text>
-            </View>
-          )}
+      {recent.length > 0 && (
+        <Section label="Recent">
+          <Group>
+            {recent.map(({ job, uploads: ups }) => {
+              const totalBytes = ups.reduce((sum, u) => sum + u.file_size, 0);
+              const pill = jobStatusPill(job);
+              return (
+                <Row
+                  key={job.id}
+                  icon={FileText}
+                  title={job.address}
+                  subtitle={`${ups.length} file${ups.length === 1 ? '' : 's'} · ${fmtBytes(totalBytes)}`}
+                  right={<Pill label={pill.label} tone={pill.tone} />}
+                />
+              );
+            })}
+          </Group>
+        </Section>
+      )}
 
-          <View style={{ height: 120 }} />
-        </ScrollView>
-    </SafeAreaView>
+      {!loading && groups.length === 0 && (
+        <EmptyState icon={Upload} title="No uploads yet" body="Files you send for a job show up here with their delivery status." />
+      )}
+    </Screen>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: TOKENS.night },
-  scroll: { paddingHorizontal: 24, paddingTop: 16 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-
-  title: { fontSize: 26, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, letterSpacing: -0.4, marginBottom: 4 },
-  subtitle: { fontSize: 12, color: TOKENS.moonFaint, marginBottom: 20 },
-
-  dropZone: { borderWidth: 1.5, borderColor: TOKENS.nightHairS, borderStyle: 'dashed', borderRadius: 2, paddingVertical: 36, paddingHorizontal: 20, alignItems: 'center', marginBottom: 28 },
-  dropTitle: { fontSize: 15, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, marginTop: 12, marginBottom: 6 },
-  dropMeta: { fontSize: 11, color: TOKENS.moonFaint, marginBottom: 14 },
-  chooseBtn: { backgroundColor: TOKENS.brick, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 2 },
-  chooseBtnText: { color: '#FFF', fontFamily: TYPOGRAPHY.monoMedium, fontSize: 11, letterSpacing: 1.2 },
-
-  section: { marginBottom: 24 },
-  sectionLabel: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.8, marginBottom: 10 },
-
-  progressCard: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHairS, borderRadius: 2, padding: 16, marginBottom: 10 },
-  progressTop: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
-  progressAddr: { fontSize: 14, color: TOKENS.moon, marginBottom: 4 },
-  progressMeta: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moonFaint },
-  pct: { fontFamily: TYPOGRAPHY.mono, fontSize: 16, color: TOKENS.brick },
-  barTrack: { height: 3, backgroundColor: TOKENS.nightHair, borderRadius: 2, overflow: 'hidden' },
-  barFill: { height: '100%', backgroundColor: TOKENS.brick, borderRadius: 2 },
-
-  card: { backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
-  recentRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  recentInfo: { flex: 1 },
-  recentAddr: { fontSize: 13, color: TOKENS.moon, marginBottom: 3 },
-  recentMeta: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moonFaint },
-  pill: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 2 },
-  pillText: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, letterSpacing: 1.2 },
-
-  empty: { paddingTop: 40, alignItems: 'center' },
-  emptyText: { fontSize: 13, color: TOKENS.moonFaint },
+  flex: { flex: 1 },
+  hint: { color: color.textMuted, marginTop: space[12] },
+  cta: { marginTop: layout.section },
+  progressRow: { padding: space[16], gap: space[12] },
+  progressTop: { flexDirection: 'row', alignItems: 'flex-start', gap: space[12] },
+  barTrack: { height: 2, backgroundColor: color.hair },
+  barFill: { height: 2, backgroundColor: color.accent },
 });

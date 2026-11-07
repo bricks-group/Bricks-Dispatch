@@ -38,8 +38,10 @@ def test_agent_emails_deep_link_listing_file():
     assert "def _listing_desk_url" in src
     confirm = src.split("async def notify_booking_confirmed")[1].split("async def notify_photographer_en_route")[0]
     deliver = src.split("async def notify_capture_delivered")[1]
-    assert "_listing_desk_url(job_id)" in confirm
-    assert "_listing_desk_url(job_id)" in deliver
+    # Agents get the listing file; client accounts get their home (gap audit X3).
+    assert "_desk_url_for(job, job_id)" in confirm
+    assert "_desk_url_for(" in deliver
+    assert "_listing_desk_url(job_id)" in src.split("def _desk_url_for")[1].split("\n\n")[0]
     assert "Copy client link" in deliver
     # Generic /properties alone is not enough for first-booking desk open
     assert '{_OS_DESK_URL}/properties"' not in confirm

@@ -1,19 +1,16 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LogOut, Clock } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
-import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { color, type as T, space, radius, layout, hairline } from '../../theme';
+import { Button, Pill } from '../../components/ui';
 
 export default function UnderReviewScreen() {
   const onSignOut = () => {
     Alert.alert('Sign out', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: () => supabase.auth.signOut(),
-      },
+      { text: 'Sign out', style: 'destructive', onPress: () => supabase.auth.signOut() },
     ]);
   };
 
@@ -21,85 +18,29 @@ export default function UnderReviewScreen() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.inner}>
         <View style={styles.iconWrap}>
-          <Clock size={28} color={TOKENS.brick} strokeWidth={2} />
+          <Clock size={24} color={color.accent} strokeWidth={layout.iconStroke} />
         </View>
-        <Text style={styles.title}>Under review</Text>
-        <Text style={styles.body}>
-          Your application is under review. You will get access to Today, Jobs, and Capture after Kam approves you in Hiring.
+        <Pill label="Application pending" tone="warn" dot />
+        <Text style={[T.display, styles.title]} accessibilityRole="header">We’re reviewing your application</Text>
+        <Text style={[T.body, styles.body]}>
+          Today, Jobs and Capture open up as soon as you’re approved. We’ll email you.
         </Text>
-        <Text style={styles.meta}>BRICKS GO · APPLICATION PENDING</Text>
-
-        <TouchableOpacity
-          style={styles.signOut}
-          onPress={onSignOut}
-          activeOpacity={0.85}
-          data-testid="under-review-sign-out"
-        >
-          <LogOut size={16} color={TOKENS.bad || '#C44'} strokeWidth={2} />
-          <Text style={styles.signOutLabel}>Sign out</Text>
-        </TouchableOpacity>
+      </View>
+      <View style={styles.footer}>
+        <Button variant="secondary" icon={LogOut} title="Sign out" onPress={onSignOut} testID="under-review-sign-out" />
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: TOKENS.night,
-  },
-  inner: {
-    flex: 1,
-    paddingHorizontal: 36,
-    justifyContent: 'center',
-  },
+  container: { flex: 1, backgroundColor: color.bg },
+  inner: { flex: 1, paddingHorizontal: layout.gutter, justifyContent: 'center', gap: space[16] },
   iconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 2,
-    borderWidth: 1,
-    borderColor: TOKENS.nightHairS || '#F4F1EB26',
-    backgroundColor: TOKENS.nightSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 24,
+    width: 56, height: 56, borderRadius: radius.sm, borderWidth: hairline, borderColor: color.hairStrong,
+    backgroundColor: color.surface, alignItems: 'center', justifyContent: 'center', marginBottom: space[8],
   },
-  title: {
-    fontSize: 34,
-    color: TOKENS.moon,
-    letterSpacing: -1.1,
-    textTransform: 'lowercase',
-    marginBottom: 14,
-  },
-  body: {
-    fontSize: 14,
-    lineHeight: 22,
-    color: TOKENS.moonSoft,
-    fontFamily: TYPOGRAPHY?.body || 'System',
-    marginBottom: 18,
-  },
-  meta: {
-    fontSize: 10,
-    fontFamily: 'IoskeleyMono-Medium',
-    color: TOKENS.moonMute,
-    letterSpacing: 1.6,
-    marginBottom: 40,
-  },
-  signOut: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    alignSelf: 'flex-start',
-    backgroundColor: TOKENS.nightSoft,
-    borderWidth: 1,
-    borderColor: TOKENS.nightHair,
-    borderRadius: 2,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  signOutLabel: {
-    fontFamily: TYPOGRAPHY?.heading || 'System',
-    fontSize: 14,
-    color: TOKENS.bad || '#C44',
-  },
+  title: { color: color.text },
+  body: { color: color.textBody },
+  footer: { paddingHorizontal: layout.gutter, paddingBottom: space[16] },
 });

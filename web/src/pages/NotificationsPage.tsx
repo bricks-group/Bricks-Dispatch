@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import BricksLoader from '../components/BricksLoader';
 
 type Notification = {
   id: string;
@@ -9,6 +11,7 @@ type Notification = {
   type?: string;
   read: boolean;
   created_at: string;
+  data?: { route?: string; type?: string; url?: string };
 };
 
 function timeAgo(iso: string) {
@@ -21,6 +24,7 @@ function timeAgo(iso: string) {
 }
 
 export function NotificationsPage() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -81,7 +85,7 @@ export function NotificationsPage() {
       </div>
 
       {error && <p className="error">{error}</p>}
-      {loading && <p className="muted">Loading…</p>}
+      {loading && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
 
       {!loading && items.length === 0 ? (
         <section className="card full">
@@ -97,7 +101,12 @@ export function NotificationsPage() {
                 <button
                   type="button"
                   className="row-click"
-                  onClick={() => { if (!n.read) markRead(n.id); }}
+                  onClick={() => {
+                    if (!n.read) markRead(n.id);
+                    if (n.type === 'onboarding_approved' || n.data?.type === 'onboarding_approved') {
+                      navigate('/availability');
+                    }
+                  }}
                   style={{ all: 'unset', cursor: n.read ? 'default' : 'pointer', display: 'block', width: '100%' }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
@@ -107,7 +116,7 @@ export function NotificationsPage() {
                   <p className="muted" style={{ margin: '6px 0 0', padding: 0 }}>
                     {n.message || n.body || ''}
                   </p>
-                  {!n.read ? <span className="badge badge-yellow" style={{ marginTop: 8 }}>Unread</span> : null}
+                  {!n.read ? <span className="badge badge-attn" style={{ marginTop: 6 }}>Unread</span> : null}
                 </button>
               </li>
             ))}

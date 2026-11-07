@@ -755,6 +755,167 @@ async def test_assign_skips_calendar_busy_vendor(monkeypatch):
                         assert upd.called
 
 
+@pytest.mark.asyncio
+async def test_assign_disconnected_vendor_uses_overlap_rules(monkeypatch):
+    """No calendar → FreeBusy unknown; Bricks job-overlap still excludes a conflicted vendor."""
+    job_doc = {
+        "id": "job_disc",
+        "address": "10 King St Mississauga",
+        "city": "Mississauga",
+        "state": "ON",
+        "job_type": "photo",
+        "vendor_id": "default_vendor",
+        "time_window_start": "10:00",
+        "time_window_end": "11:00",
+        "scheduled_date": "2026-09-10",
+        "status": "pending_assignment",
+        "lat": 43.59,
+        "lng": -79.64,
+    }
+    members = [
+        {
+            "id": "overlap_v",
+            "name": "Overlap",
+            "email": "overlap@test.com",
+            "is_active": True,
+            "status": "available",
+            "vendor_id": "default_vendor",
+            "specialty": "photo",
+            "onboarding_status": "approved",
+            "skills": ["photo"],
+            "service_areas": ["Mississauga", "GTA"],
+            "tier": 2,
+            "home_lat": 43.59,
+            "home_lng": -79.64,
+        },
+        {
+            "id": "open_v",
+            "name": "Open",
+            "email": "open@test.com",
+            "is_active": True,
+            "status": "available",
+            "vendor_id": "default_vendor",
+            "specialty": "photo",
+            "onboarding_status": "approved",
+            "skills": ["photo"],
+            "service_areas": ["Mississauga", "GTA"],
+            "tier": 1,
+            "home_lat": 43.59,
+            "home_lng": -79.64,
+        },
+    ]
+    occupied = {
+        "overlap_v": [
+            {
+                "id": "other",
+                "scheduled_date": "2026-09-10",
+                "time_window_start": "10:00",
+                "time_window_end": "11:00",
+                "status": "assigned",
+                "address": "10 King St Mississauga",
+                "city": "Mississauga",
+                "state": "ON",
+            }
+        ],
+        "open_v": [],
+    }
+    mock_db = _supabase_style_db(job_doc, members)
+    monkeypatch.setenv("USE_AI_DISPATCH", "false")
+
+    async def fake_busy(_member, _start, _end, db=None):
+        return None  # disconnected / unknown
+
+    with patch("app.services.vendor_selection.get_db", AsyncMock(return_value=mock_db)):
+        with patch("app.services.vendor_selection.bricks_smart_assign", AsyncMock(return_value=None)):
+            with patch(
+                "app.services.vendor_selection.load_occupied_jobs_by_vendor",
+                AsyncMock(return_value=occupied),
+            ):
+                with patch("app.services.vendor_calendars.vendor_is_busy", AsyncMock(side_effect=fake_busy)):
+                    with patch("app.services.vendor_selection._update_job_assignee", AsyncMock()) as upd:
+                        chosen = await assign_vendor_for_job("job_disc")
+                        assert chosen == "open_v"
+                        assert upd.called
+
+
+@pytest.mark.asyncio
+async def test_assign_calendar_api_error_fail_soft(monkeypatch):
+    """FreeBusy unknown (API error) must not exclude the vendor — prefer not to strand jobs."""
+    job_doc = {
+        "id": "job_soft",
+        "address": "10 King St Mississauga",
+        "city": "Mississauga",
+        "job_type": "photo",
+        "vendor_id": "default_vendor",
+        "time_window_start": "10:00",
+        "time_window_end": "11:00",
+        "scheduled_date": "2026-09-10",
+        "status": "pending_assignment",
+        "lat": 43.59,
+        "lng": -79.64,
+    }
+    members = [
+        {
+            "id": "only_v",
+            "name": "Only",
+            "email": "only@test.com",
+            "is_active": True,
+            "status": "available",
+            "vendor_id": "default_vendor",
+            "specialty": "photo",
+            "onboarding_status": "approved",
+            "skills": ["photo"],
+            "service_areas": ["Mississauga", "GTA"],
+            "tier": 1,
+            "home_lat": 43.59,
+            "home_lng": -79.64,
+        },
+    ]
+    mock_db = _supabase_style_db(job_doc, members)
+    monkeypatch.setenv("USE_AI_DISPATCH", "false")
+
+    with patch("app.services.vendor_selection.get_db", AsyncMock(return_value=mock_db)):
+        with patch("app.services.vendor_selection.bricks_smart_assign", AsyncMock(return_value=None)):
+            with patch("app.services.vendor_selection.load_occupied_jobs_by_vendor", AsyncMock(return_value={})):
+                with patch("app.services.vendor_calendars.vendor_is_busy", AsyncMock(return_value=None)):
+                    with patch("app.services.vendor_selection._update_job_assignee", AsyncMock()) as upd:
+                        chosen = await assign_vendor_for_job("job_soft")
+                        assert chosen == "only_v"
+                        assert upd.called
+
+
+@pytest.mark.asyncio
+async def test_google_freebusy_http_error_is_unknown():
+    """Calendar API errors are unknown (None), not busy — fail-soft."""
+    from datetime import datetime, timezone
+    from app.services.vendor_calendars import vendor_is_busy, _google_freebusy
+
+    start = datetime(2026, 9, 10, 14, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 10, 15, 0, tzinfo=timezone.utc)
+
+    class FakeResp:
+        status_code = 500
+        def raise_for_status(self):
+            raise RuntimeError("http 500")
+        def json(self):
+            return {"error": "boom"}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, headers=None, json=None):
+            return FakeResp()
+
+    with patch("app.services.vendor_calendars.httpx.AsyncClient", FakeClient):
+        assert await _google_freebusy("tok", start, end) is None
+        member = {"id": "m1", "email": "m@test.com", "google_calendar_token": "tok"}
+        assert await vendor_is_busy(member, start, end) is None
+
+
 def test_sqft_parsed_from_property_details():
     from app.services.shoot_duration import estimate_shoot_duration_minutes
     job = {

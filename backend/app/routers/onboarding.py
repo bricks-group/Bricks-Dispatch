@@ -13,8 +13,9 @@ import re
 
 from ..services.storage import upload_file
 from ..services.notifications import create_notification
-from ..shared.database import get_db
-from ..shared.schemas import AvailabilitySettings, VendorApplicationCreate, VendorMember, VendorDocument
+from ..shared.database import get_db, maybe_single_row
+from ..shared.applicant_source import ApplicantSourceError, found_us_line, normalize_applicant_source
+from ..shared.schemas import AvailabilitySettings, SampleUploadRequest, VendorApplicationCreate, VendorMember, VendorDocument
 from ..shared.portfolio import (
     PORTFOLIO_MEDIA_TYPES,
     assemble_portfolio_samples,
@@ -29,11 +30,15 @@ ADMIN_NOTIFICATION_EMAIL = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "")
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 # Version tracks the text revision so we can re-prompt if terms materially change.
-_IC_AGREEMENT_VERSION = "1.5"
-_IC_AGREEMENT_EFFECTIVE_DATE = "2026-09-06"
+# v1.9 (2026-10-23): same terms as v1.8; payout disputes and questions both go to
+# booking@brxs.ca. v1.8 was edited in place on 2026-10-23 (disputes -> raphael@)
+# without a bump, so this new version keeps existing v1.8 signers tied to the
+# v1.8 text. Prior texts: docs/legal/ic-agreement-v1.8.txt.
+_IC_AGREEMENT_VERSION = "1.9"
+_IC_AGREEMENT_EFFECTIVE_DATE = "2026-10-23"
 _IC_AGREEMENT_TEXT = """
-BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.5
-Effective: September 6, 2026
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT  v1.9
+Effective: October 23, 2026
 Contracting party: Bricks Group ("Bricks")
 Governing law: Ontario, Canada
 
@@ -56,33 +61,29 @@ You provide and maintain your own camera, lenses, drone, lighting, vehicle, edit
 5. TAXES
 Fees are exclusive of HST/GST. You are solely responsible for income tax, HST/GST (if you are required to register), and any CPP that applies to you as self-employed. If your taxable supplies exceed the CRA small-supplier threshold, you must register, give Bricks your HST number, and Bricks will pay HST on your fees. Bricks will issue a T4A (Box 048) when required. Bricks does not remit EI or employer CPP for you and does not provide employment benefits.
 
-6. INSURANCE AND WSIB (REQUIRED BEFORE FIRST JOB)
-Before your first dispatched booking you must provide, and you must keep current:
+6. INSURANCE AND WSIB
+Insurance and WSIB proof are not required to apply, and are not required before a first dispatched job. Bricks does not require a certificate of insurance, additional-insured status, a renewal certificate, commercial general liability, aviation liability, automobile liability, or a WSIB clearance or exemption. Missing or lapsed coverage is not suspension, refusal, or cancellation of dispatch.
 
-(a) Commercial general liability insurance of at least $2,000,000 CAD per occurrence, naming Bricks Group as additional insured, with at least 30 days' notice of cancellation or material change to Bricks.
-
-(b) If you accept drone jobs: unmanned-aircraft / aviation liability of at least $1,000,000 CAD.
-
-(c) Automobile liability on any vehicle used to travel to jobs, at or above Ontario statutory minimums, commercially rated if required by your insurer for this work.
-
-(d) A current WSIB Certificate of Clearance, or a written declaration of the exemption category you rely on under the Workplace Safety and Insurance Act, 1997.
-
-You must send renewal certificates before expiry. Lapsed coverage is automatic suspension from dispatch until cured. Bricks may refuse or cancel a job if proof is missing. Your indemnity in section 14 is in addition to insurance, not limited by it.
+You remain an independent contractor, responsible for your own equipment (section 4) and your own taxes (section 5). Drone and RPAS duties in section 7 are unchanged.
 
 7. DRONE
 If you operate a drone you represent that you hold a valid Transport Canada RPAS certificate at the level required for that operation (Advanced for controlled airspace, including proximity to CYYZ and CYTZ). You comply with the Aeronautics Act, Canadian Aviation Regulations, and any NAV CANADA or site restriction. You are solely responsible for the operation, including fines, incidents, and third-party claims. If airspace, weather, or regulation prevents aerial capture, you still complete the ground package and note the miss in the job.
 
 8. PAYOUTS
-You are paid a fixed amount per accepted booking, set by Bricks' vendor rate card for the media package (or à-la-carte mix), property size band, and your vendor tier at the time you accept the job. That amount does not change based on what the client was charged or any client discount. Client media on www.brxs.ca is sold à la carte as Photos only, Essentials, Story, Showcase, and Full suite. Virtual Visit (free-roam Gaussian splat) is always a paid add-on — never packaged into a suite and never treated as included deliverable pay. Path-confined Virtual Tour may be included in Showcase and Full suite or sold as an add-on. Add-ons (drone, cinematic reel, Virtual Tour, twilight, Virtual Visit, and similar) are paid at the published add-on payout for your tier. Bricks may change the rate card prospectively on 14 days' notice; changes do not apply to jobs already accepted.
+You are paid a fixed amount per accepted booking, set by Bricks' vendor rate card for the media package, client footprint band, and your vendor tier at the time you accept the job. That amount does not change based on what the client was charged or any client discount. Client media on www.brxs.ca is sold à la carte as Photos only, Essentials, Story, Showcase, and Full suite. Virtual Visit (free-roam Gaussian splat) is always a paid add-on — never packaged into a suite and never treated as included deliverable pay. Path-confined Virtual Tour may be included in Showcase and Full suite or sold as an add-on. Add-ons (drone, cinematic reel, Virtual Tour, twilight, Virtual Visit, and similar) are paid at the published add-on rate card for your tier — fixed dollars, not % of rack. Bricks may change the rate card prospectively on 14 days' notice; changes do not apply to jobs already accepted.
 
-Current media rate card (CAD, exclusive of HST), shown as Tier C / Tier B / Tier A. These are the same fixed dollar cells already published on the vendor rate card (no new amounts):
+Current media rate card (CAD, exclusive of HST), shown as Tier C / Tier B / Tier A. Footprint bands: Small ≤1,200 sqft; Mid 1,201–2,500; Large 2,501–4,000; XL 4,001+.
 
-Photos only / Essentials — under 2,000 sqft $104.65 / $134.55 / $164.45; 2,000–3,499 $132.65 / $170.55 / $208.45; 3,500–4,999 $164.15 / $211.05 / $257.95; 5,000+ $174.65 / $224.55 / $274.45
-Story / Showcase — under 2,000 $209.65 / $269.55 / $329.45; 2,000–3,499 $262.15 / $337.05 / $411.95; 3,500–4,999 $314.64 / $404.55 / $494.45; 5,000+ $367.15 / $472.05 / $576.95
-Full suite — under 2,000 $402.15 / $517.05 / $631.95; 2,000–3,499 $419.65 / $539.55 / $659.45; 3,500–4,999 $524.65 / $674.55 / $824.45; 5,000+ $664.65 / $854.55 / $1,044.45
-Legacy Estate (flat, only if booked on that package) — $874.65 / $1,124.55 / $1,374.45
+Photos only — Small (≤1,200 sqft) $55.15 / $62.60 / $71.50; Mid (1,201–2,500 sqft) $73.65 / $83.60 / $95.50; Large (2,501–4,000 sqft) $92.15 / $104.60 / $119.50; XL (4,001+ sqft) $110.65 / $125.60 / $143.50
+Essentials — Small (≤1,200 sqft) $91.75 / $104.15 / $119.05; Mid (1,201–2,500 sqft) $117.65 / $133.55 / $152.65; Large (2,501–4,000 sqft) $143.55 / $162.95 / $186.25; XL (4,001+ sqft) $169.45 / $192.35 / $219.85
+Story — Small (≤1,200 sqft) $146.90 / $166.75 / $190.55; Mid (1,201–2,500 sqft) $183.90 / $208.75 / $238.55; Large (2,501–4,000 sqft) $220.90 / $250.75 / $286.55; XL (4,001+ sqft) $261.60 / $296.95 / $339.35
+Showcase — Small (≤1,200 sqft) $202.00 / $229.30 / $262.10; Mid (1,201–2,500 sqft) $257.50 / $292.30 / $334.10; Large (2,501–4,000 sqft) $313.00 / $355.30 / $406.10; XL (4,001+ sqft) $372.20 / $422.50 / $482.90
+Full suite — Small (≤1,200 sqft) $257.50 / $292.30 / $334.10; Mid (1,201–2,500 sqft) $320.40 / $363.70 / $415.70; Large (2,501–4,000 sqft) $381.45 / $433.00 / $494.90; XL (4,001+ sqft) $446.20 / $506.50 / $578.90
 
-Add-on payouts are fixed published dollar amounts from the add-on rate card for your tier — not a percentage of rack. Virtual Visit payout is the published Virtual Visit add-on cell for your tier (quoted by footprint for the client; never a percent of rack).
+Add-on payouts are fixed published dollar amounts from the add-on rate card for your tier — fixed dollars, not a percentage of rack.
+
+Virtual Visit — Small (≤1,200 sqft) $92.15 / $104.60 / $119.50; Mid (1,201–2,500 sqft) $110.65 / $125.60 / $143.50; Large (2,501–4,000 sqft) $129.15 / $146.60 / $167.50; XL (4,001+ sqft) $147.65 / $167.60 / $191.50
+Virtual staging — $12.95 / $14.70 / $16.80 per image (Tier C / Tier B / Tier A). Not banded by footprint.
 
 Tier is assigned by Bricks based on quality, reliability, volume, and compliance. Tier C is the starting tier. Bricks may change your tier on notice. Payouts are via Stripe Connect within 7 business days of client acceptance of deliverables, or within 14 days of shoot completion if the client has not acted. Raise payout disputes in writing to booking@brxs.ca within 30 days of the payment date.
 
@@ -98,7 +99,7 @@ Bricks licenses Deliverables to the booking client for real estate marketing of 
 You warrant that the Deliverables are your original work (except stock or tools Bricks supplied), do not infringe third-party rights, and that you have model releases or equivalent permission for any identifiable person you include. You will not photograph occupants, children, documents, or personal effects except as needed for empty-room listing media, and you will not publish shoot-day content without Bricks' or the client's go-ahead.
 
 10. ACCESS, PROPERTY, AND CONDUCT
-You represent Bricks on site. You will arrive in the shoot window, use access devices (lockbox codes, keys, fobs) only for the booking, not copy them, and leave the property secured as you found it. You will not enter areas you do not need. You will not use client or occupant personal information except to perform the job. Report damage, injury, safety issues, or denied access to Bricks immediately. Inaccessible property or a client no-show reported in-app may qualify for the published trip fee then in effect.
+You represent Bricks on site. You will arrive in the shoot window, use access devices (lockbox codes, keys, fobs) only for the booking, not copy them, and leave the property secured as you found it. You will not enter areas you do not need. You will not use client or occupant personal information except to perform the job. Report damage, injury, safety issues, or denied access to Bricks immediately.
 
 11. CONFIDENTIALITY AND PERSONAL INFORMATION
 Client names, addresses, contact details, access codes, booking notes, payout rates, and Bricks' non-public processes are confidential. You will not use them to market yourself to that client off-platform, except as section 12 allows. You will handle personal information only as needed to perform the job and in line with PIPEDA. This section survives termination.
@@ -107,7 +108,7 @@ Client names, addresses, contact details, access codes, booking notes, payout ra
 For 12 months after your last Bricks job with a client, you will not solicit that client for listing-media services competing with Bricks, where Bricks introduced you to them. This does not stop you working for clients who reach you on their own, or from working for other platforms. There is no non-compete. You may work anywhere in photography and related fields.
 
 13. QUALITY
-Deliverables go through the Bricks app within the booking turnaround (standard 24 hours from shoot end unless the booking says otherwise) and must meet the Shoot Standards Guide. Bricks may require a complimentary re-shoot if work does not meet those standards. Repeated failures, fraud, or serious complaints may mean suspension, tier change, or termination.
+Deliverables go through the Bricks app within the booking turnaround (standard 24–48 hour target from shoot end unless the booking says otherwise; times are targets, not guarantees) and must meet the Shoot Standards Guide. Bricks may require a complimentary re-shoot if work does not meet those standards. Repeated failures, fraud, or serious complaints may mean suspension, tier change, or termination.
 
 14. INDEMNITY
 You will indemnify, defend, and hold harmless Bricks Group and its officers, directors, contractors, and agents from claims, losses, damages, and reasonable legal fees arising out of: (a) your services or those of your assistants; (b) injury or property damage at a job; (c) drone operations; (d) your breach of this agreement or law; (e) alleged infringement by the Deliverables; (f) your tax, WSIB, or employment-status claims against Bricks to the extent they arise from your holding yourself out as an employee contrary to this agreement. Bricks may control the defence of a third-party claim.
@@ -116,7 +117,7 @@ You will indemnify, defend, and hold harmless Bricks Group and its officers, dir
 Bricks is not liable to you for lost jobs, lost profit, or equipment damage. Bricks' total liability to you for a booking is the payout for that booking. Nothing excludes liability that Ontario or Canadian law does not allow to be excluded (including fraud or bodily injury Bricks caused).
 
 16. TERM AND TERMINATION
-This agreement starts when you accept it and continues until terminated. Either party may terminate for any reason on written notice (email is enough). Bricks may suspend or terminate immediately if you lack required insurance or WSIB proof, for safety or legal risk, fraud, material quality failure, or material breach. Outstanding accepted jobs should be finished or handed off. Earned payouts for completed, accepted work are paid on the normal cycle. Sections 9–15 and 17 survive.
+This agreement starts when you accept it and continues until terminated. Either party may terminate for any reason on written notice (email is enough). Bricks may suspend or terminate immediately for safety or legal risk, fraud, material quality failure, or material breach. Outstanding accepted jobs should be finished or handed off. Earned payouts for completed, accepted work are paid on the normal cycle. Sections 9–15 and 17 survive.
 
 17. DISPUTES AND LAW
 Ontario law and applicable Canadian federal law govern. Courts of Ontario have exclusive jurisdiction. Before filing, the parties will try to resolve a dispute in writing within 30 days. You may still make a complaint to the Ministry of Labour or the CRA. Binding arbitration is not required.
@@ -192,11 +193,71 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     if len(city) < 2:
         errs.append("Please enter your home city.")
 
+    from ..services import applicant_evidence as ev
+    from ..services.vendor_profile import normalize_vendor_type as _nvt
+    _vtype_early = _nvt(getattr(application, "vendor_type", None) or "photographer")
+    is_photographer = _vtype_early == "photographer"
+
+    structured = application.equipment if isinstance(application.equipment, dict) else None
+    if structured is not None:
+        eq = {k: " ".join(str(structured.get(k) or "").split())[:160]
+              for k in ("camera_body", "lenses", "drone_model", "lighting", "tripod")}
+        application.equipment = eq
+        if is_photographer:
+            if not eq["camera_body"]:
+                errs.append("Tell us your camera body.")
+            if not eq["lenses"]:
+                errs.append("List your lenses.")
+            if not eq["tripod"]:
+                errs.append("Tell us your tripod (or type 'none').")
+        application.equipment_list = ev.equipment_list_from_profile(eq) or application.equipment_list
     equipment = [e.strip() for e in (application.equipment_list or []) if e and e.strip()]
     if len(equipment) == 0:
         errs.append("Please list your equipment.")
     elif len(" ".join(equipment)) < 8:
         errs.append("Please describe your equipment in a little more detail.")
+
+    # Sample photos: 8-15, uploaded to Bricks storage under a signed session.
+    session = (application.sample_upload_session or "").strip()
+    paths = []
+    for raw in application.sample_paths or []:
+        p_ = str(raw or "").strip()
+        if p_ and p_ not in paths:
+            paths.append(p_)
+    cert_path = (application.rpas_cert_path or "").strip() or None
+    if paths or cert_path:
+        if not ev.verify_upload_session(session):
+            errs.append("Your photo upload expired. Please re-add your sample photos.")
+        elif any(not ev.path_in_session(x, session) for x in paths + ([cert_path] if cert_path else [])):
+            errs.append("Sample photos must be uploaded through this form.")
+    application.sample_paths = paths
+    application.rpas_cert_path = cert_path
+    if is_photographer:
+        if len(paths) < ev.MIN_SAMPLES:
+            errs.append(
+                f"Upload {ev.MIN_SAMPLES}-{ev.MAX_SAMPLES} sample real estate photos "
+                "(update the Bricks GO app, or apply at brxs.ca/photographers)."
+            )
+        elif len(paths) > ev.MAX_SAMPLES:
+            errs.append(f"Upload at most {ev.MAX_SAMPLES} sample photos.")
+
+    # Drone: a claim needs the number, the level and a photo of the certificate.
+    if is_photographer and application.drone_certified:
+        lvl = (application.rpas_certificate_level or "").strip().lower()
+        if lvl not in ("basic", "advanced"):
+            errs.append("Pick your RPAS certificate level (Basic or Advanced).")
+        if not (application.rpas_certificate_number or "").strip():
+            errs.append("Enter your RPAS pilot certificate number.")
+        if not cert_path:
+            errs.append("Add a photo of your RPAS pilot certificate.")
+        application.rpas_certificate_level = lvl or None
+
+    # Availability (self-reported). Required for photographers on the new form.
+    if application.availability is not None or (is_photographer and structured is not None):
+        try:
+            application.availability = ev.normalize_availability(application.availability)
+        except ev.AvailabilityError as exc:
+            errs.append(str(exc))
 
     samples = sanitize_portfolio_samples(
         [s.dict() if hasattr(s, "dict") else s for s in (application.portfolio_samples or [])]
@@ -211,7 +272,7 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         if link and not link.lower().startswith(("http://", "https://")):
             errs.append("Portfolio sample links must be full URLs (starting with https://).")
             break
-    if not samples and not links:
+    if not samples and not links and not paths:
         errs.append("Add at least one portfolio sample (image upload or link) by media type.")
 
     hst = (application.hst_number or "").strip()
@@ -221,12 +282,126 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     from ..services.vendor_profile import normalize_vendor_type
     vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
     application.vendor_type = vtype
-    # Stager / cleaner may not have a media portfolio yet.
-    if vtype in ("stager", "cleaner"):
-        errs = [e for e in errs if "portfolio" not in e.lower()]
+    # Non-media trades don't send photo samples or a media portfolio.
+    if vtype != "photographer":
+        errs = [e for e in errs if "portfolio" not in e.lower() and "sample" not in e.lower()]
+        try:
+            application.trade_credentials = _clean_trade_credentials(vtype, application.trade_credentials)
+        except ValueError as exc:
+            errs.append(str(exc))
+    else:
+        application.trade_credentials = None
+
+    try:
+        application.source, application.source_detail = normalize_applicant_source(
+            getattr(application, "source", None), getattr(application, "source_detail", None)
+        )
+    except ApplicantSourceError as exc:
+        errs.append(str(exc))
 
     if errs:
         raise HTTPException(status_code=400, detail=" ".join(errs))
+
+
+
+
+_CREDENTIAL_TEXT_KEYS = ("insurer", "policy_number", "wsib_number", "licences", "service_notes", "business_name")
+
+
+def _clean_trade_credentials(vtype: str, raw) -> dict:
+    """Self-reported trade credentials for non-media applicants.
+
+    Repairs (handyman) and inspections must confirm $2M commercial general
+    liability; the certificate itself is uploaded to /documents (doc_type=coi)
+    and verified by a person before any job. WSIB is optional for repairs.
+    Raises ValueError with an applicant-facing message.
+    """
+    from ..services.vendor_profile import CGL_MIN_CENTS, CGL_REQUIRED_TYPES
+
+    data = raw if isinstance(raw, dict) else {}
+    out: dict = {}
+    for key in _CREDENTIAL_TEXT_KEYS:
+        val = " ".join(str(data.get(key) or "").split())[:200]
+        if val:
+            out[key] = val
+    for key in ("years_experience", "team_size"):
+        try:
+            num = int(data.get(key))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= num <= 500:
+            out[key] = num
+    out["cgl_confirmed"] = bool(data.get("cgl_confirmed"))
+    try:
+        limit = int(data.get("cgl_limit_cents") or 0)
+    except (TypeError, ValueError):
+        limit = 0
+    if out["cgl_confirmed"]:
+        out["cgl_limit_cents"] = max(limit, CGL_MIN_CENTS)
+    out["coi_required"] = vtype in CGL_REQUIRED_TYPES
+    if vtype in CGL_REQUIRED_TYPES and not out["cgl_confirmed"]:
+        raise ValueError("Confirm you carry at least $2M commercial general liability insurance.")
+    return out
+
+
+def _application_portfolio_links(application: "VendorApplicationCreate") -> list:
+    """Links already on the application. Uploaded files are included when the URL is public."""
+    links = []
+    for raw in application.portfolio_links or []:
+        links.append(str(raw or "").strip())
+    for sample in application.portfolio_samples or []:
+        row = sample.dict() if hasattr(sample, "dict") else (sample or {})
+        if not isinstance(row, dict):
+            continue
+        for key in ("link", "url", "thumb_url"):
+            links.append(str(row.get(key) or "").strip())
+    return [link for link in links if link]
+
+def _applicant_jev_fields(application: "VendorApplicationCreate") -> dict:
+    """Fields already stored on the application. No token, email, or phone."""
+    samples = []
+    for sample in application.portfolio_samples or []:
+        row = sample.dict() if hasattr(sample, "dict") else (sample or {})
+        if not isinstance(row, dict):
+            continue
+        samples.append({
+            "media_type": row.get("media_type") or "",
+            "link": row.get("link") or "",
+        })
+    links = [str(link).strip() for link in (application.portfolio_links or []) if link and str(link).strip()]
+    return {
+        "name": application.name,
+        "city": application.city,
+        "vendor_type": getattr(application, "vendor_type", None) or "photographer",
+        "equipment": [item for item in (application.equipment_list or []) if item],
+        "portfolio": {"links": links, "samples": samples},
+        "drone": bool(application.drone_certified),
+    }
+
+
+async def _store_applicant_jev_probability(member_id: str, existing_notes: str, probability: float) -> None:
+    """Append Jev's yes-probability to internal_notes. Never writes onboarding status."""
+    line = f"Jev poor-fit yes-probability {probability:.2f}"
+    notes = (existing_notes or "").strip()
+    updated = f"{notes}; {line}" if notes else line
+    payload = {
+        "internal_notes": updated,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await (await get_db()).table("vendor_members").update(payload).eq("id", member_id).execute()
+    except Exception as exc:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_vendor_member_fields
+
+        if _is_rest_quota_error(exc):
+            if not pg_update_vendor_member_fields(member_id, payload):
+                logger.warning("applicant jev note not stored member=%s", member_id)
+        else:
+            logger.warning(
+                "applicant jev note not stored member=%s (%s)",
+                member_id,
+                type(exc).__name__,
+            )
 
 
 @router.post("/apply")
@@ -234,7 +409,7 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     """
     Wave A vendor application (photographer | stager | cleaner).
     Requires acceptance of the current IC agreement.
-    Records ic_agreement_version as the live server version (currently 1.5).
+    Records ic_agreement_version as the live server version (currently 1.9).
     photographers.html posts vendor_type=photographer; drone remains an RPAS capability.
     """
     if not application.accepted_terms:
@@ -244,38 +419,71 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     await _validate_application(application)
 
     try:
-
         result = await _apply_to_bricks_inner(application)
-        from ..services.vendor_profile import normalize_vendor_type
-        vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
-        type_label = {"photographer": "photographer", "stager": "stager", "cleaner": "cleaner"}.get(vtype, "vendor")
-        background_tasks.add_task(
-            create_notification,
-            title=f"New {type_label} application",
-            body=(
-                f"{application.name} applied ({vtype}).\n"
-                f"Email: {application.email}\n"
-                f"Phone: {application.phone}\n"
-                f"City: {application.city}\n"
-                f"Specialties: {', '.join(application.specialties) if application.specialties else 'n/a'}\n"
-                f"Drone certified: {application.drone_certified}"
-            ),
-            ntype="vendor_application",
-            data={"member_id": result["member_id"], "vendor_type": vtype},
-            email_to=ADMIN_NOTIFICATION_EMAIL,
-            email_subject=f"New {type_label} application: {application.name}",
-        )
-        return result
     except HTTPException:
         raise
     except Exception:
         logger.error("apply_to_bricks_failed:\n" + traceback.format_exc())
         raise HTTPException(status_code=500, detail="Could not process application. Please try again.")
 
+    existing_notes = result.pop("_internal_notes", "")
+    from ..services.vendor_profile import normalize_vendor_type
+    vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
+    type_label = {
+        "photographer": "photographer", "stager": "stager", "cleaner": "cleaner",
+        "inspector": "inspector", "measurer": "measurer", "handyman": "repairs",
+    }.get(vtype, "vendor")
+
+    # Evidence-based review (samples through the vision rubric, link checks,
+    # hashes, gear / location / availability / RPAS rules), stored on
+    # vendor_applicant_reviews, then one short text + one HTML email to Kam.
+    # Runs after the response; it never approves or rejects.
+    from ..services.applicant_review_runner import review_application
+    background_tasks.add_task(review_application, result["member_id"], notify=True, trigger="apply")
+
+    found = found_us_line(getattr(application, "source", None), getattr(application, "source_detail", None))
+    # In-app record only. Kam's text and raphael@brxs.ca email are the notify above.
+    # Do not email ADMIN_NOTIFICATION_EMAIL — that env is unset, and this path
+    # must not fall through to a personal mailbox.
+    background_tasks.add_task(
+        create_notification,
+        title=f"New {type_label} application",
+        body=(
+            f"{application.name} applied ({vtype}).\n"
+            f"Email: {application.email}\n"
+            f"Phone: {application.phone}\n"
+            f"City: {application.city}\n"
+            f"Specialties: {', '.join(application.specialties) if application.specialties else 'n/a'}\n"
+            f"Drone certified: {application.drone_certified}"
+            + (f"\n{found}" if found else "")
+        ),
+        ntype="vendor_application",
+        data={"member_id": result["member_id"], "vendor_type": vtype},
+    )
+    return result
+
 
 async def _apply_to_bricks_inner(application: VendorApplicationCreate):
-    res_existing = await (await get_db()).table("vendor_members").select("*").eq("email", application.email.lower().strip()).maybe_single().execute()
-    if res_existing and res_existing.data:
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_insert_vendor_application,
+        pg_select_vendor_member,
+        pg_upsert_vendor_availability,
+    )
+
+    email_l = application.email.lower().strip()
+    existing = None
+    try:
+        res_existing = await (await get_db()).table("vendor_members").select("*").eq(
+            "email", email_l
+        ).maybe_single().execute()
+        existing = maybe_single_row(res_existing) or None
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            existing = pg_select_vendor_member(email=email_l)
+        else:
+            raise
+    if existing:
         raise HTTPException(status_code=400, detail="An application with this email already exists.")
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -288,23 +496,46 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         if extra not in links:
             links.append(extra)
 
-    from ..services.vendor_profile import normalize_vendor_type
+    from ..services.vendor_profile import TRADE_SKILL, normalize_vendor_type, storage_vendor_type
     vtype = normalize_vendor_type(getattr(application, "vendor_type", None) or "photographer")
-    # Photographer apply may omit specialties for stager/cleaner; keep a sensible default.
-    default_specialty = {
-        "photographer": "photo",
-        "stager": "staging",
-        "cleaner": "cleaning",
-    }.get(vtype, "photo")
+    # Column value the DB check accepts today; the real trade rides on
+    # application_profile.trade (inspector / measurer / handyman).
+    stored_vtype = storage_vendor_type(vtype)
+    # Non-media apply may omit specialties; keep a sensible default.
+    default_specialty = TRADE_SKILL.get(vtype, "photo")
+    from ..services import applicant_evidence as ev
+    application_profile = None
+    if vtype != "photographer" or application.sample_paths or application.equipment:
+        application_profile = {
+            "version": 1,
+            "location": {"city": application.city, "in_gta": ev.city_in_gta(application.city)},
+            "specialties": list(application.specialties or []),
+            "equipment": application.equipment or ev.equipment_from_list(application.equipment_list or []),
+            "equipment_structured": bool(application.equipment),
+            "rpas": {
+                "claimed": bool(application.drone_certified) if vtype == "photographer" else False,
+                "number": application.rpas_certificate_number if vtype == "photographer" else None,
+                "level": application.rpas_certificate_level if vtype == "photographer" else None,
+                "cert_path": application.rpas_cert_path if vtype == "photographer" else None,
+            },
+            "samples": [{"path": p} for p in (application.sample_paths or [])],
+            "upload_session": application.sample_upload_session or None,
+        }
+        if vtype != "photographer":
+            application_profile["trade"] = vtype
+            application_profile["credentials"] = getattr(application, "trade_credentials", None) or {}
     member = VendorMember(
         id=str(uuid.uuid4()),
         application_token=application_token,
         name=application.name,
-        email=application.email.lower().strip(),
+        email=email_l,
         phone=application.phone,
         role="Applicant",
-        vendor_type=vtype,
-        specialty=(application.specialties[0] if application.specialties else default_specialty),
+        vendor_type=stored_vtype,
+        specialty=(
+            default_specialty if vtype != "photographer"
+            else (application.specialties[0] if application.specialties else default_specialty)
+        ),
         onboarding_status="pending",
         is_active=False,
         portfolio_links=links,
@@ -322,7 +553,12 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         service_areas=application.preferred_regions if application.preferred_regions else [application.city],
         ic_agreement_version=_IC_AGREEMENT_VERSION,
         terms_accepted_at=now_iso,
-        internal_notes=f"IC agreement v{_IC_AGREEMENT_VERSION} accepted on {now_iso}; vendor_type={vtype}",
+        source=getattr(application, "source", None),
+        source_detail=getattr(application, "source_detail", None),
+        application_profile=application_profile,
+        rpas_certificate_url=application.rpas_cert_path if vtype == "photographer" else None,
+        internal_notes=f"IC agreement v{_IC_AGREEMENT_VERSION} accepted on {now_iso}; vendor_type={vtype}"
+        + (f" (stored as {stored_vtype} until vendor_type migration)" if stored_vtype != vtype else ""),
     )
 
     member_dict = member.dict()
@@ -331,31 +567,189 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         member_dict["portfolio_samples"] = [
             s.dict() if hasattr(s, "dict") else s for s in member_dict["portfolio_samples"]
         ]
+    if "operation_polygon" in member_dict and member_dict["operation_polygon"] is not None:
+        member_dict["operation_polygon"] = [
+            c.dict() if hasattr(c, "dict") else c for c in member_dict["operation_polygon"]
+        ]
+
     db = await get_db()
+    inserted_via_pg = False
     try:
         await db.table("vendor_members").insert(member_dict).execute()
-    except Exception:
-        # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
-        member_dict.pop("portfolio_samples", None)
-        try:
-            await db.table("vendor_members").insert(member_dict).execute()
-        except Exception:
-            member_dict.pop("vendor_type", None)
-            await db.table("vendor_members").insert(member_dict).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e):
+            # Canada Fair Use REST often 402 — same PG fallback as payouts/Connect.
+            pg_row = pg_insert_vendor_application(member_dict)
+            if not pg_row:
+                logger.error("apply_to_bricks Fair-Use PG insert failed for %s", email_l)
+                raise HTTPException(
+                    status_code=503,
+                    detail="Could not process application right now. Please try again shortly.",
+                )
+            inserted_via_pg = True
+        else:
+            # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
+            # application_profile is kept: migration 0017 is live on Canada.
+            member_dict.pop("portfolio_samples", None)
+            try:
+                await db.table("vendor_members").insert(member_dict).execute()
+            except Exception as e2:
+                if _is_rest_quota_error(e2):
+                    pg_row = pg_insert_vendor_application(member_dict)
+                    if not pg_row:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Could not process application right now. Please try again shortly.",
+                        )
+                    inserted_via_pg = True
+                else:
+                    member_dict.pop("vendor_type", None)
+                    try:
+                        await db.table("vendor_members").insert(member_dict).execute()
+                    except Exception as e3:
+                        if _is_rest_quota_error(e3):
+                            pg_row = pg_insert_vendor_application(member_dict)
+                            if not pg_row:
+                                raise HTTPException(
+                                    status_code=503,
+                                    detail="Could not process application right now. Please try again shortly.",
+                                )
+                            inserted_via_pg = True
+                        else:
+                            raise
 
     availability = AvailabilitySettings(
         member_id=member.id,
         vendor_id=member.vendor_id,
         available=True
     )
-    await (await get_db()).table("vendor_availability").insert(availability.dict()).execute()
+    avail_dict = availability.dict()
+    if isinstance(application.availability, dict) and application.availability.get("days_of_week"):
+        av = application.availability
+        avail_dict.update({
+            "work_start": av["work_start"],
+            "work_end": av["work_end"],
+            "jobs_per_day": av["jobs_per_day"],
+            "days_of_week": av["days_of_week"],
+            "time_windows": av["time_windows"],
+            "weekends": av["weekends"],
+            "earliest_start_date": av["earliest_start_date"],
+            "shoots_per_week": av["shoots_per_week"],
+            "notice_hours": av["notice_hours"],
+            "has_car": av["has_car"],
+            "has_licence": av["has_licence"],
+        })
+    try:
+        await (await get_db()).table("vendor_availability").insert(avail_dict).execute()
+    except Exception as e:
+        if _is_rest_quota_error(e) or inserted_via_pg:
+            if not pg_upsert_vendor_availability(avail_dict):
+                logger.warning(
+                    "apply_to_bricks: availability PG upsert failed member=%s (non-fatal)",
+                    member.id,
+                )
+        else:
+            # Non-quota insert failure: try PG anyway if REST flaked; else log.
+            if not pg_upsert_vendor_availability(avail_dict):
+                logger.warning(
+                    "apply_to_bricks: availability insert failed member=%s: %s",
+                    member.id,
+                    type(e).__name__,
+                )
 
     return {
         "success": True,
         "message": "Welcome to Bricks! Our team will review your portfolio. You'll hear from us soon.",
         "member_id": member.id,
         "application_token": application_token,
+        "_internal_notes": member.internal_notes,
     }
+
+
+@router.post("/sample-uploads")
+async def mint_sample_uploads(body: SampleUploadRequest):
+    """Signed upload URLs for application sample photos and the RPAS cert photo.
+
+    Files go straight from the browser / GO to Bricks storage (brxs-deliverables),
+    never through this function (Vercel body cap). Limits: 15 samples + 1
+    certificate per session, JPEG/PNG/WebP/HEIC, 15 MB per sample, 10 MB cert.
+    The review re-checks real bytes (magic number, size) before using them.
+    """
+    from ..services import applicant_evidence as ev
+    from ..services.storage import create_signed_upload_url
+
+    files = list(body.files or [])
+    if not files:
+        raise HTTPException(status_code=400, detail="No files.")
+    samples = [f for f in files if (f.kind or "sample") == "sample"]
+    certs = [f for f in files if f.kind == "rpas_cert"]
+    if len(samples) > ev.MAX_SAMPLES or len(certs) > 1 or len(samples) + len(certs) != len(files):
+        raise HTTPException(status_code=400, detail=f"Up to {ev.MAX_SAMPLES} sample photos and one certificate photo.")
+    for f in files:
+        mime = (f.type or "").lower()
+        if mime not in ev.SAMPLE_MIME:
+            raise HTTPException(status_code=400, detail=f"{f.name or 'A file'} isn't a JPEG, PNG, WebP or HEIC photo.")
+        cap = ev.MAX_CERT_BYTES if f.kind == "rpas_cert" else ev.MAX_SAMPLE_BYTES
+        if f.size <= 0 or f.size > cap:
+            raise HTTPException(status_code=400, detail=f"{f.name or 'A file'} is too large ({cap // (1024 * 1024)} MB max).")
+        if f.kind != "rpas_cert" and f.size < ev.MIN_SAMPLE_BYTES:
+            raise HTTPException(status_code=400, detail=f"{f.name or 'A photo'} is too small to review. Upload the full-size export.")
+    session = (body.session or "").strip()
+    if not session or not ev.verify_upload_session(session, grace=0):
+        session = ev.mint_upload_session()
+    out = []
+    for i, f in enumerate(files):
+        kind = "cert" if f.kind == "rpas_cert" else "sample"
+        path = ev.sample_path(session, i, kind, f.type.lower())
+        signed = await create_signed_upload_url(path)
+        if not signed or not signed.get("signed_url"):
+            raise HTTPException(status_code=503, detail="Photo upload is unavailable right now. Please try again shortly.")
+        out.append({"name": f.name, "kind": f.kind, "path": signed.get("path") or path,
+                    "signed_url": signed["signed_url"], "token": signed.get("token")})
+    return {"session": session, "uploads": out,
+            "limits": {"min_samples": ev.MIN_SAMPLES, "max_samples": ev.MAX_SAMPLES,
+                       "max_sample_mb": ev.MAX_SAMPLE_BYTES // (1024 * 1024)}}
+
+
+@router.get("/review-backlog")
+async def applicant_review_backlog(request: Request, limit: int = 5):
+    """Daily Vercel cron: review pending photographers that have no review yet
+    (applied before the evidence review, or the background run failed).
+
+    Never notifies anyone (Kam already got the apply text/email) and never
+    contacts the applicant. Auth: Vercel CRON_SECRET bearer or internal key.
+    """
+    from .vendor_os import _cron_authorized
+    from ..services.applicant_review_runner import pending_without_review, review_application
+
+    if not _cron_authorized(request.headers.get("Authorization"), request.headers.get("X-Internal-Key")
+                            or request.headers.get("X-Internal-Api-Key")):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    ids = await pending_without_review(limit=max(1, min(int(limit or 5), 10)))
+    done = []
+    for mid in ids:
+        r = await review_application(mid, notify=False, trigger="backlog")
+        done.append({"member_id": mid, "verdict": (r or {}).get("verdict"), "score": (r or {}).get("score")})
+    return {"ok": True, "reviewed": done}
+
+
+@router.post("/review/{member_id}")
+async def rerun_applicant_review(member_id: str, request: Request, notify: bool = False, store: bool = True):
+    """Re-run the automatic review for one applicant. Internal key only.
+
+    notify=false by default: re-runs never text or email anyone unless asked,
+    and the applicant is never contacted from here.
+    """
+    _api_keys = set(k for k in os.environ.get("INTERNAL_API_KEYS", "").split(",") if k)
+    if not _api_keys or request.headers.get("X-Internal-Api-Key", "") not in _api_keys:
+        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    from ..services.applicant_review_runner import review_application
+
+    result = await review_application(member_id, notify=notify, trigger="rerun", store=store)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Applicant not found or review failed")
+    return {k: result[k] for k in ("verdict", "colour", "score", "incomplete", "needs_samples", "parts",
+                                   "criteria", "evidence", "flags", "missing", "cost_usd", "model")}
 
 
 @router.post("/validate-rpas/{member_id}")
@@ -374,9 +768,10 @@ async def validate_rpas_certificate(member_id: str, request: Request):
     db = await get_db()
 
     res_m = await db.table("vendor_members").select("name, drone_certified").eq("id", member_id).maybe_single().execute()
-    if not res_m.data:
+    member_row = maybe_single_row(res_m)
+    if not member_row:
         raise HTTPException(status_code=404, detail="Member not found")
-    vendor_name = res_m.data.get("name", "")
+    vendor_name = member_row.get("name", "")
 
     # Find most recent rpas_certificate document for this member
     res_d = await db.table("vendor_documents").select("id, file_url, status").eq(
@@ -453,7 +848,7 @@ async def get_application_status(member_id: str, token: Optional[str] = None):
     Check the status of an onboarding application.
     """
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Application not found.")
     _check_application_token(member, token)
@@ -480,15 +875,17 @@ async def upload_compliance_document(
     file_data: str = Form(...),
     expiry_date: Optional[str] = Form(None),
     token: Optional[str] = Form(None),
+    application_token: Optional[str] = Form(None),
 ):
     """
     Upload Ontario compliance documents (COI, WSIB, etc) or a resume.
+    Client must send member_id + application_token (or token) from /apply.
     """
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
-    _check_application_token(member, token)
+    _check_application_token(member, token or application_token)
 
     portfolio_docs = [portfolio_doc_type(t) for t in PORTFOLIO_MEDIA_TYPES]
     valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume", *portfolio_docs]
@@ -596,7 +993,7 @@ async def validate_compliance(member_id: str, doc_type: str, request: Request):
     db = await get_db()
 
     res_m = await db.table("vendor_members").select("name").eq("id", member_id).maybe_single().execute()
-    if not res_m.data:
+    if not maybe_single_row(res_m):
         raise HTTPException(status_code=404, detail="Member not found")
 
     res_d = await db.table("vendor_documents").select("id, file_url, status").eq(
@@ -659,7 +1056,7 @@ async def upload_portfolio_sample(
         )
 
     res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    member = res_member.data
+    member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
     _check_application_token(member, token)

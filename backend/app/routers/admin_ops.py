@@ -6,6 +6,13 @@ from fastapi import APIRouter, Header, HTTPException
 
 from ..shared.auth import is_vendor_admin, get_vendor_member, resolve_vendor_actor_id, require_vendor_admin
 from ..shared.database import get_db
+
+
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row."""
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
 from ..shared.errors import api_error
 from ..shared.pagination import normalize_pagination, paginated_response
 from ..shared.schemas import VendorMemberUpdate, VendorLead
@@ -120,22 +127,23 @@ async def update_applicant_status(
         update_data["is_active"] = True
         # Preserve Owner; otherwise set role from vendor_type (Wave A).
         existing = await (await get_db()).table("vendor_members").select(
-            "vendor_type,role,title"
+            "vendor_type,role,title,application_profile"
         ).eq("id", member_id).maybe_single().execute()
-        row = (existing.data or {}) if existing else {}
+        row = _maybe_single_row(existing)
         from ..services.vendor_profile import (
             is_platform_owner,
             member_vendor_type,
             normalize_vendor_type,
             role_for_vendor_type,
+            storage_vendor_type,
         )
         if is_platform_owner({**row, "id": member_id}):
             update_data["role"] = "Owner"
         else:
-            vtype = normalize_vendor_type(
-                update_data.get("vendor_type") or row.get("vendor_type") or member_vendor_type(row)
-            )
-            update_data["vendor_type"] = vtype
+            # Trade comes from application_profile.trade when the column can't
+            # hold it yet (inspector / measurer / handyman).
+            vtype = normalize_vendor_type(update_data.get("vendor_type") or member_vendor_type(row or {}))
+            update_data["vendor_type"] = storage_vendor_type(vtype)
             update_data["role"] = role_for_vendor_type(vtype)
     
     res = await (await get_db()).table("vendor_members").update(update_data).eq("id", member_id).eq("vendor_id", vendor_id).execute()
@@ -148,23 +156,26 @@ async def update_applicant_status(
         try:
             email = (approved_row.get("email") or "").strip()
             if email:
-                from ..services.notifications import create_notification
+                from ..services.notifications import create_notification, welcome_approved_email_html
+                from ..services.vendor_calendars import calendar_success_redirect_base, VENDOR_CALENDAR_WELCOME
+                availability_url = calendar_success_redirect_base()
                 await create_notification(
                     title="Welcome to Bricks GO",
                     body=(
-                        "You’re approved. Connect a calendar on Availability so auto-assign "
-                        "only offers jobs that fit your real schedule."
+                        f"{VENDOR_CALENDAR_WELCOME} "
+                        "Open Availability and connect Google, Outlook, Apple, or an ICS feed."
                     ),
                     ntype="onboarding_approved",
-                    data={"member_id": member_id},
+                    data={
+                        "member_id": member_id,
+                        "type": "onboarding_approved",
+                        "route": "/settings",
+                        "url": availability_url,
+                    },
+                    member_id=member_id,
                     email_to=email,
                     email_subject="You’re approved — connect your calendar",
-                    email_html=(
-                        "<p>You’re approved on Bricks GO.</p>"
-                        "<p>Connect a calendar on <b>Availability</b> so auto-assign only "
-                        "offers jobs that fit your real schedule. Busy on any connected "
-                        "calendar = you won’t get that slot.</p>"
-                    ),
+                    email_html=welcome_approved_email_html(availability_url),
                 )
         except Exception:
             pass
@@ -177,7 +188,8 @@ async def _require_applicant_in_own_vendor(db, member_id: str, vendor_id: str):
     applicant documents by guessing/observing a member_id, not just their own
     vendor's. Fail closed if the applicant isn't in the caller's vendor org."""
     res = await db.table("vendor_members").select("vendor_id").eq("id", member_id).maybe_single().execute()
-    if not res.data or res.data.get("vendor_id") != vendor_id:
+    row = _maybe_single_row(res)
+    if not row or row.get("vendor_id") != vendor_id:
         api_error(404, "Applicant not found", "applicant_not_found")
 
 @router.get("/applicants/{member_id}/documents")
@@ -203,6 +215,8 @@ async def verify_document(
     member_id: str,
     doc_id: str,
     status: str = "verified",
+    liability_cad: Optional[int] = None,
+    aviation_covered: Optional[bool] = None,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
@@ -224,14 +238,30 @@ async def verify_document(
         api_error(404, "Document not found", "document_not_found")
 
     doc = res.data[0]
-    # Optional record only. Copy a verified COI/WSIB expiry onto the member
-    # for history. These dates do not suspend the vendor or block approval,
-    # assignment, or dispatch.
-    if status == "verified" and doc.get("doc_type") in ("coi", "wsib") and doc.get("expiry_date"):
-        column = "coi_expires_on" if doc["doc_type"] == "coi" else "wsib_expires_on"
+    # WSIB: optional record only (expiry copied for history, never a gate).
+    if status == "verified" and doc.get("doc_type") == "wsib" and doc.get("expiry_date"):
         await db.table("vendor_members").update({
-            column: doc["expiry_date"],
+            "wsib_expires_on": doc["expiry_date"],
         }).eq("id", member_id).execute()
+    # COI: listing jobs still ignore it, but a verified COI is what the
+    # commercial job gate and the Tier A rule read (Kam, 2026-10-17). The
+    # admin confirms the liability limit and drone/aviation coverage; the
+    # vendor's declared values are only a default.
+    if doc.get("doc_type") == "coi":
+        if status == "verified":
+            declared = ((doc.get("validation_result") or {}).get("declared") or {}) if isinstance(doc.get("validation_result"), dict) else {}
+            limit = liability_cad if liability_cad is not None else declared.get("liability_cad")
+            aviation = aviation_covered if aviation_covered is not None else bool(declared.get("aviation_covered"))
+            patch = {
+                "coi_verified": True,
+                "coi_expires_on": doc.get("expiry_date") or declared.get("expires_on"),
+                "coi_liability_cad": int(limit) if limit else None,
+                "coi_aviation_covered": bool(aviation),
+                "coi_verified_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.table("vendor_members").update(patch).eq("id", member_id).execute()
+        elif status in ("rejected", "flagged"):
+            await db.table("vendor_members").update({"coi_verified": False}).eq("id", member_id).execute()
 
     return {"id": doc_id, "status": status}
 
@@ -269,7 +299,7 @@ async def validate_rpas_batch(
         member_id = doc["member_id"]
         try:
             res_m = await db.table("vendor_members").select("name").eq("id", member_id).maybe_single().execute()
-            vendor_name = (res_m.data or {}).get("name", "")
+            vendor_name = _maybe_single_row(res_m).get("name", "")
 
             image_url = await get_signed_download_url(doc["file_url"])
             if not image_url:
@@ -323,15 +353,17 @@ async def validate_rpas_batch(
 
 @router.get("/noshow-claims")
 async def list_noshow_claims(
-    status: Optional[str] = "pending_review",
+    status: Optional[str] = "open",
     page: int = 1,
     page_size: int = 50,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    List no-show trip fee claims. Defaults to pending_review (admin work queue).
-    Pass status=all to see every claim regardless of state.
+    List no-show claims. Defaults to "open": every claim Bricks still has to review,
+    i.e. held claims (pending_review) and clean claims that were recorded but not yet
+    reviewed (pending, reviewed_at unset). Pass a status to filter on it exactly, or
+    status=all to see every claim regardless of state.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
@@ -342,11 +374,33 @@ async def list_noshow_claims(
     page, page_size, skip = normalize_pagination(page, page_size)
 
     query = db.table("agent_noshow_trip_fees").select("*", count="exact")
-    if status and status != "all":
+    if not status or status == "open":
+        query = query.in_("status", ["pending_review", "pending"]).is_("reviewed_at", "null")
+    elif status != "all":
         query = query.eq("status", status)
 
     res = await query.order("created_at", ascending=False).range(skip, skip + page_size - 1).execute()
-    return paginated_response(res.data or [], res.count or 0, page, page_size)
+    rows = [await _with_noshow_evidence(r) for r in (res.data or [])]
+    return paginated_response(rows, res.count or 0, page, page_size)
+
+
+async def _with_noshow_evidence(claim: dict) -> dict:
+    """Add what the reviewer needs: a short signed photo URL and check-in facts."""
+    from ..services.storage import signed_url_in_bucket
+    from ..shared import noshow_policy
+
+    out = dict(claim or {})
+    path = out.get("photo_path")
+    out["photo_url"] = (
+        await signed_url_in_bucket(noshow_policy.EVIDENCE_BUCKET, path, 3600) if path else None
+    )
+    dist = out.get("check_in_distance_m")
+    out["checkin_radius_m"] = noshow_policy.CHECKIN_RADIUS_M
+    out["check_in_distance_label"] = (
+        f"{int(round(float(dist)))} m from the property" if dist is not None
+        else ("Distance unknown (job has no map location)" if out.get("checked_in_at") else "No check-in")
+    )
+    return out
 
 
 @router.post("/noshow-claims/{claim_id}/review")
@@ -358,9 +412,11 @@ async def review_noshow_claim(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    Approve or reject a flagged no-show claim.
-    approve → status='pending' (paid on next payout cycle)
-    reject  → status='rejected', claim voided
+    Approve or reject a no-show claim that no admin has reviewed yet: a flagged
+    claim (pending_review) or an auto-recorded one (pending, reviewed_at unset).
+    approve → status='pending', then the vendor is paid half the job's base payout
+              (HST on top as usual) and the claim becomes 'paid_out'
+    reject  → status='rejected', claim voided, nothing is paid
     """
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
@@ -376,14 +432,15 @@ async def review_noshow_claim(
     res_claim = await db.table("agent_noshow_trip_fees").select("*").eq(
         "id", claim_id
     ).maybe_single().execute()
-    if not res_claim.data:
+    claim = _maybe_single_row(res_claim)
+    if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
-
-    claim = res_claim.data
-    if claim.get("status") != "pending_review":
+    prev_status = claim.get("status")
+    unreviewed_auto = prev_status == "pending" and not claim.get("reviewed_at")
+    if prev_status != "pending_review" and not unreviewed_auto:
         raise HTTPException(
             status_code=409,
-            detail=f"Claim is not pending review (current status: {claim.get('status')})"
+            detail=f"Claim is not pending review (current status: {prev_status})"
         )
 
     new_status = "rejected" if action == "reject" else "pending"
@@ -400,7 +457,7 @@ async def review_noshow_claim(
     job_id = claim.get("job_id")
     booking_id = claim.get("booking_id")
 
-    if action == "approve" and booking_id and job_id:
+    if action == "approve" and booking_id and job_id and prev_status == "pending_review":
         # Booking webhook was deferred at claim time for pending_review holds.
         # Fire it now that admin has confirmed the no-show is valid.
         # previous_status="pending_review" signals this is the deferred notification
@@ -418,7 +475,7 @@ async def review_noshow_claim(
             logger.warning(f"Booking no-show webhook failed for {booking_id} (claim {claim_id}): {e}")
 
     elif action == "reject" and booking_id and job_id:
-        # Trip fee voided — notify Booking to reverse the agent retention penalty.
+        # Claim voided — notify Booking to reverse the agent retention penalty.
         # Job stays in agent_no_show; only the financial consequence is reversed.
         try:
             await send_dispatch_status_update_webhook(
@@ -432,11 +489,22 @@ async def review_noshow_claim(
         except Exception as e:
             logger.warning(f"Booking reversal webhook failed for {booking_id} (claim {claim_id}): {e}")
 
+    payout = None
+    if action == "approve" and job_id:
+        # Approved no-show: pay the vendor half the job's base payout (Kam, 2026-10-30).
+        from ..services.payout_service import trigger_payout_for_job
+        try:
+            payout = await trigger_payout_for_job(db, job_id, noshow_claim_id=claim_id)
+        except Exception as e:
+            logger.error(f"No-show payout failed for job {job_id} (claim {claim_id}): {e}")
+            payout = {"error": str(e), "job_id": job_id}
+
     return {
         "claim_id": claim_id,
         "status": new_status,
         "reviewed_by": actor_id,
-        "note": "Photographer will receive $60 on next payout cycle." if action == "approve" else "Claim voided.",
+        "payout": payout,
+        "note": "No-show confirmed." if action == "approve" else "Claim voided.",
     }
 
 
@@ -454,9 +522,9 @@ async def reconcile_noshow_claims(
     Match agent_noshow_trip_fees against bookings.status to surface discrepancies.
 
     Detects:
-    - fee_without_retention: trip fee exists but booking not marked as retained
-    - retention_without_fee: booking shows no-show but no trip fee record (photographer did not file)
-    - booking_missing: trip fee references a booking that no longer exists
+    - fee_without_retention: no-show claim exists but booking not marked as retained
+    - retention_without_fee: booking shows no-show but no claim record (photographer did not file)
+    - booking_missing: claim references a booking that no longer exists
 
     dry_run=true (default): report mismatches, write nothing.
     dry_run=false: write reconciliation_events rows for each mismatch.
@@ -468,7 +536,7 @@ async def reconcile_noshow_claims(
 
     db = await get_db()
 
-    # All active (non-rejected) trip fee claims
+    # All active (non-rejected) no-show claims
     res_fees = await db.table("agent_noshow_trip_fees").select(
         "id, job_id, booking_id, member_id, status, amount_cents, created_at"
     ).in_("status", ["pending", "paid_out", "pending_review"]).execute()
@@ -484,8 +552,9 @@ async def reconcile_noshow_claims(
             res_bk = await db.table("bookings").select(
                 "id, status"
             ).eq("id", booking_id).maybe_single().execute()
+            bk_row = _maybe_single_row(res_bk)
 
-            if not res_bk.data:
+            if not bk_row:
                 mismatches.append({
                     "type": "booking_missing",
                     "fee_id": fee["id"],
@@ -494,7 +563,7 @@ async def reconcile_noshow_claims(
                 })
                 continue
 
-            bk_status = res_bk.data.get("status", "")
+            bk_status = bk_row.get("status", "")
             # pending_review fees are held for admin approval; the Booking retention webhook
             # fires only after approval — these are expected not to show retained yet.
             if fee.get("status") == "pending_review":
@@ -507,7 +576,7 @@ async def reconcile_noshow_claims(
                     "booking_status": bk_status,
                     "fee_status": fee["status"],
                     "amount_cents": fee["amount_cents"],
-                    "note": "Trip fee exists but booking not marked as retained — Booking webhook may need retry",
+                    "note": "No-show claim exists but booking not marked as retained — Booking webhook may need retry",
                 })
         except Exception as e:
             mismatches.append({
@@ -517,7 +586,7 @@ async def reconcile_noshow_claims(
                 "note": str(e),
             })
 
-    # Reverse check: retained bookings with no trip fee
+    # Reverse check: retained bookings with no no-show claim
     try:
         res_bk_noshow = await db.table("bookings").select(
             "id, status"
@@ -529,7 +598,7 @@ async def reconcile_noshow_claims(
                     "type": "retention_without_fee",
                     "booking_id": bk["id"],
                     "booking_status": bk["status"],
-                    "note": "Booking retained but no photographer trip fee — photographer may not have filed",
+                    "note": "Booking retained but no photographer no-show claim — photographer may not have filed",
                 })
     except Exception as e:
         logger.warning(f"Reverse reconciliation check failed: {e}")
@@ -652,8 +721,44 @@ async def compliance_expiry_scan(
 
 
 # ---------------------------------------------------------------------------
-# Dispatch failure manual queue
+# Dispatch failure + Jev-hold manual queue
 # ---------------------------------------------------------------------------
+
+_DISPATCH_QUEUE_STATUSES = ("dispatch_failed", "held_for_review")
+_JEV_HOLD_NOTE_MARKER = "Held for a person"
+_DISPATCH_QUEUE_SELECT = (
+    "id, booking_id, address, city, job_type, package_name, min_tier_required, "
+    "scheduled_date, time_window_start, time_window_end, created_at, updated_at, "
+    "status, dispatch_explanation, assignee_id"
+)
+
+
+def _is_jev_hold_row(job: dict) -> bool:
+    """True when the job is (or was left as) a Jev human-hold."""
+    status = str((job or {}).get("status") or "").strip()
+    if status == "held_for_review":
+        return True
+    if status == "pending_assignment":
+        note = str((job or {}).get("dispatch_explanation") or "")
+        return _JEV_HOLD_NOTE_MARKER in note
+    return False
+
+
+def _dispatch_queue_kind(job: dict) -> str:
+    status = str((job or {}).get("status") or "").strip()
+    if status == "dispatch_failed":
+        return "dispatch_failed"
+    if _is_jev_hold_row(job):
+        return "held_for_review"
+    return status or "unknown"
+
+
+def _sort_queue_jobs(jobs: list) -> list:
+    def _key(j: dict):
+        return str(j.get("updated_at") or j.get("created_at") or ""), str(j.get("id") or "")
+
+    return sorted(jobs, key=_key, reverse=True)
+
 
 @router.get("/dispatch-failures")
 async def list_dispatch_failures(
@@ -663,36 +768,75 @@ async def list_dispatch_failures(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     """
-    List jobs stuck in dispatch_failed status, joined with their ops_escalation record.
-    Returns newest first. Use POST /dispatch-failures/{job_id}/reassign to retry.
+    Admin recovery queue: dispatch_failed + Jev held_for_review (and legacy
+    pending_assignment rows that still carry the hold note).
+
+    Newest first. Retry failed assign via POST .../reassign; release a Jev hold
+    via POST .../release (clears hold + runs auto-assign).
+
+    Fair-Use: when Canada PostgREST returns 402, list jobs + escalations via Postgres
+    so Owner can still recover failed auto-assign / holds while Storage quota is locked.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
 
-    db = await get_db()
-    res_jobs = await db.table("jobs").select(
-        "id, booking_id, address, city, job_type, package_name, min_tier_required, "
-        "scheduled_date, time_window_start, time_window_end, created_at, updated_at"
-    ).eq("status", "dispatch_failed").order("updated_at", desc=True).range(offset, offset + limit - 1).execute()
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_dispatch_failed_jobs,
+        pg_select_ops_escalations_for_jobs,
+    )
 
-    jobs = res_jobs.data or []
+    db = await get_db()
+    jobs: list = []
+    try:
+        # Pull failed + held + pending_assignment candidates (admin queue is small),
+        # then keep true queue rows in Python — covers legacy Jev holds that still
+        # sit on pending_assignment with the hold note and empty assignee.
+        res_jobs = await db.table("jobs").select(
+            _DISPATCH_QUEUE_SELECT
+        ).in_(
+            "status",
+            ["dispatch_failed", "held_for_review", "pending_assignment"],
+        ).order("updated_at", desc=True).range(0, 199).execute()
+        candidates = list(res_jobs.data or [])
+        kept = []
+        for row in candidates:
+            status = str(row.get("status") or "").strip()
+            if status in _DISPATCH_QUEUE_STATUSES:
+                kept.append(row)
+            elif _is_jev_hold_row(row) and not str(row.get("assignee_id") or "").strip():
+                kept.append(row)
+        jobs = _sort_queue_jobs(kept)[offset: offset + limit]
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        jobs = pg_select_dispatch_failed_jobs(limit=limit, offset=offset)
+
     if not jobs:
         return {"total": 0, "items": []}
 
-    job_ids = [j["id"] for j in jobs]
-    res_esc = await db.table("ops_escalations").select(
-        "job_id, attempt_count, error_message, status, created_at"
-    ).in_("job_id", job_ids).execute()
+    job_ids = [j["id"] for j in jobs if j.get("id")]
+    escalations: list = []
+    try:
+        res_esc = await db.table("ops_escalations").select(
+            "job_id, attempt_count, error_message, status, created_at"
+        ).in_("job_id", job_ids).execute()
+        escalations = res_esc.data or []
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        escalations = pg_select_ops_escalations_for_jobs(job_ids)
 
-    escalation_by_job = {e["job_id"]: e for e in (res_esc.data or [])}
+    escalation_by_job = {e["job_id"]: e for e in escalations if e.get("job_id")}
 
     items = []
     for j in jobs:
         esc = escalation_by_job.get(j["id"])
         items.append({
             **j,
+            "queue_kind": _dispatch_queue_kind(j),
             "escalation": esc,
         })
 
@@ -710,28 +854,61 @@ async def manual_reassign_dispatch_failure(
     Resets status to 'pending_assignment' before running assign_vendor_for_job.
     If assignment still fails, the job returns to dispatch_failed and a new
     ops_escalation record is written.
+
+    Fair-Use: job load/reset and open-escalation close fall back to Postgres on
+    PostgREST 402 so Owner can recover failed auto-assign under Fair Use.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
 
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_mark_ops_escalations_manual_retry,
+        pg_select_job_by_id,
+        pg_update_job,
+    )
+
     db = await get_db()
-    res = await db.table("jobs").select("id, status").eq("id", job_id).maybe_single().execute()
-    if not res.data:
+    job_row = None
+    try:
+        res = await db.table("jobs").select("id, status").eq("id", job_id).maybe_single().execute()
+        job_row = _maybe_single_row(res) or None
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        job_row = pg_select_job_by_id(job_id)
+
+    if not job_row:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if res.data["status"] != "dispatch_failed":
+    if job_row.get("status") != "dispatch_failed":
         raise HTTPException(
             status_code=409,
-            detail=f"Job is in status '{res.data['status']}' — only dispatch_failed jobs can be manually reassigned",
+            detail=(
+                f"Job is in status '{job_row.get('status')}' — only dispatch_failed "
+                "jobs can be manually reassigned (use /release for Jev holds)"
+            ),
         )
 
     # Reset to pending_assignment so assign_vendor_for_job can proceed
-    await db.table("jobs").update({"status": "pending_assignment", "assignee_id": ""}).eq("id", job_id).execute()
+    reset_fields = {"status": "pending_assignment", "assignee_id": ""}
+    try:
+        await db.table("jobs").update(reset_fields).eq("id", job_id).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, reset_fields):
+            raise HTTPException(status_code=500, detail="Could not reset job for reassign (Fair-Use PG)")
 
     # Close the previous escalation record
-    await db.table("ops_escalations").update({"status": "manual_retry"}).eq("job_id", job_id).eq("status", "open").execute()
+    try:
+        await db.table("ops_escalations").update({"status": "manual_retry"}).eq("job_id", job_id).eq("status", "open").execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        pg_mark_ops_escalations_manual_retry(job_id)
 
     assigned_member_id = await assign_vendor_for_job(job_id)
 
@@ -746,6 +923,92 @@ async def manual_reassign_dispatch_failure(
         "job_id": job_id,
         "assigned": False,
         "detail": "No eligible vendor found. Job returned to dispatch_failed. A new escalation has been written.",
+    }
+
+
+@router.post("/dispatch-failures/{job_id}/release")
+async def release_held_dispatch_job(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """
+    Release a Jev-held booking (held_for_review, or legacy pending_assignment
+    with the hold note) back to auto-assign.
+
+    Clears the hold stamp, resets to pending_assignment, then runs
+    assign_vendor_for_job. Does not touch dispatch_failed rows — use /reassign.
+    Fair-Use: job load/reset fall back to Postgres on PostgREST 402.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_job_by_id,
+        pg_update_job,
+    )
+
+    db = await get_db()
+    job_row = None
+    try:
+        res = await db.table("jobs").select(
+            "id, status, dispatch_explanation, assignee_id"
+        ).eq("id", job_id).maybe_single().execute()
+        job_row = _maybe_single_row(res) or None
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        job_row = pg_select_job_by_id(job_id)
+
+    if not job_row:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if not _is_jev_hold_row(job_row):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Job is in status '{job_row.get('status')}' — only Jev-held jobs "
+                "(held_for_review or pending_assignment with hold note) can be released "
+                "(use /reassign for dispatch_failed)"
+            ),
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    reset_fields = {
+        "status": "pending_assignment",
+        "assignee_id": "",
+        "dispatch_explanation": "Released from Jev hold for auto-assign.",
+        "updated_at": now,
+    }
+    try:
+        await db.table("jobs").update(reset_fields).eq("id", job_id).execute()
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, reset_fields):
+            raise HTTPException(status_code=500, detail="Could not release held job (Fair-Use PG)")
+
+    assigned_member_id = await assign_vendor_for_job(job_id)
+
+    if assigned_member_id:
+        return {
+            "job_id": job_id,
+            "released": True,
+            "assigned": True,
+            "assigned_member_id": assigned_member_id,
+        }
+
+    return {
+        "job_id": job_id,
+        "released": True,
+        "assigned": False,
+        "detail": (
+            "Hold released but no eligible vendor found. "
+            "Job is now dispatch_failed — use /reassign after fixing supply."
+        ),
     }
 
 

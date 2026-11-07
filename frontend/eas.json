@@ -1,7 +1,7 @@
 {
   "cli": {
-    "version": ">= 12.0.0",
-    "appVersionSource": "local"
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -11,18 +11,24 @@
         "simulator": true
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca"
+        "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://rbywjnnctjglhcdemnnj.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJieXdqbm5jdGpnbGhjZGVtbm5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyNzA3MTgsImV4cCI6MjEwNDg0NjcxOH0.uHSjkz-w2mzTXS1JJIilLje2ohmGWrzBCr7JOUJ4YaM",
+        "EXPO_PUBLIC_APPLE_SIGN_IN": "0"
       },
       "channel": "development"
     },
     "preview": {
       "distribution": "internal",
       "channel": "preview",
-      "ios": {
-        "simulator": true
+      "android": {
+        "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca"
+        "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://rbywjnnctjglhcdemnnj.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJieXdqbm5jdGpnbGhjZGVtbm5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyNzA3MTgsImV4cCI6MjEwNDg0NjcxOH0.uHSjkz-w2mzTXS1JJIilLje2ohmGWrzBCr7JOUJ4YaM",
+        "EXPO_PUBLIC_APPLE_SIGN_IN": "0"
       }
     },
     "production": {
@@ -30,27 +36,36 @@
       "channel": "production",
       "distribution": "store",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca"
+        "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://rbywjnnctjglhcdemnnj.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJieXdqbm5jdGpnbGhjZGVtbm5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyNzA3MTgsImV4cCI6MjEwNDg0NjcxOH0.uHSjkz-w2mzTXS1JJIilLje2ohmGWrzBCr7JOUJ4YaM",
+        "EXPO_PUBLIC_APPLE_SIGN_IN": "0"
       },
       "android": {
         "buildType": "app-bundle"
       },
       "ios": {
-        "simulator": true
+        "resourceClass": "default"
       }
     },
     "play": {
       "extends": "production",
-      "distribution": "store",
-      "channel": "production",
-      "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://dispatch-api.brxs.ca"
-      },
       "android": {
         "buildType": "app-bundle"
-      },
+      }
+    }
+  },
+  "submit": {
+    "production": {
       "ios": {
-        "simulator": true
+        "appleId": "REPLACE_WITH_KAM_APPLE_ID_EMAIL",
+        "ascAppId": "REPLACE_WITH_APP_STORE_CONNECT_APP_ID",
+        "appleTeamId": "REPLACE_WITH_TEAM_ID"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./secrets/play-service-account.json",
+        "track": "internal",
+        "releaseStatus": "draft"
       }
     }
   }

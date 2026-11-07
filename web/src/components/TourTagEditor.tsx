@@ -6,6 +6,7 @@ import {
 } from '../lib/capture-api';
 import type { CaptureSession, CaptureStation, TourTag } from '../lib/capture-api';
 import { AMENITY_PRESETS } from '../lib/amenityPresets';
+import BricksLoader from './BricksLoader';
 
 type Props = {
   jobId: string;
@@ -242,7 +243,7 @@ export function TourTagEditor({ jobId, session, onSession }: Props) {
         </label>
         <div className="row" style={{ gap: 8 }}>
           <button type="button" disabled={busy || !label.trim()} onClick={handleAdd}>
-            {busy ? 'Saving…' : 'Add tag'}
+            {busy && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{busy ? 'Saving…' : 'Add tag'}
           </button>
         </div>
         {msg ? <p className={msg.startsWith('Tag on') || msg.startsWith('Tag saved') ? undefined : 'error'} style={{ margin: 0, padding: 0 }}>{msg}</p> : null}

@@ -5,7 +5,43 @@ import { getCaptureSession, rebuildFloorPlan, rebuildTourPlayer } from '../lib/c
 import type { CaptureKind } from '../lib/capture-api';
 import { captureNeitherCopy, captureStatusCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
-import { STILLS_TYPES, uploadStillFile, type StillsType } from '../lib/stills-upload';
+import './job-uploads.css';
+import {
+  STILLS_ACCEPT,
+  STILLS_TYPES,
+  StillsUploadError,
+  requestRawPreview,
+  uploadStillFile,
+  type RawPreview,
+  type StillsType,
+} from '../lib/stills-upload';
+import {
+  BRACKET_HINT,
+  fileTooLargeMessage,
+  isCameraRawName,
+  pickStillsUploads,
+  requiresBracketSet,
+  validateHdrBracketSelection,
+  validateHdrUploadsForComplete,
+  exposureBiasFromName,
+} from '../lib/bracket-require';
+import { autoNameAebFiles } from '../lib/aeb-exif';
+import BricksLoader from '../components/BricksLoader';
+import { DayCell } from '../components/DayCell';
+import { Button, ButtonLink } from '../components/Button';
+import { captureLinks } from '../components/CaptureLinks';
+import { JobGuide } from '../guide/JobGuide';
+import { NoShowPanel } from '../components/NoShowPanel';
+import { TradeChecklist } from '../components/TradeChecklist';
+import { getCheckInFix, LOCATION_REQUIRED_COPY } from '../lib/noshow';
+
+const JOB_STATUS_TABS: [string, string][] = [
+  ['', 'All'],
+  ['pending_assignment', 'Open'],
+  ['assigned', 'Assigned'],
+  ['in_progress', 'Active'],
+  ['completed', 'Done'],
+];
 
 const STATUS_BADGE: Record<string, string> = {
   pending_assignment: 'badge-gray',
@@ -98,26 +134,34 @@ export function JobsPage() {
       <div className="page-header">
         <div>
           <h1>Jobs</h1>
-          <p>{admin ? 'All jobs including unassigned. Attach a shoot to an Office listing here.' : 'Assigned jobs. Attach a shoot to an Office listing here.'}</p>
+          <p>{admin ? 'All jobs including unassigned. Attach a job to an Office listing here.' : 'Assigned jobs. Attach a job to an Office listing here.'}</p>
         </div>
       </div>
 
       {error && <p className="error">{error}</p>}
 
       <section className="card full">
+        <div className="tabs" role="tablist" aria-label="Status">
+          {JOB_STATUS_TABS.map(([v, label]) => (
+            <button
+              key={v || 'all'}
+              type="button"
+              role="tab"
+              aria-selected={status === v}
+              className={`tab${status === v ? ' tab-on' : ''}`}
+              onClick={() => { setPage(1); setStatus(v); }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="row" style={{ paddingBottom: 16 }}>
           <input
+            className="jobs-search"
             value={search}
             onChange={(e) => { setPage(1); setSearch(e.target.value); }}
             placeholder="Search address or city"
           />
-          <select value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
-            <option value="">All statuses</option>
-            <option value="pending_assignment">Unassigned</option>
-            <option value="assigned">Assigned</option>
-            <option value="in_progress">In Progress</option>
-            <option value="completed">Completed</option>
-          </select>
           {admin ? (
             <select value={assigneeFilter} onChange={(e) => { setPage(1); setAssigneeFilter(e.target.value); }}>
               <option value="all">All</option>
@@ -129,7 +173,7 @@ export function JobsPage() {
             </select>
           ) : null}
         </div>
-        <table className="table">
+        <table className="table t1l">
           <thead>
             <tr>
               <th>Address</th>
@@ -148,16 +192,16 @@ export function JobsPage() {
                 className={selected?.id === job.id ? 'row-selected' : 'row-click'}
                 onClick={() => setSelected(job)}
               >
-                <td style={{ fontWeight: 500 }}>{job.address}</td>
-                <td className="muted">{job.listing_address || '—'}</td>
-                <td className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
-                <td className="muted">{formatShootWindow(job)}</td>
-                <td>{(job.assignee_id && (assigneeNames[job.assignee_id] ?? job.assignee_name)) || 'Unassigned'}</td>
-                <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
+                <td data-label="Address" className="c-t" style={{ fontWeight: 500 }}>{job.address}</td>
+                <td data-label="Listing" className="muted c-mh">{job.listing_address || '—'}</td>
+                <td data-label="Date" className="muted"><DayCell d={job.scheduled_date} /></td>
+                <td data-label="Time" className="muted">{formatShootWindow(job)}</td>
+                <td data-label="Assigned to" className="c-x">{(job.assignee_id && (assigneeNames[job.assignee_id] ?? job.assignee_name)) || 'Unassigned'}</td>
+                <td data-label="Payout" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
                   {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
                   {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : null}
                 </td>
-                <td>
+                <td data-label="Status" className="c-s">
                   <span className={`badge ${STATUS_BADGE[job.status] ?? 'badge-gray'}`}>
                     {(job.status || '').replace('_', ' ')}
                   </span>
@@ -182,6 +226,7 @@ export function JobsPage() {
           onPatched={onJobPatched}
         />
       )}
+      {selected && <JobGuide job={selected} />}
     </div>
   );
 }
@@ -203,19 +248,20 @@ function JobListingPanel({
   const [hits, setHits] = useState<ListingHit[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [uploads, setUploads] = useState<{ id: string; filename: string; media_type?: string }[]>([]);
+  const [uploads, setUploads] = useState<
+    { id: string; filename: string; media_type?: string; camera_raw?: boolean; preview?: RawPreview }[]
+  >([]);
+  const [notices, setNotices] = useState<string[]>([]);
+  const [progress, setProgress] = useState<{ index: number; total: number; pct: number } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [stillsType, setStillsType] = useState<StillsType>('hdr');
+  const [allowIncompleteBrackets, setAllowIncompleteBrackets] = useState(false);
   const [pick, setPick] = useState(job.assignee_id || '');
   const [arriveAt, setArriveAt] = useState((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
-  const [noShowOpen, setNoShowOpen] = useState(false);
-  const [noShowNotes, setNoShowNotes] = useState('');
 
   useEffect(() => {
     setPick(job.assignee_id || '');
     setArriveAt((job.confirmed_arrive_at || job.time_window_start || '').slice(0, 5));
-    setNoShowOpen(false);
-    setNoShowNotes('');
   }, [job.id, job.assignee_id, job.confirmed_arrive_at, job.time_window_start]);
 
   useEffect(() => {
@@ -232,7 +278,8 @@ function JobListingPanel({
     setBusy(true);
     setErr('');
     try {
-      await api.post(`/api/vendor-os/jobs/${job.id}/check-in`);
+      const fix = await getCheckInFix();
+      await api.post(`/api/vendor-os/jobs/${job.id}/check-in`, fix);
       onPatched({ ...job, status: 'in_progress' });
     } catch (e) {
       setErr((e as Error).message);
@@ -263,21 +310,72 @@ function JobListingPanel({
   };
 
   const onUpload = async (event: FormEvent<HTMLInputElement>) => {
-    const files = Array.from(event.currentTarget.files || []);
+    const input = event.currentTarget;
+    let files = Array.from(input.files || []);
     if (!files.length) return;
     setUploading(true);
     setErr('');
+    setNotices([]);
+    const notes: string[] = [];
     try {
-      for (const file of files) {
-        const rec = await uploadStillFile(job.id, file, stillsType);
+      // RAW first. A RAW+JPEG camera gives two files per frame: upload the RAW,
+      // and the JPEG only when that RAW is over the size limit.
+      const pick = pickStillsUploads(files);
+      for (const f of pick.tooLarge) notes.push(`${f.name}: ${fileTooLargeMessage(f.name)}`);
+      for (const f of pick.usedJpegFor) notes.push(`${f.name} is over 50 MB, so its JPEG is uploading. Keep the RAW.`);
+      if (pick.droppedTwins.length) {
+        notes.push(`Skipped ${pick.droppedTwins.length} JPEG ${pick.droppedTwins.length === 1 ? 'copy' : 'copies'}. The RAW is uploading.`);
+      }
+      setNotices([...notes]);
+      files = pick.files;
+      if (!files.length) return;
+      if (requiresBracketSet(stillsType)) {
+        // Camera AEB bursts (IMG_4031…4035) carry ±EV only in EXIF — name them
+        // <firstFrame>_±EV so the gate + post-prod merge see one bracketed angle.
+        // Works for camera RAW and JPEG. Unprovable frames keep the vendor's filename.
+        ({ files } = await autoNameAebFiles(files, (n) => exposureBiasFromName(n) == null));
+        const issue = validateHdrBracketSelection(
+          files.map((f) => f.name),
+          uploads.map((u) => u.filename),
+          { allowIncomplete: isAdmin && allowIncompleteBrackets },
+        );
+        if (issue) {
+          setErr(issue.message);
+          return;
+        }
+      }
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setProgress({ index: i + 1, total: files.length, pct: 0 });
+        let rec;
+        try {
+          // Preserve original filename (±EV / under / over) for backend group_brackets.
+          rec = await uploadStillFile(job.id, file, stillsType, (sent, total) =>
+            setProgress({ index: i + 1, total: files.length, pct: total ? Math.round((sent / total) * 100) : 0 }),
+          );
+        } catch (e) {
+          if (e instanceof StillsUploadError && e.code === 'file_too_large') {
+            notes.push(`${file.name}: ${e.message}`);
+            setNotices([...notes]);
+            continue;
+          }
+          throw e;
+        }
         setUploads((list) => [...list, rec]);
         onPatched({ ...job, uploaded_count: (job.uploaded_count || 0) + 1 });
+        if (rec.camera_raw) {
+          // Background: Bricks makes the working JPEG + preview from the RAW.
+          void requestRawPreview(job.id, rec.id).then((preview) =>
+            setUploads((list) => list.map((u) => (u.id === rec.id ? { ...u, preview } : u))),
+          );
+        }
       }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setUploading(false);
-      event.currentTarget.value = '';
+      setProgress(null);
+      input.value = '';
     }
   };
 
@@ -338,28 +436,27 @@ function JobListingPanel({
 
   return (
     <section className="card full">
-      <h3>Job detail</h3>
+      <h3>Job</h3>
       <div className="stack" style={{ padding: 20, maxWidth: 720 }}>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>ADDRESS</p>
+          <p className="label">Address</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{job.address}</p>
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>WHEN</p>
+          <p className="label">When</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>{formatShootWhen(job)}</p>
           {['assigned', 'in_progress', 'pending_assignment'].includes(job.status) ? (
-            <form className="row" onSubmit={confirmArrive} style={{ marginTop: 8, gap: 8, alignItems: 'center' }}>
-              <label className="muted" style={{ margin: 0 }}>Confirm arrive</label>
+            <form className="joined" onSubmit={confirmArrive} style={{ marginTop: 12 }}>
               <input
                 type="time"
+                aria-label="Arrival time"
                 value={arriveAt}
                 onChange={(e) => setArriveAt(e.target.value)}
-                style={{ width: 140 }}
                 required
               />
-              <button type="submit" disabled={busy}>
+              <Button type="submit" disabled={busy}>
                 {job.confirmed_arrive_at ? 'Update agent' : 'Tell agent'}
-              </button>
+              </Button>
             </form>
           ) : null}
           {job.confirmed_arrive_at ? (
@@ -368,12 +465,12 @@ function JobListingPanel({
             </p>
           ) : (
             <p className="muted" style={{ padding: 0, margin: '6px 0 0' }}>
-              Pick your exact arrive time inside the window — we email the agent.
+              We email the agent your exact arrival time.
             </p>
           )}
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>LISTING</p>
+          <p className="label">Listing</p>
           {job.listing_address ? (
             <p style={{ margin: '4px 0 0', fontWeight: 500 }}>
               {job.listing_address}
@@ -384,7 +481,7 @@ function JobListingPanel({
           )}
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>ASSIGNED TO</p>
+          <p className="label">Assigned to</p>
           <p style={{ margin: '4px 0 8px', fontWeight: 500 }}>{assignedLabel}</p>
           {isAdmin ? (
             <form className="row" onSubmit={assign}>
@@ -394,22 +491,24 @@ function JobListingPanel({
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
-              <button type="submit" disabled={busy}>{job.assignee_id ? 'Reassign' : 'Assign'}</button>
+              <Button type="submit" disabled={busy}>{job.assignee_id ? 'Reassign' : 'Assign'}</Button>
             </form>
           ) : null}
         </div>
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>PAYOUT</p>
+          <p className="label">Payout</p>
           <p style={{ margin: '4px 0 0', fontWeight: 500 }}>
             {job.payout_display_cad != null ? `$${job.payout_display_cad.toLocaleString()}` : '—'}
             {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : <span className="muted"> · rate card</span>}
           </p>
         </div>
-        <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+        {/* One primary per state (Accept / Check in / Mark complete); capture links are secondary. */}
+        <div className="actions">
+          {['assigned', 'in_progress'].includes(job.status) ? captureLinks(job) : null}
           {job.status === 'pending_assignment' ? (
             <>
-              <button
-                type="button"
+              <Button
+                variant="primary"
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true); setErr('');
@@ -419,9 +518,8 @@ function JobListingPanel({
                   } catch (e) { setErr((e as Error).message); }
                   finally { setBusy(false); }
                 }}
-              >Accept</button>
-              <button
-                type="button"
+              >Accept</Button>
+              <Button
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true); setErr('');
@@ -431,96 +529,152 @@ function JobListingPanel({
                   } catch (e) { setErr((e as Error).message); }
                   finally { setBusy(false); }
                 }}
-              >Decline</button>
+              >Decline</Button>
             </>
           ) : null}
           {job.status === 'assigned' ? (
-            <button type="button" disabled={busy} onClick={checkIn}>Check in</button>
+            <Button variant="primary" disabled={busy} onClick={checkIn}>Check in</Button>
           ) : null}
           {job.status === 'in_progress' ? (
-            <button
-              type="button"
+            <Button
+              variant="primary"
               disabled={busy}
               onClick={async () => {
                 setBusy(true); setErr('');
                 try {
+                  const bracketBlock = validateHdrUploadsForComplete(uploads, {
+                    allowIncomplete: isAdmin && allowIncompleteBrackets,
+                  });
+                  if (bracketBlock) {
+                    setErr(bracketBlock.message);
+                    return;
+                  }
                   await api.put(`/api/vendor-os/jobs/${job.id}/status`, { status: 'completed' });
                   onPatched({ ...job, status: 'completed' });
                 } catch (e) { setErr((e as Error).message); }
                 finally { setBusy(false); }
               }}
-            >Mark complete</button>
-          ) : null}
-          {['assigned', 'in_progress'].includes(job.status) ? (
-            <button type="button" disabled={busy} onClick={() => setNoShowOpen((v) => !v)}>
-              {noShowOpen ? 'Cancel no-show' : 'Report agent no-show'}
-            </button>
+            >Mark complete</Button>
           ) : null}
         </div>
-        {noShowOpen ? (
-          <div className="stack" style={{ border: '1px solid var(--c-hair, #333)', padding: 12, borderRadius: 8 }}>
-            <p className="muted" style={{ margin: 0, padding: 0 }}>
-              GPS is recorded on mobile. On web, add optional notes. A $60 trip fee is added to your next payout if the claim is approved.
-            </p>
-            <textarea
-              value={noShowNotes}
-              onChange={(e) => setNoShowNotes(e.target.value)}
-              placeholder="Optional: describe what happened…"
-              rows={3}
-              maxLength={500}
-              style={{ width: '100%' }}
-            />
-            <button
-              type="button"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true); setErr('');
-                try {
-                  const body: { notes?: string } = {};
-                  if (noShowNotes.trim()) body.notes = noShowNotes.trim();
-                  await api.post(`/api/vendor-os/jobs/${job.id}/agent-no-show`, body);
-                  onPatched({ ...job, status: 'agent_no_show' });
-                  setNoShowOpen(false);
-                  setNoShowNotes('');
-                } catch (e) { setErr((e as Error).message); }
-                finally { setBusy(false); }
-              }}
-            >Confirm no-show</button>
+        {job.status === 'assigned' ? (
+          <p className="muted" style={{ margin: 0, padding: 0, fontSize: 12 }}>{LOCATION_REQUIRED_COPY}</p>
+        ) : null}
+        {job.status === 'in_progress' ? <NoShowPanel job={job} onPatched={onPatched} /> : null}
+        {['assigned', 'in_progress'].includes(job.status) && !job.trade_job ? (
+          <CaptureNone job={job} />
+        ) : null}
+        {job.trade_job ? <TradeChecklist job={job} /> : <JobShootChecklist job={job} />}
+        {job.trade_job ? null : <CaptureStatusBlock job={job} />}
+        {job.trade_job && uploads.length === 0 ? null : job.trade_job ? (
+          <div>
+            <p className="label">Files on this job</p>
+            <ul className="upload-list">
+              {uploads.map((u) => (
+                <li key={u.id} className="upload-row">
+                  <span className="upload-meta"><span className="upload-name">{u.filename}</span></span>
+                </li>
+              ))}
+            </ul>
           </div>
-        ) : null}
-        {['assigned', 'in_progress'].includes(job.status) ? (
-          <CaptureStartBlock job={job} />
-        ) : null}
-        <JobShootChecklist job={job} />
-        <CaptureStatusBlock job={job} />
+        ) : (
         <div>
-          <p className="muted" style={{ padding: 0, margin: 0 }}>UPLOADS · CAMERA / DRONE / REEL</p>
+          <p className="label">Uploads</p>
           <p className="muted" style={{ padding: 0, margin: '4px 0 8px', fontSize: 12 }}>
-            HDR stills stay on the camera. After the shoot, upload JPEG / RAW / MP4 here — files go straight to storage (not the 4MB API cap).
+            Upload after the shoot. Pick a type first so delivery handles it right.
           </p>
-          <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
-            {uploads.length === 0 ? <li className="muted">None yet</li> : uploads.map((u) => (
-              <li key={u.id}>{u.filename}{u.media_type ? <span className="muted"> · {u.media_type}</span> : null}</li>
-            ))}
+          {requiresBracketSet(stillsType) ? (
+            <>
+              <p style={{ padding: 0, margin: '0 0 8px', fontSize: 13, color: 'var(--c-brick, #D2542B)' }}>
+                {BRACKET_HINT} At least 3 per angle, plus the window frame.
+              </p>
+              <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
+                Upload the RAW files. JPEG only if a RAW is over 50 MB. Keep your RAWs until the job is approved.
+              </p>
+              {stillsType === 'twilight' ? (
+                <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
+                  Real dusk only. We keep the dusk sky.
+                </p>
+              ) : null}
+            </>
+          ) : stillsType === 'staging' ? (
+            <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
+              Delivered as shot. No enhance.
+            </p>
+          ) : stillsType === 'floorplan' ? (
+            <p className="muted" style={{ padding: 0, margin: '0 0 8px', fontSize: 12 }}>
+              PNG or PDF, delivered as is.
+            </p>
+          ) : null}
+          <ul className="upload-list">
+            {uploads.length === 0 ? <li className="muted">None yet</li> : uploads.map((u) => {
+              const raw = u.camera_raw || isCameraRawName(u.filename);
+              return (
+                <li key={u.id} className="upload-row">
+                  {u.preview?.preview_url ? (
+                    <img className="upload-thumb" src={u.preview.preview_url} alt="" />
+                  ) : raw ? (
+                    <span className="upload-thumb upload-thumb-empty" aria-hidden="true">RAW</span>
+                  ) : null}
+                  <span className="upload-meta">
+                    <span className="upload-name">{u.filename}</span>
+                    <span className="muted">
+                      {raw ? 'RAW' : null}
+                      {raw && u.media_type ? ' · ' : null}
+                      {u.media_type || null}
+                      {raw && u.preview?.status === 'pending' ? ' · Making preview' : null}
+                      {raw && u.preview?.status === 'ready' ? ' · Preview ready' : null}
+                    </span>
+                    {raw && u.preview?.status === 'needs_review' ? (
+                      <span className="upload-warn">{u.preview.message || 'Bricks will check this RAW. Keep the file.'}</span>
+                    ) : null}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
-          <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="row upload-controls">
             <select
               value={stillsType}
               onChange={(e) => setStillsType(e.target.value as StillsType)}
               disabled={uploading || job.status === 'assigned'}
+              aria-label="Upload type"
             >
               {STILLS_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
             </select>
-            <input
-              type="file"
-              multiple
-              accept="image/*,video/*,.jpg,.jpeg,.png,.tif,.tiff,.webp,.heic,.mp4,.mov"
-              onChange={onUpload}
-              disabled={uploading || job.status === 'assigned'}
-            />
-            {uploading && <span className="muted"> Uploading…</span>}
+            <label className={`btn btn-secondary upload-pick${uploading || job.status === 'assigned' ? ' is-disabled' : ''}`}>
+              <span className="btn-label">{uploading ? 'Uploading' : 'Choose files'}</span>
+              <input
+                type="file"
+                multiple
+                accept={STILLS_ACCEPT}
+                onChange={onUpload}
+                disabled={uploading || job.status === 'assigned'}
+              />
+            </label>
           </div>
+          {progress ? (
+            <p className="muted upload-progress" role="status">
+              Uploading {progress.index} of {progress.total} · {progress.pct}%
+            </p>
+          ) : null}
+          {notices.length ? (
+            <ul className="upload-notices" role="status">
+              {notices.map((n) => <li key={n}>{n}</li>)}
+            </ul>
+          ) : null}
+          {isAdmin ? (
+            <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
+              <input
+                type="checkbox"
+                checked={allowIncompleteBrackets}
+                onChange={(e) => setAllowIncompleteBrackets(e.target.checked)}
+              />
+              Admin override: allow incomplete brackets
+            </label>
+          ) : null}
         </div>
+        )}
         <form className="row" onSubmit={search}>
           <input
             value={q}
@@ -528,11 +682,11 @@ function JobListingPanel({
             placeholder="Search office listings or paste id"
             style={{ flex: 1, minWidth: 220 }}
           />
-          <button type="submit" disabled={busy}>{busy ? '…' : 'Search'}</button>
+          <Button type="submit" disabled={busy}>{busy ? '…' : 'Search'}</Button>
           {job.transaction_id ? (
-            <button type="button" disabled={busy} onClick={() => attach(null)}>Detach</button>
+            <Button variant="tertiary" disabled={busy} onClick={() => attach(null)}>Detach</Button>
           ) : null}
-          <button type="button" onClick={onClose}>Close</button>
+          <Button variant="tertiary" onClick={onClose}>Close</Button>
         </form>
         {err && <p className="error" style={{ padding: 0 }}>{err}</p>}
         {hits.length > 0 && (
@@ -565,9 +719,7 @@ function JobShootChecklist({ job }: { job: Job }) {
   if (!items.length) return null;
   return (
     <div>
-      <p className="muted" style={{ padding: 0, margin: 0, fontSize: 11, letterSpacing: '0.06em' }}>
-        SHOOT CHECKLIST · ONE VISIT
-      </p>
+      <p className="label">{job.checklist_title || 'Shoot checklist'}</p>
       <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
         {items.map((item: any) => (
           <li key={item.id} className={item.completed ? 'muted' : undefined}>{item.label}</li>
@@ -578,38 +730,16 @@ function JobShootChecklist({ job }: { job: Job }) {
 }
 
 
-function CaptureStartBlock({ job }: { job: Job }) {
+function CaptureNone({ job }: { job: Job }) {
   const flags = jobCaptureModes(job);
-  const hasMode = flags.tour || flags.floorplan || flags.visit;
-  if (!hasMode) {
-    return (
-      <div className="capture-none">
-        <p className="muted" style={{ padding: 0, margin: 0 }}>{captureNeitherCopy(flags)}</p>
-      </div>
-    );
-  }
-  const links = [];
-  if (flags.tour) {
-    links.push(
-      <Link key="tour" className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=splat`}>Start Capture · 3D tour</Link>
-    );
-  }
-  if (flags.floorplan) {
-    links.push(
-      <Link key="fp" className="btn-capture" to={`/capture?jobId=${encodeURIComponent(job.id)}&kind=floorplan`}>Start Capture · Floor plan</Link>
-    );
-  }
-  if (flags.visit) {
-    links.push(
-      <Link key="visit" className="btn-capture" to={`/capture/visit?jobId=${encodeURIComponent(job.id)}`}>Deliver Visit</Link>
-    );
-  }
+  if (flags.tour || flags.floorplan || flags.visit) return null;
   return (
-    <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
-      {links}
+    <div className="capture-none">
+      <p className="muted" style={{ padding: 0, margin: 0 }}>{captureNeitherCopy(flags)}</p>
     </div>
   );
 }
+
 
 
 function CaptureStatusBlock({ job }: { job: Job }) {
@@ -649,15 +779,15 @@ function CaptureStatusBlock({ job }: { job: Job }) {
     }
     setRebuildState({
       msg: kind === 'floorplan'
-        ? 'Floor plan PNG rebuilt from stored stations. Refresh the listing — no recapture.'
-        : 'Tour player rebuilt from existing 360s. Hard-refresh the listing iframe — no recapture.',
+        ? 'Floor plan rebuilt. Refresh the listing.'
+        : 'Tour rebuilt. Hard-refresh the listing.',
     });
   };
 
   if (rows.length === 0) return null;
   return (
     <div className="capture-status-block">
-      <p className="muted" style={{ padding: 0, margin: '0 0 8px' }}>CAPTURE STATUS</p>
+      <p className="label" style={{ marginBottom: 8 }}>Capture status</p>
       <div className="stack" style={{ gap: 8 }}>
         {rows.map((r) => {
           const failed = r.status === 'failed';
@@ -669,13 +799,13 @@ function CaptureStatusBlock({ job }: { job: Job }) {
               <span>{r.line}</span>
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                 {ready && (r.kind === 'splat' || r.kind === 'floorplan') ? (
-                  <button type="button" disabled={rebuildState.busy} onClick={() => handleRebuild(r.kind, r.sessionId)}>
-                    {rebuildState.busy ? 'Rebuilding…' : (r.kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour player')}
-                  </button>
+                  <Button disabled={rebuildState.busy} onClick={() => handleRebuild(r.kind, r.sessionId)}>
+                    {rebuildState.busy && <BricksLoader variant="cycle" size={16} color="currentColor" style={{ marginRight: 8 }} />}{rebuildState.busy ? 'Rebuilding…' : (r.kind === 'floorplan' ? 'Rebuild floor plan' : 'Rebuild tour')}
+                  </Button>
                 ) : null}
-                <Link to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>
-                  {failed ? 'Review / retry' : 'Open review'}
-                </Link>
+                <ButtonLink variant="tertiary" to={`/capture/review?jobId=${encodeURIComponent(job.id)}&kind=${r.kind}`}>
+                  {failed ? 'Review and retry' : 'Review'}
+                </ButtonLink>
               </div>
             </div>
           );

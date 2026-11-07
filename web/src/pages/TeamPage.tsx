@@ -1,3 +1,4 @@
+import { TRADES, tradeById, tradeOf } from '../lib/trades';
 import { useEffect, useState } from 'react';
 import { api, PaginatedTeamResponse, TeamMember } from '../lib/api';
 
@@ -45,7 +46,7 @@ export function TeamPage() {
       <div className="page-header">
         <div>
           <h1>Team</h1>
-          <p>Identity, title, skills, RPAS, assignable — same fields the Office assigner reads</p>
+          <p>Who the office can assign shoots to</p>
         </div>
       </div>
 
@@ -76,17 +77,17 @@ export function TeamPage() {
           <tbody>
             {members.map((m) => (
               <tr key={m.id}>
-                <td style={{ fontWeight: 500 }}>{m.name}</td>
-                <td className="muted">{(m as any).vendor_type ? `${(m as any).vendor_type} · ${m.title || m.role}` : (m.title || m.role)}</td>
-                <td className="muted">{(m.skills || []).join(', ') || '—'}</td>
-                <td className="muted">{m.rpas_certificate_level || '—'}</td>
-                <td>
-                  <span className={`badge ${m.assignable ? 'badge-green' : 'badge-yellow'}`}>
+                <td data-label="Name" style={{ fontWeight: 500 }}>{m.name}</td>
+                <td data-label="Title" className="muted">{`${tradeOf(m as any).label} · ${m.title || m.role}`}</td>
+                <td data-label="Skills" className="muted">{(m.skills || []).join(', ') || '—'}</td>
+                <td data-label="RPAS" className="muted">{m.rpas_certificate_level || '—'}</td>
+                <td data-label="Assignable">
+                  <span className={`badge ${m.assignable ? 'badge-green' : 'badge-attn'}`}>
                     {m.assignable ? 'Yes' : (m.assignable_reason || 'No')}
                   </span>
                 </td>
-                <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>{m.assigned_jobs}</td>
-                <td>
+                <td data-label="Active jobs" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>{m.assigned_jobs}</td>
+                <td data-label="Availability">
                   <div className="status-toggle">
                     {STATUS_OPTIONS.map((s) => (
                       <button
@@ -116,12 +117,10 @@ export function TeamPage() {
           <input value={name}  onChange={(e) => setName(e.target.value)}  placeholder="Full name" />
           <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" />
           <input value={role}  onChange={(e) => setRole(e.target.value)}  placeholder="Role" />
-          <select value={vendorType} onChange={(e) => setVendorType(e.target.value)} aria-label="Vendor type">
-            <option value="photographer">Photographer</option>
-            <option value="stager">Stager</option>
-            <option value="cleaner">Cleaner</option>
+          <select value={vendorType} onChange={(e) => { const t = tradeById(e.target.value); setVendorType(e.target.value); if (t) setRole(t.role); }} aria-label="Trade">
+            {TRADES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
-          <button type="submit" onClick={addMember}>Add</button>
+          <button type="submit" className="btn-primary" onClick={addMember}>Add</button>
         </div>
       </section>
     </div>

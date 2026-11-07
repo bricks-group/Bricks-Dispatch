@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { COLORS, FONTS } from '../../constants/CaptureTheme';
+import { color, type as T, space, radius, hairline } from '../../theme';
+import { Plus, Check } from 'lucide-react-native';
+import { hud, HudScrims, HudTopBar, HudReadout, CoachCard, Shutter, HudControl, HudControls, CameraPermission, ScreenshotFeed } from '../../components/capture-hud';
 import { ensureCaptureSession, openCaptureStation, uploadCaptureFrame } from '../../lib/capture-api';
 import type { CaptureKind, CaptureSession } from '../../lib/capture-api';
 
@@ -24,15 +26,15 @@ function CoverageDome({ captured, total, headingTick }: { captured: Set<number> 
     const x2 = cx + Math.cos(ang) * R, y2 = cy + Math.sin(ang) * R;
     return (
       <Line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-        stroke={aim ? '#F4F1EB' : on ? COLORS.brick : '#F4F1EB30'} strokeWidth={aim || on ? 3 : 2} strokeLinecap="round" />
+        stroke={aim ? color.text : on ? color.accent : color.textFaint} strokeWidth={aim || on ? 3 : 2} strokeLinecap="butt" />
     );
   });
   return (
     <Svg width={220} height={220} viewBox="0 0 220 220">
-      <Circle cx={cx} cy={cy} r={R - 22} fill="none" stroke="#F4F1EB1A" strokeWidth={1} />
-      <Circle cx={cx} cy={cy} r={R + 6} fill="none" stroke="#F4F1EB12" strokeWidth={1} />
+      <Circle cx={cx} cy={cy} r={R - 22} fill="none" stroke={color.hairStrong} strokeWidth={1} />
+      <Circle cx={cx} cy={cy} r={R + 6} fill="none" stroke={color.hairStrong} strokeWidth={1} />
       {ticks}
-      <Path d={`M${cx - 10} ${cy}H${cx + 10}M${cx} ${cy - 10}V${cy + 10}`} stroke="#F4F1EB55" strokeWidth={1} />
+      <Path d={`M${cx - 10} ${cy}H${cx + 10}M${cx} ${cy - 10}V${cy + 10}`} stroke={color.textMuted} strokeWidth={1} />
     </Svg>
   );
 }
@@ -105,20 +107,11 @@ export default function CaptureScreen() {
 
   if (!permission) return <View style={styles.dark} />;
   if (!permission.granted) {
-    return (
-      <SafeAreaView style={[styles.dark, styles.permWrap]}>
-        <Text style={styles.permText}>Bricks needs camera access to photograph listings.</Text>
-        <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
-          <Text style={styles.permBtnText}>Allow camera</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
-    );
+    return <CameraPermission onAllow={requestPermission} onClose={() => router.back()} body="Bricks uses the camera only while you shoot this listing's 360 stations." />;
   }
 
   const address = session?.address || 'Property';
-  const roomLabel = session?.guidance?.room
-    ? session.guidance.room.toUpperCase()
-    : (currentRoom?.name ? currentRoom.name.toUpperCase() : 'ROOM 1');
+  const roomLabel = session?.guidance?.room || currentRoom?.name || 'Room 1';
 
   const onShutter = async () => {
     if (shutterBusy.current || !jobId) return;
@@ -178,103 +171,61 @@ export default function CaptureScreen() {
     setHeading0(null);
   };
 
+  const station = String(stationIndex + 1).padStart(2, '0');
+
   return (
     <View style={styles.dark}>
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
-      <View style={styles.scrim} pointerEvents="none" />
+      <ScreenshotFeed />
+      <HudScrims />
 
       <SafeAreaView style={{ flex: 1 }}>
-        <View style={styles.topBar}>
-          <TouchableOpacity style={styles.chip} onPress={() => router.back()}>
-            <Text style={styles.chipText}>✕</Text>
-          </TouchableOpacity>
-          <View style={{ alignItems: 'center' }}>
-            <Text style={styles.roomTitle}>{address}</Text>
-            <Text style={[styles.roomSub, roomSubColor(roomLabel)]}>{roomLabel}</Text>
-          </View>
-          <View style={styles.chip} />
-        </View>
+        <HudTopBar title={address} subtitle={`360° tour · ${roomLabel}`} onClose={() => router.back()} />
 
-        <View style={styles.pillRow}>
-          <Text style={styles.pill}>Station {stationIndex} · {ticks.size}/{DOME_TOTAL} · {frameCount} frames</Text>
-        </View>
+        <HudReadout
+          style={styles.readout}
+          items={[
+            { label: 'Station', value: station },
+            { label: 'Sweep', value: `${ticks.size}/${DOME_TOTAL}`, tone: ticks.size >= DOME_TOTAL ? 'ok' : undefined },
+            { label: 'Frames', value: String(frameCount) },
+          ]}
+        />
 
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <View>
+        <View style={styles.center}>
+          <View style={styles.domePanel}>
             <CoverageDome captured={ticks} total={DOME_TOTAL} headingTick={aimTick} />
             <View style={styles.domeCenter} pointerEvents="none">
-              <Text style={styles.domePct}>{pct}%</Text>
-              <Text style={styles.domeLabel}>Station {stationIndex} sweep</Text>
+              <Text style={[T.kpi, { color: color.text }]}>{pct}%</Text>
             </View>
           </View>
         </View>
 
-        <View style={styles.guidance}>
-          <Text style={styles.guidanceTitle}>
-            {session?.guidance ? `360 station · ${session.guidance.room}` : 'Stand still · pan slowly through 360'}
-          </Text>
-          <Text style={styles.guidanceBody}>
-            {session?.guidance?.message ?? 'Fill the coverage dome for this station, then walk to the next. Server stitches the pan into a 360.'}
-          </Text>
-        </View>
-
         {captureError ? (
-          <Text style={styles.errorText}>{captureError}</Text>
-        ) : null}
+          <CoachCard tone="bad" title="Frame not saved" body={captureError} style={styles.coach} />
+        ) : (
+          <CoachCard
+            step={`360 station ${station}`}
+            title={session?.guidance?.room ? `Pan slowly · ${session.guidance.room}` : 'Stand still, pan slowly'}
+            body={session?.guidance?.message ?? 'Turn on the spot until the ring is full, then walk to the next station.'}
+            style={styles.coach}
+          />
+        )}
 
-        <View style={styles.shutterRow}>
-          <TouchableOpacity style={styles.doneBtn} onPress={onNewStation}>
-            <Text style={[styles.chipText, { fontSize: 11 }]}>+St</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.shutterOuter, shutterPressed && styles.shutterPressed]}
-            onPress={onShutter}
-            activeOpacity={0.8}
-          >
-            <View style={styles.shutterInner} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.doneBtn}
-            onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId, kind } } as any)}
-          >
-            <Text style={styles.chipText}>✓</Text>
-          </TouchableOpacity>
-        </View>
+        <HudControls
+          left={<HudControl icon={Plus} label="Station" onPress={onNewStation} />}
+          center={<Shutter mode="photo" busy={shutterPressed} onPress={onShutter} label="Take 360 frame" />}
+          right={<HudControl icon={Check} label="Review" onPress={() => router.push({ pathname: '/(capture)/review', params: { jobId, kind } } as any)} />}
+        />
       </SafeAreaView>
     </View>
   );
 }
 
-function roomSubColor(label: string): { color?: string } {
-  if (label.includes('EXTERIOR')) return { color: COLORS.bad };
-  if (label.includes('BATH')) return { color: COLORS.warn };
-  return {};
-}
-
 const styles = StyleSheet.create({
-  dark: { flex: 1, backgroundColor: '#0C0B09' },
-  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(12,11,9,0.35)' },
-  permWrap: { alignItems: 'center', justifyContent: 'center', padding: 32, gap: 20 },
-  permText: { fontFamily: FONTS.body, color: '#F4F1EB', textAlign: 'center', fontSize: 14 },
-  permBtn: { backgroundColor: COLORS.brick, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 2 },
-  permBtnText: { fontFamily: FONTS.bodySemibold, color: '#fff' },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8 },
-  chip: { width: 34, height: 34, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
-  chipText: { color: '#F4F1EB', fontSize: 16 },
-  roomTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#F4F1EB' },
-  roomSub: { fontFamily: FONTS.mono, fontSize: 10, letterSpacing: 1.4, color: COLORS.brick, marginTop: 1 },
-  pillRow: { flexDirection: 'row', gap: 8, justifyContent: 'center', marginTop: 12 },
-  pill: { fontFamily: FONTS.mono, fontSize: 10.5, color: '#F4F1EB', backgroundColor: '#14111099', borderWidth: 1, borderColor: '#F4F1EB1A', borderRadius: 2, paddingHorizontal: 10, paddingVertical: 5 },
+  dark: { flex: 1, backgroundColor: color.bg },
+  readout: { marginTop: space[12] },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  domePanel: { padding: space[8], backgroundColor: hud.panel, borderRadius: radius.sm, borderWidth: hairline, borderColor: color.hair },
   domeCenter: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  domePct: { fontFamily: FONTS.mono, fontSize: 30, color: '#F4F1EB' },
-  domeLabel: { fontFamily: FONTS.mono, fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: '#F4F1EBAA', marginTop: 2 },
-  guidance: { marginHorizontal: 20, backgroundColor: COLORS.brick, borderRadius: 2, padding: 12 },
-  guidanceTitle: { fontFamily: FONTS.bodySemibold, fontSize: 13, color: '#fff' },
-  guidanceBody: { fontFamily: FONTS.body, fontSize: 11, color: '#FFFFFFCC', marginTop: 2 },
-  errorText: { fontFamily: FONTS.body, fontSize: 11, color: '#F4F1EB', backgroundColor: COLORS.bad, marginHorizontal: 20, marginTop: 8, padding: 8, borderRadius: 2, textAlign: 'center' },
-  shutterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 18 },
-  shutterOuter: { width: 74, height: 74, borderRadius: 37, borderWidth: 3, borderColor: '#F4F1EB', alignItems: 'center', justifyContent: 'center' },
-  shutterPressed: { transform: [{ scale: 0.92 }] },
-  shutterInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.brick },
-  doneBtn: { width: 44, height: 44, borderRadius: 2, borderWidth: 1, borderColor: '#F4F1EB30', alignItems: 'center', justifyContent: 'center' },
+  coach: { marginTop: space[8] },
 });

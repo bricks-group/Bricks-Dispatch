@@ -1,12 +1,12 @@
 import { Stack } from 'expo-router';
-import { TOKENS } from '../../constants/Theme';
+import { color } from '../../theme';
 
 export default function OnboardingLayout() {
   return (
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: TOKENS.night },
+        contentStyle: { backgroundColor: color.bg },
         animation: 'none',
       }}
     />

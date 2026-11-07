@@ -40,7 +40,7 @@ _EXPIRY_WARNING_DAYS = 14
 _PROMPTS = {
     "coi": """
 You are validating a Certificate of Insurance (COI) submitted by an independent
-contractor photographer for a Canadian company, Bricks Group. Extract the
+contractor photographer for a Canadian company, Bricks Group Extract the
 following fields from this document. Return ONLY a JSON object.
 
 {

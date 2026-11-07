@@ -1,28 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import {
-  View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, Image,
-} from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Alert, Image, Linking } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ArrowRight, Check, Camera } from 'lucide-react-native';
+import { ArrowRight, Check as CheckIcon, Camera } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../lib/api';
 import BricksAOSelector from '../../components/BricksAOSelector';
+import { EnterFadeDown } from '../../components/motion';
+import { NavBar, Section, Group, Field, Button, Notice, Overline, LoadingState } from '../../components/ui';
+import { color, type as T, space, radius, layout, hairline } from '../../theme';
 import { PORTFOLIO_TYPES } from '../../lib/vendor';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
-
-const TOKENS = {
-  night: '#141210',
-  nightSoft: '#1C1A17',
-  nightHair: '#F4F1EB14',
-  nightHairS: '#F4F1EB26',
-  moon: '#F4F1EB',
-  moonSoft: '#D6CFC2',
-  moonMute: '#8F8678',
-  moonFaint: '#5E574C',
-  brick: '#D2542B',
-};
 
 type LocalSample = {
   media_type: string;
@@ -116,7 +105,7 @@ export default function OnboardingRegister() {
 
   const handleApply = async () => {
     if (!form.name || !form.email || !form.phone || !form.accepted_terms || !agreement) {
-      Alert.alert('REQUIRED FIELDS', 'Please complete all required fields and accept the contractor agreement.');
+      Alert.alert('Required fields', 'Please complete all required fields and accept the contractor agreement.');
       return;
     }
 
@@ -131,7 +120,7 @@ export default function OnboardingRegister() {
       .filter(Boolean);
 
     if (portfolio_samples.length === 0 && portfolio_links.length === 0) {
-      Alert.alert('PORTFOLIO', 'Add at least one sample image or link (HDR, drone, floor plan, tour, twilight, or reel).');
+      Alert.alert('Portfolio', 'Add at least one sample image or link (HDR, drone, floor plan, tour, twilight, or reel).');
       return;
     }
 
@@ -147,7 +136,20 @@ export default function OnboardingRegister() {
         hst_exempt: true,
       });
       if (!result.success) {
-        Alert.alert('ERROR', result.detail || 'Failed to submit application.');
+        const detail = String(result.detail || 'Failed to submit application.');
+        // Photographers now apply with 8-15 sample photos + availability on the web form.
+        if (/sample real estate photos|availability|camera body/i.test(detail)) {
+          Alert.alert(
+            'Finish on the web form',
+            'Photographer applications need 8-15 sample photos, your gear and your availability. Open the Bricks web form to finish.',
+            [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Open web form', onPress: () => Linking.openURL('https://www.brxs.ca/photographers#apply') },
+            ],
+          );
+          return;
+        }
+        Alert.alert('Error', detail);
         return;
       }
 
@@ -171,262 +173,144 @@ export default function OnboardingRegister() {
       }
 
       Alert.alert(
-        'APPLICATION RECEIVED',
+        'Application received',
         'Your application is under review. You will get access after approval.',
         [{ text: 'OK', onPress: () => router.replace('/onboarding/under-review' as any) }],
       );
     } catch (e) {
-      Alert.alert('ERROR', 'Connection failed.');
+      Alert.alert('Error', 'Connection failed.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} nestedScrollEnabled>
-      <View style={styles.headerBox}>
-        <Text style={styles.header}>join the crew</Text>
-        <Text style={styles.subhead}>ONTARIO FIELD OPERATIONS</Text>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.label}>FULL NAME</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="ALEX RIVERA"
-          placeholderTextColor={TOKENS.moonFaint}
-          value={form.name}
-          onChangeText={(v) => setForm({ ...form, name: v })}
-          data-testid="onboarding-name"
-        />
-
-        <Text style={styles.label}>EMAIL ADDRESS</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="ALEX@EXAMPLE.COM"
-          placeholderTextColor={TOKENS.moonFaint}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          value={form.email}
-          onChangeText={(v) => setForm({ ...form, email: v })}
-          data-testid="onboarding-email"
-        />
-
-        <Text style={styles.label}>PHONE</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="416-555-0100"
-          placeholderTextColor={TOKENS.moonFaint}
-          keyboardType="phone-pad"
-          value={form.phone}
-          onChangeText={(v) => setForm({ ...form, phone: v })}
-          data-testid="onboarding-phone"
-        />
-
-        <View style={styles.row}>
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <Text style={styles.label}>CITY</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="TORONTO"
-              placeholderTextColor={TOKENS.moonFaint}
-              value={form.city}
-              onChangeText={(v) => setForm({ ...form, city: v })}
-              data-testid="onboarding-city"
-            />
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <NavBar title="Apply" onBack={router.canGoBack() ? () => router.back() : undefined} border={false} />
+      <ScrollView style={styles.flex} contentContainerStyle={styles.content} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+        <EnterFadeDown>
+          <View style={styles.headerBox}>
+            <Overline>Ontario field operations</Overline>
+            <Text style={[T.display, { color: color.text }]} accessibilityRole="header">Join the crew</Text>
+            <Text style={[T.body, { color: color.textMuted }]}>A few details, a few samples, and you’re in the queue.</Text>
           </View>
-          <View style={{ width: 100 }}>
-            <Text style={styles.label}>RADIUS (KM)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="50"
-              placeholderTextColor={TOKENS.moonFaint}
-              keyboardType="numeric"
-              value={form.max_travel_km}
-              onChangeText={(v) => setForm({ ...form, max_travel_km: v })}
-              data-testid="onboarding-radius"
-            />
-          </View>
-        </View>
 
-        <BricksAOSelector
-          onPolygonComplete={(path: any) => setForm({ ...form, operation_polygon: path })}
-        />
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.label}>PORTFOLIO BY TYPE</Text>
-        <Text style={styles.hint}>
-          Upload a sample for each media type you shoot. Links are optional and supplemental.
-        </Text>
-        {PORTFOLIO_TYPES.map((t) => {
-          const sample = samples[t.id];
-          return (
-            <View key={t.id} style={styles.sampleCard} data-testid={`onboarding-portfolio-${t.id}`}>
-              <Text style={styles.sampleTitle}>{t.label.toUpperCase()}</Text>
-              <TouchableOpacity
-                style={styles.uploadRow}
-                onPress={() => pickSampleImage(t.id)}
-                activeOpacity={0.85}
-              >
-                {sample.uri ? (
-                  <Image source={{ uri: sample.uri }} style={styles.thumb} />
-                ) : (
-                  <View style={styles.thumbPlaceholder}>
-                    <Camera size={16} color={TOKENS.moonMute} />
-                  </View>
-                )}
-                <Text style={styles.uploadLabel}>
-                  {sample.uri ? 'Change image' : 'Upload image'}
-                </Text>
-              </TouchableOpacity>
-              <TextInput
-                style={styles.input}
-                placeholder="Optional link (https://…)"
-                placeholderTextColor={TOKENS.moonFaint}
-                autoCapitalize="none"
-                value={sample.link}
-                onChangeText={(v) =>
-                  setSamples((prev) => ({
-                    ...prev,
-                    [t.id]: { ...prev[t.id], link: v },
-                  }))
-                }
-              />
+          <Section first label="About you">
+            <View style={styles.fields}>
+              <Field label="Full name" placeholder="Alex Rivera" value={form.name} onChangeText={(v) => setForm({ ...form, name: v })} textContentType="name" testID="onboarding-name" />
+              <Field label="Email" placeholder="alex@example.com" keyboardType="email-address" autoCapitalize="none" value={form.email} onChangeText={(v) => setForm({ ...form, email: v })} textContentType="emailAddress" testID="onboarding-email" />
+              <Field label="Phone" placeholder="416-555-0100" keyboardType="phone-pad" value={form.phone} onChangeText={(v) => setForm({ ...form, phone: v })} textContentType="telephoneNumber" testID="onboarding-phone" />
+              <View style={styles.row}>
+                <View style={styles.flex}>
+                  <Field label="City" placeholder="Toronto" value={form.city} onChangeText={(v) => setForm({ ...form, city: v })} testID="onboarding-city" />
+                </View>
+                <View style={styles.radius}>
+                  <Field label="Radius (km)" placeholder="50" keyboardType="numeric" value={form.max_travel_km} onChangeText={(v) => setForm({ ...form, max_travel_km: v })} testID="onboarding-radius" />
+                </View>
+              </View>
             </View>
-          );
-        })}
-      </View>
+            <View style={styles.gapTop}>
+              <BricksAOSelector onPolygonComplete={(path: any) => setForm({ ...form, operation_polygon: path })} />
+            </View>
+          </Section>
 
-      <View style={styles.section}>
-        <Text style={styles.label}>CONTRACTOR AGREEMENT</Text>
-        {agreement ? (
-          <>
-            <Text style={styles.agreementMeta}>V{agreement.version} · EFFECTIVE {agreement.effective_date}</Text>
-            <ScrollView style={styles.agreementBox} nestedScrollEnabled data-testid="onboarding-agreement-text">
-              <Text style={styles.agreementText} selectable>{agreement.text}</Text>
-            </ScrollView>
-          </>
-        ) : agreementError ? (
-          <TouchableOpacity onPress={loadAgreement} activeOpacity={0.8}>
-            <Text style={styles.agreementError}>{agreementError}</Text>
-          </TouchableOpacity>
-        ) : (
-          <Text style={styles.agreementMeta}>LOADING AGREEMENT…</Text>
-        )}
-      </View>
+          <Section label="Portfolio">
+            <Text style={[T.bodySm, styles.hint]}>Add a sample for each type you shoot. Links are optional.</Text>
+            <Group>
+              {PORTFOLIO_TYPES.map((t) => {
+                const sample = samples[t.id];
+                return (
+                  <View key={t.id} style={styles.sample} testID={`onboarding-portfolio-${t.id}`}>
+                    <Pressable style={styles.uploadRow} onPress={() => pickSampleImage(t.id)} accessibilityRole="button" accessibilityLabel={`${sample.uri ? 'Change' : 'Upload'} ${t.label} sample`}>
+                      {sample.uri ? (
+                        <Image source={{ uri: sample.uri }} style={styles.thumb} />
+                      ) : (
+                        <View style={styles.thumbPlaceholder}><Camera size={layout.icon} color={color.textMuted} strokeWidth={layout.iconStroke} /></View>
+                      )}
+                      <View style={styles.flex}>
+                        <Text style={[T.bodyMedium, { color: color.text }]}>{t.label}</Text>
+                        <Text style={[T.caption, { color: sample.uri ? color.ok : color.textMuted }]}>{sample.uri ? 'Image added · tap to change' : 'Tap to add an image'}</Text>
+                      </View>
+                    </Pressable>
+                    <Field
+                      placeholder="Optional link (https://…)"
+                      autoCapitalize="none"
+                      keyboardType="url"
+                      value={sample.link}
+                      onChangeText={(v) => setSamples((prev) => ({ ...prev, [t.id]: { ...prev[t.id], link: v } }))}
+                    />
+                  </View>
+                );
+              })}
+            </Group>
+          </Section>
 
-      <TouchableOpacity
-        style={styles.termsRow}
-        onPress={() => {
-          if (!agreement) return;
-          setForm({ ...form, accepted_terms: !form.accepted_terms });
-        }}
-        activeOpacity={0.8}
-        disabled={!agreement}
-        data-testid="onboarding-terms"
-      >
-        <View style={[styles.checkbox, form.accepted_terms && styles.checkboxChecked]}>
-          {form.accepted_terms && <Check size={14} color="#FFF" strokeWidth={3} />}
-        </View>
-        <Text style={styles.termsText}>
-          {agreement
-            ? `I ACCEPT THE BRICKS CONTRACTOR AGREEMENT V${agreement.version} (ONTARIO)`
-            : 'I ACCEPT THE BRICKS CONTRACTOR AGREEMENT (ONTARIO)'}
-        </Text>
-      </TouchableOpacity>
+          <Section label="Contractor agreement">
+            {agreement ? (
+              <>
+                <Text style={[T.dataSm, styles.hint]}>Version {agreement.version} · effective {agreement.effective_date}</Text>
+                <ScrollView style={styles.agreementBox} nestedScrollEnabled testID="onboarding-agreement-text">
+                  <Text style={[T.bodySm, { color: color.textBody }]} selectable>{agreement.text}</Text>
+                </ScrollView>
+              </>
+            ) : agreementError ? (
+              <Notice tone="bad">{agreementError}</Notice>
+            ) : (
+              <LoadingState label="Loading agreement…" />
+            )}
+            {agreementError && !agreement ? <View style={styles.gapTop}><Button variant="secondary" title="Retry" onPress={loadAgreement} /></View> : null}
 
-      <TouchableOpacity
-        style={styles.button}
-        onPress={handleApply}
-        disabled={loading || !agreement}
-        activeOpacity={0.9}
-        data-testid="onboarding-submit"
-      >
-        {loading ? (
-          <ActivityIndicator color="#FFF" />
-        ) : (
-          <View style={styles.btnInner}>
-            <Text style={styles.buttonText}>SUBMIT APPLICATION</Text>
-            <ArrowRight size={18} color="#FFF" strokeWidth={2} />
+            <Pressable
+              style={styles.termsRow}
+              onPress={() => {
+                if (!agreement) return;
+                setForm({ ...form, accepted_terms: !form.accepted_terms });
+              }}
+              disabled={!agreement}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: form.accepted_terms, disabled: !agreement }}
+              testID="onboarding-terms"
+            >
+              <View style={[styles.checkbox, form.accepted_terms && styles.checkboxChecked]}>
+                {form.accepted_terms && <CheckIcon size={14} color={color.textOnAccent} strokeWidth={2.5} />}
+              </View>
+              <Text style={[T.bodySm, styles.flex, { color: color.textBody }]}>
+                {agreement
+                  ? `I accept the Bricks contractor agreement v${agreement.version} (Ontario).`
+                  : 'I accept the Bricks contractor agreement (Ontario).'}
+              </Text>
+            </Pressable>
+          </Section>
+
+          <View style={styles.submit}>
+            <Button title="Submit application" iconRight={ArrowRight} onPress={handleApply} loading={loading} disabled={!agreement} testID="onboarding-submit" />
           </View>
-        )}
-      </TouchableOpacity>
-
-      <View style={{ height: 60 }} />
-    </ScrollView>
+        </EnterFadeDown>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: TOKENS.night },
-  content: { padding: 36 },
-  headerBox: { marginTop: 48, marginBottom: 36 },
-  header: {
-    fontSize: 34, fontFamily: 'System', color: TOKENS.moon,
-    letterSpacing: -1.1, textTransform: 'lowercase',
-  },
-  subhead: {
-    fontSize: 10.5, fontFamily: 'IoskeleyMono-Medium', color: TOKENS.moonMute,
-    letterSpacing: 1.8, marginTop: 8,
-  },
-  section: { marginBottom: 28 },
-  label: {
-    fontSize: 10, fontFamily: 'IoskeleyMono-Medium', color: TOKENS.moonMute,
-    letterSpacing: 1.6, marginBottom: 10, textTransform: 'uppercase',
-  },
-  hint: {
-    fontSize: 12, color: TOKENS.moonSoft, marginBottom: 14, lineHeight: 18,
-  },
-  row: { flexDirection: 'row' },
-  input: {
-    backgroundColor: TOKENS.nightSoft, borderWidth: 1, borderColor: TOKENS.nightHair,
-    padding: 14, color: TOKENS.moon, fontSize: 13, fontFamily: 'IoskeleyMono-Regular',
-    borderRadius: 2, marginBottom: 18,
-  },
-  sampleCard: {
-    borderWidth: 1, borderColor: TOKENS.nightHair, backgroundColor: TOKENS.nightSoft,
-    borderRadius: 2, padding: 12, marginBottom: 14,
-  },
-  sampleTitle: {
-    fontSize: 10, fontFamily: 'IoskeleyMono-Medium', color: TOKENS.moonMute,
-    letterSpacing: 1.4, marginBottom: 10,
-  },
-  uploadRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 },
-  thumb: { width: 48, height: 48, borderRadius: 2 },
-  thumbPlaceholder: {
-    width: 48, height: 48, borderRadius: 2, borderWidth: 1, borderColor: TOKENS.nightHairS,
-    alignItems: 'center', justifyContent: 'center', backgroundColor: TOKENS.night,
-  },
-  uploadLabel: { color: TOKENS.moonSoft, fontSize: 12, fontFamily: 'IoskeleyMono-Medium' },
-  button: {
-    backgroundColor: TOKENS.brick, paddingVertical: 14, paddingHorizontal: 22,
-    borderRadius: 2, alignItems: 'center', marginTop: 12,
-  },
-  btnInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  buttonText: { color: '#FFF', fontFamily: 'System', fontSize: 14 },
-  termsRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 24, gap: 12 },
+  flex: { flex: 1 },
+  safe: { flex: 1, backgroundColor: color.bg },
+  content: { paddingHorizontal: layout.gutter, paddingBottom: space[48] },
+  headerBox: { paddingTop: space[8], paddingBottom: space[32], gap: space[8] },
+  fields: { gap: space[16] },
+  row: { flexDirection: 'row', gap: space[10] },
+  radius: { width: 112 },
+  gapTop: { marginTop: space[16] },
+  hint: { color: color.textMuted, marginBottom: space[12] },
+  sample: { padding: space[16], gap: space[12] },
+  uploadRow: { flexDirection: 'row', alignItems: 'center', gap: space[12], minHeight: layout.tap },
+  thumb: { width: 48, height: 48, borderRadius: radius.sm },
+  thumbPlaceholder: { width: 48, height: 48, borderRadius: radius.sm, backgroundColor: color.surface, alignItems: 'center', justifyContent: 'center' },
+  agreementBox: { maxHeight: 280, borderWidth: hairline, borderColor: color.hair, borderRadius: radius.sm, padding: space[14] },
+  termsRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space[12], marginTop: space[20], minHeight: layout.tap },
   checkbox: {
-    width: 20, height: 20, borderWidth: 1, borderColor: TOKENS.nightHairS,
-    borderRadius: 2, alignItems: 'center', justifyContent: 'center', marginTop: 2,
+    width: 22, height: 22, borderWidth: 1.5, borderColor: color.hairStrong, borderRadius: radius.sm,
+    alignItems: 'center', justifyContent: 'center',
   },
-  checkboxChecked: { backgroundColor: TOKENS.brick, borderColor: TOKENS.brick },
-  termsText: {
-    color: TOKENS.moonSoft, fontSize: 10, fontFamily: 'IoskeleyMono-Medium',
-    lineHeight: 16, flex: 1,
-  },
-  agreementMeta: {
-    fontSize: 10, fontFamily: 'IoskeleyMono-Medium', color: TOKENS.moonFaint,
-    letterSpacing: 1.2, marginBottom: 10,
-  },
-  agreementBox: {
-    maxHeight: 280, backgroundColor: TOKENS.nightSoft, borderWidth: 1,
-    borderColor: TOKENS.nightHair, borderRadius: 2, padding: 12,
-  },
-  agreementText: {
-    color: TOKENS.moonSoft, fontSize: 11, fontFamily: 'IoskeleyMono-Regular', lineHeight: 16,
-  },
-  agreementError: {
-    color: TOKENS.brick, fontSize: 11, fontFamily: 'IoskeleyMono-Medium', lineHeight: 16,
-  },
+  checkboxChecked: { backgroundColor: color.accent, borderColor: color.accent },
+  submit: { marginTop: layout.section },
 });

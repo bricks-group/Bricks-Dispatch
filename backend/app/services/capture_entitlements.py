@@ -382,6 +382,17 @@ def stamp_capture(job: dict | None) -> dict:
     flags = job_capture_entitlements(row)
     row["capture"] = flags
     try:
+        from .job_checklist import effective_checklist, is_trade_job, public_items
+        if is_trade_job(row):
+            # Trade jobs: saved ticks and proof, stable ids, no storage paths.
+            row["checklist"] = public_items(effective_checklist(row))
+            row["checklist_title"] = "Job checklist"
+            row["trade_job"] = True
+            return row
+        row["trade_job"] = False
+    except Exception:
+        pass
+    try:
         from .visit_checklist import ensure_visit_checklist
         existing = row.get("checklist") or []
         if not existing:
@@ -393,6 +404,17 @@ def stamp_capture(job: dict | None) -> dict:
             )
             if "return visit" in labels or "twilight return" in labels or "second appointment" in labels:
                 row["checklist"] = ensure_visit_checklist(row)
+            else:
+                # Client-service and trade jobs: swap an untouched generic list.
+                from .visit_checklist import swap_untouched_checklist
+                swapped = swap_untouched_checklist(row)
+                if swapped is not None:
+                    row["checklist"] = swapped
     except Exception:
         pass
+    try:
+        from .visit_checklist import checklist_title
+        row["checklist_title"] = checklist_title(row)
+    except Exception:
+        row["checklist_title"] = "Shoot checklist"
     return row

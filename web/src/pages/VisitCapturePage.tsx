@@ -1,13 +1,19 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { API_BASE } from '../lib/api';
-import { supabase } from '../lib/supabase';
+import {
+  deliverVisitFile,
+  deliverVisitUrl,
+  formatVisitFileLabel,
+  VISIT_EXTS,
+  type VisitUploadPhase,
+} from '../lib/visit-upload';
 
-async function authHeaders(extra: Record<string, string> = {}) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const headers: Record<string, string> = { ...extra };
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
-  return headers;
+function phaseLabel(phase: VisitUploadPhase | null, busy: boolean): string {
+  if (!busy) return 'Deliver to listing';
+  if (phase === 'signing') return 'Preparing upload…';
+  if (phase === 'uploading') return 'Uploading file…';
+  if (phase === 'delivering') return 'Delivering…';
+  return 'Delivering…';
 }
 
 export function VisitCapturePage() {
@@ -16,6 +22,7 @@ export function VisitCapturePage() {
   const [url, setUrl] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<VisitUploadPhase | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
@@ -28,42 +35,17 @@ export function VisitCapturePage() {
   const deliver = async () => {
     if (!jobId) return;
     setBusy(true);
+    setPhase(null);
     setError(null);
     setDone(null);
     try {
       if (file) {
-        const signRes = await fetch(`${API_BASE}/api/capture/visit/sign`, {
-          method: 'POST',
-          headers: await authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ job_id: jobId, filename: file.name }),
-        });
-        const sign = await signRes.json().catch(() => ({}));
-        if (!signRes.ok) {
-          throw new Error(sign?.detail || sign?.message || 'Could not start visit upload');
-        }
-        const put = await fetch(sign.signed_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': sign.content_type || 'application/octet-stream' },
-          body: file,
-        });
-        if (!put.ok) throw new Error('Visit file upload failed');
-        const delRes = await fetch(`${API_BASE}/api/capture/visit/deliver`, {
-          method: 'POST',
-          headers: await authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ job_id: jobId, storage_path: sign.storage_path, title: 'Virtual Visit' }),
-        });
-        const del = await delRes.json().catch(() => ({}));
-        if (!delRes.ok) throw new Error(del?.detail || del?.message || 'Could not deliver visit');
+        await deliverVisitFile(jobId, file, { onPhase: setPhase });
         setDone('Virtual Visit file is on the listing.');
         setFile(null);
       } else {
-        const delRes = await fetch(`${API_BASE}/api/capture/visit/deliver`, {
-          method: 'POST',
-          headers: await authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ job_id: jobId, polycam_url: url.trim(), title: 'Virtual Visit' }),
-        });
-        const del = await delRes.json().catch(() => ({}));
-        if (!delRes.ok) throw new Error(del?.detail || del?.message || 'Could not deliver visit');
+        setPhase('delivering');
+        await deliverVisitUrl(jobId, url);
         setDone('Virtual Visit link is on the listing.');
         setUrl('');
       }
@@ -71,6 +53,7 @@ export function VisitCapturePage() {
       setError(String(e?.message || e));
     } finally {
       setBusy(false);
+      setPhase(null);
     }
   };
 
@@ -82,6 +65,8 @@ export function VisitCapturePage() {
     );
   }
 
+  const accept = [...VISIT_EXTS, 'application/octet-stream'].join(',');
+
   return (
     <div className="capture-shell" style={{ padding: 24, maxWidth: 520, margin: '0 auto' }}>
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 18 }}>
@@ -89,9 +74,11 @@ export function VisitCapturePage() {
         <span className="kicker" style={{ letterSpacing: 2, fontSize: 11, color: 'var(--c-brick, #C45C26)' }}>VIRTUAL VISIT</span>
       </div>
       <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>Deliver Virtual Visit</h1>
+      <p className="muted" style={{ marginBottom: 12, lineHeight: 1.45 }}>
+        Recording on a phone? <Link to={`/capture/guided?jobId=${encodeURIComponent(jobId)}&type=virtual-visit`}>Use the guided camera</Link>.
+      </p>
       <p className="muted" style={{ marginBottom: 18, lineHeight: 1.45 }}>
-        Free-roam splat of the space — not the path-confined 3D tour. Paste a Polycam share URL, or upload a .ply / .splat / .spz.
-        Owned GPU cook from GO frames comes later.
+        Paste a Polycam link, or upload a .sog, .spz, .ply or .splat file.
       </p>
 
       <label className="muted" style={{ display: 'block', marginBottom: 6 }}>Polycam / share URL</label>
@@ -105,24 +92,44 @@ export function VisitCapturePage() {
 
       <p className="muted" style={{ margin: '8px 0' }}>or</p>
 
-      <label className="muted" style={{ display: 'block', marginBottom: 6 }}>.ply / .splat / .spz file</label>
+      <label className="muted" style={{ display: 'block', marginBottom: 6 }}>.sog / .spz / .ply / .splat file</label>
       <input
         type="file"
-        accept=".ply,.splat,.spz,application/octet-stream"
+        accept={accept}
         disabled={busy || !!url.trim()}
         onChange={(e) => {
           const f = e.target.files?.[0] || null;
           setFile(f);
           if (f) setUrl('');
+          setError(null);
+          setDone(null);
         }}
-        style={{ marginBottom: 18, color: '#F4F1EB' }}
+        style={{ marginBottom: 8, color: '#F4F1EB' }}
       />
+      {file ? (
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, gap: 12 }}>
+          <span className="muted" style={{ fontSize: 13, wordBreak: 'break-all' }}>{formatVisitFileLabel(file)}</span>
+          <button
+            type="button"
+            className="btn-logout"
+            disabled={busy}
+            onClick={() => setFile(null)}
+            style={{ flexShrink: 0 }}
+          >
+            Clear
+          </button>
+        </div>
+      ) : (
+        <p className="muted" style={{ marginBottom: 18, fontSize: 12 }}>
+          Large .sog / .spz / .ply / .splat upload direct to storage (not through the 4.5MB API body). Same deliver finalize as Polycam URL.
+        </p>
+      )}
 
       {error && <p className="error" style={{ marginBottom: 12 }}>{error}</p>}
       {done && <p style={{ color: '#7dba7d', marginBottom: 12 }}>{done}</p>}
 
-      <button className="btn-capture" type="button" disabled={!canSubmit} onClick={deliver}>
-        {busy ? 'Delivering…' : 'Deliver to listing'}
+      <button className="btn-primary" type="button" disabled={!canSubmit} onClick={deliver}>
+        {phaseLabel(phase, busy)}
       </button>
     </div>
   );

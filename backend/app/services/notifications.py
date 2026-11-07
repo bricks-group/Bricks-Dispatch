@@ -4,7 +4,7 @@ import os
 import re
 from datetime import date as _date
 from zoneinfo import ZoneInfo
-from ..shared.database import get_db
+from ..shared.database import get_db, maybe_single_row
 from ..shared.job_timezone import resolve_job_iana, tz_abbrev
 from ..shared.schemas import NotificationRecord
 
@@ -242,6 +242,35 @@ async def notify_arrive_confirmed(job: dict, photographer: dict | None = None) -
     return result
 
 
+def welcome_approved_email_html(availability_url: str) -> str:
+    """Welcome after Hiring approval — calendar connect is how auto-assign sees availability."""
+    url = (availability_url or "https://go.brxs.ca/availability").strip()
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px">
+<div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
+<tr>
+<td width="16" height="16" style="width:16px;height:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
+<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
+<td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
+</tr>
+</table>
+<div style="background:#d2542b;padding:16px 24px;margin-top:12px">
+<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">You’re approved</h1>
+</div>
+<div style="padding:24px">
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">You’re approved on Bricks GO.</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Connecting a calendar is how Dispatch knows your availability for auto-assign.</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Busy on any connected calendar = you won’t get that slot. Manual hours still apply if none is connected.</p>
+<a href="{url}" style="display:inline-block;margin-top:8px;padding:12px 24px;background:#d2542b;color:#fff;text-decoration:none;border-radius:2px;font-weight:500">Open Availability</a>
+<p style="margin-top:24px;font-size:13px;color:#999;line-height:1.5">Or go to <a href="{url}" style="color:#d2542b">{url}</a></p>
+</div>
+<div style="padding:12px 24px;border-top:1px solid #eee;font-size:12px;color:#888;font-family:{_EMAIL_FONT_STACK}">
+<p style="margin:0">Bricks · brxs.ca</p></div>
+</div></body></html>"""
+
+
 def _assignment_email_html(name: str, address: str, when_line: str, go_url: str) -> str:
     who = (name or "").strip() or "there"
     addr = (address or "").strip() or "a property"
@@ -389,8 +418,10 @@ def _paid_booking_admin_email_html(
 </div></body></html>"""
 
 
-async def send_email_via_resend(to: str, subject: str, html: str) -> bool:
-    """Send transactional email via Resend. Returns True on success."""
+async def send_email_via_resend(to: str, subject: str, html: str, text: str | None = None) -> bool:
+    """Send transactional email via Resend. Returns True on success.
+
+    text: optional plain-text alternative (multipart/alternative)."""
     api_key = os.environ.get("RESEND_API_KEY", "")
     if not api_key:
         logger.debug("RESEND_API_KEY not set — skipping email")
@@ -406,9 +437,11 @@ async def send_email_via_resend(to: str, subject: str, html: str) -> bool:
                 },
                 json={
                     "from": "BRICKS <notifications@brxs.ca>",
+                    "reply_to": "help@brxs.ca",
                     "to": [to],
                     "subject": subject,
                     "html": html,
+                    **({"text": text} if text else {}),
                 },
             )
             r.raise_for_status()
@@ -546,8 +579,12 @@ async def send_push_to_member(member_id: str, title: str, body: str, data: dict 
         res = await (await get_db()).table("push_tokens").select("*").eq("member_id", member_id).eq("active", True).limit(50).execute()
         tokens = res.data or []
     except Exception as exc:
-        logger.error("push_tokens lookup failed: %s", exc)
-        return False
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_push_tokens_for_member
+        if _is_rest_quota_error(exc):
+            tokens = list(pg_select_push_tokens_for_member(member_id) or [])
+        else:
+            logger.error("push_tokens lookup failed: %s", exc)
+            return False
     if not tokens:
         logger.info("No push tokens for member %s — skipping push", member_id)
         return False
@@ -593,16 +630,38 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
     db = await get_db()
     try:
         existing = await db.table("push_tokens").select("id").eq("token", token).maybe_single().execute()
-        if existing.data:
+        existing_row = maybe_single_row(existing)
+        if existing_row:
             await db.table("push_tokens").update({
                 "member_id": member_id,
                 "platform": platform,
                 "active": True,
                 "updated_at": now,
-            }).eq("id", existing.data["id"]).execute()
-            return {"registered": True, "id": existing.data["id"]}
+            }).eq("id", existing_row["id"]).execute()
+            return {"registered": True, "id": existing_row["id"]}
     except Exception as exc:
-        logger.error("push_tokens lookup failed: %s", exc)
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_push_token_by_token,
+            pg_upsert_push_token,
+        )
+        if _is_rest_quota_error(exc):
+            found = pg_select_push_token_by_token(token)
+            if found and found.get("id"):
+                updated = pg_upsert_push_token({
+                    "id": found["id"],
+                    "member_id": member_id,
+                    "token": token,
+                    "platform": platform,
+                    "active": True,
+                    "updated_at": now,
+                })
+                if updated and updated.get("id"):
+                    return {"registered": True, "id": updated["id"]}
+                raise
+            # no existing row — fall through to insert path below via PG
+        else:
+            logger.error("push_tokens lookup failed: %s", exc)
     row = {
         "id": str(uuid.uuid4()),
         "member_id": member_id,
@@ -616,6 +675,12 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
         await db.table("push_tokens").insert(row).execute()
         return {"registered": True, "id": row["id"]}
     except Exception as exc:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_upsert_push_token
+        if _is_rest_quota_error(exc):
+            saved = pg_upsert_push_token(dict(row))
+            if saved and saved.get("id"):
+                return {"registered": True, "id": saved["id"]}
+            raise
         logger.error("push_tokens insert failed: %s", exc)
         slim = {k: row[k] for k in ("id", "token", "active") if k in row}
         slim["member_id"] = member_id
@@ -623,6 +688,10 @@ async def store_push_token(member_id: str, token: str, platform: str = "expo") -
             await db.table("push_tokens").insert(slim).execute()
             return {"registered": True, "id": row["id"]}
         except Exception as exc2:
+            if _is_rest_quota_error(exc2):
+                saved = pg_upsert_push_token(dict(row))
+                if saved and saved.get("id"):
+                    return {"registered": True, "id": saved["id"]}
             logger.error("push_tokens insert retry failed: %s", exc2)
             raise
 
@@ -649,10 +718,25 @@ async def create_notification(
     try:
         await (await get_db()).table("notifications").insert(notif_dict).execute()
     except Exception as exc:
-        if member_id:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_notification
+        if _is_rest_quota_error(exc):
+            if not pg_insert_notification(dict(notif_dict)):
+                raise
+        elif member_id:
             logger.info("notifications insert with member_id failed (%s) — retrying without it", type(exc).__name__)
             notif_dict.pop("member_id", None)
-            await (await get_db()).table("notifications").insert(notif_dict).execute()
+            try:
+                await (await get_db()).table("notifications").insert(notif_dict).execute()
+            except Exception as exc2:
+                if _is_rest_quota_error(exc2):
+                    # Prefer original member-scoped row on Fair-Use retry
+                    retry_row = dict(notif_dict)
+                    if member_id:
+                        retry_row["member_id"] = member_id
+                    if not pg_insert_notification(retry_row):
+                        raise
+                else:
+                    raise
         else:
             raise
     if member_id and send_push:
@@ -675,7 +759,7 @@ async def notify_assignment(job: dict, member_id: str) -> dict:
     member: dict = {}
     try:
         res = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-        member = res.data or {}
+        member = maybe_single_row(res)
     except Exception as exc:
         logger.error("Assignment notify: failed to load member %s: %s", member_id, exc)
 

@@ -34,7 +34,7 @@ struct VisitDeliverView: View {
                     Text("Deliver Virtual Visit")
                         .font(.title2.weight(.semibold))
 
-                    Text("Free-roam splat of the space — not the path-confined 3D tour. Paste a Polycam share URL, or upload a .ply / .splat / .spz. Owned GPU cook from GO frames comes later.")
+                    Text("Free-roam splat of the space — not the path-confined 3D tour. Paste a Polycam share URL, or upload a .sog / .spz / .ply / .splat. Owned phone-video Visit capture is next.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
@@ -162,14 +162,15 @@ struct VisitDeliverView: View {
         if let ply = UTType(filenameExtension: "ply") { types.insert(ply, at: 0) }
         if let splat = UTType(filenameExtension: "splat") { types.insert(splat, at: 0) }
         if let spz = UTType(filenameExtension: "spz") { types.insert(spz, at: 0) }
+        if let sog = UTType(filenameExtension: "sog") { types.insert(sog, at: 0) }
         return types
     }
 
     private func ingestFile(_ fileURL: URL) {
         let name = fileURL.lastPathComponent
         let ext = fileURL.pathExtension.lowercased()
-        guard ["ply", "splat", "spz"].contains(ext) else {
-            error = "Only .splat, .ply, or .spz files are supported"
+        guard ["ply", "splat", "spz", "sog"].contains(ext) else {
+            error = "Only .sog, .spz, .ply, or .splat files are supported"
             return
         }
         let accessed = fileURL.startAccessingSecurityScopedResource()

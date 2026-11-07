@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, Pressable, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronLeft, ChevronRight } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
-import { TOKENS, TYPOGRAPHY } from '../../constants/Theme';
+import { cachedJson } from '../../lib/offline';
+import { color, type as T, space, radius, hairline, type Tone } from '../../theme';
+import { Screen, PageHeader, Section, Group, IconButton, Pill, EmptyState, LoadingState } from '../../components/ui';
 import { formatShootWindow } from '../../lib/shoot-window';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
-const DAY_LABELS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 type Job = {
   id: string; address: string; city: string; state: string;
@@ -41,10 +42,10 @@ function toISO(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
-function pillForStatus(status: string): { label: string; bg: string; fg: string; dot: string } {
-  if (status === 'completed') return { label: 'Delivered', bg: TOKENS.ok + '33', fg: '#B8CC9E', dot: TOKENS.ok };
-  if (status === 'in_progress') return { label: 'Next', bg: TOKENS.brick + '33', fg: TOKENS.brickSoft, dot: TOKENS.brick };
-  return { label: 'Scheduled', bg: TOKENS.nightDeep, fg: TOKENS.moonSoft, dot: TOKENS.nightHairS };
+function pillForStatus(status: string): { label: string; tone: Tone } {
+  if (status === 'completed') return { label: 'Delivered', tone: 'ok' };
+  if (status === 'in_progress') return { label: 'Next', tone: 'accent' };
+  return { label: 'Scheduled', tone: 'neutral' };
 }
 
 export default function ScheduleScreen() {
@@ -65,9 +66,8 @@ export default function ScheduleScreen() {
   const fetchJobs = useCallback(async () => {
     try {
       const headers = await actorHeaders();
-      const res = await fetch(`${API}/api/jobs`, { headers });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setAllJobs(await res.json());
+      const { data } = await cachedJson<Job[]>('jobs', `${API}/api/jobs`, { headers });
+      setAllJobs(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error('Schedule fetch error', e);
     } finally {
@@ -87,156 +87,103 @@ export default function ScheduleScreen() {
 
   const weekNum = getWeekNumber(weekMonday);
 
+  const weekEnd = weekDays[6];
+  const rangeLabel = `${weekMonday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${weekEnd.toLocaleDateString('en-US', weekEnd.getMonth() === weekMonday.getMonth() ? { day: 'numeric' } : { month: 'short', day: 'numeric' })}`;
+  const shiftWeek = (days: number) => {
+    const d = new Date(weekMonday);
+    d.setDate(d.getDate() + days);
+    setWeekMonday(d);
+  };
+  const typeLabel = (t: string) => t.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchJobs(); }} tintColor={TOKENS.brick} />}
-        stickyHeaderIndices={[0]}
-      >
-        {/* Sticky header + week grid */}
-        <View style={s.stickyTop}>
-          {/* Week header */}
-          <View style={s.weekHeader}>
-            <Text style={s.weekTitle}>Week {weekNum}</Text>
-            <View style={s.weekNav}>
-              <TouchableOpacity
-                style={s.navBtn}
-                onPress={() => {
-                  const prev = new Date(weekMonday);
-                  prev.setDate(prev.getDate() - 7);
-                  setWeekMonday(prev);
-                }}
-                activeOpacity={0.7}
-              >
-                <ChevronLeft size={14} color={TOKENS.moonMute} strokeWidth={1.5} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={s.navBtn}
-                onPress={() => {
-                  const next = new Date(weekMonday);
-                  next.setDate(next.getDate() + 7);
-                  setWeekMonday(next);
-                }}
-                activeOpacity={0.7}
-              >
-                <ChevronRight size={14} color={TOKENS.moonMute} strokeWidth={1.5} />
-              </TouchableOpacity>
-            </View>
-          </View>
+    <Screen
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchJobs(); }} tintColor={color.accent} />}
+    >
+      <PageHeader
+        overline={`Week ${weekNum}`}
+        title={rangeLabel}
+        right={
+          <>
+            <IconButton icon={ChevronLeft} label="Previous week" outline onPress={() => shiftWeek(-7)} />
+            <IconButton icon={ChevronRight} label="Next week" outline onPress={() => shiftWeek(7)} />
+          </>
+        }
+      />
 
-          {/* 7-day grid */}
-          <View style={s.dayGrid}>
-            {weekDays.map((day, i) => {
-              const iso = toISO(day);
-              const isSelected = iso === selected;
-              const isToday = iso === toISO(today);
-              const count = jobsForDate(iso).length;
-              return (
-                <TouchableOpacity
-                  key={iso}
-                  style={[s.dayCell, isSelected && s.dayCellActive]}
-                  onPress={() => setSelected(iso)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[s.dayName, isSelected && s.dayNameActive]}>
-                    {DAY_LABELS[i]}
-                  </Text>
-                  <Text style={[s.dayNum, isSelected && s.dayNumActive, isToday && !isSelected && { color: TOKENS.brick }]}>
-                    {day.getDate()}
-                  </Text>
-                  <View style={s.dotRow}>
-                    {count > 0
-                      ? Array.from({ length: Math.min(count, 4) }).map((_, j) => (
-                          <View key={j} style={[s.dot, { backgroundColor: isSelected ? TOKENS.moon : TOKENS.brick }]} />
-                        ))
-                      : <View style={{ height: 4 }} />
-                    }
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+      <View style={s.dayGrid}>
+        {weekDays.map((day, i) => {
+          const iso = toISO(day);
+          const isSelected = iso === selected;
+          const isToday = iso === toISO(today);
+          const count = jobsForDate(iso).length;
+          const fg = isSelected ? color.textInverse : isToday ? color.accentText : color.text;
+          return (
+            <Pressable
+              key={iso}
+              style={[s.dayCell, isSelected && s.dayCellActive]}
+              onPress={() => setSelected(iso)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isSelected }}
+              accessibilityLabel={`${day.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}, ${count} shoot${count === 1 ? '' : 's'}`}
+            >
+              <Text style={[T.caption, { color: isSelected ? color.textInverse : color.textMuted }]}>{DAY_LABELS[i]}</Text>
+              <Text style={[T.dataMd, { color: fg }]}>{day.getDate()}</Text>
+              <View style={s.dotRow}>
+                {Array.from({ length: Math.min(count, 3) }).map((_, j) => (
+                  <View key={j} style={[s.dot, { backgroundColor: isSelected ? color.textInverse : color.accent }]} />
+                ))}
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
 
-        {/* Day label */}
-        <View style={s.dayLabelRow}>
-          <Text style={s.dayLabelText}>
-            {selectedLabel.toUpperCase()} · {selectedJobs.length} SHOOT{selectedJobs.length !== 1 ? 'S' : ''}
-          </Text>
-        </View>
-
-        {/* Timeline */}
-        {!loading && selectedJobs.length === 0 ? (
-          <View style={s.empty}><Text style={s.emptyText}>No jobs on this day</Text></View>
+      <Section label={`${selectedLabel} · ${selectedJobs.length} shoot${selectedJobs.length !== 1 ? 's' : ''}`}>
+        {loading && allJobs.length === 0 ? (
+          <LoadingState />
+        ) : selectedJobs.length === 0 ? (
+          <EmptyState icon={CalendarDays} title="Nothing booked" body="Pick another day." />
         ) : (
-          <View style={s.timeline}>
-            {selectedJobs.map((job, i) => {
+          <Group>
+            {selectedJobs.map((job) => {
               const pill = pillForStatus(job.status);
               return (
-                <TouchableOpacity
+                <Pressable
                   key={job.id}
-                  style={[s.timelineRow, i < selectedJobs.length - 1 && s.timelineRowBorder]}
+                  style={({ pressed }) => [s.row, pressed && s.rowPressed]}
                   onPress={() => router.push(`/job/${job.id}`)}
-                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open job at ${job.address}`}
                 >
-                  <Text style={s.timelineTime} numberOfLines={3}>{formatShootWindow(job)}</Text>
-                  <View style={s.timelineLine}>
-                    <View style={[s.timelineDot, { backgroundColor: pill.dot }]} />
+                  <Text style={[T.dataSm, s.time]}>{formatShootWindow(job)}</Text>
+                  <View style={s.info}>
+                    <Text style={[T.bodyMedium, { color: color.text }]}>{job.address}</Text>
+                    <Text style={[T.caption, { color: color.textMuted }]}>{typeLabel(job.job_type)}</Text>
+                    <View style={s.pill}><Pill label={pill.label} tone={pill.tone} /></View>
                   </View>
-                  <View style={s.timelineInfo}>
-                    <Text style={s.timelineAddr}>{job.address.toLowerCase()}</Text>
-                    <Text style={s.timelineType}>{job.job_type.replace(/_/g, ' ')}</Text>
-                    <View style={[s.pill, { backgroundColor: pill.bg, marginTop: 8 }]}>
-                      <Text style={[s.pillText, { color: pill.fg }]}>{pill.label.toUpperCase()}</Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
+                </Pressable>
               );
             })}
-          </View>
+          </Group>
         )}
-
-        <View style={{ height: 120 }} />
-      </ScrollView>
-    </SafeAreaView>
+      </Section>
+    </Screen>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: TOKENS.night },
-  center: { paddingTop: 60, alignItems: 'center' },
-  empty: { paddingTop: 60, alignItems: 'center' },
-  emptyText: { fontFamily: TYPOGRAPHY.body, color: TOKENS.moonFaint, fontSize: 13 },
-
-  stickyTop: { backgroundColor: TOKENS.night, paddingHorizontal: 24, paddingTop: 16, paddingBottom: 0 },
-  weekHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  weekTitle: { fontSize: 22, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, letterSpacing: -0.4 },
-  weekNav: { flexDirection: 'row', gap: 6 },
-  navBtn: { padding: 8, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
-
-  dayGrid: { flexDirection: 'row', gap: 4, marginBottom: 16 },
-  dayCell: { flex: 1, alignItems: 'center', paddingVertical: 10, borderWidth: 1, borderColor: TOKENS.nightHair, borderRadius: 2 },
-  dayCellActive: { backgroundColor: TOKENS.moon, borderColor: TOKENS.moon },
-  dayName: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 8, color: TOKENS.moonFaint, letterSpacing: 1, marginBottom: 4, opacity: 0.7 },
-  dayNameActive: { color: TOKENS.night, opacity: 0.7 },
-  dayNum: { fontFamily: TYPOGRAPHY.mono, fontSize: 14, color: TOKENS.moonFaint },
-  dayNumActive: { color: TOKENS.night },
-  dotRow: { flexDirection: 'row', gap: 2, justifyContent: 'center', marginTop: 5, height: 4 },
-  dot: { width: 3, height: 3, borderRadius: 2 },
-
-  dayLabelRow: { paddingHorizontal: 24, paddingVertical: 14 },
-  dayLabelText: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, color: TOKENS.moonFaint, letterSpacing: 1.6 },
-
-  timeline: { paddingHorizontal: 24 },
-  timelineRow: { flexDirection: 'row', gap: 14, paddingVertical: 16 },
-  timelineRowBorder: { borderBottomWidth: 1, borderBottomColor: TOKENS.nightHair },
-  timelineTime: { fontFamily: TYPOGRAPHY.mono, fontSize: 10, color: TOKENS.moonFaint, width: 88, paddingTop: 2, lineHeight: 13 },
-  timelineLine: { width: 1, backgroundColor: TOKENS.nightHair, position: 'relative' },
-  timelineDot: { position: 'absolute', top: 6, left: -3, width: 7, height: 7, borderRadius: 4 },
-  timelineInfo: { flex: 1, paddingLeft: 8 },
-  timelineAddr: { fontSize: 14, color: TOKENS.moon, fontFamily: TYPOGRAPHY.heading, marginBottom: 3 },
-  timelineType: { fontFamily: TYPOGRAPHY.mono, fontSize: 11, color: TOKENS.moonFaint },
-  pill: { alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 2 },
-  pillText: { fontFamily: TYPOGRAPHY.monoMedium, fontSize: 9, letterSpacing: 1.2 },
+  dayGrid: { flexDirection: 'row', gap: space[4] },
+  dayCell: {
+    flex: 1, minHeight: 68, alignItems: 'center', justifyContent: 'center', gap: space[4],
+    borderWidth: hairline, borderColor: color.hair, borderRadius: radius.sm,
+  },
+  dayCellActive: { backgroundColor: color.inverse, borderColor: color.inverse },
+  dotRow: { flexDirection: 'row', gap: 3, height: 4, alignItems: 'center' },
+  dot: { width: 4, height: 4, borderRadius: radius.pill },
+  row: { flexDirection: 'row', gap: space[14], paddingHorizontal: space[16], paddingVertical: space[16] },
+  rowPressed: { backgroundColor: color.surface },
+  time: { color: color.textBody, width: 88, paddingTop: 2 },
+  info: { flex: 1, gap: 2 },
+  pill: { marginTop: space[8] },
 });

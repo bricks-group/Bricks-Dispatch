@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
+import { fmtMoneyCompact, fmtMoneyExact } from '../lib/money';
 import { api } from '../lib/api';
+import BricksLoader from '../components/BricksLoader';
+import { DayCell } from '../components/DayCell';
 
 type EarningJob = {
   id: string;
@@ -56,33 +59,30 @@ export function EarningsPage() {
             <section className="card full">
               <h3>Owner payout</h3>
               <div className="stack">
-                <p className="metric" style={{ fontSize: 22, padding: '14px 20px 0' }}>Full package · $0 deduction</p>
-                <p className="muted">You receive the full package. No platform cut is applied or shown.</p>
+                <p className="meta-line">Full package, no deduction</p>
+                <p className="muted" style={{ margin: 0 }}>You receive the full package. No platform cut is applied.</p>
               </div>
             </section>
           )}
           {data.payout_model === 'ic_rate_card' && (
-            <section className="card full">
-              <h3>Rate card</h3>
-              <p className="muted">Fixed photographer rate for www à-la-carte media (Photos only → Full suite) by size and tier — not a percent of rack. Virtual Visit is a paid add-on.</p>
-            </section>
+            <p className="stats-foot" style={{ margin: 0 }}>You're paid a fixed rate card by package, home size and tier. Virtual visits pay extra.</p>
           )}
-          <div className="page-grid">
-            <section className="card">
-              <h3>This week</h3>
-              <p className="metric">${data.week_total.toLocaleString()}</p>
-              <p className="muted">{data.week_job_count} job{data.week_job_count !== 1 ? 's' : ''}</p>
-            </section>
-            <section className="card">
-              <h3>Paid</h3>
-              <p className="metric">${data.paid_amount.toLocaleString()}</p>
-              <p className="muted">settled</p>
-            </section>
-            <section className="card">
-              <h3>Pending</h3>
-              <p className="metric">${data.pending_amount.toLocaleString()}</p>
-              <p className="muted">Pays out {data.payout_day}</p>
-            </section>
+          <div className="stats">
+            <div className="stat">
+              <p className="stat-label">This week</p>
+              <p className="stat-value" title={fmtMoneyExact(data.week_total)}>{fmtMoneyCompact(data.week_total)}</p>
+              <p className="stat-note">{data.week_job_count} job{data.week_job_count !== 1 ? 's' : ''}</p>
+            </div>
+            <div className="stat">
+              <p className="stat-label">Paid</p>
+              <p className="stat-value" title={fmtMoneyExact(data.paid_amount)}>{fmtMoneyCompact(data.paid_amount)}</p>
+              <p className="stat-note">Settled</p>
+            </div>
+            <div className="stat">
+              <p className="stat-label">Pending</p>
+              <p className="stat-value" title={fmtMoneyExact(data.pending_amount)}>{fmtMoneyCompact(data.pending_amount)}</p>
+              <p className="stat-note">Pays {data.payout_day}</p>
+            </div>
           </div>
 
           <section className="card full">
@@ -90,7 +90,7 @@ export function EarningsPage() {
             {data.recent_jobs.length === 0 ? (
               <p className="muted" style={{ padding: '20px' }}>No recent jobs</p>
             ) : (
-              <table className="table">
+              <table className="table t1l">
                 <thead>
                   <tr>
                     <th>Address</th>
@@ -102,15 +102,15 @@ export function EarningsPage() {
                 <tbody>
                   {data.recent_jobs.map((job) => (
                     <tr key={job.id}>
-                      <td style={{ fontWeight: 500 }}>{job.address}</td>
-                      <td className="muted">{job.scheduled_date?.slice(0, 10) ?? '—'}</td>
-                      <td>
+                      <td data-label="Address" className="c-t" style={{ fontWeight: 500 }}>{job.address}</td>
+                      <td data-label="Date" className="muted"><DayCell d={job.scheduled_date} /></td>
+                      <td data-label="Status" className="c-s">
                         <span className={`badge ${PAYOUT_BADGE[job.payout_status] ?? 'badge-gray'}`}>
                           {job.payout_status}
                         </span>
                       </td>
-                      <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
-                        ${job.payout_amount.toLocaleString()}
+                      <td data-label="Payout" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
+                        {fmtMoneyExact(job.payout_amount)}
                       </td>
                     </tr>
                   ))}
@@ -121,7 +121,7 @@ export function EarningsPage() {
         </>
       )}
 
-      {!data && !error && <p className="muted">Loading…</p>}
+      {!data && !error && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
     </div>
   );
 }

@@ -17,8 +17,72 @@ ORG_VENDOR_ID = "default_vendor"
 
 TIER_LABELS = {1: "C", 2: "B", 3: "A"}  # display only; pay is the rate card
 TOP_TIER = 3
-SKILL_KEYS = ("photo", "drone", "reel", "tour", "twilight")
-VENDOR_TYPES = ("photographer", "stager", "cleaner")
+# "mapping" (orthomosaic / 3D capture) is admin-granted only, never inferred from
+# equipment or specialty text — commercial mapped work requires a QC'd test mission.
+SKILL_KEYS = ("photo", "drone", "reel", "tour", "twilight", "mapping")
+
+# Free-text specialty / job_type labels that map onto SKILL_KEYS (www / Companion /
+# media_intake portfolio lockstep). Used by assign scoring so specialty=reel still
+# boosts legacy job_type=video after vendor_skills drops the phantom "video" label.
+_SKILL_KEY_ALIASES = {
+    "video": "reel",
+    "cinematic": "reel",
+    "cinematic_reel": "reel",
+    "photography": "photo",
+    "photos": "photo",
+    "hdr": "photo",
+    # www / OS / Companion stamp job_type=floor_plan_only (stripe-webhook +
+    # book_checkout + PACKAGES). SKILL_KEYS has photo, not floor_plan* — without
+    # this alias hard-gate needed.issubset(have) demands a phantom skill no
+    # photo vendor has, so floor-plan-only books never auto-assign.
+    "floor_plan": "photo",
+    "floorplan": "photo",
+    "floor_plan_only": "photo",
+    "floorplans": "photo",
+    "2d_floor_plan": "photo",
+    "virtual": "tour",
+    "3d": "tour",
+    "polycam": "tour",
+}
+
+
+def normalize_skill_key(raw: Any) -> str:
+    """Map specialty/job_type free text onto SKILL_KEYS when an alias exists."""
+    key = str(raw or "").strip().lower()
+    return _SKILL_KEY_ALIASES.get(key, key)
+
+
+def specialty_matches_job(member: Any, job: Any) -> bool:
+    """Soft specialty boost for assign scoring — video/reel + floor_plan→photo lockstep.
+
+    Hard-gate uses job_required_skills ⊆ vendor_skills. Rule-based scoring used
+    ``specialty == job_type or job_type in have``; after video→reel / floor_plan→photo
+    skill aliases, have never contains the phantom labels, so specialty=reel|photo
+    (and skills=["reel"|"photo"]) lost the specialty boost on in-flight
+    job_type=video|floor_plan_only. Normalize both sides the same way
+    vendor_skills / job_required_skills do.
+    """
+    m = _as_dict(member)
+    j = _as_dict(job)
+    spec = normalize_skill_key(m.get("specialty"))
+    jt = normalize_skill_key(j.get("job_type") or "photo")
+    if spec and jt and spec == jt:
+        return True
+    have = vendor_skills(member)
+    return bool(jt and jt in have)
+
+VENDOR_TYPES = ("photographer", "stager", "cleaner", "inspector", "measurer", "handyman")
+# Values vendor_members.vendor_type accepts today (vendor_members_vendor_type_check,
+# migration 20260913193000). inspector / measurer / handyman wait on the
+# widening migration Kam must approve; until then their trade lives in
+# application_profile.trade and the column keeps its 'photographer' default.
+DB_VENDOR_TYPES = ("photographer", "stager", "cleaner")
+# Trades that need a $2M CGL certificate of insurance (Kam, 2026-10-26).
+CGL_REQUIRED_TYPES = ("inspector", "handyman")
+CGL_MIN_CENTS = 2_000_000 * 100
+# Phase 1 trades are quote-request only: Bricks brokers each job by hand, so
+# they are never auto-assigned.
+QUOTE_ONLY_TYPES = ("inspector", "measurer", "handyman")
 VENDOR_TYPE_ALIASES = {
     "photo": "photographer",
     "photography": "photographer",
@@ -32,16 +96,48 @@ VENDOR_TYPE_ALIASES = {
     "clean": "cleaner",
     "turnover": "cleaner",
     "maid": "cleaner",
+    "inspection": "inspector",
+    "inspections": "inspector",
+    "home_inspector": "inspector",
+    "home_inspection": "inspector",
+    "building_inspection": "inspector",
+    "measurement": "measurer",
+    "measurements": "measurer",
+    "measuring": "measurer",
+    "measure": "measurer",
+    "repair": "handyman",
+    "repairs": "handyman",
+    "handyperson": "handyman",
+    "handy": "handyman",
+    # De-staging (pickup / removal of staged furniture) is stager work.
+    "destage": "stager",
+    "destaging": "stager",
+    "de_stage": "stager",
+    "de_staging": "stager",
+    "staging_pickup": "stager",
+    "staging_removal": "stager",
 }
+# Package names / ids that mark a de-staging job when job_type doesn't say.
+_DESTAGE_PACKAGE_WORDS = (
+    "destag", "de_stag", "de-stag", "de stag",
+    "staging_pickup", "staging pickup", "staging-pickup",
+    "staging_removal", "staging removal", "staging-removal",
+)
 ROLE_FOR_VENDOR_TYPE = {
     "photographer": "Photographer",
     "stager": "Stager",
     "cleaner": "Cleaner",
+    "inspector": "Inspector",
+    "measurer": "Measurer",
+    "handyman": "Repairs",
 }
 IC_TITLE_FOR_VENDOR_TYPE = {
     "photographer": "Photographer IC",
     "stager": "Stager IC",
     "cleaner": "Cleaner IC",
+    "inspector": "Inspector IC",
+    "measurer": "Measurer IC",
+    "handyman": "Repairs IC",
 }
 # Media / field-capture job_types stay on the photographer spine.
 # Drone is a photographer capability (Advanced RPAS), not a vendor_type.
@@ -49,6 +145,17 @@ _PHOTOGRAPHER_JOB_TYPES = {
     "photo", "photography", "photos", "hdr", "drone", "reel", "video",
     "tour", "virtual", "twilight", "floor_plan", "floorplan", "exterior",
     "visit", "virtual_visit", "media", "",
+    "listing", "3d_tour", "virtual_tour", "floor_plan_only", "floorplans",
+    "2d_floor_plan", "cinematic", "cinematic_reel", "photo_floorplan",
+    "photo_video", "photo_drone",
+}
+# Compound media job_types (photo_floorplan, site_mapped_capture, ...) match on
+# any of these tokens. Anything else is unknown and goes to admin review.
+_MEDIA_JOB_TOKENS = {
+    "photo", "photos", "photography", "hdr", "drone", "aerial", "reel", "video",
+    "cinematic", "tour", "virtual", "3d", "2d", "twilight", "floor", "floorplan",
+    "floorplans", "exterior", "visit", "media", "listing", "progress", "mapped",
+    "mapping", "capture", "monitoring", "orthomosaic",
 }
 
 GTA_TOKENS = {
@@ -125,13 +232,50 @@ def is_aman_pending(member: Any) -> bool:
 
 
 
-def normalize_vendor_type(raw: Any) -> str:
-    """Wave A types only. Unknown values fall back to photographer (media path)."""
+def _vendor_type_key(raw: Any) -> str:
     key = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if not key:
-        return "photographer"
-    key = VENDOR_TYPE_ALIASES.get(key, key)
-    return key if key in VENDOR_TYPES else "photographer"
+    return VENDOR_TYPE_ALIASES.get(key, key)
+
+
+def strict_vendor_type(raw: Any) -> Optional[str]:
+    """Known vendor type or None. Never guesses photographer."""
+    key = _vendor_type_key(raw)
+    return key if key in VENDOR_TYPES else None
+
+
+def normalize_vendor_type(raw: Any) -> str:
+    """Members / applications: unknown or empty values fall back to photographer (media path)."""
+    return strict_vendor_type(raw) or "photographer"
+
+
+def storage_vendor_type(vendor_type: Any) -> str:
+    """Value safe to write to vendor_members.vendor_type before the widening migration."""
+    vt = normalize_vendor_type(vendor_type)
+    return vt if vt in DB_VENDOR_TYPES else "photographer"
+
+
+def _profile_dict(m: dict) -> dict:
+    prof = m.get("application_profile")
+    if isinstance(prof, str):
+        try:
+            import json
+            prof = json.loads(prof)
+        except ValueError:
+            prof = None
+    return prof if isinstance(prof, dict) else {}
+
+
+def member_trade(member: Any) -> Optional[str]:
+    """Trade recorded on the application (application_profile.trade), if any."""
+    return strict_vendor_type(_profile_dict(_as_dict(member)).get("trade"))
+
+
+def _label_vendor_type(blob: str) -> Optional[str]:
+    """Role / title label (Stager, Inspector IC, Repairs) -> vendor type."""
+    blob = blob.strip().lower()
+    if blob.endswith(" ic"):
+        blob = blob[:-3]
+    return strict_vendor_type(blob)
 
 
 def member_vendor_type(member: Any) -> str:
@@ -139,16 +283,23 @@ def member_vendor_type(member: Any) -> str:
     # Owner is always on the photographer spine (media + RPAS capable).
     if is_platform_owner(m):
         return "photographer"
+    # Trades the DB column can't hold yet (inspector / measurer / handyman) live
+    # on application_profile.trade or the role/title label and win over the
+    # column's 'photographer' default.
+    trade = member_trade(m)
+    if trade and trade not in DB_VENDOR_TYPES:
+        return trade
+    labels = [_label_vendor_type(str(m.get(k) or "")) for k in ("role", "title")]
+    for label in labels:
+        if label and label not in DB_VENDOR_TYPES:
+            return label
     explicit = m.get("vendor_type")
     if explicit:
         return normalize_vendor_type(explicit)
-    role = str(m.get("role") or "").strip().lower()
-    title = str(m.get("title") or "").strip().lower()
-    for blob in (role, title):
-        mapped = VENDOR_TYPE_ALIASES.get(blob, blob)
-        if mapped in VENDOR_TYPES:
-            return mapped
-    return "photographer"
+    for label in labels:
+        if label:
+            return label
+    return trade or "photographer"
 
 
 def role_for_vendor_type(vendor_type: Any) -> str:
@@ -159,20 +310,53 @@ def ic_title_for_vendor_type(vendor_type: Any) -> str:
     return IC_TITLE_FOR_VENDOR_TYPE.get(normalize_vendor_type(vendor_type), "Photographer IC")
 
 
-def job_required_vendor_type(job: Any) -> str:
-    """Media bookings → photographer; future staging/cleaning jobs → those types."""
+def _is_media_job_type(jt: str) -> bool:
+    if jt in _PHOTOGRAPHER_JOB_TYPES:
+        return True
+    tokens = [t for t in jt.replace("-", "_").replace(" ", "_").split("_") if t]
+    return any(t in _MEDIA_JOB_TOKENS for t in tokens)
+
+
+def job_required_vendor_type(job: Any) -> Optional[str]:
+    """Vendor type a job needs, or None when Bricks can't tell (admin review).
+
+    Media bookings -> photographer; staging / cleaning / inspection /
+    measurement / repairs jobs -> those trades. Unknown job types used to fall
+    back to photographer, which could send a repair or inspection job to a
+    photographer. They now return None and are never auto-assigned.
+    """
     j = _as_dict(job)
     for key in ("required_vendor_type", "vendor_type"):
         if j.get(key):
-            return normalize_vendor_type(j.get(key))
+            return strict_vendor_type(j.get(key))
     jt = str(j.get("job_type") or "photo").strip().lower()
-    mapped = VENDOR_TYPE_ALIASES.get(jt, jt)
-    if mapped in ("stager", "cleaner"):
+    mapped = _vendor_type_key(jt)
+    if mapped in VENDOR_TYPES and mapped != "photographer":
         return mapped
-    if jt in _PHOTOGRAPHER_JOB_TYPES or mapped == "photographer":
+    # A de-staging package is stager work even on a job_type left at the
+    # photo default.
+    package_blob = " ".join(str(j.get(k) or "") for k in ("package_id", "package_name")).lower()
+    if any(w in package_blob for w in _DESTAGE_PACKAGE_WORDS):
+        return "stager"
+    if mapped == "photographer" or _is_media_job_type(jt):
         return "photographer"
-    # Unknown job types stay on photographer so media path never breaks.
-    return "photographer"
+    try:
+        from .commercial_jobs import is_commercial_job
+        if is_commercial_job(j):
+            return "photographer"
+    except Exception:
+        pass
+    return None
+
+TRADE_SKILL = {
+    "photographer": "photo",
+    "stager": "staging",
+    "cleaner": "cleaning",
+    "inspector": "inspection",
+    "measurer": "measurement",
+    "handyman": "repairs",
+}
+
 
 def has_advanced_rpas(member: Any) -> bool:
     m = _as_dict(member)
@@ -195,12 +379,23 @@ def vendor_skills(member: Any) -> set[str]:
             skills.add("photo")
         if key in ("virtual", "3d", "polycam"):
             skills.add("tour")
+        # www / Companion cinematic reel — never leave a non-SKILL_KEYS "video"
+        # label that hard-gates assign against reel-capable vendors.
+        if key in ("video", "cinematic", "cinematic_reel"):
+            skills.add("reel")
+        # Floor-plan-only books stamp floor_plan* — map onto photo (SKILL_KEYS).
+        if key in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
+            skills.add("photo")
     spec = str(m.get("specialty") or "").strip().lower()
     if spec in ("photo", "photography", "photos"):
         skills.add("photo")
+    elif spec in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
+        skills.add("photo")
     elif spec == "virtual":
         skills.add("tour")
-    elif spec:
+    elif spec in ("video", "cinematic", "cinematic_reel", "reel"):
+        skills.add("reel")
+    elif spec and spec != "mapping":
         skills.add(spec)
     if m.get("drone_certified") or has_advanced_rpas(m):
         skills.add("drone")
@@ -209,18 +404,13 @@ def vendor_skills(member: Any) -> set[str]:
     for item in m.get("equipment_list") or []:
         t = str(item).lower()
         for skill in SKILL_KEYS:
-            if skill in t:
+            if skill != "mapping" and skill in t:
                 skills.add(skill)
         if "polycam" in t or "splat" in t or "virtual" in t:
             skills.add("tour")
     if not skills:
         vt = member_vendor_type(m)
-        if vt == "stager":
-            skills.add("staging")
-        elif vt == "cleaner":
-            skills.add("cleaning")
-        else:
-            skills.add("photo")
+        skills.add(TRADE_SKILL.get(vt, "photo"))
     return skills
 
 
@@ -235,20 +425,51 @@ def _add_on_keys(add_ons: Iterable) -> set[str]:
     return keys
 
 
+# Client-service add-ons that need their own capture skill on top of the
+# job_type's. inv_acquisition (drone) sells interior stills and a Virtual
+# Visit; inv_acquisition_mapped (site_mapped_capture) sells the same, so a
+# drone-only vendor must not be auto-assigned work they can't deliver.
+_ADD_ON_SKILLS = {
+    "interior": "photo",
+    "interior_stills": "photo",
+    "virtual_visit": "tour",
+    "tour": "tour",
+    "virtual": "tour",
+}
+
+
+def _add_on_skills(job: Any) -> set[str]:
+    keys = _add_on_keys(_as_dict(job).get("add_ons") or [])
+    return {_ADD_ON_SKILLS[k] for k in keys if k in _ADD_ON_SKILLS}
+
+
 def job_required_skills(job: Any) -> set[str]:
     j = _as_dict(job)
+    # Commercial (builder/developer) kinds: drone (+ mapping for mapped work).
+    # progress_capture used to fall through to skills.add("progress_capture"),
+    # a skill no vendor can hold, so OS progress visits never auto-assigned.
+    from .commercial_jobs import is_commercial_job, required_skills as _commercial_skills
+    if is_commercial_job(j):
+        return _commercial_skills(j) | _add_on_skills(j)
     needed_type = job_required_vendor_type(j)
     # Non-media Wave A jobs: type match is the hard gate; skills are soft labels.
-    if needed_type == "stager":
-        return {"staging"}
-    if needed_type == "cleaner":
-        return {"cleaning"}
+    if needed_type in TRADE_SKILL and needed_type != "photographer":
+        return {TRADE_SKILL[needed_type]}
     jt = str(j.get("job_type") or "photo").lower()
     skills: set[str] = set()
     if jt in ("photo", "photography", ""):
         skills.add("photo")
+    elif jt in ("floor_plan", "floorplan", "floor_plan_only", "floorplans", "2d_floor_plan"):
+        # SKILL_KEYS has photo, not floor_plan*. www stripe-webhook / OS
+        # book_checkout / Companion PACKAGES stamp job_type=floor_plan_only —
+        # hard-gate must not demand a phantom skill photo vendors lack.
+        skills.add("photo")
     elif jt == "virtual":
         skills.add("tour")
+    elif jt in ("reel", "video", "cinematic", "cinematic_reel"):
+        # SKILL_KEYS has reel, not video. Pre-fa52afd Companion Story/Showcase/Suite
+        # stamped job_type=video and hard-gated assign against reel vendors.
+        skills.add("reel")
     elif jt in ("stager", "staging", "cleaner", "cleaning"):
         pass
     else:
@@ -257,12 +478,18 @@ def job_required_skills(job: Any) -> set[str]:
     blob = " ".join(keys) + " " + jt
     if jt == "drone" or "drone" in keys:
         skills.add("drone")
-    if "reel" in blob:
+    # Cinematic reel aliases (www / Companion / media_intake portfolio lockstep).
+    if (
+        "reel" in blob
+        or keys & {"reel", "video", "cinematic", "cinematic_reel"}
+        or jt in ("reel", "video", "cinematic", "cinematic_reel")
+    ):
         skills.add("reel")
     if "tour" in blob or "virtual" in blob:
         skills.add("tour")
     if "twilight" in blob:
         skills.add("twilight")
+    skills |= _add_on_skills(j)
     if not skills:
         skills.add("photo")
     return skills
@@ -270,6 +497,9 @@ def job_required_skills(job: Any) -> set[str]:
 
 def min_tier_for_job(job: Any) -> int:
     j = _as_dict(job)
+    from .commercial_jobs import TOP_TIER as _COMMERCIAL_TIER, is_commercial_job
+    if is_commercial_job(j):
+        return _COMMERCIAL_TIER
     explicit = j.get("min_tier_required")
     if explicit:
         try:
@@ -438,17 +668,26 @@ def location_matches(member: Any, job: Any) -> bool:
 
 def is_drone_job(job: Any) -> bool:
     j = _as_dict(job)
+    from .commercial_jobs import is_commercial_job, job_requires_advanced_rpas
+    if is_commercial_job(j):
+        return job_requires_advanced_rpas(j)
     if str(j.get("job_type") or "").lower() == "drone":
         return True
     return "drone" in _add_on_keys(j.get("add_ons") or [])
 
 
 def member_eligible_for_job(member: Any, job: Any) -> bool:
-    """Approved, active, type/location/skill match. Insurance is not a gate.
+    """Approved, active, type/location/skill match.
 
-    COI and WSIB are optional records. Missing, expired, or unverified proof
-    must not exclude an otherwise approved vendor from assignment or dispatch.
-    coi_expires_on and wsib_expires_on are ignored here.
+    Listing jobs: insurance is not a gate. COI and WSIB are optional records and
+    missing, expired, or unverified proof must not exclude an otherwise approved
+    vendor from a listing job.
+
+    Commercial jobs (commercial_jobs.COMMERCIAL_KINDS, incl. OS progress_capture):
+    Tier A + verified, unexpired drone/aviation liability >= the job minimum
+    (default $2M) + Advanced RPAS unless the job opts out (Kam, 2026-10-17).
+    In-house employees (worker_type="employee") use the company policy instead
+    of a personal COI and are not tier-banded.
     """
     m = _as_dict(member)
     if not m.get("is_active"):
@@ -456,6 +695,13 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     if is_aman_pending(m):
         return False
     needed_type = job_required_vendor_type(job)
+    # Unknown job type: fail closed so ops routes it by hand.
+    if needed_type is None:
+        return False
+    # Quote-request trades (inspection, measurement, repairs) are brokered by
+    # Bricks in phase 1 and never auto-assigned.
+    if needed_type in QUOTE_ONLY_TYPES:
+        return False
     if member_vendor_type(m) != needed_type:
         return False
     if not location_matches(m, job):
@@ -463,7 +709,10 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     # Stager / cleaner: type + location + active/approved. No photo skill/RPAS gates.
     if needed_type in ("stager", "cleaner"):
         return True
-    if int(m.get("tier") or 1) < min_tier_for_job(job):
+    from .commercial_jobs import is_commercial_job, is_employee
+    # Tier bands are a contractor concept; in-house staff on commercial jobs
+    # are gated by the company policy + RPAS + skills instead.
+    if int(m.get("tier") or 1) < min_tier_for_job(job) and not (is_employee(m) and is_commercial_job(job)):
         return False
     needed = job_required_skills(job)
     have = vendor_skills(m)
@@ -472,6 +721,10 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     if is_drone_job(job) and not has_advanced_rpas(m):
         return False
     if "tour" in needed and not (m.get("polycam_equipped") or "tour" in have):
+        return False
+    # Commercial: Tier A + verified, unexpired drone liability >= job minimum.
+    from .commercial_jobs import commercial_gate_failures
+    if commercial_gate_failures(m, job, has_skills=have, advanced_rpas=has_advanced_rpas(m)):
         return False
     return True
 
@@ -503,7 +756,7 @@ def owner_payout_cents(job: Any) -> int:
 def display_title(member: Any) -> str:
     if is_platform_owner(member):
         return "Owner"
-    return "Photographer IC"
+    return ic_title_for_vendor_type(member_vendor_type(member))
 
 
 def _missing_column(err: str, keys: list[str]) -> str | None:

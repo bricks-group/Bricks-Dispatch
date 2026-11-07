@@ -5,6 +5,108 @@ from .errors import api_error
 from .schemas import VendorMember
 from .vendor_identity import is_owner_member
 
+
+def _is_rest_quota_error(err: object) -> bool:
+    e = str(err or "").lower()
+    return any(
+        tok in e
+        for tok in (
+            "402",
+            "exceed_storage",
+            "storage_size_quota",
+            "fair-use",
+            "fair use",
+            "fair_use",
+            "restricted",
+            "quota exceeded",
+            "over_quota",
+        )
+    )
+
+
+def _is_jwt_signature_or_parse_error(err: object) -> bool:
+    """Auth.get_user rejects fair-use HS256 mints as signature-invalid.
+
+    Real Supabase sessions still prefer get_user (success path). Only when
+    Auth reports parse/signature failure do we fall through to local verify
+    with SUPABASE_JWT_SECRET (same secret mint_supabase_access_token uses).
+    """
+    e = str(err or "").lower()
+    return any(
+        tok in e
+        for tok in (
+            "unable to parse or verify signature",
+            "token signature is invalid",
+            "signature is invalid",
+            "invalid jwt",
+            "could not be decoded",
+            "error decoding",
+            "jwt malformed",
+            "not enough segments",
+        )
+    )
+
+
+def decode_supabase_user_from_jwt(token: str) -> Optional[tuple]:
+    """Local HS256 verify when Auth API is Fair-Use blocked. Returns (user_id, email)."""
+    secret = (os.environ.get("SUPABASE_JWT_SECRET") or "").strip()
+    if not secret or not token:
+        return None
+    try:
+        import jwt
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            audience="authenticated",
+            options={"require": ["sub", "exp"]},
+        )
+        uid = str(payload.get("sub") or "").strip()
+        if not uid:
+            return None
+        email = payload.get("email")
+        return uid, (str(email).strip() if email else None)
+    except Exception:
+        return None
+
+
+
+def mint_supabase_access_token(
+    user_id: str,
+    email: str,
+    *,
+    expires_in: int = 7 * 24 * 3600,
+) -> str:
+    """Mint an HS256 JWT matching decode_supabase_user_from_jwt expectations."""
+    import time
+    import jwt
+
+    secret = (os.environ.get("SUPABASE_JWT_SECRET") or "").strip()
+    if not secret:
+        raise RuntimeError("SUPABASE_JWT_SECRET missing")
+    uid = str(user_id or "").strip()
+    if not uid:
+        raise RuntimeError("user_id required")
+    now = int(time.time())
+    payload = {
+        "aud": "authenticated",
+        "role": "authenticated",
+        "sub": uid,
+        "email": (email or "").strip().lower() or None,
+        "iat": now,
+        "exp": now + int(expires_in),
+    }
+    # Drop null email to keep payload clean
+    if not payload["email"]:
+        payload.pop("email", None)
+    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
+    if supabase_url:
+        payload["iss"] = f"{supabase_url}/auth/v1"
+    token = jwt.encode(payload, secret, algorithm="HS256")
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    return token
+
 def resolve_actor_id(x_user_id: Optional[str]) -> str:
     actor_id = (x_user_id or "").strip()
     if not actor_id:
@@ -17,33 +119,65 @@ def ensure_assigned_to_actor(job: dict, actor_id: str, member: Optional[dict] = 
     if assignee_id not in photographer_assignee_ids(actor_id, member):
         api_error(403, "You are not assigned to this job", "job_not_assigned_to_actor")
 
+def _is_uuid(value: object) -> bool:
+    import uuid as _uuid
+    try:
+        _uuid.UUID(str(value or ""))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 async def lookup_vendor_member(actor_id: str, email: Optional[str] = None) -> Optional[dict]:
     """Map auth user → vendor_members row. Prefer Kam Owner 0c3fa7c2 over a duplicate IC."""
     from .job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
+    from .pg_fallback import _is_rest_quota_error as _pg_quota, pg_select_vendor_member
 
-    db = await get_db()
-    rows: list[dict] = []
-    seen: set[str] = set()
-
-    def add(row):
-        if not row:
-            return
-        rid = str(row.get("id") or "")
-        if rid and rid not in seen:
-            seen.add(rid)
-            rows.append(row)
-
-    by_id = await db.table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
-    add(by_id.data)
     email_l = (email or "").strip().lower()
-    if str(actor_id or "").lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
-        kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
-        add(kam.data)
-    if email_l:
-        by_email = await db.table("vendor_members").select("*").ilike("email", email_l).limit(10).execute()
-        for row in by_email.data or []:
-            add(row)
-    return pick_canonical_member(rows, actor_id, email_l)
+    try:
+        db = await get_db()
+        rows: list[dict] = []
+        seen: set[str] = set()
+
+        def add(row):
+            if not row:
+                return
+            rid = str(row.get("id") or "")
+            if rid and rid not in seen:
+                seen.add(rid)
+                rows.append(row)
+
+        # postgrest maybe_single().execute() is None when there is no row. Applicants
+        # and owner-added members have a random member id != auth uid, so the by-id
+        # read is often empty; reading .data on None used to 401/500 GO before the
+        # email match below could find them.
+        by_id = await db.table("vendor_members").select("*").eq("id", actor_id).maybe_single().execute()
+        add(getattr(by_id, "data", None))
+        # Linked Auth identity (phone-OTP users, owner-linked members): match
+        # vendor_members.auth_user_id = JWT sub. Same as the PG fallback.
+        if _is_uuid(actor_id):
+            try:
+                by_auth = await db.table("vendor_members").select("*").eq(
+                    "auth_user_id", str(actor_id)
+                ).limit(5).execute()
+                for row in getattr(by_auth, "data", None) or []:
+                    if isinstance(row, dict) and str(row.get("auth_user_id") or "") == str(actor_id):
+                        add(row)
+            except Exception as e:
+                if _pg_quota(e) or _is_rest_quota_error(e):
+                    raise
+        if str(actor_id or "").lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
+            kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
+            add(getattr(kam, "data", None))
+        if email_l:
+            by_email = await db.table("vendor_members").select("*").ilike("email", email_l).limit(10).execute()
+            for row in by_email.data or []:
+                add(row)
+        return pick_canonical_member(rows, actor_id, email_l)
+    except Exception as e:
+        if _pg_quota(e) or _is_rest_quota_error(e):
+            return pg_select_vendor_member(actor_id, email_l)
+        raise
 
 
 async def get_vendor_member(actor_id: str, email: Optional[str] = None) -> dict:
@@ -61,6 +195,23 @@ def is_vendor_admin(member: dict) -> bool:
     role = (member.get("role") or "").lower()
     title = (member.get("title") or "").lower()
     return any(k in role or k in title for k in ["owner", "admin", "manager"])
+
+def can_access_stripe_connect(member: dict) -> bool:
+    """Who may start/view Stripe Connect onboard+status for their vendor org.
+
+    Owner/Admin/Manager always (admin override). Any *active* vendor_member
+    (including Photographer after approval) may open Connect for the org's
+    contractor row. Applicants (is_active=False) stay gated out.
+
+    TODO: multi-member Connect — today contractors are keyed by vendor_id
+    (one Stripe Express account per org). Solo IC applicants are the Monday path;
+    do not assume per-member stripe_account_id until redesigned.
+    """
+    if not member:
+        return False
+    if is_vendor_admin(member):
+        return True
+    return bool(member.get("is_active")) and bool(member.get("vendor_id"))
 
 def verify_internal_api_key(key: Optional[str]) -> bool:
     """Validate a service-to-service X-Internal-Api-Key value.
@@ -131,7 +282,7 @@ async def resolve_vendor_actor_id(
         token = authorization.replace("Bearer ", "").strip()
         if token:
             try:
-                # Verify with Supabase
+                # Verify with Supabase Auth API
                 user_resp = await (await get_db()).auth.get_user(token)
                 if user_resp and user_resp.user:
                     user = user_resp.user
@@ -140,6 +291,19 @@ async def resolve_vendor_actor_id(
                         api_error(403, "Vendor member not found", "vendor_member_not_found")
                     return member["id"]
             except Exception as e:
+                # Fair-Use locks Auth API (402) OR Auth rejects locally-minted
+                # HS256 fair-use JWTs (signature invalid) — verify with the same
+                # SUPABASE_JWT_SECRET used by mint_supabase_access_token.
+                # Do not fall through on unrelated Auth errors; garbage tokens
+                # still 401 when local decode fails.
+                if _is_rest_quota_error(e) or _is_jwt_signature_or_parse_error(e):
+                    decoded = decode_supabase_user_from_jwt(token)
+                    if decoded:
+                        uid, email = decoded
+                        member = await lookup_vendor_member(uid, email)
+                        if not member:
+                            api_error(403, "Vendor member not found", "vendor_member_not_found")
+                        return member["id"]
                 api_error(401, f"Invalid session: {str(e)}", "invalid_session_token")
 
     if x_user_id and verify_internal_api_key(x_internal_api_key):

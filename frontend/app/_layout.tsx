@@ -1,72 +1,52 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet, Platform } from 'react-native';
-import { BrickLoader } from '../components/BricksWordmark';
+import BricksLoader from '../components/BricksLoader';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ThemeProvider, useTheme } from '../context/ThemeContext';
-import { TOKENS } from '../constants/Theme';
+import { ThemeProvider } from '../context/ThemeContext';
+import { color, fontAssets } from '../theme';
 import { actorHeaders } from '../lib/api';
 import { hasAppAccess, needsRegister, isUnderReview } from '../lib/vendor';
 import { supabase } from '../lib/supabase';
+import { configureNotificationHandler, ensureAndroidChannel, registerForPush, routeForNotification } from '../lib/push';
+import { clearOfflineCache } from '../lib/offline';
+import OfflineBanner from '../components/OfflineBanner';
 import type { Session } from '@supabase/supabase-js';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
 
 SplashScreen.preventAutoHideAsync();
 
-function useInitPushNotifications() {
+function useInitPushNotifications(signedIn: boolean) {
+  const router = useRouter();
+  // Handler, Android channel, and tap routing are set up once on launch.
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    (async () => {
-      try {
-        const Notifications = require('expo-notifications');
-        const Device = require('expo-device');
-        const Constants = require('expo-constants');
-
-        Notifications.setNotificationHandler({
-          handleNotification: async () => ({
-            shouldPlaySound: true,
-            shouldSetBadge: true,
-            shouldShowBanner: true,
-            shouldShowList: true,
-          }),
-        });
-
-        if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync('default', {
-            name: 'Bricks GO',
-            importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: TOKENS.brick,
-          });
-        }
-
-        if (!Device.isDevice) return;
-        const { status: existing } = await Notifications.getPermissionsAsync();
-        let finalStatus = existing;
-        if (existing !== 'granted') {
-          const { status } = await Notifications.requestPermissionsAsync();
-          finalStatus = status;
-        }
-        if (finalStatus !== 'granted') return;
-
-        const tokenData = await Notifications.getExpoPushTokenAsync();
-        await fetch(`${API}/api/push-tokens`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: tokenData.data, platform: Platform.OS }),
-        }).catch(() => {});
-      } catch (e) {}
-    })();
+    configureNotificationHandler();
+    ensureAndroidChannel(color.accent).catch(() => {});
+    const Notifications = require('expo-notifications');
+    const open = (resp: any) => {
+      const route = routeForNotification(resp?.notification?.request?.content?.data);
+      if (route) router.push(route as any);
+    };
+    Notifications.getLastNotificationResponseAsync?.().then((r: any) => r && open(r)).catch(() => {});
+    const sub = Notifications.addNotificationResponseReceivedListener(open);
+    return () => sub.remove();
   }, []);
+  // Permission prompt + token registration only after the vendor signs in,
+  // so the token is stored against their account (POST /api/push-tokens is auth-only).
+  useEffect(() => {
+    if (Platform.OS === 'web' || !signedIn) return;
+    registerForPush().catch(() => {});
+  }, [signedIn]);
 }
 
 function ThemedStatusBar() {
-  const { isDark } = useTheme();
-  return <StatusBar style={isDark ? 'light' : 'dark'} />;
+  // GO is dark always (design system): light status-bar content everywhere.
+  return <StatusBar style="light" />;
 }
 
 export default function RootLayout() {
@@ -74,12 +54,7 @@ export default function RootLayout() {
   const segments = useSegments();
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [fontsLoaded] = useFonts({
-    'GeneralSans-Medium':   require('../assets/fonts/GeneralSans-Medium.otf'),
-    'GeneralSans-Regular':  require('../assets/fonts/GeneralSans-Regular.otf'),
-    'IoskeleyMono-Regular': require('../assets/fonts/IoskeleyMono-Regular.ttf'),
-    'IoskeleyMono-Medium':  require('../assets/fonts/IoskeleyMono-Medium.ttf'),
-  });
+  const [fontsLoaded] = useFonts(fontAssets);
 
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
@@ -91,7 +66,10 @@ export default function RootLayout() {
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
-      if (event === 'SIGNED_OUT') setOnboardingChecked(false);
+      if (event === 'SIGNED_OUT') {
+        setOnboardingChecked(false);
+        clearOfflineCache();
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -112,7 +90,7 @@ export default function RootLayout() {
     }
   }, [session, authChecked, fontsLoaded, segments]);
 
-  useInitPushNotifications();
+  useInitPushNotifications(!!session);
 
   useEffect(() => {
     if (!fontsLoaded || !authChecked || !session) {
@@ -170,7 +148,7 @@ export default function RootLayout() {
   if (!fontsLoaded) {
     return (
       <View style={styles.loadingContainer}>
-        <BrickLoader />
+        <BricksLoader variant="assemble" size={160} startAtHold />
       </View>
     );
   }
@@ -181,18 +159,28 @@ export default function RootLayout() {
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: TOKENS.night },
+          contentStyle: { backgroundColor: color.bg },
           animation: 'none',
         }}
       >
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="(capture)" options={{ headerShown: false, presentation: 'fullScreenModal' }} />
+        <Stack.Screen
+          name="(capture)"
+          options={{
+            headerShown: false,
+            presentation: 'fullScreenModal',
+            animation: 'fade',
+            animationDuration: 220,
+          }}
+        />
         <Stack.Screen
           name="job/[id]"
           options={{
             headerShown: false,
             presentation: 'card',
+            animation: 'fade',
+            animationDuration: 220,
           }}
         />
         <Stack.Screen
@@ -205,6 +193,7 @@ export default function RootLayout() {
         <Stack.Screen name="profile-edit" options={{ headerShown: false, presentation: 'card' }} />
         <Stack.Screen name="settings" options={{ headerShown: false, presentation: 'card' }} />
       </Stack>
+      <OfflineBanner />
     </ThemeProvider>
   );
 }
@@ -212,7 +201,7 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   loadingContainer: {
     flex: 1,
-    backgroundColor: TOKENS.night,
+    backgroundColor: color.bg,
     alignItems: 'center',
     justifyContent: 'center',
   },

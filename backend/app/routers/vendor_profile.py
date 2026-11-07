@@ -52,16 +52,27 @@ async def _actor_member(authorization: Optional[str], x_user_id: Optional[str]) 
     return member
 
 
+def _maybe_single_row(res) -> dict:
+    """postgrest maybe_single().execute() is None when there is no row.
+
+    Reading .data on that None is AttributeError. The global handler turns it
+    into HTTP 500 with no CORS, so the browser shows net::ERR_FAILED instead
+    of the profile fallback (member status / empty row).
+    """
+    data = getattr(res, "data", None) if res is not None else None
+    return data if isinstance(data, dict) else {}
+
+
 async def _persist_safe(db, member_id: str, patch: dict) -> dict:
     """Write fields that exist; drop unknown columns if PostgREST errors."""
     if not patch:
         res = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-        return res.data or {}
+        return _maybe_single_row(res)
     patch = {k: v for k, v in patch.items() if v is not None}
     patch["updated_at"] = datetime.now(timezone.utc).isoformat()
     try:
         res = await db.table("vendor_members").update(patch).eq("id", member_id).execute()
-        if res.data:
+        if res is not None and res.data:
             return res.data[0]
     except Exception:
         optional = {
@@ -71,30 +82,37 @@ async def _persist_safe(db, member_id: str, patch: dict) -> dict:
         slim = {k: v for k, v in patch.items() if k not in optional}
         if slim:
             res = await db.table("vendor_members").update(slim).eq("id", member_id).execute()
-            if res.data:
+            if res is not None and res.data:
                 return res.data[0]
     res = await db.table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
-    return res.data or {}
+    return _maybe_single_row(res)
 
 
 async def _seed_owner(db, member: dict) -> dict:
     patch = owner_seed_fields(member)
     if not patch:
         return member
-    return await _persist_safe(db, member["id"], patch)
+    # Empty re-read must not drop the authenticated member (KeyError on "id").
+    return (await _persist_safe(db, member["id"], patch)) or {**member, **patch}
 
 
 async def _availability_flag(db, member: dict) -> bool:
+    # maybe_single() is None when the member has no vendor_availability row yet
+    # (every new GO photographer). None.data was a CORS-less 500 on every
+    # GET /api/vendor-os/profile before the member-status fallback could run.
     res = await db.table("vendor_availability").select("available").eq(
         "member_id", member["id"]
     ).maybe_single().execute()
-    if res.data and "available" in res.data:
-        return bool(res.data.get("available"))
+    row = _maybe_single_row(res)
+    if "available" in row:
+        return bool(row.get("available"))
     return (member.get("status") or "") == "available"
 
 
 async def build_profile(member: dict) -> dict:
     db = await get_db()
+    from ..services.commercial_jobs import refresh_company_policy
+    await refresh_company_policy(db)
     member = await _seed_owner(db, member)
     if not member.get("rpas_certificate_url"):
         try:
@@ -107,6 +125,7 @@ async def build_profile(member: dict) -> dict:
             pass
     avail = await _availability_flag(db, member)
     portfolio_docs = []
+    coi_docs = []
     try:
         docs = await db.table("vendor_documents").select(
             "id, doc_type, file_url, status, created_at"
@@ -117,12 +136,55 @@ async def build_profile(member: dict) -> dict:
         ]
     except Exception:
         portfolio_docs = []
+    try:
+        # Separate read so a column problem here never hides the portfolio.
+        res = await db.table("vendor_documents").select(
+            "id, status, created_at, expiry_date, validation_result"
+        ).eq("member_id", member["id"]).eq("doc_type", "coi").order(
+            "created_at", desc=True
+        ).limit(5).execute()
+        coi_docs = res.data or []
+    except Exception:
+        coi_docs = []
     extra = {
         "availability": avail,
         "bio": member.get("bio") or member.get("internal_notes") or "",
         "_portfolio_documents": portfolio_docs,
+        "insurance_review": latest_coi_review(coi_docs),
     }
     return public_profile(member, extra)
+
+
+def latest_coi_review(docs: list) -> Optional[dict]:
+    """The vendor's most recent certificate-of-insurance upload, for GO.
+
+    Lets the photographer see "In review" / "Not accepted" after a reload
+    (the verified state itself comes from insurance_status on the member).
+    Only the vendor's own declared values are echoed; no file key, no
+    reviewer notes.
+    """
+    rows = [d for d in (docs or []) if isinstance(d, dict)]
+    if not rows:
+        return None
+    rows.sort(key=lambda d: str(d.get("created_at") or ""), reverse=True)
+    d = rows[0]
+    vr = d.get("validation_result")
+    declared = (vr.get("declared") or {}) if isinstance(vr, dict) else {}
+    status = str(d.get("status") or "pending").lower()
+    if status not in ("pending", "verified", "rejected", "flagged"):
+        status = "pending"
+    try:
+        limit = int(declared.get("liability_cad")) if declared.get("liability_cad") is not None else None
+    except (TypeError, ValueError):
+        limit = None
+    return {
+        "status": "rejected" if status == "flagged" else status,
+        "uploaded_at": d.get("created_at"),
+        "expires_on": (str(d.get("expiry_date") or declared.get("expires_on") or "")[:10] or None),
+        "liability_cad": limit,
+        "aviation_covered": bool(declared.get("aviation_covered")),
+        "insurer": declared.get("insurer") or None,
+    }
 
 
 async def get_profile_impl(
@@ -154,6 +216,10 @@ async def update_profile_impl(
         patch["service_areas"] = [s.strip() for s in payload.service_areas if s and s.strip()]
     if payload.skills is not None:
         patch["skills"] = [s for s in payload.skills if s in VENDOR_SKILLS]
+        # "mapping" is admin-granted after a QC'd test mission; a self-serve
+        # profile save keeps it but can never add it.
+        if "mapping" in (member.get("skills") or []):
+            patch["skills"].append("mapping")
         if "drone" in patch["skills"] and not member.get("drone_certified"):
             patch["drone_certified"] = True
     if payload.rpas_certificate_level is not None:
@@ -183,7 +249,7 @@ async def update_profile_impl(
         patch["role"] = "Owner"
         patch["tier"] = 3
         patch["payout_mode"] = "owner_full"
-    updated = await _persist_safe(db, member["id"], patch)
+    updated = (await _persist_safe(db, member["id"], patch)) or {**member, **patch}
     return await build_profile(updated)
 
 
@@ -226,10 +292,103 @@ async def upload_rpas_impl(
     }
     if (certificate_number or "").strip():
         rpas_patch["rpas_certificate_number"] = certificate_number.strip()
-    updated = await _persist_safe(db, member["id"], rpas_patch)
+    updated = (await _persist_safe(db, member["id"], rpas_patch)) or {**member, **rpas_patch}
+    try:
+        from ..services.credential_review_notify import notify_rpas_uploaded
+        await notify_rpas_uploaded(updated or member, level, certificate_number)
+    except Exception:
+        pass
     profile = await build_profile(updated)
     profile["rpas_document_id"] = doc_id
     profile["rpas_certificate_url"] = file_key
+    return profile
+
+
+async def upload_insurance_impl(
+    authorization: Optional[str],
+    x_user_id: Optional[str],
+    file: UploadFile,
+    liability_cad: int,
+    expires_on: str,
+    aviation_covered: bool = False,
+    insurer: str = "",
+    policy_number: str = "",
+):
+    """Vendor uploads a certificate of insurance (COI) for commercial work.
+
+    Stored as a pending vendor_documents row with the vendor's declared limit,
+    expiry and drone/aviation coverage. Nothing here marks the member verified:
+    an admin verifies in OS hiring (or Dispatch admin_ops), which is what the
+    commercial job gate and Tier A rule read. A pending upload never removes an
+    existing verified COI.
+    """
+    from datetime import date as _date
+
+    member = await _actor_member(authorization, x_user_id)
+    raw = await file.read()
+    if not raw:
+        api_error(400, "Empty file", "empty_file")
+    if len(raw) > 12 * 1024 * 1024:
+        api_error(400, "File too large (12 MB max)", "file_too_large")
+    try:
+        exp = _date.fromisoformat((expires_on or "").strip()[:10])
+    except ValueError:
+        api_error(400, "expires_on must be YYYY-MM-DD", "invalid_expiry")
+    if exp < datetime.now(timezone.utc).date():
+        api_error(400, "This certificate has already expired", "insurance_expired")
+    try:
+        limit = int(liability_cad)
+    except (TypeError, ValueError):
+        api_error(400, "liability_cad must be a whole number of dollars", "invalid_liability")
+    if limit <= 0:
+        api_error(400, "liability_cad must be positive", "invalid_liability")
+    filename = os.path.basename(file.filename or "certificate-of-insurance.pdf").lstrip(".") or "certificate-of-insurance.pdf"
+    mime = file.content_type or "application/pdf"
+    from ..services.storage import upload_file
+    file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], filename, mime)
+    db = await get_db()
+    doc_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    declared = {
+        "declared": {
+            "liability_cad": limit,
+            "expires_on": exp.isoformat(),
+            "aviation_covered": bool(aviation_covered),
+            "insurer": (insurer or "").strip()[:120] or None,
+            "policy_number": (policy_number or "").strip()[:80] or None,
+        }
+    }
+    await db.table("vendor_documents").insert({
+        "id": doc_id,
+        "vendor_id": member.get("vendor_id", "default_vendor"),
+        "member_id": member["id"],
+        "doc_type": "coi",
+        "file_url": file_key,
+        "status": "pending",
+        "expiry_date": exp.isoformat(),
+        "validation_result": declared,
+        "created_at": now,
+    }).execute()
+    patch = {}
+    if (policy_number or "").strip():
+        patch["insurance_policy_number"] = policy_number.strip()[:80]
+    updated = (await _persist_safe(db, member["id"], patch)) if patch else member
+    try:
+        from ..services.credential_review_notify import notify_insurance_uploaded
+        await notify_insurance_uploaded(updated or member, declared["declared"])
+    except Exception:
+        pass
+    profile = await build_profile(updated or member)
+    profile["insurance_document_id"] = doc_id
+    profile["insurance_pending_review"] = True
+    profile["insurance_review"] = {
+        "status": "pending",
+        "uploaded_at": now,
+        "expires_on": exp.isoformat(),
+        "liability_cad": limit,
+        "aviation_covered": bool(aviation_covered),
+        "insurer": declared["declared"]["insurer"],
+    }
     return profile
 
 
@@ -340,7 +499,7 @@ async def upload_photo_impl(
     from ..services.storage import upload_file
     file_key, _, _, _ = await upload_file(raw, "onboarding", member["id"], filename, mime)
     db = await get_db()
-    updated = await _persist_safe(db, member["id"], {"avatar_url": file_key})
+    updated = (await _persist_safe(db, member["id"], {"avatar_url": file_key})) or {**member, "avatar_url": file_key}
     profile = await build_profile(updated)
     profile["avatar_url"] = file_key
     return profile
@@ -375,6 +534,23 @@ async def upload_rpas(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     return await upload_rpas_impl(authorization, x_user_id, file, level, certificate_number)
+
+
+@router.post("/api/profile/insurance")
+async def upload_insurance(
+    file: UploadFile = File(...),
+    liability_cad: int = Form(...),
+    expires_on: str = Form(...),
+    aviation_covered: bool = Form(False),
+    insurer: str = Form(""),
+    policy_number: str = Form(""),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await upload_insurance_impl(
+        authorization, x_user_id, file, liability_cad, expires_on,
+        aviation_covered, insurer, policy_number,
+    )
 
 
 @router.get("/api/payouts")
@@ -413,6 +589,22 @@ async def os_upload_rpas(
 ):
     return await upload_rpas_impl(authorization, x_user_id, file, level, certificate_number)
 
+@os_router.post("/profile/insurance")
+async def os_upload_insurance(
+    file: UploadFile = File(...),
+    liability_cad: int = Form(...),
+    expires_on: str = Form(...),
+    aviation_covered: bool = Form(False),
+    insurer: str = Form(""),
+    policy_number: str = Form(""),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await upload_insurance_impl(
+        authorization, x_user_id, file, liability_cad, expires_on,
+        aviation_covered, insurer, policy_number,
+    )
+
 @router.post("/api/profile/photo")
 async def upload_photo(
     file: UploadFile = File(...),
@@ -430,3 +622,91 @@ async def os_upload_photo(
 ):
     return await upload_photo_impl(authorization, x_user_id, file)
 
+
+
+# ── Contractor agreement for members added without an application ────────────
+
+class AcceptTermsBody(BaseModel):
+    ic_agreement_version: str
+    read: List[str] = []
+
+
+REQUIRED_READS = ("ic", "privacy")
+
+
+async def accept_terms_impl(
+    payload: AcceptTermsBody,
+    authorization: Optional[str],
+    x_user_id: Optional[str],
+) -> dict:
+    """Record that the signed-in contractor read and accepted the current IC
+    agreement and the privacy policy. Applicants do this on the www form; team
+    members an owner added get the same step in GO before the app opens."""
+    from .onboarding import _IC_AGREEMENT_VERSION
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_vendor_member_fields
+
+    member = await _actor_member(authorization, x_user_id)
+    if not member or not member.get("id"):
+        api_error(403, "Vendor member not found", "vendor_member_not_found")
+    if (payload.ic_agreement_version or "").strip() != _IC_AGREEMENT_VERSION:
+        api_error(409, "The agreement was updated. Reload to read the current version.", "ic_agreement_outdated")
+    missing = [k for k in REQUIRED_READS if k not in set(payload.read or [])]
+    if missing:
+        api_error(422, "Read the contractor agreement and privacy policy to the end first.", "terms_not_read")
+
+    if member.get("terms_accepted_at") and member.get("ic_agreement_version") == _IC_AGREEMENT_VERSION:
+        return {
+            "terms_accepted_at": member["terms_accepted_at"],
+            "ic_agreement_version": _IC_AGREEMENT_VERSION,
+            "needs_terms": False,
+        }
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    note = f"IC agreement v{_IC_AGREEMENT_VERSION} and privacy policy accepted in GO on {now_iso}"
+    prior = (member.get("internal_notes") or "").strip()
+    fields = {
+        "terms_accepted_at": now_iso,
+        "ic_agreement_version": _IC_AGREEMENT_VERSION,
+        "internal_notes": f"{prior}\n{note}".strip(),
+        "updated_at": now_iso,
+    }
+    saved = False
+    db = await get_db()
+    try:
+        res = await db.table("vendor_members").update(fields).eq("id", member["id"]).execute()
+        saved = bool(res is not None and getattr(res, "data", None))
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        saved = pg_update_vendor_member_fields(member["id"], fields)
+    if not saved:
+        api_error(503, "Couldn't save your agreement. Try again.", "terms_not_saved")
+
+    try:
+        from ..shared.audit import write_audit_event
+        await write_audit_event(
+            member["id"], "vendor_member", member["id"], "terms_accepted",
+            vendor_id=member.get("vendor_id") or "default_vendor",
+            details={"ic_agreement_version": _IC_AGREEMENT_VERSION, "read": list(REQUIRED_READS), "surface": "go"},
+        )
+    except Exception:
+        pass
+    return {"terms_accepted_at": now_iso, "ic_agreement_version": _IC_AGREEMENT_VERSION, "needs_terms": False}
+
+
+@router.post("/api/profile/accept-terms")
+async def accept_terms(
+    payload: AcceptTermsBody,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await accept_terms_impl(payload, authorization, x_user_id)
+
+
+@os_router.post("/profile/accept-terms")
+async def os_accept_terms(
+    payload: AcceptTermsBody,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    return await accept_terms_impl(payload, authorization, x_user_id)

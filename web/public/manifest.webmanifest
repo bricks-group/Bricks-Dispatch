@@ -1,7 +1,7 @@
 {
-  "name": "bricks GO",
-  "short_name": "GO",
-  "description": "bricks GO — capture and dispatch",
+  "name": "Bricks",
+  "short_name": "Bricks",
+  "description": "Bricks for photographers — jobs, capture and payouts",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

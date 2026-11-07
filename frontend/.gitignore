@@ -40,3 +40,8 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+secrets/
+
+# Prebuild output (CNG)
+/android
+/ios

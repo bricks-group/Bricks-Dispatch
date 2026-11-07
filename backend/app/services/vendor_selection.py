@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import httpx
 
-from ..shared.database import get_db
+from ..shared.database import get_db, maybe_single_row
 from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.schemas import Job, VendorMember
 from .webhooks import send_dispatch_status_update_webhook
@@ -18,8 +18,8 @@ from .vendor_profile import (
     min_tier_for_job,
     ORG_VENDOR_ID,
     preferred_tier_for_job,
+    specialty_matches_job,
     travel_within_cap,
-    vendor_skills,
     _missing_column,
 )
 from .shoot_duration import (
@@ -31,7 +31,7 @@ from .shoot_duration import (
 
 logger = logging.getLogger(__name__)
 
-OPS_EMAIL = "ops@brxs.ca"
+OPS_EMAIL = "raphael@brxs.ca"
 
 
 async def _mark_dispatch_failed(job_id: str) -> None:
@@ -40,14 +40,26 @@ async def _mark_dispatch_failed(job_id: str) -> None:
     Historical bug: failure wrote status=unassigned while the ops queue only
     listed dispatch_failed — paid first bookings with no eligible vendor were
     invisible to the recovery path.
+
+    Fair-Use: when PostgREST returns 402, write via Postgres (pg_update_job).
+    Never raises.
     """
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+
+    payload = {
+        "status": "dispatch_failed",
+        "assignee_id": "",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
     try:
-        await (await get_db()).table("jobs").update({
-            "status": "dispatch_failed",
-            "assignee_id": "",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", job_id).execute()
+        await (await get_db()).table("jobs").update(payload).eq("id", job_id).execute()
     except Exception as e:
+        if _is_rest_quota_error(e):
+            try:
+                if pg_update_job(job_id, payload):
+                    return
+            except Exception as pg_e:
+                logger.error(f"pg_update_job dispatch_failed failed for {job_id}: {pg_e}")
         logger.error(f"Failed to mark job {job_id} dispatch_failed: {e}")
 
 
@@ -68,9 +80,18 @@ async def _notify_owner_no_vendor(job: Job, error_message: str) -> None:
         res = await (await get_db()).table("vendor_members").select("phone,email").eq(
             "id", KAM_MEMBER_ID
         ).maybe_single().execute()
-        phone = ((res.data or {}).get("phone") or "").strip()
+        phone = (maybe_single_row(res).get("phone") or "").strip()
     except Exception as e:
-        logger.error(f"Owner phone lookup failed for job {job.id}: {e}")
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+
+        if _is_rest_quota_error(e):
+            try:
+                member = pg_select_vendor_member(KAM_MEMBER_ID) or {}
+                phone = (member.get("phone") or "").strip()
+            except Exception as pg_e:
+                logger.error(f"Owner phone pg fallback failed for job {job.id}: {pg_e}")
+        if not phone:
+            logger.error(f"Owner phone lookup failed for job {job.id}: {e}")
 
     if phone:
         try:
@@ -93,23 +114,467 @@ async def _notify_owner_no_vendor(job: Job, error_message: str) -> None:
         logger.error(f"Owner no-vendor in-app notify failed for job {job.id}: {e}")
 
 
+HOLD_ADMIN_EMAIL = "raphael@brxs.ca"
+
+
+def jev_hold_sms_body(address: str, scheduled_date: str, yes_probability) -> str:
+    """Short owner text. No email address and no new phone number."""
+    place = (address or "").strip() or "a property"
+    when = (scheduled_date or "").strip()
+    if isinstance(yes_probability, float):
+        probability = f"{yes_probability:.2f}"
+    else:
+        probability = "n/a"
+    when_bit = f" on {when}" if when else ""
+    return (
+        f"Bricks held a booking at {place}{when_bit}. "
+        f"Jev yes-probability {probability}. It is unassigned."
+    )
+
+
+def jev_hold_email_subject() -> str:
+    return "Bricks held a booking"
+
+
+def jev_hold_email_body(job: dict, yes_probability) -> str:
+    from .notifications import short_booking_ref
+
+    job = job or {}
+    if isinstance(yes_probability, float):
+        probability = f"{yes_probability:.2f}"
+    else:
+        probability = "n/a"
+    address = (job.get("address") or "").strip() or "n/a"
+    when = (job.get("scheduled_date") or "").strip() or "n/a"
+    booking_ref = short_booking_ref(job.get("booking_id"))
+    return (
+        "Bricks held a booking for a person. It is unassigned.\n"
+        f"Address: {address}\n"
+        f"Date: {when}\n"
+        f"Booking ref: {booking_ref}\n"
+        f"Jev yes-probability: {probability}"
+    )
+
+
+async def notify_owner_jev_hold(db, job: dict, yes_probability) -> None:
+    """SMS the owner profile phone and email raphael@brxs.ca. Never raises.
+
+    A failed lookup, SMS, or email must not assign the held job.
+    """
+    from ..shared.job_scope import KAM_MEMBER_ID
+
+    job = job or {}
+    job_id = job.get("id")
+    sms_body = jev_hold_sms_body(
+        job.get("address") or "",
+        job.get("scheduled_date") or "",
+        yes_probability,
+    )
+    phone = ""
+    try:
+        res = await db.table("vendor_members").select("phone").eq(
+            "id", KAM_MEMBER_ID
+        ).maybe_single().execute()
+        phone = (maybe_single_row(res).get("phone") or "").strip()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+
+        if _is_rest_quota_error(e):
+            try:
+                member = pg_select_vendor_member(KAM_MEMBER_ID) or {}
+                phone = (member.get("phone") or "").strip()
+            except Exception as pg_e:
+                logger.error("Owner phone pg fallback failed for held job %s: %s", job_id, pg_e)
+        if not phone:
+            logger.error("Owner phone lookup failed for held job %s: %s", job_id, type(e).__name__)
+
+    if phone:
+        try:
+            from ..notifications import send_dispatch_sms
+            send_dispatch_sms(phone, sms_body)
+        except Exception as e:
+            logger.error("Jev hold SMS failed for job %s: %s", job_id, type(e).__name__)
+
+    try:
+        from .notifications import _build_html_email, send_email_via_resend
+
+        subject = jev_hold_email_subject()
+        body = jev_hold_email_body(job, yes_probability)
+        await send_email_via_resend(
+            to=HOLD_ADMIN_EMAIL,
+            subject=subject,
+            html=_build_html_email(subject, body),
+        )
+    except Exception as e:
+        logger.error("Jev hold email failed for job %s: %s", job_id, type(e).__name__)
+
+
+def vendor_application_fit_line(yes_probability, needs_review: bool = False) -> str:
+    """Plain sentence for a person. Empty when there is no score and nothing to flag.
+
+    The number is how sure the check is that the applicant is a poor fit.
+    Above 0.7 is a weak fit. A portfolio nobody could open, or a location that
+    may not be in the GTA, is "needs review", never a fit. No name, no decimal.
+    """
+    if isinstance(yes_probability, float) and yes_probability > 0.7:
+        return "This looks like a weak fit."
+    if needs_review:
+        return "This needs review."
+    if isinstance(yes_probability, float):
+        return "This does not look like a weak fit."
+    return ""
+
+
+def _human_reason_lines(yes_probability, reasons) -> list:
+    """Bullets only when there is a score. Drop jargon, names, and decimals."""
+    if not isinstance(yes_probability, float):
+        return []
+    import re
+    decimal = re.compile(r"\d+\.\d+")
+    banned = ("jev", "poor-fit", "yes-probability")
+    lines = []
+    for reason in reasons or ():
+        line = " ".join(str(reason or "").split())
+        if line.startswith("- "):
+            line = line[2:].strip()
+        if not line:
+            continue
+        low = line.lower()
+        if any(word in low for word in banned) or decimal.search(line):
+            continue
+        if not line.endswith("."):
+            line += "."
+        lines.append(line)
+    return lines
+
+
+# Strict GTA: Toronto and the four GTA regions. Wider Ontario is "may not be in the GTA".
+_GTA_PLACES = {
+    "gta", "greater toronto", "greater toronto area", "toronto", "etobicoke",
+    "scarborough", "north york", "east york", "york", "downtown toronto",
+    "mississauga", "brampton", "caledon", "peel",
+    "oakville", "burlington", "milton", "halton hills", "georgetown", "halton",
+    "vaughan", "markham", "richmond hill", "aurora", "newmarket",
+    "king city", "stouffville", "whitchurch", "east gwillimbury",
+    "georgina", "woodbridge", "concord", "thornhill", "maple", "unionville",
+    "pickering", "ajax", "whitby", "oshawa", "clarington", "bowmanville",
+    "uxbridge", "durham",
+}
+# Words that add nothing about where in Ontario someone is.
+_LOCATION_FILLER = {
+    "on", "ont", "ontario", "canada", "ca", "area", "the", "downtown",
+    "based", "in", "near", "around", "city", "of", "region", "greater", "gta",
+}
+
+
+def _location_key(text: str) -> str:
+    import unicodedata
+    folded = unicodedata.normalize("NFKD", text or "")
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return " ".join(folded.lower().replace(".", " ").split())
+
+
+def location_check(city: str) -> tuple:
+    """(bullet, unclear). Self-reported text only; nothing is geocoded."""
+    import re
+    raw = " ".join(str(city or "").split())
+    if not raw:
+        return ("No city given.", True)
+    key = _location_key(raw)
+    parts = [p.strip() for p in re.split(r"[/,;|&+()\\-]| and | or ", key) if p.strip()]
+    gta = 0
+    other = 0
+    for part in parts:
+        if part in _GTA_PLACES:
+            gta += 1
+            continue
+        words = [w for w in part.split() if w not in _LOCATION_FILLER]
+        phrase = " ".join(words)
+        if not phrase:
+            if "gta" in part.split() or "greater" in part.split():
+                gta += 1
+            continue
+        if phrase in _GTA_PLACES:
+            gta += 1
+        else:
+            other += 1
+    if gta and not other:
+        return (f"Self-reported city: {raw} (GTA).", False)
+    return (f"Location unclear / may not be in the GTA (says: {raw}).", True)
+
+
+def _short(text: str, limit: int = 100) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def equipment_line(equipment) -> str:
+    items = [" ".join(str(i or "").split()) for i in (equipment or ())]
+    items = [i for i in items if i]
+    if not items:
+        return "No equipment listed."
+    return f"Says they have: {_short(', '.join(items))}."
+
+
+def drone_line(drone, level=None) -> str:
+    if not drone:
+        return "No drone certificate claimed."
+    lvl = str(level or "").strip().lower()
+    if lvl in ("basic", "advanced"):
+        return f"Says they hold a {lvl} drone (RPAS) certificate, not verified."
+    return "Says they are drone certified, not verified."
+
+
+def portfolio_check_lines(check, urls) -> tuple:
+    """(bullets, needs_review). Only what was actually seen.
+
+    There is no image or vision model on this path, so a page that opens is
+    "opened, work not reviewed". Nothing here says the work is a fit.
+    """
+    urls = list(urls or ())
+    if not urls:
+        return (["No portfolio link to check."], True)
+    if check is None:
+        return ([f"Portfolio not checked (link: {', '.join(urls)})."], True)
+    lines = []
+    opened = check.opened
+    failed = check.failed
+    if opened:
+        lines.append(
+            f"Portfolio opened, work not reviewed (link: {', '.join(c.url for c in opened)})."
+        )
+    if failed:
+        lines.append(f"Portfolio couldn't be opened (link: {', '.join(c.url for c in failed)}).")
+    if check.instagram:
+        lines.append("Instagram link provided, not reviewed.")
+    unchecked = [u for u in urls if u not in {c.url for c in check.links}]
+    if unchecked:
+        lines.append(f"Not checked (link: {', '.join(unchecked)}).")
+    return (lines, check.needs_review)
+
+
+def vendor_application_facts(
+    city: str,
+    portfolio_links=(),
+    *,
+    portfolio_check=None,
+    equipment=None,
+    drone=None,
+    drone_level=None,
+) -> tuple:
+    """(bullets, needs_review) from what the applicant typed plus the link check.
+
+    Equipment, city, and drone are self-reported and worded that way.
+    None for equipment/drone means the caller did not pass them; skip the bullet.
+    """
+    urls = _public_portfolio_urls(portfolio_links)
+    lines, review = portfolio_check_lines(portfolio_check, urls)
+    loc, unclear = location_check(city)
+    lines.append(loc)
+    if equipment is not None:
+        lines.append(equipment_line(equipment))
+    if drone is not None:
+        lines.append(drone_line(drone, drone_level))
+    return (lines, review or unclear)
+
+
+def vendor_application_sms_body(
+    name: str,
+    city: str,
+    vendor_type: str,
+    yes_probability,
+    reasons=(),
+    portfolio_links=(),
+    facts=(),
+    needs_review: bool = False,
+) -> str:
+    """Owner text. Fit sentence and bullets. Public portfolio URL on its own line."""
+    who = (name or "").strip() or "Someone"
+    where = (city or "").strip() or "an unknown city"
+    kind = (vendor_type or "").strip() or "vendor"
+    fit = vendor_application_fit_line(yes_probability, needs_review)
+    head = f"New Bricks {kind} application: {who} in {where}."
+    bullets = list(facts or ()) + _human_reason_lines(yes_probability, reasons)
+    urls = _public_portfolio_urls(portfolio_links)
+    if not fit and not urls and not bullets:
+        return f"{head} Pending your approval."
+    parts = [f"{head} {fit}"] if fit else [head]
+    parts.extend(f"- {line}" for line in bullets)
+    parts.extend(urls)
+    parts.append("Pending your approval.")
+    return "\n".join(parts)
+
+
+def vendor_application_email_subject(name: str) -> str:
+    who = (name or "").strip() or "Applicant"
+    return f"New vendor application pending your approval: {who}"
+
+
+def _public_portfolio_urls(portfolio_links) -> list:
+    """Public http(s) portfolio URLs only. Not an email address and not a phone."""
+    urls = []
+    seen = set()
+    for raw in portfolio_links or ():
+        url = " ".join(str(raw or "").split())
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        if "@" in url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def _portfolio_lines(portfolio_links) -> list:
+    urls = _public_portfolio_urls(portfolio_links)
+    if not urls:
+        return []
+    return ["Portfolio:", *urls]
+
+
+def vendor_application_email_body(
+    name: str,
+    city: str,
+    vendor_type: str,
+    yes_probability,
+    reasons=(),
+    portfolio_links=(),
+    facts=(),
+    needs_review: bool = False,
+    source=None,
+    source_detail=None,
+) -> str:
+    who = (name or "").strip() or "Someone"
+    where = (city or "").strip() or "an unknown city"
+    kind = (vendor_type or "").strip() or "vendor"
+    lines = [f"{who} in {where} applied as a {kind}."]
+    from ..shared.applicant_source import found_us_line
+
+    found = found_us_line(source, source_detail)
+    if found:
+        lines.append(found)
+    fit = vendor_application_fit_line(yes_probability, needs_review)
+    if fit:
+        lines.append(fit)
+    lines.extend(f"- {line}" for line in facts or ())
+    lines.extend(f"- {line}" for line in _human_reason_lines(yes_probability, reasons))
+    lines.extend(_portfolio_lines(portfolio_links))
+    lines.append("Pending your approval.")
+    return "\n".join(lines)
+
+
+async def notify_owner_vendor_application(
+    db,
+    *,
+    name: str,
+    city: str,
+    vendor_type: str,
+    yes_probability,
+    reasons=(),
+    portfolio_links=(),
+    portfolio_check=None,
+    equipment=None,
+    drone=None,
+    drone_level=None,
+    source=None,
+    source_detail=None,
+) -> None:
+    """SMS the owner profile phone and email raphael@brxs.ca. Never raises.
+
+    A failed lookup, SMS, or email leaves the application pending. This does
+    not approve or reject.
+    """
+    from ..shared.job_scope import KAM_MEMBER_ID
+
+    try:
+        facts, needs_review = vendor_application_facts(
+            city,
+            portfolio_links,
+            portfolio_check=portfolio_check,
+            equipment=equipment,
+            drone=drone,
+            drone_level=drone_level,
+        )
+    except Exception as e:
+        logger.error("Vendor application facts failed: %s", type(e).__name__)
+        facts, needs_review = [], True
+    sms_body = vendor_application_sms_body(
+        name, city, vendor_type, yes_probability, reasons, portfolio_links, facts, needs_review
+    )
+    phone = ""
+    try:
+        res = await db.table("vendor_members").select("phone").eq(
+            "id", KAM_MEMBER_ID
+        ).maybe_single().execute()
+        phone = (maybe_single_row(res).get("phone") or "").strip()
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_vendor_member
+
+        if _is_rest_quota_error(e):
+            try:
+                member = pg_select_vendor_member(KAM_MEMBER_ID) or {}
+                phone = (member.get("phone") or "").strip()
+            except Exception as pg_e:
+                logger.error("Owner phone pg fallback failed for vendor application: %s", type(pg_e).__name__)
+        if not phone:
+            logger.error("Owner phone lookup failed for vendor application: %s", type(e).__name__)
+
+    if phone:
+        try:
+            from ..notifications import send_dispatch_sms
+            send_dispatch_sms(phone, sms_body)
+        except Exception as e:
+            logger.error("Vendor application SMS failed: %s", type(e).__name__)
+
+    try:
+        from .notifications import _build_html_email, send_email_via_resend
+
+        subject = vendor_application_email_subject(name)
+        body = vendor_application_email_body(
+            name, city, vendor_type, yes_probability, reasons, portfolio_links, facts, needs_review,
+            source=source, source_detail=source_detail,
+        )
+        # Kam alone. No cc, no bcc, no applicant, no hiring@, no personal Gmail.
+        if HOLD_ADMIN_EMAIL != "raphael@brxs.ca":
+            raise RuntimeError("vendor application email recipient drifted")
+        await send_email_via_resend(
+            to=HOLD_ADMIN_EMAIL,
+            subject=subject,
+            html=_build_html_email(subject, body),
+        )
+    except Exception as e:
+        logger.error("Vendor application email failed: %s", type(e).__name__)
+
+
 async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: str = "") -> None:
     """Record escalation, mark dispatch_failed, email ops, SMS/notify owner."""
     err = error_message or f"No eligible vendor found after {attempt_count} attempt(s)"
     await _mark_dispatch_failed(job.id)
 
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_ops_escalation
+
+    esc_row = {
+        "booking_id": job.booking_id,
+        "job_id": job.id,
+        "escalation_type": "no_vendor_available",
+        "attempt_count": attempt_count,
+        "error_message": err,
+        "status": "open",
+    }
     db = await get_db()
     try:
-        await db.table("ops_escalations").insert({
-            "booking_id": job.booking_id,
-            "job_id": job.id,
-            "escalation_type": "no_vendor_available",
-            "attempt_count": attempt_count,
-            "error_message": err,
-            "status": "open",
-        }).execute()
+        await db.table("ops_escalations").insert(esc_row).execute()
     except Exception as e:
-        logger.error(f"Failed to write ops_escalation for job {job.id}: {e}")
+        if _is_rest_quota_error(e):
+            try:
+                if pg_insert_ops_escalation(esc_row):
+                    pass
+                else:
+                    logger.error(f"pg_insert_ops_escalation returned False for job {job.id}")
+            except Exception as pg_e:
+                logger.error(f"pg_insert_ops_escalation failed for job {job.id}: {pg_e}")
+        else:
+            logger.error(f"Failed to write ops_escalation for job {job.id}: {e}")
 
     await _notify_owner_no_vendor(job, err)
 
@@ -173,6 +638,21 @@ async def load_occupied_jobs_by_vendor(
             elif aid:
                 occupied.setdefault(aid, []).append(row)
     except Exception as e:
+        # Fair-Use 402: PostgREST blocked — read conflicts via Postgres.
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_select_occupied_jobs_by_assignees,
+        )
+        if _is_rest_quota_error(e):
+            pg_map = pg_select_occupied_jobs_by_assignees(
+                ids[:80], scheduled_date=scheduled_date
+            )
+            for aid, jobs in (pg_map or {}).items():
+                if aid in occupied:
+                    occupied[aid].extend(jobs)
+                elif aid:
+                    occupied.setdefault(aid, []).extend(jobs)
+            return occupied
         # Soft-drop missing columns (selected_slot_*, estimated_duration_min)
         msg = str(e)
         miss = _missing_column(msg, [
@@ -284,8 +764,7 @@ def pick_vendor_rule_based(
 
     def selection_score(v: VendorMember):
         owner_bonus = 1 if is_platform_owner(v) else 0
-        have = vendor_skills(v)
-        specialty_match = 1 if v.specialty == job.job_type or job.job_type in have else 0
+        specialty_match = 1 if specialty_matches_job(v, job) else 0
         tier_match = 1 if v.tier == preferred_tier else 0
         # Higher tier wins premium/luxury packages when preferred_tier is top.
         tier_rank = v.tier or 1
@@ -324,7 +803,12 @@ def pick_vendor_rule_based(
 
 
 async def _patch_job_assign(job_id: str, patch: dict) -> None:
-    """Update job assign fields; soft-drop columns PostgREST says are missing."""
+    """Update job assign fields; soft-drop columns PostgREST says are missing.
+
+    Fair-Use: when PostgREST returns 402, write via Postgres (pg_update_job).
+    """
+    from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+
     data = dict(patch)
     last = None
     db = await get_db()
@@ -334,6 +818,10 @@ async def _patch_job_assign(job_id: str, patch: dict) -> None:
             return
         except Exception as e:
             last = e
+            if _is_rest_quota_error(e):
+                if pg_update_job(job_id, data):
+                    return
+                raise
             miss = _missing_column(str(e), list(data.keys()))
             if not miss:
                 raise
@@ -379,7 +867,7 @@ async def _update_job_assignee(
     try:
         from .notifications import notify_assignment
         res = await (await get_db()).table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-        await notify_assignment(res.data or {"id": job_id}, member_id)
+        await notify_assignment(maybe_single_row(res) or {"id": job_id}, member_id)
     except Exception as e:
         logger.error(f"Vendor assignment notify failed for job {job_id}: {e}")
 
@@ -391,13 +879,29 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
     Retries up to _MAX_ASSIGNMENT_ATTEMPTS times; on final failure writes an
-    ops_escalation, marks status=dispatch_failed, emails ops@brxs.ca, and SMS/notifies owner.
+    ops_escalation, marks status=dispatch_failed, emails raphael@brxs.ca, and SMS/notifies owner.
 
     exclude_member_id: skip this vendor member on all attempts (e.g. contractor who no-showed).
     """
+    from ..shared.pg_fallback import (
+        _is_rest_quota_error,
+        pg_select_job_by_id,
+        pg_select_vendor_members_by_vendor_ids,
+    )
+
     db = await get_db()
-    res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
-    job_doc = res.data
+    try:
+        from .commercial_jobs import refresh_company_policy
+        await refresh_company_policy(db)  # employees on commercial jobs read the org policy
+    except Exception:
+        pass
+    try:
+        res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        job_doc = maybe_single_row(res) or None
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        job_doc = pg_select_job_by_id(job_id)
     if not job_doc:
         raise ValueError(f"Job {job_id} not found")
 
@@ -408,8 +912,13 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
     # this job's vendor_id. Paid /book previously stored Kam's member UUID as
     # jobs.vendor_id; those rows must still see every approved photographer.
     org_ids = list({ORG_VENDOR_ID, vendor_id}) if vendor_id else [ORG_VENDOR_ID]
-    res_members = await db.table("vendor_members").select("*").in_("vendor_id", org_ids).execute()
-    rows = res_members.data or []
+    try:
+        res_members = await db.table("vendor_members").select("*").in_("vendor_id", org_ids).execute()
+        rows = res_members.data or []
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        rows = pg_select_vendor_members_by_vendor_ids(org_ids)
     vendors = []
     for m in rows:
         try:
@@ -461,14 +970,27 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
         except Exception:
             calendar_connected[v.id] = False
 
-    # Calendar FreeBusy hard gate (busy=True excludes; None/False continue)
+    # Calendar FreeBusy hard gate for the booked slot (selected_slot_* or
+    # scheduled_date + window + estimated duration). Same as a Bricks slot
+    # conflict when busy=True. Not connected → skip this probe (overlap +
+    # manual hours still apply). Calendar API errors → None (unknown): log
+    # and continue so a Google outage does not strand the whole roster.
     try:
         from .vendor_calendars import vendor_is_busy
         bounds = _slot_bounds(job, duration_min)
         if bounds:
             filtered = []
             for v in vendors:
-                busy = await vendor_is_busy(v, bounds[0], bounds[1], db=db)
+                # Synced free/busy cache first (periodic sync of linked calendars),
+                # then a live FreeBusy probe for anything not yet synced.
+                busy = None
+                try:
+                    from .vendor_busy_sync import cached_busy
+                    busy = await cached_busy(db, v.id, bounds[0], bounds[1])
+                except Exception:
+                    busy = None
+                if busy is not True:
+                    busy = await vendor_is_busy(v, bounds[0], bounds[1], db=db)
                 if busy is True:
                     logger.info("Vendor %s excluded: calendar busy for job %s", v.id, job_id)
                     continue
