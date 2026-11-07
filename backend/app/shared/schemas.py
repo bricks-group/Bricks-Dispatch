@@ -407,9 +407,9 @@ class VendorMember(BaseModel):
     hst_number: Optional[str] = None
     wsib_number: Optional[str] = None
     insurance_policy_number: Optional[str] = None
-    # Optional copies of a verified COI/WSIB expiry (admin_ops.verify_document).
-    # Historical storage only. Apply, approval, assignment, and dispatch do
-    # not read these fields and do not require a COI or WSIB record.
+    # Verified expiry copied by admin_ops.verify_document.
+    # Listing jobs do not read these. Commercial jobs read coi_expires_on
+    # with the verified-liability fields below. wsib_expires_on is history only.
     coi_expires_on: Optional[str] = None
     wsib_expires_on: Optional[str] = None
     # Commercial gate (Kam, 2026-10-17): listing jobs still ignore insurance.
