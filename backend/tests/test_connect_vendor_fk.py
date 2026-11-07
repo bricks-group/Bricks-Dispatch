@@ -75,6 +75,12 @@ class FakeDb:
 @pytest.fixture
 def fake_stripe(monkeypatch):
     calls = {}
+    # The stripe stub is a MagicMock. pytest deletes attributes it created, and
+    # a deleted MagicMock attribute then raises AttributeError for later tests.
+    # Seed them first so monkeypatch restores the seed instead of deleting.
+    for obj, name in ((scs.stripe_lib.Account, "create"), (scs.stripe_lib.AccountLink, "create")):
+        if not hasattr(obj, name):
+            setattr(obj, name, lambda **_k: None)
     monkeypatch.setattr(scs.stripe_lib.Account, "create",
                         lambda **k: calls.setdefault("acct", k) and SimpleNamespace(id="acct_test"))
     monkeypatch.setattr(scs.stripe_lib.AccountLink, "create",

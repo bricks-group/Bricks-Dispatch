@@ -121,6 +121,46 @@ def is_assignable(member: Optional[dict]) -> bool:
     return (member.get("onboarding_status") or "") == "approved"
 
 
+def has_app_access(member: Optional[dict]) -> bool:
+    """Approved and active vendors can open GO.
+
+    Trade pause (handyman at launch) and paused_at block assignment only.
+    They must not send an approved vendor back to Under review.
+    """
+    if not member:
+        return False
+    if is_owner_member(member):
+        return True
+    if not member.get("is_active"):
+        return False
+    return (member.get("onboarding_status") or "") == "approved"
+
+
+def assignable_block_reason(member: Optional[dict], *, assignable: bool, onboarded: bool) -> Optional[str]:
+    """Why the profile says not assignable. Approval, pause, and setup are separate."""
+    if assignable and onboarded:
+        return None
+    status = str((member or {}).get("onboarding_status") or "").strip().lower()
+    if status == "pending":
+        return "Pending — not assignable"
+    if is_vendor_paused(member):
+        if (member or {}).get("paused_at"):
+            return "Paused"
+        label = "This trade"
+        try:
+            from ..services.trade_specs import spec
+            row = spec(member_trade(member)) or {}
+            label = row.get("long_label") or row.get("label") or label
+        except Exception:
+            pass
+        return f"{label} is paused"
+    if assignable:
+        return "Finish setup to get jobs"
+    if not (member or {}).get("is_active") and status == "approved":
+        return "Not active"
+    return "Not approved"
+
+
 def member_skills(member: Optional[dict]) -> list[str]:
     raw = (member or {}).get("skills")
     if isinstance(raw, list) and raw:
@@ -249,12 +289,7 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "onboarding_status": member.get("onboarding_status") or "pending",
         "is_active": bool(member.get("is_active")),
         "assignable": assignable and onboarded,
-        "assignable_reason": (
-            None if (assignable and onboarded)
-            else "Pending — not assignable" if (member.get("onboarding_status") or "") == "pending"
-            else "Finish setup to get jobs" if assignable
-            else "Not approved"
-        ),
+        "assignable_reason": assignable_block_reason(member, assignable=assignable, onboarded=onboarded),
         "onboarding_complete": onboarded,
         "payout_model": payout_model(member),
         "payout_label": (
@@ -274,7 +309,7 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "member_role": member.get("role") or "",
         "terms_accepted_at": member.get("terms_accepted_at"),
         "application_submitted": bool(member.get("terms_accepted_at")),
-        "app_access": bool(assignable or owner),
+        "app_access": has_app_access(member),
         "portfolio_links": member.get("portfolio_links") or [],
         "portfolio_samples": member.get("portfolio_samples") or [],
     }
