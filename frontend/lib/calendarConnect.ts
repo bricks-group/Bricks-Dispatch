@@ -129,8 +129,9 @@ async function postConnect(provider: string, body: Record<string, string> = {}) 
   return data;
 }
 
-async function finishOauthInBrowser(oauthUrl: string, redirectUri: string | undefined, provider: CalendarProvider) {
-  await WebBrowser.openAuthSessionAsync(oauthUrl, redirectUri || WEB_AVAILABILITY);
+async function finishOauthInBrowser(oauthUrl: string, provider: CalendarProvider) {
+  // Never intercept the API callback: it must validate and consume the signed state first.
+  await WebBrowser.openAuthSessionAsync(oauthUrl, WEB_AVAILABILITY);
   const after = await fetchVendorCalendars();
   const row = connectionFor(after, provider);
   if (row?.connected) {
@@ -155,7 +156,7 @@ export async function connectGoogleCalendar(): Promise<{ connected: boolean; err
   }
 
   if (start.oauth_url) {
-    return finishOauthInBrowser(start.oauth_url, start.redirect_uri, 'google');
+    return finishOauthInBrowser(start.oauth_url, 'google');
   }
 
   if (start.mode === 'supabase' || start.connect_via === 'supabase') {
@@ -244,7 +245,7 @@ export async function connectMicrosoftCalendar(): Promise<{ connected: boolean; 
     return { connected: false, error: start.detail || 'Outlook is not configured on this environment.' };
   }
   if (start.oauth_url) {
-    return finishOauthInBrowser(start.oauth_url, start.redirect_uri, 'microsoft');
+    return finishOauthInBrowser(start.oauth_url, 'microsoft');
   }
   return { connected: false, error: start.detail || 'Outlook is not ready to connect on this environment.' };
 }
