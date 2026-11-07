@@ -37,16 +37,33 @@ def is_owner_member(member: Optional[dict]) -> bool:
     return title == "owner" or role == "owner"
 
 
-def needs_terms(member: Optional[dict]) -> bool:
-    """A contractor who reached GO without accepting the IC agreement and privacy policy.
+def needs_ic_terms(member: Optional[dict]) -> bool:
+    """The contractor still has to accept the current IC agreement and privacy policy.
 
-    Applicants accept on the www application. Members an owner added from the
-    team screen (and older rows) never did, so GO asks them once before the app
-    opens. Owners are not contractors and are never asked.
-    """
+    Applicants accept on the www application; members an owner added from the team
+    screen (and older rows) never did. Vendors still onboarding accept the current
+    version. Owners are not contractors and are never asked."""
     if not member or is_owner_member(member):
         return False
-    return not member.get("terms_accepted_at")
+    if not member.get("terms_accepted_at"):
+        return True
+    if not member.get("onboarding_completed_at"):
+        from ..routers.onboarding import _IC_AGREEMENT_VERSION
+        return str(member.get("ic_agreement_version") or "") != _IC_AGREEMENT_VERSION
+    return False
+
+
+def needs_amendment(member: Optional[dict]) -> bool:
+    """Every contractor, current and new, accepts IC amendment A1 in the GO gate."""
+    if not member or is_owner_member(member):
+        return False
+    from ..routers.onboarding import _IC_AMENDMENT_VERSION
+    return str(member.get("ic_amendment_version") or "") != _IC_AMENDMENT_VERSION
+
+
+def needs_terms(member: Optional[dict]) -> bool:
+    """GO shows the "I agree" gate before the app opens."""
+    return needs_ic_terms(member) or needs_amendment(member)
 
 
 def member_title(member: Optional[dict]) -> str:
@@ -71,13 +88,77 @@ def _vendor_type_of(member: dict) -> str:
         return (member.get("vendor_type") or "photographer").strip().lower() or "photographer"
 
 
+def is_vendor_paused(member: Optional[dict]) -> bool:
+    """Paused vendor (expired credential, probation fail, admin) or paused trade.
+
+    Owner is never paused. Trade pause comes from trade_specs.json `enabled`.
+    """
+    if not member or is_owner_member(member):
+        return False
+    if member.get("paused_at"):
+        return True
+    from ..services.trade_specs import trade_enabled
+    return not trade_enabled(member_trade(member))
+
+
+def member_trade(member: Optional[dict]) -> str:
+    try:
+        from ..services.vendor_profile import member_vendor_type
+        return member_vendor_type(member or {})
+    except Exception:
+        return ((member or {}).get("vendor_type") or "photographer").strip().lower() or "photographer"
+
+
 def is_assignable(member: Optional[dict]) -> bool:
-    """Hard gate used by auto-assign. Pending (Aman) is never assignable."""
+    """Hard gate used by auto-assign and manual assign. Pending (Aman) is never
+    assignable; neither is a paused vendor or a vendor in a paused trade."""
     if not member:
         return False
     if not member.get("is_active"):
         return False
+    if is_vendor_paused(member):
+        return False
     return (member.get("onboarding_status") or "") == "approved"
+
+
+def has_app_access(member: Optional[dict]) -> bool:
+    """Approved and active vendors can open GO.
+
+    Trade pause (handyman at launch) and paused_at block assignment only.
+    They must not send an approved vendor back to Under review.
+    """
+    if not member:
+        return False
+    if is_owner_member(member):
+        return True
+    if not member.get("is_active"):
+        return False
+    return (member.get("onboarding_status") or "") == "approved"
+
+
+def assignable_block_reason(member: Optional[dict], *, assignable: bool, onboarded: bool) -> Optional[str]:
+    """Why the profile says not assignable. Approval, pause, and setup are separate."""
+    if assignable and onboarded:
+        return None
+    status = str((member or {}).get("onboarding_status") or "").strip().lower()
+    if status == "pending":
+        return "Pending — not assignable"
+    if is_vendor_paused(member):
+        if (member or {}).get("paused_at"):
+            return "Paused"
+        label = "This trade"
+        try:
+            from ..services.trade_specs import spec
+            row = spec(member_trade(member)) or {}
+            label = row.get("long_label") or row.get("label") or label
+        except Exception:
+            pass
+        return f"{label} is paused"
+    if assignable:
+        return "Finish setup to get jobs"
+    if not (member or {}).get("is_active") and status == "approved":
+        return "Not active"
+    return "Not approved"
 
 
 def member_skills(member: Optional[dict]) -> list[str]:
@@ -183,6 +264,8 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
     rpas_url = member.get("rpas_certificate_url") or ""
     rpas_level = member.get("rpas_certificate_level") or ("advanced" if owner else None)
     assignable = is_assignable(member)
+    # Approved + active opens the app; jobs need the onboarding checklist too.
+    onboarded = owner or bool(member.get("onboarding_completed_at"))
     out = {
         "id": member.get("id"),
         "name": member.get("name") or "",
@@ -205,12 +288,9 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "rpas_certificate_number": member.get("rpas_certificate_number"),
         "onboarding_status": member.get("onboarding_status") or "pending",
         "is_active": bool(member.get("is_active")),
-        "assignable": assignable,
-        "assignable_reason": (
-            None if assignable
-            else "Pending — not assignable" if (member.get("onboarding_status") or "") == "pending"
-            else "Not approved"
-        ),
+        "assignable": assignable and onboarded,
+        "assignable_reason": assignable_block_reason(member, assignable=assignable, onboarded=onboarded),
+        "onboarding_complete": onboarded,
         "payout_model": payout_model(member),
         "payout_label": (
             "Full package · $0 deduction" if owner else "Fixed rate card"
@@ -229,7 +309,7 @@ def public_profile(member: dict, extra: Optional[dict] = None) -> dict:
         "member_role": member.get("role") or "",
         "terms_accepted_at": member.get("terms_accepted_at"),
         "application_submitted": bool(member.get("terms_accepted_at")),
-        "app_access": bool(assignable or owner),
+        "app_access": has_app_access(member),
         "portfolio_links": member.get("portfolio_links") or [],
         "portfolio_samples": member.get("portfolio_samples") or [],
     }

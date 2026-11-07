@@ -82,8 +82,9 @@ def test_titles_follow_trade():
 
 
 def test_storage_vendor_type_respects_db_check():
+    # vendor_members_vendor_type_check allows all six (2026-11-01).
     for vt in ("inspector", "measurer", "handyman"):
-        assert storage_vendor_type(vt) == "photographer"
+        assert storage_vendor_type(vt) == vt
     for vt in DB_VENDOR_TYPES:
         assert storage_vendor_type(vt) == vt
 
@@ -96,15 +97,22 @@ def _app(vendor_type, creds=None):
     )
 
 
-def test_repairs_apply_requires_cgl():
-    app = _app("handyman", {})
+def test_paused_repairs_apply_is_refused():
+    app = _app("handyman", {"cgl_confirmed": True})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(onboarding._validate_application(app))
+    assert "isn't taking applications" in exc.value.detail
+
+
+def test_inspector_apply_requires_cgl():
+    app = _app("inspector", {})
     with pytest.raises(HTTPException) as exc:
         asyncio.run(onboarding._validate_application(app))
     assert "$2M" in exc.value.detail
 
 
-def test_repairs_apply_with_cgl_ok_and_no_samples_needed():
-    app = _app("handyman", {"cgl_confirmed": True, "wsib_number": "123", "years_experience": "6"})
+def test_inspector_apply_with_cgl_ok_and_no_samples_needed():
+    app = _app("inspector", {"cgl_confirmed": True, "wsib_number": "123", "years_experience": "6"})
     asyncio.run(onboarding._validate_application(app))
     assert app.trade_credentials["cgl_confirmed"] is True
     assert app.trade_credentials["cgl_limit_cents"] >= 200_000_000
@@ -125,3 +133,50 @@ def test_review_input_uses_trade_and_credentials():
     ))
     assert inp.vendor_type == "inspector"
     assert inp.credentials["cgl_confirmed"] is True
+
+
+def _vet_app(vendor_type, creds=None, vetting=None, hst=None):
+    app = _app(vendor_type, creds)
+    app.vetting = vetting if vetting is not None else {}
+    app.docs_pending = True
+    app.hst_number = hst
+    return app
+
+
+def test_vetting_form_occupied_home_needs_reviews_or_two_refs():
+    app = _vet_app("cleaner", {"business_name": "Spark Co"}, {"references": [{"name": "A B", "contact": "a@example.com"}]})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(onboarding._validate_application(app))
+    assert "two references" in exc.value.detail
+
+
+def test_vetting_form_reviews_link_ok():
+    app = _vet_app("cleaner", {"business_name": "Spark Co"},
+                   {"reviews_link": "https://g.page/spark-co", "police_check_consent": True})
+    asyncio.run(onboarding._validate_application(app))
+    assert app.vetting["reviews_link_known_host"] is True
+    assert app.vetting["police_check_consent"] is True
+
+
+def test_vetting_form_needs_business_or_hst():
+    refs = [{"name": "A B", "contact": "a@example.com"}, {"name": "C D", "contact": "416 555 0101"}]
+    app = _vet_app("stager", {}, {"references": refs})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(onboarding._validate_application(app))
+    assert "business name or HST" in exc.value.detail
+    app = _vet_app("stager", {}, {"references": refs}, hst="123456789RT0001")
+    asyncio.run(onboarding._validate_application(app))
+    assert len(app.vetting["references"]) == 2
+
+
+def test_vetting_form_rejects_non_https_link():
+    app = _vet_app("inspector", {"cgl_confirmed": True, "business_name": "X"}, {"reviews_link": "homestars.com/x"})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(onboarding._validate_application(app))
+    assert "https://" in exc.value.detail
+
+
+def test_legacy_form_without_vetting_still_accepted():
+    app = _app("cleaner", {})
+    asyncio.run(onboarding._validate_application(app))
+    assert app.vetting is None

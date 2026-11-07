@@ -15,7 +15,7 @@ from fastapi import HTTPException
 
 from app.routers import vendor_profile as vp
 from app.routers import auth as auth_router
-from app.routers.onboarding import _IC_AGREEMENT_VERSION
+from app.routers.onboarding import _IC_AGREEMENT_VERSION, _IC_AMENDMENT_VERSION
 from app.shared import pg_fallback
 from app.shared.vendor_identity import needs_terms
 
@@ -78,13 +78,24 @@ def _patch(monkeypatch, db, member=None):
     monkeypatch.setattr(vp, "get_vendor_member", AsyncMock(return_value=dict(member or MEMBER)))
 
 
-def _body(version=_IC_AGREEMENT_VERSION, read=("ic", "privacy")):
-    return vp.AcceptTermsBody(ic_agreement_version=version, read=list(read))
+A1 = {"ic_amendment_version": _IC_AMENDMENT_VERSION, "ic_amendment_accepted_at": "2026-11-02T16:00:00+00:00"}
+
+
+def _body(version=_IC_AGREEMENT_VERSION, read=("ic", "privacy", "ic_a1"), amendment=_IC_AMENDMENT_VERSION):
+    return vp.AcceptTermsBody(ic_agreement_version=version, ic_amendment_version=amendment, read=list(read))
 
 
 def test_needs_terms_only_for_contractors_without_acceptance():
     assert needs_terms(MEMBER) is True
-    assert needs_terms({**MEMBER, "terms_accepted_at": "2026-10-01T00:00:00+00:00"}) is False
+    accepted = {**MEMBER, "terms_accepted_at": "2026-10-01T00:00:00+00:00"}
+    # Still onboarding: the current agreement version is required.
+    assert needs_terms({**accepted, **A1, "ic_agreement_version": _IC_AGREEMENT_VERSION}) is False
+    assert needs_terms({**accepted, **A1, "ic_agreement_version": "0.1"}) is True
+    # Live vendors on an older version are not re-gated for v1.9, only for amendment A1.
+    live = {**accepted, "onboarding_completed_at": "2026-10-01T00:00:00+00:00"}
+    assert needs_terms({**live, **A1}) is False
+    assert needs_terms(live) is True
+    assert needs_terms({**live, "ic_amendment_version": "IC-A0"}) is True
     assert needs_terms({**MEMBER, "role": "Owner"}) is False
     assert needs_terms({**MEMBER, "payout_mode": "owner_full"}) is False
     assert needs_terms(None) is False
@@ -106,6 +117,8 @@ def test_accept_records_version_time_and_audit(monkeypatch):
     assert table == "vendor_members"
     assert patch["ic_agreement_version"] == _IC_AGREEMENT_VERSION
     assert patch["terms_accepted_at"] == out["terms_accepted_at"]
+    assert patch["ic_amendment_version"] == _IC_AMENDMENT_VERSION
+    assert patch["ic_amendment_accepted_at"] == out["terms_accepted_at"]
     assert patch["internal_notes"].startswith("Added by owner\n")
     assert "accepted in GO" in patch["internal_notes"]
     assert ("vendor_members", "id", ACTOR) in db.filters
@@ -133,7 +146,7 @@ def test_refuses_outdated_agreement_version(monkeypatch):
 
 def test_already_accepted_is_a_no_op(monkeypatch):
     db = _Db()
-    done = {**MEMBER, "terms_accepted_at": "2026-10-20T00:00:00+00:00", "ic_agreement_version": _IC_AGREEMENT_VERSION}
+    done = {**MEMBER, "terms_accepted_at": "2026-10-20T00:00:00+00:00", "ic_agreement_version": _IC_AGREEMENT_VERSION, **A1}
     _patch(monkeypatch, db, done)
     out = _run(vp.accept_terms_impl(_body(), "Bearer t", None))
     assert out["terms_accepted_at"] == "2026-10-20T00:00:00+00:00"
@@ -173,3 +186,30 @@ def test_pg_fallback_whitelists_terms_columns(monkeypatch):
     assert ok is True
     assert "terms_accepted_at = %s" in captured["sql"] and "ic_agreement_version = %s" in captured["sql"]
     assert "role" not in captured["sql"]
+
+
+def test_live_vendor_accepts_only_the_amendment(monkeypatch):
+    db = _Db()
+    live = {**MEMBER, "terms_accepted_at": "2026-10-01T00:00:00+00:00", "ic_agreement_version": "1.8",
+            "onboarding_completed_at": "2026-10-02T00:00:00+00:00"}
+    _patch(monkeypatch, db, live)
+    with pytest.raises(HTTPException) as e:
+        _run(vp.accept_terms_impl(vp.AcceptTermsBody(read=["ic_a1"], ic_amendment_version="IC-A0"), "Bearer t", None))
+    assert e.value.status_code == 409
+    with pytest.raises(HTTPException) as e:
+        _run(vp.accept_terms_impl(vp.AcceptTermsBody(read=[], ic_amendment_version=_IC_AMENDMENT_VERSION), "Bearer t", None))
+    assert e.value.status_code == 422
+    out = _run(vp.accept_terms_impl(vp.AcceptTermsBody(read=["ic_a1"], ic_amendment_version=_IC_AMENDMENT_VERSION),
+                                    "Bearer t", None))
+    (table, patch), = db.updates
+    assert patch["ic_amendment_version"] == _IC_AMENDMENT_VERSION and "terms_accepted_at" not in patch
+    assert out["ic_amendment_accepted_at"] == patch["ic_amendment_accepted_at"]
+    assert "IC-A1 v1.0 accepted in GO" in patch["internal_notes"]
+
+
+def test_amendment_text_endpoint():
+    from app.routers import onboarding
+    out = _run(onboarding.get_ic_amendment())
+    assert out["version"] == "IC-A1 v1.0" and out["binds_without_acceptance"].startswith("2026-11-16")
+    assert "IC-A1 v1.0" in out["text"].splitlines()[0]
+    assert "help@brxs.ca" in out["text"]

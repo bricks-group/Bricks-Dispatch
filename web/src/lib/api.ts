@@ -119,8 +119,47 @@ export type AuthMember = {
   app_access?: boolean;
   /** Server: a contractor in GO who never accepted the IC agreement and privacy policy. */
   needs_terms?: boolean;
+  /** Still needs the IC agreement v1.9 and privacy policy. */
+  needs_ic_terms?: boolean;
+  /** Still needs IC amendment A1 (every contractor). */
+  needs_amendment?: boolean;
   portfolio_samples?: Array<{ media_type: string; url?: string; link?: string; label?: string }>;
+  /** Onboarding checklist (approved vendors who are not live yet). */
+  onboarding?: OnboardingState | null;
+  /** True once every onboarding step is done (or grandfathered). Jobs come automatically after that. */
+  onboarding_complete?: boolean;
 };
+
+export type OnboardingStepKey = 'signed_in' | 'payouts' | 'availability' | 'guide' | 'agreement';
+
+export type OnboardingStep = {
+  key: OnboardingStepKey;
+  title: string;
+  detail: string;
+  done: boolean;
+  required: boolean;
+};
+
+export type OnboardingState = {
+  state: 'applicant' | 'onboarding' | 'live' | 'paused' | 'rejected';
+  complete: boolean;
+  completed_at?: string | null;
+  all_steps_done: boolean;
+  steps: OnboardingStep[];
+  done: number;
+  total: number;
+};
+
+/** True while an approved vendor still has onboarding steps to finish. */
+export function isOnboarding(m: AuthMember | null | undefined): boolean {
+  return !!m && m.onboarding_complete === false && !!m.onboarding && m.onboarding.state === 'onboarding';
+}
+
+export const getOnboarding = () => api.get<OnboardingState>('/api/vendor-os/onboarding');
+export const acknowledgeGuide = () => api.post<OnboardingState>('/api/vendor-os/onboarding/guide');
+export const confirmAvailability = () => api.post<OnboardingState>('/api/vendor-os/onboarding/availability');
+export const startPayoutSetup = (returnUrl: string) =>
+  api.post<{ url: string }>('/api/vendor-os/stripe-connect/onboard', { return_url: returnUrl });
 
 export function hasAppAccess(m: AuthMember | null | undefined): boolean {
   if (!m) return false;
@@ -160,6 +199,17 @@ export type VendorProfile = {
 };
 
 export async function login(email: string): Promise<void> {
+  // First-time vendors: have Dispatch confirm their Auth user first so Supabase
+  // sends the 6-digit login code, not a 'Confirm your email' link. Best-effort.
+  try {
+    await fetch(`${API_BASE}/api/vendor-os/auth/prepare-email-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    /* login still proceeds */
+  }
   const { error } = await supabase.auth.signInWithOtp({ email });
   if (error) throw error;
 }
@@ -276,7 +326,8 @@ export async function verifyOtp(email: string, token: string): Promise<AuthMembe
   const { data, error } = await supabase.auth.verifyOtp({
     email,
     token,
-    type: 'magiclink'
+    // 'email' accepts both the magic-link and signup codes.
+    type: 'email'
   });
   if (error) throw error;
   if (!data.session) throw new Error('No session');
@@ -376,11 +427,11 @@ export async function me(): Promise<AuthMember> {
   return api.get<AuthMember>('/api/vendor-os/auth/me');
 }
 
-/** Record the contractor agreement and privacy policy as read and accepted. */
-export async function acceptTerms(icAgreementVersion: string, read: string[]) {
-  return api.post<{ terms_accepted_at: string; ic_agreement_version: string; needs_terms: boolean }>(
+/** Record the contractor agreement, privacy policy and amendment A1 as read and accepted. */
+export async function acceptTerms(icAgreementVersion: string, read: string[], icAmendmentVersion = '') {
+  return api.post<{ terms_accepted_at: string; ic_agreement_version: string; ic_amendment_version: string; needs_terms: boolean }>(
     '/api/vendor-os/profile/accept-terms',
-    { ic_agreement_version: icAgreementVersion, read },
+    { ic_agreement_version: icAgreementVersion || null, ic_amendment_version: icAmendmentVersion || null, read },
   );
 }
 

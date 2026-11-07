@@ -254,6 +254,14 @@ async def create_dispatch_job(
         except Exception:
             logger.exception("Admin new-booking notify failed for job %s", job_id)
 
+        # First live (cs_live_) paid booking ever → one-time prompt to Kam to
+        # start the Autoenhance plan. Test-mode bookings never count.
+        try:
+            from ..services.editor_ledger import maybe_prompt_autoenhance_plan
+            await maybe_prompt_autoenhance_plan({**job_data, "id": job_id})
+        except Exception:
+            logger.exception("Autoenhance plan prompt failed for job %s", job_id)
+
         return {
             "job_id": job_id,
             "status": status,
@@ -315,6 +323,11 @@ async def create_dispatch_job(
                     )
                 except Exception:
                     logger.exception("Admin notify after pg fallback failed for %s", pg_id)
+                try:
+                    from ..services.editor_ledger import maybe_prompt_autoenhance_plan
+                    await maybe_prompt_autoenhance_plan({**job_data, "id": pg_id})
+                except Exception:
+                    logger.exception("Autoenhance plan prompt failed for job %s", pg_id)
                 # Best-effort client/vendor notify for preassigned Fair-Use path
                 if preassigned:
                     try:
@@ -399,6 +412,12 @@ async def update_job_status(
     booking_id = job.get("booking_id")
     dev_capture_visit_id = job.get("dev_capture_visit_id")
 
+    # Delivered is final for the shoot flow: a second "complete" (double tap,
+    # retry, Booking echo) must not drag the job back to completed and re-run
+    # post-production (E2E BUG 7). Cancel / no-show transitions still pass.
+    if old_status == "delivered" and new_status in ("completed", "delivered", "processing"):
+        return {"status": "unchanged", "job_id": job_id, "new_status": old_status}
+
     # Vendors can't complete a trade job here either until its checklist is
     # ticked with proof (same gate as /api/vendor-os/jobs/{id}/status).
     if (
@@ -428,6 +447,12 @@ async def update_job_status(
 
     # Auto-trigger payout when job is completed or delivered
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
+        # Probation: hold one of the vendor's first N jobs for admin review (soft-fail).
+        try:
+            from ..services.vendor_vetting import record_probation_job
+            await record_probation_job(db, job)
+        except Exception as e:
+            logger.warning(f"Probation record failed for job {job_id}: {e}")
         logger.info(f"Job {job_id} moved to {new_status}, triggering payout")
         try:
             from ..services.payout_service import trigger_payout_for_job

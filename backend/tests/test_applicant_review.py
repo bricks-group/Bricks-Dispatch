@@ -62,6 +62,10 @@ def _session_paths(n=10, cert=False):
     return s, paths, cert_path
 
 
+def _resume_path(session: str) -> str:
+    return ev.sample_path(session, 98, "resume", "application/pdf")
+
+
 def _application(n_samples=10, drone=False, **over) -> VendorApplicationCreate:
     s, paths, cert = _session_paths(n_samples, cert=drone)
     data = dict(
@@ -84,6 +88,9 @@ def _application(n_samples=10, drone=False, **over) -> VendorApplicationCreate:
         sample_paths=paths,
         rpas_cert_path=cert,
         availability=_availability(),
+        samples_are_real_estate=True,
+        resume_path=_resume_path(s),
+        resume_name="Alex Rivera resume.pdf",
     )
     data.update(over)
     return VendorApplicationCreate(**data)
@@ -257,12 +264,16 @@ def test_limited_availability():
 # ---------------------------------------------------------------------------
 # Review engine (vision faked; never calls the network)
 # ---------------------------------------------------------------------------
-def _vision(grade="pass", real_estate=True, watermark=False):
+def _vision(grade="pass", real_estate=True, watermark=False, subjects=("interior", "interior", "exterior")):
+    seen = {"n": 0}
+
     async def fake(prompt, jpeg, client=None):
         if "pilot certificate" in prompt:
             return {"is_tc_pilot_certificate": True, "level": "advanced", "certificate_number": "PC-12345678"}, 0.0003
         crit = {k: grade for k in ar.RUBRIC_KEYS}
-        return {"is_real_estate": real_estate, "subject": "interior" if real_estate else "not_real_estate",
+        subject = subjects[seen["n"] % len(subjects)]
+        seen["n"] += 1
+        return {"is_real_estate": real_estate, "subject": subject if real_estate else "not_real_estate",
                 "criteria": crit, "watermark": watermark, "watermark_text": "", "looks_stock": False,
                 "note": "Clean kitchen frame."}, 0.0006
     return fake

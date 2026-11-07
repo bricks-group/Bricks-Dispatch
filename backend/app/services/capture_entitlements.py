@@ -364,7 +364,7 @@ def capture_forbidden_message(kind: str, flags: dict[str, bool] | None = None) -
     if kind == KIND_TOUR:
         if flags.get("visit") and not flags.get("tour"):
             return (
-                "This job has no 3D tour. Open Virtual Visit in GO to paste a Polycam URL "
+                "This job has no 3D tour. Open Virtual Visit in the Bricks app to paste a Polycam URL "
                 "or upload a .ply / .splat."
             )
         return "This job has no 3D tour. Start Capture does not shoot a tour that was not purchased."

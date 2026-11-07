@@ -42,7 +42,7 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip internal auth for health, seed, docs, root, and job intake endpoints
         exempt_paths = ("/health", "/health/ready", "/docs", "/openapi.json", "/redoc")
-        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads", "/api/jobs", "/api/notifications", "/api/push-tokens", "/api/capture", "/api/stripe/connect-webhook")
+        exempt_prefixes = ("/api/seed", "/api/vendor-os", "/api/onboarding", "/api/admin", "/api/v1/payouts", "/api/profile", "/api/payouts", "/api/uploads", "/api/jobs", "/api/notifications", "/api/push-tokens", "/api/capture", "/api/stripe/connect-webhook", "/api/ops", "/api/public/delivery-email/")
         if request.url.path in exempt_paths or any(request.url.path.startswith(p) for p in exempt_prefixes):
             return await call_next(request)
 
@@ -65,6 +65,7 @@ from app.routers.auth import router as auth_router
 from app.routers.dispatch import router as dispatch_router
 from app.routers.vendor_os import router as vendor_os_router
 from app.routers.stripe_connect_status import router as stripe_connect_status_router
+from app.routers.onboarding_checklist import admin_router as onboarding_admin_router, router as onboarding_checklist_router
 from app.routers.stripe_connect_webhook import router as stripe_connect_webhook_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.admin_ops import router as admin_ops_router
@@ -76,6 +77,8 @@ from app.routers.notifications import router as notifications_router
 from app.routers.jobs import router as jobs_router
 from app.routers.capture import router as capture_router
 from app.routers.capture_visit_video import router as capture_visit_video_router
+from app.routers.ops_autopilot import router as ops_autopilot_router
+from app.routers.delivery_email_media import router as delivery_email_media_router
 from app.shared.database import get_db
 from app.shared.schemas import (
     AvailabilitySettings,
@@ -169,6 +172,8 @@ async def seed_data():
 app.include_router(dispatch_router)
 app.include_router(auth_router)
 app.include_router(stripe_connect_status_router)  # honest Connected (sole status route)
+app.include_router(onboarding_checklist_router)  # GO onboarding checklist
+app.include_router(onboarding_admin_router)
 app.include_router(vendor_os_router)
 # Drop hollow Connected duplicate if still defined in vendor_os (honest router is sole status).
 from fastapi.routing import APIRoute
@@ -192,6 +197,8 @@ app.include_router(notifications_router)
 app.include_router(jobs_router)
 app.include_router(capture_router)
 app.include_router(capture_visit_video_router)
+app.include_router(ops_autopilot_router)  # self-running ops sweep/daily/one-tap (2026-11-02)
+app.include_router(delivery_email_media_router)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
 install_browser_middleware(app)

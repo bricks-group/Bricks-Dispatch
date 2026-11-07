@@ -26,7 +26,7 @@ def test_vision_unconfigured_opencv_rejected_holds(monkeypatch):
     monkeypatch.setattr(qc, "_vision_qc_configured", lambda: False)
     monkeypatch.setattr(qc, "_fetch_image_bytes", AsyncMock(return_value=b"jpeg-bytes"))
 
-    def fake_cv(_bytes, is_exterior=False, is_twilight=False):
+    def fake_cv(_bytes, is_exterior=False, is_twilight=False, **_kw):
         return _cv("rejected", 40, ["soft_focus"])
 
     monkeypatch.setattr("app.services.qc_opencv.analyze_image_cv", fake_cv)

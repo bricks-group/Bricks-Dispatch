@@ -224,11 +224,11 @@ def test_checkin_without_location_is_rejected_when_job_has_coords(env):
 
 def test_checkin_nearby_records_time_gps_and_distance(env):
     db = env(_job(-30))  # 30 min early
-    out = _run(vos.check_in_job(JOB_ID, vos.CheckInRequest(lat=JOB_LAT + 0.001, lng=JOB_LNG, accuracy_m=12), "Bearer t", None))
+    out = _run(vos.check_in_job(JOB_ID, vos.CheckInRequest(lat=JOB_LAT + 0.0006, lng=JOB_LNG, accuracy_m=12), "Bearer t", None))
     row = _db_job(db)
     assert row["status"] == "in_progress"
     assert row["checked_in_at"]
-    assert 100 < row["check_in_distance_m"] < 125  # ~111 m
+    assert 60 < row["check_in_distance_m"] < 75  # ~67 m, inside the 100 m fence
     assert row["check_in_accuracy_m"] == 12
     assert out["noshow"]["wait_started_at"] == np_.booked_start(row).isoformat()
     first = row["checked_in_at"]

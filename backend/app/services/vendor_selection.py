@@ -587,7 +587,7 @@ async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: s
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {resend_key}"},
                 json={
-                    "from": "Bricks GO <noreply@brxs.ca>",
+                    "from": "Bricks <noreply@brxs.ca>",
                     "to": [OPS_EMAIL],
                     "subject": f"[OPS] No vendor available — job {job.id}",
                     "html": (
@@ -841,6 +841,8 @@ async def _update_job_assignee(
         "assignee_id": member_id,
         "status": "assigned",
         "updated_at": now,
+        "assigned_at": now,
+        "vendor_accepted_at": None,
     }
     if estimated_duration_min is not None:
         patch["estimated_duration_min"] = int(estimated_duration_min)

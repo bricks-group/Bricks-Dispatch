@@ -127,7 +127,7 @@ def capabilities() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _EV_SUFFIX = re.compile(
-    r"(?P<stem>.+?)(?:[_-](?P<evp>ev)?(?P<ev>[+-]?\d+(?:\.\d+)?)|"
+    r"(?P<stem>.+?)(?:[_-](?P<evp>ev)?(?P<ev>[+-]?\d+(?:\.\d+)?)(?P<evs>ev)?|"
     r"[_-](?P<sign>minus|plus)(?P<mp>\d+(?:\.\d+)?)(?:ev)?|"
     r"_m(?P<m>\d+)|_p(?P<p>\d+)|_und(?:er)?|_over|_ov|_normal)$",
     re.IGNORECASE,
@@ -143,7 +143,7 @@ def _is_sequence_number(m: "re.Match[str]") -> bool:
     confusing "same-side frames" Mark-complete reject.
     """
     ev = m.group("ev")
-    if ev is None or m.group("evp"):
+    if ev is None or m.group("evp") or m.group("evs"):
         return False
     if ev[:1] in "+-":
         return False

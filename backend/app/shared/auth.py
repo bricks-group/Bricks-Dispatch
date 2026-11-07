@@ -128,16 +128,67 @@ def _is_uuid(value: object) -> bool:
         return False
 
 
-async def lookup_vendor_member(actor_id: str, email: Optional[str] = None) -> Optional[dict]:
-    """Map auth user → vendor_members row. Prefer Kam Owner 0c3fa7c2 over a duplicate IC."""
+# Sign-in methods (JWT amr) that prove control of the mailbox / IdP account.
+_STRONG_AMR = {"otp", "magiclink", "oauth", "sso/saml", "recovery", "invite", "email/signup", "email_change"}
+
+
+def session_amr_methods(token: str) -> set:
+    """amr methods from an access token that was ALREADY verified (get_user or
+    local HS256). Unverified decode only to read the claim."""
+    try:
+        import jwt
+        payload = jwt.decode(token, options={"verify_signature": False, "verify_aud": False, "verify_exp": False})
+    except Exception:
+        return set()
+    out = set()
+    for a in payload.get("amr") or []:
+        m = a.get("method") if isinstance(a, dict) else a
+        if m:
+            out.add(str(m).strip().lower())
+    return out
+
+
+def _jwt_email_verified(token: str) -> bool:
+    try:
+        import jwt
+        payload = jwt.decode(token, options={"verify_signature": False, "verify_aud": False, "verify_exp": False})
+    except Exception:
+        return False
+    meta = payload.get("user_metadata") or {}
+    return bool(isinstance(meta, dict) and meta.get("email_verified") is True)
+
+
+async def lookup_vendor_member(
+    actor_id: str,
+    email: Optional[str] = None,
+    *,
+    email_confirmed: Optional[bool] = None,
+    amr: Optional[set] = None,
+) -> Optional[dict]:
+    """Map auth user -> vendor_members row. Prefer Kam Owner 0c3fa7c2 over a duplicate IC.
+
+    SECURITY (2026-11-02, account takeover via email match):
+    - id / auth_user_id matches always win and need nothing else.
+    - An email match is only used when the Auth email is confirmed
+      (email_confirmed=False -> no email match at all).
+    - An email-matched row already linked to a DIFFERENT auth user is skipped
+      unless the session proved the mailbox/IdP (amr otp/magiclink/oauth...).
+    - The first confirmed-email match links vendor_members.auth_user_id.
+    email_confirmed=None keeps the legacy (trusted internal caller) behaviour.
+    """
     from .job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
     from .pg_fallback import _is_rest_quota_error as _pg_quota, pg_select_vendor_member
 
     email_l = (email or "").strip().lower()
+    if email_confirmed is False:
+        email_l = ""
+    strong = bool(set(amr or ()) & _STRONG_AMR)
+    actor_s = str(actor_id or "")
     try:
         db = await get_db()
         rows: list[dict] = []
         seen: set[str] = set()
+        email_only: set[str] = set()
 
         def add(row):
             if not row:
@@ -166,17 +217,48 @@ async def lookup_vendor_member(actor_id: str, email: Optional[str] = None) -> Op
             except Exception as e:
                 if _pg_quota(e) or _is_rest_quota_error(e):
                     raise
-        if str(actor_id or "").lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
+        if actor_s.lower().startswith("0c3fa7c2") or email_l in KAM_EMAILS:
             kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
             add(getattr(kam, "data", None))
         if email_l:
             by_email = await db.table("vendor_members").select("*").ilike("email", email_l).limit(10).execute()
             for row in by_email.data or []:
+                if not isinstance(row, dict):
+                    continue
+                # ilike wildcards (% _): exact address only.
+                if str(row.get("email") or "").strip().lower() != email_l:
+                    continue
+                linked = str(row.get("auth_user_id") or "")
+                if email_confirmed is not None and linked and linked != actor_s and not strong:
+                    continue
+                if str(row.get("id") or "") not in seen:
+                    email_only.add(str(row.get("id") or ""))
                 add(row)
-        return pick_canonical_member(rows, actor_id, email_l)
+        picked = pick_canonical_member(rows, actor_id, email_l)
+        if (
+            picked
+            and email_confirmed is True
+            and _is_uuid(actor_id)
+            and str(picked.get("id") or "") in email_only
+            and str(picked.get("id") or "") != str(KAM_MEMBER_ID)
+            and not picked.get("auth_user_id")
+        ):
+            try:
+                await db.table("vendor_members").update({"auth_user_id": actor_s}).eq(
+                    "id", picked["id"]
+                ).is_("auth_user_id", "null").execute()
+                picked = {**picked, "auth_user_id": actor_s}
+            except Exception:
+                pass
+        return picked
     except Exception as e:
         if _pg_quota(e) or _is_rest_quota_error(e):
-            return pg_select_vendor_member(actor_id, email_l)
+            picked = pg_select_vendor_member(actor_id, email_l)
+            if picked and email_confirmed is not None and not strong:
+                linked = str(picked.get("auth_user_id") or "")
+                if linked and linked != actor_s and str(picked.get("id") or "") != actor_s:
+                    return None
+            return picked
         raise
 
 
@@ -286,7 +368,12 @@ async def resolve_vendor_actor_id(
                 user_resp = await (await get_db()).auth.get_user(token)
                 if user_resp and user_resp.user:
                     user = user_resp.user
-                    member = await lookup_vendor_member(user.id, getattr(user, "email", None))
+                    member = await lookup_vendor_member(
+                        user.id,
+                        getattr(user, "email", None),
+                        email_confirmed=bool(getattr(user, "email_confirmed_at", None)),
+                        amr=session_amr_methods(token),
+                    )
                     if not member:
                         api_error(403, "Vendor member not found", "vendor_member_not_found")
                     return member["id"]
@@ -300,7 +387,14 @@ async def resolve_vendor_actor_id(
                     decoded = decode_supabase_user_from_jwt(token)
                     if decoded:
                         uid, email = decoded
-                        member = await lookup_vendor_member(uid, email)
+                        # Locally verified token: only trust the email when the
+                        # token says it was verified (fair-use mints never do).
+                        member = await lookup_vendor_member(
+                            uid,
+                            email,
+                            email_confirmed=_jwt_email_verified(token),
+                            amr=session_amr_methods(token),
+                        )
                         if not member:
                             api_error(403, "Vendor member not found", "vendor_member_not_found")
                         return member["id"]

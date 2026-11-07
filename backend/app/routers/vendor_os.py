@@ -1496,6 +1496,20 @@ async def public_availability_days(
         return {"ok": False, "source": "unavailable", "days": []}
 
 
+async def _auto_reassign_after_decline(db, job: dict, decliner_id: str | None) -> None:
+    """A decline sends the job straight to the next vendor (ops autopilot, 2026-11-02).
+    Only for jobs that have not started; the 15-minute sweep is the backstop. Never raises."""
+    try:
+        from ..services import ops_autopilot as ops
+        start = ops.job_start_utc(job)
+        if not start or start <= datetime.now(timezone.utc):
+            return
+        if await ops.once(db, f"reassign:{job.get('id')}:{decliner_id or ''}"):
+            await ops.reassign_job(db, job["id"], "vendor_declined")
+    except Exception as e:
+        logger.error(f"Auto-reassign after decline failed for job {job.get('id')}: {e}")
+
+
 def _cron_authorized(authorization: str | None, x_internal_key: str | None) -> bool:
     secret = (os.environ.get("CRON_SECRET") or "").strip()
     if secret and (authorization or "").strip() == f"Bearer {secret}":
@@ -2127,7 +2141,7 @@ async def start_stripe_connect_onboarding(
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
     # Active Photographer (post-approval) + Manager/Owner/Admin may start Connect.
-    # Org still shares one contractors row per vendor_id (no multi-member redesign).
+    # Each photographer gets their own Express account (contractors.member_id).
     if not can_access_stripe_connect(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendor_id = actor_member.get("vendor_id", "default_vendor")
@@ -2135,7 +2149,7 @@ async def start_stripe_connect_onboarding(
     if not os.environ.get("STRIPE_SECRET_KEY"):
         api_error(503, "Payouts are not configured yet", "stripe_not_configured")
 
-    from ..services.stripe_connect_service import create_connect_account_and_link
+    from ..services.stripe_connect_service import connect_member_key, create_connect_account_and_link
     try:
         url = await create_connect_account_and_link(
             vendor_id=vendor_id,
@@ -2143,9 +2157,15 @@ async def start_stripe_connect_onboarding(
             return_url=payload.return_url,
             full_name=actor_member.get("name", ""),
             email=actor_member.get("email", ""),
+            member_id=connect_member_key(actor_member),
         )
     except ValueError as e:
         api_error(502, str(e), "stripe_connect_failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("stripe-connect/onboard failed for member %s: %s", actor_member.get("id"), e)
+        api_error(502, "Could not open Stripe payout setup. Try again in a minute.", "stripe_connect_failed")
 
     await write_audit_event(actor_id, "stripe_connect", vendor_id, "onboard_started", vendor_id=vendor_id)
     return {"url": url}
@@ -2363,6 +2383,18 @@ async def update_vendor_job_status(
         assignee_id = job.get("assignee_id")
         if assignee_id and assignee_id != "default_user":
             await _refresh_decline_rate(db, assignee_id, now, job_id)
+        from ..services.vendor_termination import on_vendor_drop
+        await on_vendor_drop(db, job, assignee_id, old_status, new_status,  # policy: cancel after accept
+                             reason=getattr(payload, "cancel_reason", None), note=getattr(payload, "cancel_note", None))
+        await _auto_reassign_after_decline(db, job, assignee_id)
+
+    if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
+        # Probation: hold one of the vendor's first N jobs for admin review (soft-fail).
+        try:
+            from ..services.vendor_vetting import record_probation_job
+            await record_probation_job(db, job)
+        except Exception as e:
+            logger.warning(f"Probation record failed for job {job_id}: {e}")
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         try:
@@ -2451,6 +2483,8 @@ async def update_vendor_job_status(
 
 class WatchActionRequest(BaseModel):
     action: str  # "accept" | "decline" | "on_way" | "arrived"
+    cancel_reason: Optional[str] = None  # on decline: vendor_termination.CANCEL_REASONS key
+    cancel_note: Optional[str] = None
 
 
 _WATCH_ACTION_STATUS_MAP = {
@@ -2504,6 +2538,11 @@ async def watch_job_action(
                 status_code=503,
                 detail="Job status update unavailable (Fair Use); try again shortly",
             )
+    if body.action == "accept":
+        try:  # record explicit acceptance (termination policy); soft-fail if column absent
+            await db.table("jobs").update({"vendor_accepted_at": now}).eq("id", job_id).execute()
+        except Exception as e:
+            logger.warning("vendor_accepted_at not recorded for %s: %s", job_id, type(e).__name__)
 
     if new_status == "in_progress" and old_status != "in_progress":
         try:
@@ -2514,6 +2553,10 @@ async def watch_job_action(
 
     if new_status == "declined" and old_status in ("pending_assignment", "assigned"):
         await _refresh_decline_rate(db, actor_id, now, job_id)
+        from ..services.vendor_termination import on_vendor_drop
+        await on_vendor_drop(db, job, actor_id, old_status, new_status,  # policy: cancel after accept
+                             reason=body.cancel_reason, note=body.cancel_note)
+        await _auto_reassign_after_decline(db, job, actor_id)
 
     booking_id = job.get("booking_id")
     if booking_id:

@@ -39,7 +39,7 @@ def _vendor(vid="a1", tier=3, insured=True, limit=2_000_000, expires=FUTURE,
     return VendorMember(
         id=vid, name=vid, email=f"{vid}@test.com", specialty="photo",
         vendor_type="photographer", is_active=True, status="available",
-        onboarding_status="approved", tier=tier, drone_certified=True,
+        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", tier=tier, drone_certified=True,
         rpas_advanced=(rpas == "advanced"), rpas_certificate_level=rpas,
         skills=list(skills),
         coi_verified=insured, coi_liability_cad=limit, coi_expires_on=expires,
@@ -172,7 +172,7 @@ def test_insurance_status_reasons():
 
 
 KAM = {"id": KAM_MEMBER_ID, "vendor_id": KAM_MEMBER_ID, "role": "Owner", "title": "Owner",
-       "payout_mode": "owner_full", "is_active": True, "onboarding_status": "approved"}
+       "payout_mode": "owner_full", "is_active": True, "onboarding_status": "approved", "onboarding_completed_at": "2026-10-01T00:00:00+00:00"}
 
 
 def test_manual_assign_blocks_commercial_without_insurance():

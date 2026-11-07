@@ -11,6 +11,7 @@ from slowapi.middleware import SlowAPIMiddleware
 # Import routers
 from app.routers import dispatch, notifications, payouts, post_production, vendor_os, onboarding, admin_ops, uploads, auth, jobs, capture
 from app.routers.stripe_connect_status import router as stripe_connect_status_router
+from app.routers.onboarding_checklist import admin_router as onboarding_admin_router, router as onboarding_checklist_router
 from app.routers.stripe_connect_webhook import router as stripe_connect_webhook_router
 
 limiter = Limiter(key_func=get_remote_address, default_limits=['100/minute'])
@@ -35,7 +36,9 @@ app.add_middleware(SlowAPIMiddleware)
 
 async def get_db() -> Client:
     supabase_url = os.environ.get("SUPABASE_URL")
-    supabase_key = os.environ.get("SUPABASE_KEY")
+    # Same key order as shared.database: the service key, so RLS on jobs
+    # cannot make the readiness probe lie (E2E BUG 5 pattern).
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_KEY")
     if not supabase_url or not supabase_key:
         raise HTTPException(status_code=500, detail="Supabase credentials not found")
     return create_client(supabase_url, supabase_key)
@@ -65,6 +68,8 @@ app.include_router(notifications.router, tags=["notifications"])
 app.include_router(jobs.router, tags=["jobs"])
 app.include_router(post_production.router, tags=["post-production"])
 app.include_router(stripe_connect_status_router, tags=["vendor-os"])  # honest Connected (sole status route)
+app.include_router(onboarding_checklist_router)  # GO onboarding checklist
+app.include_router(onboarding_admin_router)
 app.include_router(vendor_os.router, tags=["vendor-os"])
 # Drop hollow Connected duplicate if still defined in vendor_os (honest router is sole status).
 from fastapi.routing import APIRoute
@@ -79,6 +84,8 @@ app.router.routes = [
 app.include_router(stripe_connect_webhook_router, tags=["stripe-connect"])
 app.include_router(onboarding.router, tags=["onboarding"])
 app.include_router(admin_ops.router, tags=["admin"])
+from app.routers.ops_autopilot import router as ops_autopilot_router
+app.include_router(ops_autopilot_router, tags=["ops"])
 # Mounted 2026-07-27: both carry their own /api/* prefix internally, real
 # working code that was built but never wired in. uploads.py is a dependency
 # of vendor_os.py's post-production trigger comment; auth.py is the only path
@@ -88,6 +95,8 @@ app.include_router(auth.router, tags=["auth"])
 app.include_router(capture.router, tags=["capture"])
 from .routers import capture_visit_video
 app.include_router(capture_visit_video.router, tags=["capture"])
+from .routers.delivery_email_media import router as delivery_email_media_router
+app.include_router(delivery_email_media_router)
 from .routers.vendor_profile import router as vendor_profile_router, os_router as vendor_profile_os_router
 app.include_router(vendor_profile_router)
 app.include_router(vendor_profile_os_router)

@@ -131,7 +131,30 @@ async def _owner_phone() -> str:
         return ""
 
 
-def render_all(member: dict, result: dict, thumb_urls: list) -> dict:
+def resume_path_of(member: dict) -> str:
+    prof = member.get("application_profile") or {}
+    if isinstance(prof, str):
+        try:
+            import json
+            prof = json.loads(prof)
+        except ValueError:
+            prof = {}
+    r = prof.get("resume") if isinstance(prof, dict) else None
+    return (r or {}).get("path") or "" if isinstance(r, dict) else ""
+
+
+async def signed_resume_url(member: dict, ttl: int = THUMB_LINK_TTL) -> str:
+    path = resume_path_of(member)
+    if not path:
+        return ""
+    try:
+        from .storage import get_signed_download_url
+        return await get_signed_download_url(path, ttl) or ""
+    except Exception:
+        return ""
+
+
+def render_all(member: dict, result: dict, thumb_urls: list, resume_url: str = "") -> dict:
     from ..shared.applicant_source import found_us_line
 
     prof = member.get("application_profile") or {}
@@ -140,7 +163,8 @@ def render_all(member: dict, result: dict, thumb_urls: list) -> dict:
     found = found.replace("Found us via: ", "").strip()
     specs = (prof.get("specialties") if isinstance(prof, dict) else None) or member.get("skills") or ([member.get("specialty")] if member.get("specialty") else [])
     kw = dict(member_id=str(member.get("id")), name=member.get("name") or "", city=city,
-              specialties=specs, found_via=found, review=result, thumb_urls=thumb_urls)
+              specialties=specs, found_via=found, review=result, thumb_urls=thumb_urls,
+              resume_url=resume_url or None)
     return {
         "subject": mail.subject(member.get("name") or "", result),
         "html": mail.render_html(**kw),
@@ -152,7 +176,7 @@ def render_all(member: dict, result: dict, thumb_urls: list) -> dict:
 async def notify_owner(member: dict, result: dict) -> None:
     """Text Kam's profile phone and email raphael@brxs.ca. Never raises."""
     try:
-        rendered = render_all(member, result, await signed_thumb_urls(result))
+        rendered = render_all(member, result, await signed_thumb_urls(result), await signed_resume_url(member))
     except Exception as e:
         logger.error("applicant notify render failed (%s)", type(e).__name__)
         return
@@ -174,6 +198,39 @@ async def notify_owner(member: dict, result: dict) -> None:
         logger.error("applicant notify email failed (%s)", type(e).__name__)
 
 
+async def _load_docs(member_id: str) -> list:
+    try:
+        db = await get_db()
+        res = await db.table("vendor_documents").select("id, doc_type, status, expiry_date, validation_result, file_url").eq(
+            "member_id", member_id).execute()
+        return res.data or []
+    except Exception as e:
+        logger.warning("applicant docs lookup failed (%s)", type(e).__name__)
+        return []
+
+
+def _apply_doc_checks_photographer(member: dict, result: dict, docs: list) -> None:
+    """Photographer rubric scores samples; documents still can't be blank or mismatched."""
+    try:
+        from . import trade_specs as ts
+        from .trade_review import doc_checks, DOC_PROBLEM_SCORE_CAP, NEEDS_REVIEW, VERDICT_LABEL
+        checks = doc_checks(ts.credential_states({**member, "vendor_type": "photographer"}, docs), docs)
+        result["doc_checks"] = checks
+        bad = [x for x in checks if x["overall"] in ("blank", "unreadable", "mismatch")]
+        unver = [x for x in checks if x not in bad and x["overall"] != "verified" and x["group"] in ("credential", "identity")]
+        result["doc_problem"] = bool(bad)
+        if bad:
+            result["score"] = min(int(result.get("score") or 0), DOC_PROBLEM_SCORE_CAP)
+            result["score_cap"] = DOC_PROBLEM_SCORE_CAP
+            result.setdefault("flags", []).insert(0, {"source": "verified", "text": "Document check failed: " + ", ".join(x["label"] for x in bad) + "."})
+        if (bad or unver) and result.get("verdict") == "recommend":
+            result["verdict"], result["verdict_label"], result["colour"] = NEEDS_REVIEW, VERDICT_LABEL[NEEDS_REVIEW], "yellow"
+            result.setdefault("verdict_reasons", []).append(
+                "Document check failed." if bad else "Couldn't verify the content of: " + ", ".join(x["label"] for x in unver[:4]) + ".")
+    except Exception as e:
+        logger.warning("photographer doc checks skipped (%s)", type(e).__name__)
+
+
 async def review_application(
     member_id: str,
     *,
@@ -187,9 +244,39 @@ async def review_application(
         member = member or await _load_member(member_id)
         if not member:
             return None
-        availability = await _load_availability(member_id)
-        inp = review_input_from_member(member, availability)
-        result = await run_review(inp, other_hashes=await _load_hashes())
+        from .applicant_review import _member_trade
+        trade = _member_trade(member)
+        docs = await _load_docs(member_id)
+        try:  # read what's actually on each uploaded document (server-side vision)
+            from .doc_vision import check_member_docs
+            docs = await check_member_docs(await get_db(), {**member, "vendor_type": trade}, docs)
+        except Exception as e:
+            logger.warning("doc content check skipped (%s)", type(e).__name__)
+        terminated_match = None
+        try:  # same ID / email / phone as a terminated vendor (Kam, 2026-11-02)
+            from .vendor_termination import blocked_identity, doc_id_hashes
+            terminated_match = await blocked_identity(await get_db(), email=member.get("email"),
+                                                      phone=member.get("phone"), id_hashes=doc_id_hashes(docs))
+        except Exception:
+            terminated_match = None
+        if trade != "photographer":
+            # Rules rubric for non-photographer trades (no sample photos to score).
+            from .trade_review import run_trade_review
+            result = run_trade_review({**member, "vendor_type": trade}, docs)
+        else:
+            availability = await _load_availability(member_id)
+            inp = review_input_from_member(member, availability)
+            result = await run_review(inp, other_hashes=await _load_hashes())
+            result.setdefault("trade", "photographer")
+            result.setdefault("rubric_version", "photo-v1")
+            _apply_doc_checks_photographer(member, result, docs)
+        if terminated_match:
+            from .applicant_review import NOT_A_FIT, VERDICT_LABEL as _VL
+            result["verdict"], result["verdict_label"], result["colour"] = NOT_A_FIT, _VL[NOT_A_FIT], "red"
+            result["terminated_match"] = True
+            if isinstance(result.get("flags"), list):
+                result["flags"].insert(0, {"source": "verified",
+                                           "text": "Same email, phone or ID as a vendor Bricks terminated. Don't approve."})
         if store:
             await _store_thumbs(result)
         else:
@@ -203,6 +290,8 @@ async def review_application(
                 "model": result.get("model"),
                 "cost_usd": result.get("cost_usd"),
                 "trigger": trigger,
+                "trade": result.get("trade"),
+                "rubric_version": result.get("rubric_version"),
             }])
             seen = set()
             hash_rows = []
@@ -221,15 +310,33 @@ async def review_application(
         return None
 
 
+def _backlog_due(row: dict, vtype: str, now=None) -> bool:
+    if vtype == "photographer":
+        return True
+    from datetime import datetime, timedelta, timezone
+    try:
+        created = datetime.fromisoformat(str(row.get("created_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) - created >= timedelta(minutes=30)
+
+
 async def pending_without_review(limit: int = 5) -> list:
-    """Pending photographer ids with no row in vendor_applicant_reviews (oldest first)."""
+    """Pending applicant ids with no row in vendor_applicant_reviews (oldest first).
+
+    Photographers as soon as they apply. Other trades upload documents after
+    /apply and then call /submitted; if that call never lands, they're picked
+    up here once the application is 30 minutes old.
+    """
     try:
         db = await get_db()
         pend = await db.table("vendor_members").select("id,vendor_type,role,title,application_profile,created_at").eq(
             "onboarding_status", "pending"
         ).order("created_at").limit(200).execute()
         from .vendor_profile import member_vendor_type
-        ids = [r["id"] for r in (pend.data or []) if member_vendor_type(r) == "photographer"]
+        ids = [r["id"] for r in (pend.data or []) if _backlog_due(r, member_vendor_type(r))]
         if not ids:
             return []
         done = await db.table("vendor_applicant_reviews").select("member_id").in_("member_id", ids).execute()

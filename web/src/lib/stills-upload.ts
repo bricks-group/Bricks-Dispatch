@@ -75,6 +75,13 @@ function errMessage(body: { detail?: string | { message?: string; code?: string 
   );
 }
 
+const VIDEO_NAME = /\.(mp4|mov|m4v|webm|avi)$/i;
+
+/** Reel / video master — gets the API's larger video cap, not the 50 MB stills one. */
+export function isVideoUpload(file: { name: string; type?: string }, mediaType?: string): boolean {
+  return mediaType === 'reel' || (file.type || '').startsWith('video/') || VIDEO_NAME.test(file.name);
+}
+
 /**
  * Camera RAW / JPEG / drone / reel / twilight / staging / floorplan → storage,
  * direct from the browser (TUS resumable for big files, else one signed PUT).
@@ -87,7 +94,9 @@ export async function uploadStillFile(
   mediaType: StillsType,
   onProgress?: UploadProgress,
 ): Promise<UploadedStill> {
-  if (file.size > UPLOAD_MAX_FILE_BYTES) {
+  // Reels / video masters: the API mints the cap (up to 2 GB when storage
+  // allows) and 413s with the exact limit — don't pre-block at the stills 50 MB.
+  if (!isVideoUpload(file, mediaType) && file.size > UPLOAD_MAX_FILE_BYTES) {
     throw new StillsUploadError(fileTooLargeMessage(file.name), 'file_too_large');
   }
   const mime = file.type || 'application/octet-stream';
@@ -123,14 +132,14 @@ export async function uploadStillFile(
     }
   } catch (e) {
     const status = (e as { status?: number }).status;
-    if (status === 413) throw new StillsUploadError(fileTooLargeMessage(file.name), 'file_too_large');
+    if (status === 413) throw new StillsUploadError(fileTooLargeMessage(file.name, sign.max_file_bytes || UPLOAD_MAX_FILE_BYTES), 'file_too_large');
     if (useTus) {
       // TUS refused (old storage host / CORS): one plain signed PUT instead.
       await putUpload(sign.signed_url, file, sign.headers || { 'Content-Type': contentType }, onProgress).catch(
         (err) => {
           const st = (err as { status?: number }).status;
           throw new StillsUploadError(
-            st === 413 ? fileTooLargeMessage(file.name) : `Upload failed for ${file.name}. Try again.`,
+            st === 413 ? fileTooLargeMessage(file.name, sign.max_file_bytes || UPLOAD_MAX_FILE_BYTES) : `Upload failed for ${file.name}. Try again.`,
           );
         },
       );

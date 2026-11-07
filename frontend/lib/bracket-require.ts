@@ -16,7 +16,7 @@ const MID_ABS = 0.5;
 
 /** Name patterns the backend clusters on (stem + ±EV / under / over). */
 const EV_SUFFIX =
-  /^(?<stem>.+?)(?:[_-](?<evp>ev)?(?<ev>[+-]?\d+(?:\.\d+)?)|[_-](?<sign>minus|plus)(?<mp>\d+(?:\.\d+)?)(?:ev)?|_m(?<m>\d+)|_p(?<p>\d+)|_und(?:er)?|_over|_ov|_normal)$/i;
+  /^(?<stem>.+?)(?:[_-](?<evp>ev)?(?<ev>[+-]?\d+(?:\.\d+)?)(?<evs>ev)?|[_-](?<sign>minus|plus)(?<mp>\d+(?:\.\d+)?)(?:ev)?|_m(?<m>\d+)|_p(?<p>\d+)|_und(?:er)?|_over|_ov|_normal)$/i;
 
 export type BracketFileLike = { name: string };
 
@@ -39,7 +39,7 @@ export function basename(pathOrName: string): string {
  */
 function isSequenceNumber(m: RegExpMatchArray | null): boolean {
   const ev = m?.groups?.ev;
-  if (ev == null || ev === '' || m?.groups?.evp) return false;
+  if (ev == null || ev === '' || m?.groups?.evp || m?.groups?.evs) return false;
   if (ev[0] === '+' || ev[0] === '-') return false;
   return ev.split('.')[0].length >= 2;
 }

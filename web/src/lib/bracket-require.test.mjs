@@ -18,6 +18,7 @@ execSync(
 const {
   bracketStem,
   exposureBiasFromName,
+  groupByBracketStem,
   bracketHasUnderMidOver,
   inferMediaType,
   isCameraRawName,
@@ -284,5 +285,16 @@ assert.equal(exposureBiasFromName('IMG_4031_-2.jpg'), -2);
 assert.equal(bracketStem('IMG_4031_-2.jpg'), 'IMG_4031');
 assert.equal(exposureBiasFromName('k_ev10.jpg'), 10);
 assert.equal(exposureBiasFromName('kitchen_2.jpg'), 2);
+
+// Trailing-EV names (GO web/AEB exports, fuze-lounge_-2EV.jpg) are one 5-frame bracket.
+assert.equal(exposureBiasFromName('fuze-lounge_-2EV.jpg'), -2);
+assert.equal(exposureBiasFromName('fuze-lounge_0EV.jpg'), 0);
+assert.equal(exposureBiasFromName('kitchen_+0.7ev.JPG'), 0.7);
+assert.equal(exposureBiasFromName('dusk_10EV.jpg'), 10);
+assert.equal(bracketStem('fuze-lounge_+2EV.jpg'), 'fuze-lounge');
+assert.equal(
+  groupByBracketStem(['-2', '-1', '0', '+1', '+2'].map((e) => `fuze-lounge_${e}EV.jpg`)).get('fuze-lounge')?.length,
+  5,
+);
 
 console.log('bracket-require tests passed');

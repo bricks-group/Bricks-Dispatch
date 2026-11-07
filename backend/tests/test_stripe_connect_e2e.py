@@ -228,6 +228,9 @@ async def test_payout_ignores_noshow_claims():
             return MagicMock(data=job_row)
         if tables and tables[-1] == "payouts":
             return MagicMock(data=[payout_row_initial])
+        if tables and tables[-1] == "vendor_probation_reviews":
+            # Vendor is past the probation payout hold (first 3 jobs done).
+            return MagicMock(data=[{"job_id": f"old{i}", "payout_hold": "released"} for i in range(3)])
         return MagicMock(data=None)
 
     db.execute = AsyncMock(side_effect=_execute)

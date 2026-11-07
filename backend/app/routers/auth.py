@@ -21,12 +21,29 @@ async def vendor_os_login(payload: VendorAuthLogin):
     if not email:
         api_error(400, "Email is required", "email_required")
     
-    # In Supabase, we send OTP
+    # In Supabase, we send OTP. Confirm a known vendor's Auth user first so a
+    # first-time vendor gets the login-code email, not 'Confirm your email'.
+    try:
+        from ..services.email_login_prep import ensure_confirmed_vendor_auth_user
+        await ensure_confirmed_vendor_auth_user(await get_db(), email)
+    except Exception:
+        pass
     try:
         res = await (await get_db()).auth.sign_in_with_otp({"email": email})
         return {"message": "OTP sent to email", "email": email}
     except Exception as e:
         api_error(500, f"Error sending OTP: {str(e)}", "otp_error")
+
+@router.post("/vendor-os/auth/prepare-email-login")
+async def vendor_os_prepare_email_login(payload: VendorAuthLogin):
+    """Called by GO before signInWithOtp({email}). Always 200 with the same body
+    so it cannot be used to probe which emails are vendors."""
+    try:
+        from ..services.email_login_prep import ensure_confirmed_vendor_auth_user
+        await ensure_confirmed_vendor_auth_user(await get_db(), payload.email)
+    except Exception:
+        pass
+    return {"ok": True}
 
 @router.post("/vendor-os/auth/verify")
 async def vendor_os_verify(payload: dict):
@@ -36,36 +53,23 @@ async def vendor_os_verify(payload: dict):
         api_error(400, "Email and token are required", "missing_fields")
     
     try:
-        res = await (await get_db()).auth.verify_otp({"email": email, "token": token, "type": "magiclink"})
+        # Verify on a throwaway auth client. verify_otp on the shared client
+        # switched its Authorization header to the vendor's JWT, so the member
+        # lookup/link below ran under RLS and failed for unlinked rows.
+        from ..shared.database import new_auth_client
+        res = await (await new_auth_client()).auth.verify_otp({"email": email, "token": token, "type": "email"})
         if res.session:
-            # We might want to ensure the member exists in our table too
             user = res.user
-            from ..shared.job_scope import KAM_EMAILS, KAM_MEMBER_ID, pick_canonical_member
-            db = await get_db()
-            member_res = await db.table("vendor_members").select("*").eq("id", user.id).maybe_single().execute()
-            # maybe_single() is None when no member row — None.data was AttributeError.
-            _mdata = getattr(member_res, "data", None) if member_res is not None else None
-            rows = [_mdata] if isinstance(_mdata, dict) else []
-            if user.email:
-                by_email = await db.table("vendor_members").select("*").ilike("email", user.email).limit(10).execute()
-                for row in by_email.data or []:
-                    if row and row.get("id") not in {r.get("id") for r in rows}:
-                        rows.append(row)
-            if (user.email or "").lower() in KAM_EMAILS or str(user.id).lower().startswith("0c3fa7c2"):
-                kam = await db.table("vendor_members").select("*").eq("id", KAM_MEMBER_ID).maybe_single().execute()
-                _kdata = getattr(kam, "data", None) if kam is not None else None
-                if isinstance(_kdata, dict) and _kdata.get("id") not in {r.get("id") for r in rows}:
-                    rows.append(_kdata)
-            picked = pick_canonical_member(rows, user.id, user.email or "")
-            if not picked:
-                await db.table("vendor_members").insert({
-                    "id": user.id,
-                    "email": user.email,
-                    "name": user.user_metadata.get("name", email.split("@")[0]),
-                    "role": "Photographer",
-                    "vendor_id": "default_vendor"
-                }).execute()
-            
+            from ..services.vendor_otp_link import link_member_after_otp
+            db = await get_db()  # service role
+            meta = getattr(user, "user_metadata", None) or {}
+            try:
+                await link_member_after_otp(db, str(user.id), user.email or "", meta.get("name") or "")
+            except Exception as le:
+                # Code is valid; /auth/me resolves the member again. Don't fail the login.
+                import logging
+                logging.getLogger(__name__).warning("otp verify: member link failed: %s", str(le)[:200])
+
             await write_audit_event(user.id, "session", user.id, "login", vendor_id="default_vendor")
             return {
                 "access_token": res.session.access_token,
@@ -83,8 +87,17 @@ async def vendor_os_me(authorization: str | None = Header(default=None, alias="A
     actor_id = await resolve_vendor_actor_id(authorization, None)
     member = await get_vendor_member(actor_id)
     if isinstance(member, dict):
-        from ..shared.vendor_identity import needs_terms
-        return {**member, "needs_terms": needs_terms(member)}
+        from ..shared.vendor_identity import needs_amendment, needs_ic_terms, needs_terms
+        from ..services.vendor_onboarding import ensure_signed_in
+        onboarding = await ensure_signed_in(member)
+        if onboarding and onboarding.get("complete"):
+            member = {**member, "onboarding_completed_at": onboarding.get("completed_at")}
+        out = {**member, "needs_terms": needs_terms(member), "needs_ic_terms": needs_ic_terms(member),
+               "needs_amendment": needs_amendment(member)}
+        if onboarding is not None:
+            out["onboarding"] = onboarding
+        out["onboarding_complete"] = bool(member.get("onboarding_completed_at"))
+        return out
     return member
 
 @router.post("/vendor-os/auth/logout")

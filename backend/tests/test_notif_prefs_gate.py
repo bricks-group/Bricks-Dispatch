@@ -64,7 +64,7 @@ def _setup(monkeypatch, allows):
     async def photog(*_a, **_k):
         return "Pat"
 
-    async def email(to, subject, html):
+    async def email(to, subject, html, text=None):
         sent.append((to, subject))
         return True
 

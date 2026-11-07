@@ -88,7 +88,12 @@ def measure_roll_tilt(gray) -> Optional[float]:
     return lm if abs(lm) < abs(rm) else rm
 
 
-def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False, is_twilight: bool = False) -> dict:
+def analyze_image_cv(
+    image_bytes: bytes,
+    is_exterior: bool = False,
+    is_twilight: bool = False,
+    check_filesize: bool = True,
+) -> dict:
     try:
         import cv2
         import numpy as np
@@ -98,7 +103,9 @@ def analyze_image_cv(image_bytes: bytes, is_exterior: bool = False, is_twilight:
     score = 100
     issues = []
 
-    if len(image_bytes) < 500_000:
+    # The QC-review variant is a deliberate downscale (~300 KB); its size says
+    # nothing about the delivered file, so callers scoring it pass False.
+    if check_filesize and len(image_bytes) < 500_000:
         issues.append("low_filesize")
         score -= 15
 

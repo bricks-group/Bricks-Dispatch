@@ -9,6 +9,8 @@ or HTTP 500 with no CORS (Fair-Use JWT path). The email match must win.
 """
 from __future__ import annotations
 
+import pytest
+
 import asyncio
 from types import SimpleNamespace
 
@@ -98,5 +100,22 @@ def test_resolve_actor_fair_use_jwt_maps_to_member_id(monkeypatch):
         "decode_supabase_user_from_jwt",
         lambda tok: (AUTH_UID, MEMBER["email"]),
     )
+    # Real Supabase JWTs carry user_metadata.email_verified for confirmed emails.
+    monkeypatch.setattr(auth_mod, "_jwt_email_verified", lambda tok: True)
     actor = asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer tok", None))
     assert actor == MEMBER["id"]
+
+
+def test_resolve_actor_local_jwt_unverified_email_no_match(monkeypatch):
+    """Locally decoded token without email_verified must not adopt a row by email."""
+    class _Auth:
+        async def get_user(self, token):
+            raise Exception("402 exceed_storage_size_quota")
+
+    db = _Db(by_id=None, by_email=[dict(MEMBER)])
+    db.auth = _Auth()
+    _patch_db(monkeypatch, db)
+    monkeypatch.setattr(auth_mod, "_is_rest_quota_error", lambda e: "402" in str(e))
+    monkeypatch.setattr(auth_mod, "decode_supabase_user_from_jwt", lambda tok: (AUTH_UID, MEMBER["email"]))
+    with pytest.raises(Exception):
+        asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer tok", None))

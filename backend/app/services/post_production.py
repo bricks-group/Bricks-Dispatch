@@ -59,10 +59,12 @@ def _as_is_qc_variant_fields(processed_url, file_path, asset: dict) -> dict:
 # BoxBrownie / third-party virtual staging is intentionally disabled (Kam 2026-09-12).
 # Staging uploads deliver originals to the listing file — never call vendors or claim furniture was staged.
 # Owned Bricks staging ships later. Fotello/Autoenhance remain optional HDR enhance only.
-# POSTPROD_STILLS_PROVIDER selects leftover stills editor (Kam: AE is NOT locked).
-#   inhouse (default) — bricks_inhouse / Enfuse path; never call Autoenhance
-#   autoenhance       — prefer AE when key+plan available; soft-fail to inhouse
-# Aliases: ae→autoenhance; bricks_inhouse→inhouse. Unknown values → inhouse.
+# POSTPROD_STILLS_PROVIDER selects leftover stills editor.
+#   autoenhance (default, Kam Oct 31) — prefer AE when key+plan/credits ok;
+#                 any AE refusal/failure (401/402/403/No Plan/no credits/timeout)
+#                 soft-fails to bricks_inhouse so the job never fails on AE.
+#   inhouse     — bricks_inhouse / Enfuse path; never call Autoenhance (kill switch)
+# Aliases: ae→autoenhance; bricks_inhouse→inhouse. Unknown values → autoenhance.
 _POSTPROD_STILLS_PROVIDER_ENV = "POSTPROD_STILLS_PROVIDER"
 AUTOENHANCE_API_KEY = os.environ.get("AUTOENHANCE_API_KEY")
 FOTELLO_API_KEY = os.environ.get("FOTELLO_API_KEY")
@@ -71,18 +73,52 @@ FOTELLO_API_KEY = os.environ.get("FOTELLO_API_KEY")
 def stills_provider_preference() -> str:
     """Return 'inhouse' or 'autoenhance' for leftover vendor stills.
 
-    Default is inhouse so production does not treat Autoenhance as the locked
-    stills editor. Set POSTPROD_STILLS_PROVIDER=autoenhance to prefer AE.
+    Default is autoenhance (Kam: "Use Autoenhance for stills"); in-house stays
+    the automatic fallback. Set POSTPROD_STILLS_PROVIDER=inhouse to never call AE.
     """
-    raw = (os.environ.get(_POSTPROD_STILLS_PROVIDER_ENV) or "inhouse").strip().lower()
-    if raw in ("autoenhance", "ae"):
+    raw = (os.environ.get(_POSTPROD_STILLS_PROVIDER_ENV) or "").strip().lower()
+    if raw in ("autoenhance", "ae", ""):
         return "autoenhance"
-    if raw in ("inhouse", "bricks_inhouse", ""):
+    if raw in ("inhouse", "bricks_inhouse"):
         return "inhouse"
     logger.warning(
-        f"Unknown {_POSTPROD_STILLS_PROVIDER_ENV}={raw!r} — using inhouse"
+        f"Unknown {_POSTPROD_STILLS_PROVIDER_ENV}={raw!r} — using autoenhance"
     )
-    return "inhouse"
+    return "autoenhance"
+
+
+# AE time budget per leftover run. process_job_assets claims the job once and
+# runs inside one 300s Vercel invocation; AE polling must never push the run
+# past that or the job sticks in processing. Once spent, remaining stills go
+# in-house. AUTOENHANCE_RUN_BUDGET_SEC overrides (default 120s).
+_AE_MIN_CALL_SEC = 20.0
+_AE_DEFAULT_CALL_SEC = 120.0
+_ae_deadline: Optional[float] = None
+
+
+def _ae_run_budget_sec() -> float:
+    try:
+        return max(0.0, float(os.environ.get("AUTOENHANCE_RUN_BUDGET_SEC") or 120))
+    except ValueError:
+        return 120.0
+
+
+def start_ae_budget() -> None:
+    """Start the per-run AE budget (called at the top of leftover delivery)."""
+    global _ae_deadline
+    import time as _time
+    _ae_deadline = _time.monotonic() + _ae_run_budget_sec()
+
+
+def ae_call_timeout_sec() -> Optional[float]:
+    """Seconds AE may poll for the next still, or None when budget is spent."""
+    if _ae_deadline is None:
+        return _AE_DEFAULT_CALL_SEC
+    import time as _time
+    left = _ae_deadline - _time.monotonic()
+    if left < _AE_MIN_CALL_SEC:
+        return None
+    return min(_AE_DEFAULT_CALL_SEC, left)
 
 
 UNEDITED_ORIGINAL_QC_NOTE = (
@@ -347,7 +383,7 @@ async def _hold_equirect_360(
 
 
 def prefer_autoenhance_stills() -> bool:
-    """True only when env explicitly selects Autoenhance for leftover stills."""
+    """True unless env selects inhouse (AE is the stills default)."""
     return stills_provider_preference() == "autoenhance"
 
 
@@ -419,6 +455,15 @@ async def trigger_fotello_edit(image_url: str) -> Optional[str]:
 
 # --- Pipeline Orchestrator ---
 
+_ALREADY_PROCESSED = ("done", "skipped")
+
+
+def is_already_processed(asset: dict | None) -> bool:
+    """True when an upload already went through post-production (done/skipped)."""
+    row = asset if isinstance(asset, dict) else {}
+    return str(row.get("processing_status") or "").strip().lower() in _ALREADY_PROCESSED
+
+
 async def process_job_assets(job_id: str):
     """
     Main entry point for post-production processing.
@@ -474,7 +519,14 @@ async def process_job_assets(job_id: str):
 
     results = []
     leftover = []
+    already = 0
     for asset in assets or []:
+        if is_already_processed(asset):
+            # Re-complete of a delivered (or partly delivered) job: never send a
+            # finished still back through Autoenhance (E2E BUG 7). Late uploads
+            # are still pending, so they are processed and folded as before.
+            already += 1
+            continue
         route = delivery_route(asset)
         if route == "skip":
             continue
@@ -504,7 +556,7 @@ async def process_job_assets(job_id: str):
             continue
 
         # Launch path: sync leftover enhance (provider via POSTPROD_STILLS_PROVIDER;
-        # default inhouse; autoenhance only when env selects it + key/plan ok).
+        # default autoenhance when key/plan ok, soft-fail to inhouse).
         # Do NOT submit vendor_photo to async Fotello/AE v2 — that leaves rows
         # in processing waiting for callbacks and skips bracket HDR merge.
         leftover.append(asset)
@@ -521,7 +573,10 @@ async def process_job_assets(job_id: str):
     # processing forever — finalize never ran. Deliver them now so the listing
     # file / client share is not a hollow path.
     # Group photo leftovers by bracket stem so +/-EV bursts HDR-merge once.
-    await _deliver_leftovers_with_brackets(db, job_id, leftover)
+    if already:
+        logger.info(f"Job {job_id}: {already} upload(s) already processed — not re-enhanced")
+    if leftover:
+        await _deliver_leftovers_with_brackets(db, job_id, leftover)
 
     if not results:
         try:
@@ -534,6 +589,7 @@ async def process_job_assets(job_id: str):
 
 async def _deliver_leftovers_with_brackets(db, job_id: str, leftover: list) -> None:
     """Deliver leftovers; fuse photo/twilight brackets into one listing still per stem."""
+    start_ae_budget()
     from .media_intake import delivery_route
     from .photo_enhance_service import group_assets_by_bracket
 
@@ -697,15 +753,16 @@ async def deliver_bracket_group_without_vendor(
     enhanced = None
     enhance_meta = {}
     provider = "bricks_inhouse"
-    # Day vendor brackets: Autoenhance only when POSTPROD_STILLS_PROVIDER=autoenhance
-    # (mls_safe: no invent sky). Default inhouse. Twilight stays in-house.
+    # Day vendor brackets: Autoenhance by default (POSTPROD_STILLS_PROVIDER=inhouse
+    # disables; mls_safe: no invent sky). Twilight stays in-house.
     # Fail-fast to bricks_inhouse on No Plan / errors so listing never hangs.
-    if apply_sky and prefer_autoenhance_stills():
+    ae_timeout = ae_call_timeout_sec() if (apply_sky and prefer_autoenhance_stills()) else None
+    if ae_timeout is not None:
         try:
             from . import autoenhance_service as ae
             if ae.is_available():
                 enhanced, enhance_meta = ae.enhance_brackets_sync(
-                    frames, filenames, apply_sky=False
+                    frames, filenames, apply_sky=False, timeout_sec=ae_timeout
                 )
                 # AE full-res skips inhouse format_listing_ready — apply PropTx
                 # 4:3 + long-edge ≤2400 before upload (live Fuze was 2800×1870 3:2).
@@ -1175,11 +1232,13 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             if original:
                 enhanced = None
                 filename = str(asset.get("filename") or "still.jpg")
-                # Autoenhance single-frame only when POSTPROD_STILLS_PROVIDER=autoenhance.
-                if prefer_autoenhance_stills() and ae.is_available():
+                # Autoenhance single-frame by default (inhouse env disables).
+                ae_timeout = ae_call_timeout_sec() if prefer_autoenhance_stills() else None
+                if ae_timeout is not None and ae.is_available():
                     try:
                         enhanced, enhance_meta = ae.enhance_brackets_sync(
-                            [original], [filename], apply_sky=False
+                            [original], [filename], apply_sky=False,
+                            timeout_sec=ae_timeout,
                         )
                         # Soft-fail: keep AE bytes if export throws (exterior/single
                         # HDR leftovers too — do not discard AE → inhouse).

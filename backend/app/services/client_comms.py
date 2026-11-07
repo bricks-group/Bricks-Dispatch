@@ -253,8 +253,13 @@ def _agent_allows(email: str, field: str) -> bool:
     return agent_allows(email, field)
 
 
-async def _email_agent_direct(to: str, subject: str, html: str) -> bool:
+DELIVERY_FROM = "Bricks <notifications@brxs.ca>"
+
+
+async def _email_agent_direct(to: str, subject: str, html: str, text: str | None = None) -> bool:
     from .notifications import send_email_via_resend
+    if text:
+        return bool(await send_email_via_resend(to, subject, html, text=text, from_addr=DELIVERY_FROM))
     return bool(await send_email_via_resend(to, subject, html))
 
 
@@ -477,61 +482,47 @@ async def notify_capture_delivered(
 
     if len(clean_products) == 1:
         what = clean_products[0]
-        subject = f"Your {what} is ready — {addr}"
-        ready_phrase = f"Your {_html.escape(what)}"
         verb = "is"
-        open_it = "Open it"
+        button = f"View your {what}"
     else:
-        what = (
-            " and ".join(clean_products)
-            if len(clean_products) == 2
-            else ", ".join(clean_products[:-1]) + f", and {clean_products[-1]}"
-        )
-        subject = f"Your media is ready — {addr}"
-        ready_phrase = f"Your {_html.escape(what)}"
-        verb = "are"
-        open_it = "Open them"
-
-    links = "".join(
-        f'<p style="margin:8px 0"><a href="{_html.escape(u.get("url", "#"))}" '
-        f'style="color:#d2542b">{_html.escape(u.get("filename") or "Open")}</a></p>'
-        for u in urls[:5]
-        if isinstance(u, dict) and u.get("url")
-    )
+        what = "media"
+        verb = "is"
+        button = "View your media"
 
     if agent_email and not _agent_allows(agent_email, "delivery_ready_email"):
         logger.info(f"Job {job_id}: delivery email muted by agent's notification settings")
         return False
 
+    from .delivery_email_media import services_from_delivery
+
+    jctx = {**(job or {}), "booking_id": bid}
+    client = is_client_account_job(jctx)
+    desk = _desk_url_for(jctx, job_id)
+    # Same never-expiring share page as the photo email (it shows the tour,
+    # floor plan and Visit); signed links in urls die, so they stay out.
+    share_url = await _client_share_link(job_id)
+    capture_note = (
+        ""
+        if client
+        else "From the listing, use Copy client link to share with your seller."
+    )
+    rendered = render_delivery(
+        recipient_name=agent_name,
+        address=addr,
+        share_url=share_url,
+        desk_url=desk,
+        client=client,
+        what=what,
+        verb=verb,
+        button_label=button,
+        services=services_from_delivery(urls, clean_products),
+        capture_note=capture_note,
+    )
+    # Was a "Media ready" card; the headline carries it now.
+    subject = rendered.subject
+
     if agent_email:
-        client = is_client_account_job({**(job or {}), "booking_id": bid})
-        desk = _desk_url_for({**(job or {}), "booking_id": bid}, job_id)
-        if client:
-            ready_line = (
-                f"{ready_phrase} for <strong>{_html.escape(addr)}</strong> {verb} in your Bricks account. "
-                f"{open_it} there{' or with the link(s) below' if links else ''}."
-            )
-        else:
-            ready_line = (
-                f"{ready_phrase} for <strong>{_html.escape(addr)}</strong> {verb} on the listing file. "
-                f"{open_it} on your desk{' or via the link(s) below' if links else ''}. "
-                "From the listing, use <strong>Copy client link</strong> to share with your seller."
-            )
-        body = f"""
-<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {_html.escape(agent_name)},</p>
-<p style="color:#555;line-height:1.6;margin:0 0 12px 0">
-  {ready_line}
-</p>
-{links}
-<p style="margin-top:16px;font-size:13px;color:#888;line-height:1.5">
-  <a href="{desk}" style="color:#d2542b">{desk}</a>
-</p>
-"""
-        ok = await _email_agent_direct(
-            agent_email,
-            subject,
-            _branded_card("Media ready", body),
-        )
+        ok = await _email_agent_direct(agent_email, subject, rendered.html, text=rendered.text)
         if ok:
             logger.info(f"Job {job_id}: capture delivery email sent products={clean_products!r}")
         return ok
@@ -548,6 +539,10 @@ async def notify_capture_delivered(
         "delivery_urls": urls[:5],
         "products": clean_products,
         "splat_pending": False,
+        # Companion sends these verbatim (one template for every delivery email).
+        "subject": subject,
+        "html": rendered.html,
+        "text": rendered.text,
     })
     if ok:
         logger.info(f"Job {job_id}: capture delivery notification sent products={clean_products!r}")
@@ -597,44 +592,65 @@ def _delivery_has_video(delivery_urls: list | None) -> bool:
     return False
 
 
+def render_delivery(
+    *,
+    recipient_name: str,
+    address: str,
+    share_url: str,
+    desk_url: str,
+    client: bool,
+    what: str = "photos",
+    verb: str = "are",
+    button_label: str = "View your gallery",
+    services: list[str] | None = None,
+    preview: dict | None = None,
+    capture_note: str = "",
+):
+    """Every delivery email goes through delivery_email.render_delivery_email."""
+    from .delivery_email import DeliveryEmailContext, render_delivery_email, shown_still_count
+
+    pv = preview or {}
+    stills = list(pv.get("stills") or [])
+    total = int(pv.get("total") or 0)
+    ctx = DeliveryEmailContext(
+        recipient_name=recipient_name or "there",
+        address=address,
+        primary_url=share_url or desk_url,
+        desk_url=desk_url,
+        share_link=bool(share_url),
+        client=client,
+        photo_count=total,
+        services=services or [],
+        stills=stills,
+        hero_gif_url=str(pv.get("hero_gif_url") or "") if stills else "",
+        more_count=max(0, total - shown_still_count(stills)),
+        headline_what=what,
+        headline_verb=verb,
+        button_label=button_label,
+        capture_note=capture_note,
+    )
+    return render_delivery_email(ctx)
+
+
 def photos_delivered_email(
     *, agent_name: str, address: str, share_url: str, desk_url: str, has_video: bool,
-    client: bool = False,
-) -> tuple[str, str]:
-    """(subject, html) for the delivery email. Links never expire."""
+    client: bool = False, services: list[str] | None = None, preview: dict | None = None,
+):
+    """RenderedEmail (subject, html, text) for the photo/video delivery. Links never expire."""
     what = "media" if has_video else "photos"
     addr = (address or "").strip() or ("your property" if client else "your listing")
-    subject = f"Your photos are ready · {addr}" if what == "photos" else f"Your media is ready · {addr}"
-    verb = "are" if what == "photos" else "is"
-    primary = share_url or desk_url
-    note = (
-        (
-            "This link doesn't expire. You can share it with your team as is."
-            if client
-            else "This link doesn't expire. You can share it with your seller as is."
-        )
-        if share_url
-        else "Sign in to view and download everything."
+    return render_delivery(
+        recipient_name=agent_name,
+        address=addr,
+        share_url=share_url,
+        desk_url=desk_url,
+        client=client,
+        what=what,
+        verb="is" if has_video else "are",
+        button_label="View your gallery",
+        services=services,
+        preview=preview,
     )
-    body = f"""
-<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Hi {_html.escape(agent_name or 'there')},</p>
-<p style="color:#555;line-height:1.6;margin:0 0 20px 0">
-  Your {what} for <strong>{_html.escape(addr)}</strong> {verb} ready.
-</p>
-<p style="margin:0 0 20px 0">
-  <a href="{_html.escape(primary)}" style="display:inline-block;background:#14110E;color:#F4F1EB;text-decoration:none;font-weight:500;font-size:14px;padding:12px 20px;border-radius:2px">View and download</a>
-</p>
-<p style="color:#888;font-size:13px;line-height:1.5;margin:0 0 8px 0">{note}</p>
-"""
-    if share_url and desk_url:
-        body += (
-            f'<p style="color:#888;font-size:13px;line-height:1.5;margin:0">'
-            f'{"Or open your Bricks account" if client else "Or open the listing file"}: '
-            f'<a href="{_html.escape(desk_url)}" style="color:#d2542b">'
-            f"{_html.escape(desk_url)}</a></p>"
-        )
-    title = "Media ready" if has_video else "Photos ready"
-    return subject, _branded_card(title, body)
 
 
 async def _call_booking_comms_json(path: str, payload: dict) -> dict | None:
@@ -658,6 +674,21 @@ async def _call_booking_comms_json(path: str, payload: dict) -> dict | None:
     except Exception as e:  # noqa: BLE001
         logger.error(f"Booking comms call to {path} failed: {e}")
         return None
+
+
+async def _photos_email_for(
+    job_id: str, delivery_urls: list | None, *, agent_name: str, address: str,
+    share_url: str, desk_url: str, has_video: bool, client: bool,
+):
+    """Gallery preview (QC-passed stills only) + services line + render."""
+    from .delivery_email_media import gallery_preview, services_from_delivery
+
+    preview = await gallery_preview(job_id, delivery_urls, address=address)
+    services = services_from_delivery(delivery_urls, photo_count=int(preview.get("total") or 0))
+    return photos_delivered_email(
+        agent_name=agent_name, address=address, share_url=share_url, desk_url=desk_url,
+        has_video=has_video, client=client, services=services, preview=preview,
+    )
 
 
 def _looks_like_uuid(v: str) -> bool:
@@ -700,11 +731,11 @@ async def notify_photos_delivered(
         if not to_override and not _agent_allows(agent_email, "delivery_ready_email"):
             logger.info(f"Job {job_id}: delivery email muted by agent's notification settings")
             return "muted"
-        subject, html = photos_delivered_email(
-            agent_name=agent_name, address=address, share_url=share_url,
-            desk_url=desk_url, has_video=has_video, client=client,
+        rendered = await _photos_email_for(
+            job_id, delivery_urls, agent_name=agent_name, address=address,
+            share_url=share_url, desk_url=desk_url, has_video=has_video, client=client,
         )
-        ok = await _email_agent_direct(agent_email, subject, html)
+        ok = await _email_agent_direct(agent_email, rendered.subject, rendered.html, text=rendered.text)
         logger.info(
             "Job %s: delivery email %s (share_link=%s)", job_id, "sent" if ok else "failed", bool(share_url)
         )
@@ -714,6 +745,10 @@ async def notify_photos_delivered(
     if not booking_id or not _looks_like_uuid(booking_id):
         logger.warning(f"Job {job_id}: no agent_email and no Companion booking — delivery email skipped")
         return "skipped"
+    rendered = await _photos_email_for(
+        job_id, delivery_urls, agent_name="", address=address,
+        share_url=share_url, desk_url=desk_url, has_video=has_video, client=client,
+    )
     body = await _call_booking_comms_json("/api/internal/comms/job-delivered", {
         "booking_id": booking_id,
         "job_id": job_id,
@@ -725,6 +760,11 @@ async def notify_photos_delivered(
         "desk_url": desk_url,
         "has_video": has_video,
         "splat_pending": False,
+        # Pre-rendered: Companion sends these verbatim (greets with its own
+        # agent name only when it falls back to its legacy template).
+        "subject": rendered.subject,
+        "html": rendered.html,
+        "text": rendered.text,
     })
     if body is None:
         return "failed"

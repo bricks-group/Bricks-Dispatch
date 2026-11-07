@@ -30,7 +30,7 @@ def _capture(monkeypatch, job):
     async def name(_aid, fb):
         return "Sam"
 
-    async def email(to, subject, html):
+    async def email(to, subject, html, text=None):
         sent.append((to, subject, html))
         return True
 

@@ -34,7 +34,13 @@ VERDICT_BAND = {
     "red": "Not a fit",
     "grey": "Incomplete",
 }
-PART_ORDER = ("samples", "gear", "availability", "location", "portfolio", "drone")
+POINT_WORD = {"verified": ("Verified", STATUS["green"]["fg"]), "unverified": ("Unverified", STATUS["yellow"]["fg"]),
+              "mismatch": ("Mismatch", STATUS["red"]["fg"])}
+DOC_OVERALL = {"verified": ("Verified", STATUS["green"]["fg"]), "partial": ("Partly verified", STATUS["yellow"]["fg"]),
+               "not_checked": ("Not verified", STATUS["grey"]["fg"]), "mismatch": ("Mismatch", STATUS["red"]["fg"]),
+               "unreadable": ("Unreadable", STATUS["red"]["fg"]), "blank": ("Blank file", STATUS["red"]["fg"])}
+PART_ORDER = ("samples", "gear", "availability", "location", "portfolio", "drone", "resume",
+              "proof", "credentials", "identity", "experience", "completeness")
 SPECIALTY_LABEL = {
     "photo": "Photos", "video": "Video", "drone": "Drone", "virtual_tour": "Virtual tour",
     "virtual_visit": "Virtual visit", "floor_plan": "Floor plans", "twilight": "Twilight",
@@ -59,7 +65,23 @@ def band_title(review: dict) -> str:
 
 def subject(name: str, review: dict) -> str:
     who = (name or "").strip() or "Applicant"
-    return f"{band_title(review)} · {review.get('score', 0)}/100 · {who} applied to Bricks"
+    trade = review.get("trade_label") if review.get("trade") not in (None, "", "photographer") else None
+    lead = f"{trade} · " if trade else ""
+    return f"{lead}{band_title(review)} · {review.get('score', 0)}/100 · {who} applied to Bricks"
+
+
+def _rubric_note(review: dict) -> str:
+    if review.get("rubric_version", "").startswith("trade-rules"):
+        return f"{review.get('trade_label') or 'Trade'} rules: credentials, ID, proof of work, experience and completeness."
+    return "Not run: no sample photos were reviewed."
+
+
+def _cap_note(review: dict) -> str:
+    if review.get("doc_problem"):
+        return f"Capped at {review.get('score_cap') or 50}: a document is blank, unreadable or doesn't match."
+    if review.get("rubric_version", "").startswith("trade-rules"):
+        return f"Capped at {review.get('score_cap') or 60} until required documents are in."
+    return f"Capped at {review.get('score_cap') or 60} until samples are reviewed."
 
 
 def _specialties(specs) -> str:
@@ -100,13 +122,14 @@ def render_html(
     found_via: str,
     review: dict,
     thumb_urls: list,
+    resume_url: str | None = None,
 ) -> str:
     colour = review.get("colour") or "yellow"
     st = STATUS.get(colour, STATUS["yellow"])
     score = int(review.get("score") or 0)
     cap_note = ""
-    if review.get("incomplete"):
-        cap_note = f"Capped at {review.get('score_cap') or 60} until samples are reviewed."
+    if review.get("incomplete") or review.get("doc_problem"):
+        cap_note = _cap_note(review)
     parts = review.get("parts") or {}
 
     # per-part R/Y/G bar (labels + status word, never colour alone)
@@ -173,7 +196,7 @@ def render_html(
     else:
         rubric_html = (
             _section_label("Rubric")
-            + f'<tr><td style="padding:0 24px;font-family:{SANS};font-size:13px;line-height:19px;color:{INK_MUTE};">Not run: no sample photos were reviewed.</td></tr>'
+            + f'<tr><td style="padding:0 24px;font-family:{SANS};font-size:13px;line-height:19px;color:{INK_MUTE};">{e(_rubric_note(review))}</td></tr>'
         )
 
     # evidence + flags
@@ -192,6 +215,37 @@ def render_html(
             for m in missing
         )
         missing_html = _section_label("Still missing") + f'<tr><td style="padding:0 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{items}</table></td></tr>'
+
+    docs_html = ""
+    if review.get("doc_checks"):
+        rows = []
+        for x in review["doc_checks"]:
+            ocol = DOC_OVERALL.get(x.get("overall"), DOC_OVERALL["not_checked"])
+            rows.append(
+                f'<tr><td colspan="2" style="padding:10px 0 2px 0;font-family:{SANS};font-size:13px;line-height:19px;font-weight:600;color:{INK};">'
+                f'{e(x.get("label"))} <span style="font-family:{MONO};font-size:10px;letter-spacing:.6px;font-weight:400;color:{ocol[1]};">{e(ocol[0].upper())}</span></td></tr>')
+            for pt in x.get("points") or []:
+                w, col = POINT_WORD.get(pt.get("status"), POINT_WORD["unverified"])
+                rows.append(
+                    f'<tr><td valign="top" width="96" style="width:96px;padding:3px 8px 3px 0;font-family:{MONO};font-size:9px;letter-spacing:1px;color:{col};">{e(w.upper())}</td>'
+                    f'<td valign="top" style="padding:2px 0;font-family:{SANS};font-size:12px;line-height:17px;color:{INK_SOFT};">{e(pt.get("point"))}: {e(pt.get("detail"))}</td></tr>')
+        docs_html = _section_label("Document check") + f'<tr><td style="padding:0 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{"".join(rows)}</table></td></tr>'
+    reasons = review.get("verdict_reasons") or []
+    reasons_html = ""
+    if reasons:
+        items = "".join(
+            f'<tr><td valign="top" width="14" style="width:14px;padding:4px 0;font-family:{MONO};font-size:12px;color:{BRICK_DEEP};">–</td>'
+            f'<td style="padding:4px 0;font-family:{SANS};font-size:13px;line-height:19px;color:{INK};">{e(r)}</td></tr>'
+            for r in reasons
+        )
+        reasons_html = _section_label("Why") + f'<tr><td style="padding:0 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{items}</table></td></tr>'
+    resume_html = _section_label("Resume") + (
+        f'<tr><td style="padding:0 24px;font-family:{SANS};font-size:13px;line-height:19px;color:{INK};">'
+        f'<a href="{e(resume_url)}" target="_blank" style="color:{BRICK_DEEP};">Download resume</a>'
+        f' <span style="color:{INK_MUTE};">(link works for 7 days)</span></td></tr>'
+        if resume_url else
+        f'<tr><td style="padding:0 24px;font-family:{SANS};font-size:13px;line-height:19px;color:{INK_MUTE};">No resume on file.</td></tr>'
+    )
 
     os_url, approve_url = os_link(member_id), os_link(member_id, "approve")
     avail = review.get("availability_summary") or "—"
@@ -240,8 +294,11 @@ def render_html(
   {''.join(f'<tr><td width="104" valign="top" style="width:104px;padding:3px 0;font-family:{MONO};font-size:10px;letter-spacing:1px;color:{INK_MUTE};text-transform:uppercase;">{e(k)}</td><td style="padding:2px 0;font-family:{SANS};font-size:13px;line-height:19px;color:{INK};">{e(v)}</td></tr>' for k, v in (("City", city or "—"), ("Specialty", _specialties(specialties)), ("Found us via", found_via or "—"), ("Availability", avail)))}
   </table>
 </td></tr>
+{reasons_html}
 {thumbs_html}
+{resume_html}
 {rubric_html}
+{docs_html}
 {_section_label("Evidence")}
 <tr><td style="padding:0 24px;" class="px"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{''.join(ev_rows)}</table></td></tr>
 {missing_html}
@@ -263,12 +320,16 @@ Tags: <b style="font-weight:600;">Verified</b> = Bricks looked at it. <b style="
 </body></html>"""
 
 
-def render_text(*, member_id: str, name: str, city: str, specialties, found_via: str, review: dict, thumb_urls: list) -> str:
+def render_text(*, member_id: str, name: str, city: str, specialties, found_via: str, review: dict, thumb_urls: list,
+                resume_url: str | None = None) -> str:
     lines = [
-        f"{band_title(review)} · {review.get('score', 0)}/100",
+        (f"{review['trade_label']} · " if review.get("trade") not in (None, "", "photographer") and review.get("trade_label") else "")
+        + f"{band_title(review)} · {review.get('score', 0)}/100",
     ]
-    if review.get("incomplete"):
-        lines.append(f"Score capped at {review.get('score_cap') or 60} until samples are reviewed.")
+    for r in review.get("verdict_reasons") or []:
+        lines.append(f"Why: {r}")
+    if review.get("incomplete") or review.get("doc_problem"):
+        lines.append("Score " + _cap_note(review)[0].lower() + _cap_note(review)[1:])
     parts = review.get("parts") or {}
     bar = []
     for key in PART_ORDER:
@@ -287,10 +348,17 @@ def render_text(*, member_id: str, name: str, city: str, specialties, found_via:
     ]
     if thumb_urls:
         lines += ["", "Sample photos:"] + [f"- {t.get('label')}: {t['url']}" for t in thumb_urls[:3]]
+    lines += ["", f"Resume: {resume_url}" if resume_url else "Resume: none on file."]
     if review.get("vision_ran"):
         lines += ["", "Rubric:"] + [f"- {c['label']}: {c['words']}" for c in (review.get("criteria") or {}).values()]
     else:
-        lines += ["", "Rubric: not run (no sample photos were reviewed)."]
+        lines += ["", "Rubric: " + _rubric_note(review)]
+    if review.get("doc_checks"):
+        lines += ["", "Document check:"]
+        for x in review["doc_checks"]:
+            lines.append(f"- {x.get('label')}: {DOC_OVERALL.get(x.get('overall'), DOC_OVERALL['not_checked'])[0]}")
+            for pt in x.get("points") or []:
+                lines.append(f"    {POINT_WORD.get(pt.get('status'), POINT_WORD['unverified'])[0]}: {pt.get('point')}: {pt.get('detail')}")
     lines += ["", "Evidence:"]
     for b in list(review.get("flags") or []) + list(review.get("evidence") or []):
         lines.append(f"- [{SOURCE_LABEL.get(b.get('source'), 'Self-reported')}] {b.get('text')}")

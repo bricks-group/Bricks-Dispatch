@@ -76,7 +76,11 @@ VENDOR_TYPES = ("photographer", "stager", "cleaner", "inspector", "measurer", "h
 # migration 20260913193000). inspector / measurer / handyman wait on the
 # widening migration Kam must approve; until then their trade lives in
 # application_profile.trade and the column keeps its 'photographer' default.
-DB_VENDOR_TYPES = ("photographer", "stager", "cleaner")
+# vendor_members_vendor_type_check allows all six trades (checked 2026-11-01).
+DB_VENDOR_TYPES = ("photographer", "stager", "cleaner", "inspector", "measurer", "handyman")
+# What older rows could hold: inspector / measurer / handyman were stored as
+# 'photographer' with the real trade on application_profile.trade or the label.
+LEGACY_COLUMN_TYPES = ("photographer", "stager", "cleaner")
 # Trades that need a $2M CGL certificate of insurance (Kam, 2026-10-26).
 CGL_REQUIRED_TYPES = ("inspector", "handyman")
 CGL_MIN_CENTS = 2_000_000 * 100
@@ -221,6 +225,11 @@ def is_platform_owner(member: Any) -> bool:
     return str(m.get("id") or "") == KAM_MEMBER_ID
 
 
+def onboarding_complete(member: Any) -> bool:
+    """Checklist done (or grandfathered): vendor_members.onboarding_completed_at set."""
+    return bool(_as_dict(member).get("onboarding_completed_at"))
+
+
 def is_aman_pending(member: Any) -> bool:
     """Aman Sammy (and any unapproved applicant) must never be assigned."""
     m = _as_dict(member)
@@ -287,11 +296,11 @@ def member_vendor_type(member: Any) -> str:
     # on application_profile.trade or the role/title label and win over the
     # column's 'photographer' default.
     trade = member_trade(m)
-    if trade and trade not in DB_VENDOR_TYPES:
+    if trade and trade not in LEGACY_COLUMN_TYPES:
         return trade
     labels = [_label_vendor_type(str(m.get(k) or "")) for k in ("role", "title")]
     for label in labels:
-        if label and label not in DB_VENDOR_TYPES:
+        if label and label not in LEGACY_COLUMN_TYPES:
             return label
     explicit = m.get("vendor_type")
     if explicit:
@@ -692,9 +701,22 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     m = _as_dict(member)
     if not m.get("is_active"):
         return False
+    # Terminated for a no-show / cancel after accepting (Kam, 2026-11-02): never auto-assigned.
+    if m.get("terminated_at") or str(m.get("onboarding_status") or "") == "terminated":
+        return False
     if is_aman_pending(m):
         return False
+    # Approved vendors finish the onboarding checklist first (Kam, 2026-10-31).
+    if not onboarding_complete(m):
+        return False
+    # Paused vendor (expired credential, probation) or paused trade (Kam, 2026-11-01).
+    from ..shared.vendor_identity import is_vendor_paused
+    if is_vendor_paused(m):
+        return False
     needed_type = job_required_vendor_type(job)
+    from .trade_specs import trade_enabled
+    if needed_type is not None and not trade_enabled(needed_type):
+        return False
     # Unknown job type: fail closed so ops routes it by hand.
     if needed_type is None:
         return False

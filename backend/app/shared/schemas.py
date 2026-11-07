@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 SESSION_TTL_DAYS = 7
@@ -170,6 +170,8 @@ class JobIntakeRequest(BaseModel):
 class JobStatusUpdate(BaseModel):
     status: str
     completed_at: Optional[str] = None  # vendor device timestamp for on-time accuracy
+    cancel_reason: Optional[str] = None  # vendor hand-back reason (vendor_termination.CANCEL_REASONS)
+    cancel_note: Optional[str] = None
 
 
 class ChecklistProgress(BaseModel):
@@ -330,6 +332,29 @@ class PortfolioSample(BaseModel):
 
 
 class VendorMember(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _null_columns_use_defaults(cls, data: Any) -> Any:
+        # DB rows carry NULL for columns a signup path never wrote (title, phone,
+        # home_city, internal_notes...). A NULL in a non-Optional field used to
+        # fail validation, and auto-assign silently skipped that vendor
+        # ("Skipping vendor_members row"). Drop NULLs for fields that have a
+        # default so the default applies; Optional fields keep None.
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for key, value in data.items():
+            if value is not None:
+                continue
+            field = cls.model_fields.get(key)
+            if field is None or field.is_required():
+                continue
+            ann = field.annotation
+            if ann is not None and type(None) in getattr(ann, "__args__", ()):
+                continue
+            out.pop(key, None)
+        return out
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     vendor_id: str = "default_vendor"
     name: str
@@ -409,6 +434,13 @@ class VendorMember(BaseModel):
     source_detail: Optional[str] = None
     # Structured application (migration 0017). Null for older applicants.
     application_profile: Optional[Dict[str, Any]] = None
+    # Onboarding gate (migration 20261031_vendor_onboarding_gate). Approval puts a
+    # vendor into onboarding; auto-assign needs onboarding_completed_at.
+    onboarding_completed_at: Optional[str] = None
+    first_signed_in_at: Optional[str] = None
+    guide_acknowledged_at: Optional[str] = None
+    availability_confirmed_at: Optional[str] = None
+    rejected_at: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -453,6 +485,12 @@ class VendorApplicationCreate(BaseModel):
     sample_upload_session: Optional[str] = None
     sample_paths: List[str] = []
     rpas_cert_path: Optional[str] = None
+    # Photographers (2026-10-31): samples must be real estate (interiors and
+    # exteriors of homes) and a resume is required. The resume goes up through
+    # /sample-uploads (kind=resume) in the same session.
+    samples_are_real_estate: bool = False
+    resume_path: Optional[str] = None
+    resume_name: Optional[str] = None
     # {camera_body, lenses, drone_model, lighting, tripod}
     equipment: Optional[Dict[str, Any]] = None
     # {days_of_week, time_windows, weekends, earliest_start_date,
@@ -463,13 +501,18 @@ class VendorApplicationCreate(BaseModel):
     # Repairs and inspections must confirm $2M CGL; the COI file goes to
     # POST /api/onboarding/documents (doc_type=coi) after /apply.
     trade_credentials: Optional[Dict[str, Any]] = None
+    # Trade vetting (2026-11-01): reviews link or references, commercial drone flag.
+    vetting: Optional[Dict[str, Any]] = None
+    # www trade form uploads documents after /apply, then calls /apply/{id}/submitted,
+    # which runs the review and notifies Kam. False keeps the old notify-on-apply.
+    docs_pending: bool = False
 
 
 class SampleUploadFile(BaseModel):
     name: str = ""
     type: str
     size: int
-    kind: str = "sample"  # sample | rpas_cert
+    kind: str = "sample"  # sample | rpas_cert | resume
 
 
 class SampleUploadRequest(BaseModel):

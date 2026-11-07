@@ -32,4 +32,9 @@ assert.equal(requiresBracketSet('floorplan'), false);
 assert.equal(requiresBracketSet('hdr'), true);
 assert.equal(requiresBracketSet('twilight'), true);
 
+// Reels: no client-side 50 MB pre-block; the API mints the video cap (≤2 GB).
+assert.match(stillsSrc, /!isVideoUpload\(file, mediaType\) && file\.size > UPLOAD_MAX_FILE_BYTES/);
+assert.match(stillsSrc, /mediaType === 'reel'/);
+assert.match(stillsSrc, /fileTooLargeMessage\(file\.name, sign\.max_file_bytes/);
+
 console.log('stills-upload staging/floorplan picker tests passed');

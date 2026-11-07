@@ -6,8 +6,8 @@ from app.services.vendor_selection import pick_vendor_rule_based, assign_vendor_
 def test_pick_vendor_rule_based_specialty_match():
     job = Job(address="123 Main St", job_type="video", time_window_start="09:00")
     vendors = [
-        VendorMember(id="v1", name="Photo Pro", email="v1@test.com", specialty="photo", is_active=True, status="available", onboarding_status="approved"),
-        VendorMember(id="v2", name="Video Pro", email="v2@test.com", specialty="video", is_active=True, status="available", onboarding_status="approved"),
+        VendorMember(id="v1", name="Photo Pro", email="v1@test.com", specialty="photo", is_active=True, status="available", onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00"),
+        VendorMember(id="v2", name="Video Pro", email="v2@test.com", specialty="video", is_active=True, status="available", onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00"),
     ]
     
     chosen_id = pick_vendor_rule_based(job, vendors)
@@ -16,8 +16,8 @@ def test_pick_vendor_rule_based_specialty_match():
 def test_pick_vendor_rule_based_load_balancing():
     job = Job(address="123 Main St", job_type="photo", time_window_start="09:00")
     vendors = [
-        VendorMember(id="v1", name="Busy Photo", email="v1@test.com", specialty="photo", is_active=True, status="available", active_assignments=5, onboarding_status="approved"),
-        VendorMember(id="v2", name="Free Photo", email="v2@test.com", specialty="photo", is_active=True, status="available", active_assignments=0, onboarding_status="approved"),
+        VendorMember(id="v1", name="Busy Photo", email="v1@test.com", specialty="photo", is_active=True, status="available", active_assignments=5, onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00"),
+        VendorMember(id="v2", name="Free Photo", email="v2@test.com", specialty="photo", is_active=True, status="available", active_assignments=0, onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00"),
     ]
     
     chosen_id = pick_vendor_rule_based(job, vendors)
@@ -26,8 +26,8 @@ def test_pick_vendor_rule_based_load_balancing():
 def test_pick_vendor_rule_based_quality_rating():
     job = Job(address="123 Main St", job_type="photo", time_window_start="09:00")
     vendors = [
-        VendorMember(id="v1", name="Good Photo", email="v1@test.com", specialty="photo", is_active=True, status="available", quality_rating=4.5, onboarding_status="approved"),
-        VendorMember(id="v2", name="Great Photo", email="v2@test.com", specialty="photo", is_active=True, status="available", quality_rating=4.9, onboarding_status="approved"),
+        VendorMember(id="v1", name="Good Photo", email="v1@test.com", specialty="photo", is_active=True, status="available", quality_rating=4.5, onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00"),
+        VendorMember(id="v2", name="Great Photo", email="v2@test.com", specialty="photo", is_active=True, status="available", quality_rating=4.9, onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00"),
     ]
     
     chosen_id = pick_vendor_rule_based(job, vendors)
@@ -114,7 +114,7 @@ async def test_assign_vendor_for_job_fallback(monkeypatch):
             "status": "available",
             "vendor_id": "default_vendor",
             "specialty": "photo",
-            "onboarding_status": "approved",
+            "onboarding_status": "approved", "onboarding_completed_at": "2026-10-01T00:00:00+00:00",
             "skills": ["photo"],
             "service_areas": ["Mississauga", "GTA"],
             "tier": 1,
@@ -153,7 +153,7 @@ async def test_assign_vendor_for_job_ai_success(monkeypatch):
             "status": "available",
             "vendor_id": "default_vendor",
             "specialty": "photo",
-            "onboarding_status": "approved",
+            "onboarding_status": "approved", "onboarding_completed_at": "2026-10-01T00:00:00+00:00",
             "skills": ["photo"],
             "service_areas": ["Mississauga", "GTA"],
             "tier": 1,
@@ -177,7 +177,7 @@ from app.shared.schemas import Job as _Job
 
 
 def _approved(**kwargs):
-    base = dict(is_active=True, status="available", onboarding_status="approved", specialty="photo", tier=1)
+    base = dict(is_active=True, status="available", onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", specialty="photo", tier=1)
     base.update(kwargs)
     return VendorMember(**base)
 
@@ -715,7 +715,7 @@ async def test_assign_skips_calendar_busy_vendor(monkeypatch):
             "status": "available",
             "vendor_id": "default_vendor",
             "specialty": "photo",
-            "onboarding_status": "approved",
+            "onboarding_status": "approved", "onboarding_completed_at": "2026-10-01T00:00:00+00:00",
             "skills": ["photo"],
             "service_areas": ["Mississauga", "GTA"],
             "tier": 2,
@@ -730,7 +730,7 @@ async def test_assign_skips_calendar_busy_vendor(monkeypatch):
             "status": "available",
             "vendor_id": "default_vendor",
             "specialty": "photo",
-            "onboarding_status": "approved",
+            "onboarding_status": "approved", "onboarding_completed_at": "2026-10-01T00:00:00+00:00",
             "skills": ["photo"],
             "service_areas": ["Mississauga", "GTA"],
             "tier": 1,
@@ -860,7 +860,7 @@ def test_pick_vendor_respects_manual_unavailable():
             specialty="photo",
             is_active=True,
             status="available",
-            onboarding_status="approved",
+            onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00",
             service_areas=["Mississauga"],
             home_city="Mississauga",
         ),
@@ -871,7 +871,7 @@ def test_pick_vendor_respects_manual_unavailable():
             specialty="photo",
             is_active=True,
             status="available",
-            onboarding_status="approved",
+            onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00",
             service_areas=["Mississauga"],
             home_city="Mississauga",
         ),
@@ -918,7 +918,7 @@ async def test_assign_failure_marks_dispatch_failed_and_notifies_owner(monkeypat
             "status": "available",
             "vendor_id": "default_vendor",
             "specialty": "photo",
-            "onboarding_status": "approved",
+            "onboarding_status": "approved", "onboarding_completed_at": "2026-10-01T00:00:00+00:00",
             "skills": ["photo"],
             "service_areas": ["Mississauga", "GTA"],
             "home_city": "Mississauga",

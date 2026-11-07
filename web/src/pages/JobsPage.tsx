@@ -67,6 +67,17 @@ function isPickerMember(m: TeamMember) {
   return true;
 }
 
+// Mirrors backend vendor_termination.CANCEL_REASONS (all but "other" are reviewed by Bricks).
+const CANCEL_REASONS: [string, string][] = [
+  ['medical', 'Medical emergency'],
+  ['bereavement', 'Bereavement'],
+  ['accident', 'Accident or breakdown on the way'],
+  ['weather', 'Severe weather or unsafe drone conditions'],
+  ['client_site', 'Unsafe site or no access caused by the client'],
+  ['app_outage', 'Bricks app or GPS outage'],
+  ['other', 'Something else'],
+];
+
 export function JobsPage() {
   const [params] = useSearchParams();
   const deepLinkId = params.get('id') || '';
@@ -254,6 +265,9 @@ function JobListingPanel({
   const [notices, setNotices] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ index: number; total: number; pct: number } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [handback, setHandback] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelNote, setCancelNote] = useState('');
   const [stillsType, setStillsType] = useState<StillsType>('hdr');
   const [allowIncompleteBrackets, setAllowIncompleteBrackets] = useState(false);
   const [pick, setPick] = useState(job.assignee_id || '');
@@ -502,6 +516,35 @@ function JobListingPanel({
             {job.payout_model === 'owner_full' ? <span className="muted"> · $0 deduction</span> : <span className="muted"> · rate card</span>}
           </p>
         </div>
+        {handback && job.status === 'assigned' ? (
+          <div className="stack" style={{ gap: 8 }}>
+            <p className="label">Hand back this job</p>
+            <p className="muted" style={{ margin: 0 }}>
+              Free until 48 hours before the start. Inside 48 hours, cancelling closes your account unless
+              it's one of the reasons below, which go to Bricks for review. You can't send someone else.
+            </p>
+            <select value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} aria-label="Reason">
+              <option value="">Pick a reason</option>
+              {CANCEL_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <textarea rows={3} placeholder="Anything Bricks should know (optional)" value={cancelNote}
+              onChange={(e) => setCancelNote(e.target.value)} maxLength={1000} />
+            <Button
+              disabled={busy || !cancelReason}
+              onClick={async () => {
+                setBusy(true); setErr('');
+                try {
+                  await api.put(`/api/vendor-os/jobs/${job.id}/status`, {
+                    status: 'declined', cancel_reason: cancelReason, cancel_note: cancelNote || undefined,
+                  });
+                  setHandback(false);
+                  onPatched({ ...job, status: 'declined' });
+                } catch (e) { setErr((e as Error).message); }
+                finally { setBusy(false); }
+              }}
+            >Hand back job</Button>
+          </div>
+        ) : null}
         {/* One primary per state (Accept / Check in / Mark complete); capture links are secondary. */}
         <div className="actions">
           {['assigned', 'in_progress'].includes(job.status) ? captureLinks(job) : null}
@@ -533,7 +576,10 @@ function JobListingPanel({
             </>
           ) : null}
           {job.status === 'assigned' ? (
-            <Button variant="primary" disabled={busy} onClick={checkIn}>Check in</Button>
+            <>
+              <Button variant="primary" disabled={busy} onClick={checkIn}>Check in</Button>
+              <Button disabled={busy} onClick={() => setHandback((v) => !v)}>Can't make it</Button>
+            </>
           ) : null}
           {job.status === 'in_progress' ? (
             <Button

@@ -1,0 +1,274 @@
+{
+  "version": "2026-11-01.1",
+  "probation_jobs": 3,
+  "bad_rating_max": 2,
+  "trades": {
+    "photographer": {
+      "slug": "photographers",
+      "label": "Photographer",
+      "long_label": "Photographer / videographer / drone",
+      "ic_title": "Photographer IC",
+      "role": "Photographer",
+      "enabled": true,
+      "occupied_homes": false,
+      "apply_path": "/photographers",
+      "credentials": [
+        {
+          "kind": "rpas_certificate",
+          "label": "Transport Canada RPAS certificate",
+          "required_when": "drone",
+          "expires": false
+        },
+        {
+          "kind": "drone_liability",
+          "label": "Drone liability insurance ($2M)",
+          "required_when": "commercial_drone",
+          "min_limit_cents": 200000000,
+          "expires": true
+        }
+      ],
+      "proof": [
+        {
+          "kind": "portfolio",
+          "label": "Real estate photo samples",
+          "min_count": 10,
+          "required": true
+        }
+      ],
+      "identity": {
+        "gov_id": true,
+        "business_or_hst": true,
+        "reviews_or_refs": false,
+        "police_check": false
+      },
+      "rubric": {
+        "samples": 45,
+        "experience": 20,
+        "gear": 15,
+        "credentials": 10,
+        "completeness": 10
+      }
+    },
+    "stager": {
+      "slug": "staging",
+      "label": "Stager",
+      "long_label": "Stager",
+      "ic_title": "Stager IC",
+      "role": "Stager",
+      "enabled": true,
+      "occupied_homes": true,
+      "apply_path": "/work-with-bricks/staging",
+      "credentials": [
+        {
+          "kind": "inventory_insurance",
+          "label": "Insurance on your own furniture and inventory",
+          "required_when": "always",
+          "expires": true
+        }
+      ],
+      "proof": [
+        {
+          "kind": "proof_photo",
+          "label": "Photos of homes you staged",
+          "min_count": 5,
+          "required": true
+        }
+      ],
+      "identity": {
+        "gov_id": true,
+        "business_or_hst": true,
+        "reviews_or_refs": true,
+        "police_check": false
+      },
+      "rubric": {
+        "proof": 35,
+        "credentials": 25,
+        "identity": 15,
+        "experience": 15,
+        "completeness": 10
+      }
+    },
+    "cleaner": {
+      "slug": "cleaning",
+      "label": "Cleaner",
+      "long_label": "Cleaner / turnover",
+      "ic_title": "Cleaner IC",
+      "role": "Cleaner",
+      "enabled": true,
+      "occupied_homes": true,
+      "apply_path": "/work-with-bricks/cleaning",
+      "credentials": [],
+      "proof": [
+        {
+          "kind": "proof_photo",
+          "label": "Photos of homes you cleaned",
+          "min_count": 3,
+          "required": true
+        }
+      ],
+      "identity": {
+        "gov_id": true,
+        "business_or_hst": true,
+        "reviews_or_refs": true,
+        "police_check": true
+      },
+      "rubric": {
+        "proof": 30,
+        "identity": 30,
+        "experience": 20,
+        "credentials": 10,
+        "completeness": 10
+      }
+    },
+    "inspector": {
+      "slug": "inspections",
+      "label": "Home inspector",
+      "long_label": "Home inspector",
+      "ic_title": "Inspector IC",
+      "role": "Inspector",
+      "enabled": true,
+      "occupied_homes": true,
+      "apply_path": "/work-with-bricks/inspections",
+      "credentials": [
+        {
+          "kind": "rhi_or_training",
+          "label": "OAHI RHI certificate or proof of home inspection training",
+          "required_when": "always",
+          "expires": true
+        },
+        {
+          "kind": "eo",
+          "label": "Errors and omissions insurance ($1M)",
+          "required_when": "always",
+          "min_limit_cents": 100000000,
+          "expires": true
+        },
+        {
+          "kind": "coi",
+          "label": "Commercial general liability ($2M)",
+          "required_when": "always",
+          "min_limit_cents": 200000000,
+          "expires": true
+        }
+      ],
+      "proof": [
+        {
+          "kind": "sample_report",
+          "label": "A sample inspection report (remove client details)",
+          "min_count": 1,
+          "required": true
+        }
+      ],
+      "identity": {
+        "gov_id": true,
+        "business_or_hst": true,
+        "reviews_or_refs": true,
+        "police_check": false
+      },
+      "rubric": {
+        "credentials": 35,
+        "proof": 30,
+        "identity": 15,
+        "experience": 10,
+        "completeness": 10
+      }
+    },
+    "measurer": {
+      "slug": "measurement",
+      "label": "Measurer",
+      "long_label": "Measurer",
+      "ic_title": "Measurer IC",
+      "role": "Measurer",
+      "enabled": true,
+      "occupied_homes": true,
+      "apply_path": "/work-with-bricks/measurement",
+      "credentials": [
+        {
+          "kind": "eo",
+          "label": "Errors and omissions insurance ($1M)",
+          "required_when": "always",
+          "min_limit_cents": 100000000,
+          "expires": true
+        }
+      ],
+      "proof": [
+        {
+          "kind": "floor_plan",
+          "label": "A sample floor plan you drew",
+          "min_count": 1,
+          "required": true
+        }
+      ],
+      "identity": {
+        "gov_id": true,
+        "business_or_hst": true,
+        "reviews_or_refs": true,
+        "police_check": false
+      },
+      "rubric": {
+        "proof": 35,
+        "credentials": 25,
+        "identity": 15,
+        "experience": 15,
+        "completeness": 10
+      }
+    },
+    "handyman": {
+      "slug": "repairs",
+      "label": "Handyman",
+      "long_label": "Handyman / repairs",
+      "ic_title": "Repairs IC",
+      "role": "Repairs",
+      "enabled": false,
+      "occupied_homes": true,
+      "apply_path": "/work-with-bricks/repairs",
+      "scope_note": "Electrical, gas and plumbing work beyond simple fixture swaps is excluded.",
+      "credentials": [
+        {
+          "kind": "coi",
+          "label": "Commercial general liability ($2M)",
+          "required_when": "always",
+          "min_limit_cents": 200000000,
+          "expires": true
+        }
+      ],
+      "proof": [
+        {
+          "kind": "before_after",
+          "label": "Before and after photos from 5 or more past jobs",
+          "min_count": 10,
+          "required": true
+        }
+      ],
+      "identity": {
+        "gov_id": true,
+        "business_or_hst": true,
+        "reviews_or_refs": true,
+        "police_check": true
+      },
+      "rubric": {
+        "proof": 30,
+        "credentials": 30,
+        "identity": 20,
+        "experience": 10,
+        "completeness": 10
+      }
+    }
+  },
+  "doc_labels": {
+    "id_verification": "Government photo ID",
+    "police_check": "Police check",
+    "coi": "Certificate of insurance",
+    "eo": "E&O insurance certificate",
+    "drone_liability": "Drone liability certificate",
+    "inventory_insurance": "Inventory insurance certificate",
+    "rhi_or_training": "RHI or training certificate",
+    "rpas_certificate": "RPAS certificate",
+    "sample_report": "Sample report",
+    "floor_plan": "Sample floor plan",
+    "proof_photo": "Job photos",
+    "before_after": "Before and after photos",
+    "wsib": "WSIB clearance"
+  },
+  "occupied_home_rule": "Trades with occupied_homes=true need a reviews link (Google or HomeStars) or two references."
+}

@@ -121,6 +121,7 @@ async def run_qc_on_upload(
     package: str = "",
     is_exterior: bool = False,
     is_twilight: bool = False,
+    is_qc_variant: bool = False,
 ) -> dict:
     """
     Runs QC on a single upload: OpenCV coded pre-pass first, vision QC only when needed.
@@ -152,7 +153,12 @@ async def run_qc_on_upload(
     cv_status = None
     try:
         from .qc_opencv import analyze_image_cv
-        cv_result = analyze_image_cv(image_bytes, is_exterior=is_exterior, is_twilight=is_twilight)
+        cv_result = analyze_image_cv(
+            image_bytes,
+            is_exterior=is_exterior,
+            is_twilight=is_twilight,
+            check_filesize=not is_qc_variant,
+        )
         cv_source = cv_result.get("source", "opencv")
         cv_status = cv_result.get("status", "passed")
     except ImportError:
@@ -534,7 +540,14 @@ async def run_qc_for_job(job_id: str) -> dict:
         is_twilight = infer_media_type(filename=filename, file_url=u.get("file_url")) == "twilight"
 
         qc = await run_qc_on_upload(
-            u["id"], signed_url, package=package_name, is_exterior=is_exterior, is_twilight=is_twilight
+            u["id"],
+            signed_url,
+            package=package_name,
+            is_exterior=is_exterior,
+            is_twilight=is_twilight,
+            # Downscaled review copy: low_filesize would flag every edited
+            # still (and force a paid vision call when one is configured).
+            is_qc_variant=bool(u.get("qc_variant_url")) and path == u.get("qc_variant_url"),
         )
         # Soft-fail metadata (mls_quarantine / qc_people_*) is returned to callers
         # and summarized in qc_notes — only known uploads columns are persisted.

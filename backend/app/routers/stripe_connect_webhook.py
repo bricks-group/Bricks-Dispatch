@@ -62,7 +62,7 @@ async def stripe_connect_webhook(
 
     db = await get_db()
     try:
-        res = await db.table("contractors").select("id").eq(
+        res = await db.table("contractors").select("id, member_id").eq(
             "stripe_account_id", account_id
         ).maybe_single().execute()
         data = getattr(res, "data", None) if res is not None else None
@@ -89,6 +89,13 @@ async def stripe_connect_webhook(
                 )
         else:
             raise
+    if row.get("member_id") and status == "connected":
+        # Payouts was the last onboarding step for some vendors.
+        try:
+            from ..services.vendor_onboarding import refresh_onboarding
+            await refresh_onboarding(str(row["member_id"]))
+        except Exception as e:
+            logger.warning("onboarding refresh after connect webhook failed: %s", type(e).__name__)
     return {
         "received": True,
         "ok": True,

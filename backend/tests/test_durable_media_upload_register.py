@@ -316,7 +316,7 @@ def test_sign_accepts_camera_raw_with_tus(monkeypatch):
         up, "_actor_job", AsyncMock(return_value=(MagicMock(), "photog-1", "default_vendor", {}))
     )
 
-    async def fake_target(key, content_type, size):
+    async def fake_target(key, content_type, size, **_kw):
         return {
             "provider": "supabase", "method": "PUT", "signed_url": "https://x.supabase.co/sign?token=t",
             "token": "t", "tus": {"endpoint": "https://x.storage.supabase.co/storage/v1/upload/resumable/sign"},
@@ -364,7 +364,7 @@ def test_sign_refuses_big_file_on_blob_proxy(monkeypatch):
         up, "_actor_job", AsyncMock(return_value=(MagicMock(), "photog-1", "default_vendor", {}))
     )
 
-    async def proxy_target(key, content_type, size):
+    async def proxy_target(key, content_type, size, **_kw):
         return {"provider": "blob_proxy", "method": "PUT", "signed_url": "https://dispatch-api.brxs.ca/api/capture/blob-put?x",
                 "token": None, "tus": None, "storage_path": key, "via_proxy": True}
 

@@ -123,6 +123,9 @@ async def update_applicant_status(
         
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
+    if update_data.get("onboarding_status") == "rejected":
+        # 90-day reapply cooldown runs from here (routers/onboarding.py).
+        update_data["rejected_at"] = update_data["updated_at"]
     if update_data.get("onboarding_status") == "approved":
         update_data["is_active"] = True
         # Preserve Owner; otherwise set role from vendor_type (Wave A).
@@ -152,30 +155,13 @@ async def update_applicant_status(
         api_error(404, "Applicant not found", "applicant_not_found")
 
     approved_row = res.data[0]
+    # Approval starts onboarding (welcome email + checklist in the Bricks app);
+    # auto-assign waits for onboarding_completed_at (services/vendor_onboarding).
+    from ..services import vendor_onboarding as _vo
     if update_data.get("onboarding_status") == "approved":
-        try:
-            email = (approved_row.get("email") or "").strip()
-            if email:
-                from ..services.notifications import create_notification
-                await create_notification(
-                    title="Welcome to Bricks GO",
-                    body=(
-                        "You’re approved. Connect a calendar on Availability so auto-assign "
-                        "only offers jobs that fit your real schedule."
-                    ),
-                    ntype="onboarding_approved",
-                    data={"member_id": member_id},
-                    email_to=email,
-                    email_subject="You’re approved — connect your calendar",
-                    email_html=(
-                        "<p>You’re approved on Bricks GO.</p>"
-                        "<p>Connect a calendar on <b>Availability</b> so auto-assign only "
-                        "offers jobs that fit your real schedule. Busy on any connected "
-                        "calendar = you won’t get that slot.</p>"
-                    ),
-                )
-        except Exception:
-            pass
+        await _vo.send_onboarding_welcome(approved_row)
+    elif update_data.get("onboarding_status") == "rejected":
+        await _vo.send_reject_email(approved_row, datetime.fromisoformat(update_data["updated_at"]))
     return approved_row
 
 async def _require_applicant_in_own_vendor(db, member_id: str, vendor_id: str):
@@ -1023,3 +1009,156 @@ async def seed_owner_profile(
     await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
     from ..services.vendor_profile import ensure_owner_profile
     return await ensure_owner_profile(await get_db())
+
+
+# ── Probation reviews (first N jobs per vendor; Kam, 2026-11-01) ─────────────
+from pydantic import BaseModel as _BaseModel, Field as _Field
+
+
+class ProbationReviewIn(_BaseModel):
+    status: str = _Field(..., description="approved | failed")
+    client_rating: Optional[int] = _Field(default=None, ge=1, le=5)
+    qc_result: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.get("/probation-reviews")
+async def list_probation_reviews(
+    member_id: Optional[str] = None,
+    status: Optional[str] = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
+    from ..services.vendor_vetting import probation_reviews
+    return {"reviews": await probation_reviews(await get_db(), member_id=member_id, status=status)}
+
+
+@router.post("/vendors/{member_id}/probation/{job_id}")
+async def review_probation(
+    member_id: str,
+    job_id: str,
+    body: ProbationReviewIn,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """Approve or fail one probation job. A fail, or a client rating at or under
+    bad_rating_max, pauses the vendor (never assigned until resumed). No email."""
+    actor_id, _ = await require_vendor_admin(authorization, x_user_id, x_internal_api_key)
+    from ..services.vendor_vetting import review_probation_job
+    try:
+        out = await review_probation_job(await get_db(), member_id, job_id, body.status, body.client_rating,
+                                         body.qc_result, body.notes, reviewed_by=actor_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if out is None:
+        raise HTTPException(status_code=404, detail="No probation review for this vendor and job")
+    return out
+
+
+async def _require_admin(authorization, x_user_id) -> str:
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    actor_member = await get_vendor_member(actor_id)
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
+    return actor_id
+
+
+async def _load_one(db, table: str, column: str, value: str, cols: str = "*") -> dict | None:
+    from ..shared.pg_fallback import _is_rest_quota_error
+    try:
+        res = await db.table(table).select(cols).eq(column, value).limit(1).execute()
+        rows = getattr(res, "data", None) or []
+        return rows[0] if rows else None
+    except Exception as e:
+        if not _is_rest_quota_error(e):
+            raise
+        if table == "jobs":
+            from ..shared.pg_fallback import pg_select_job_by_id
+            return pg_select_job_by_id(value)
+        if table == "payouts":
+            from ..shared.pg_fallback import pg_select_payout_by_job_id
+            return pg_select_payout_by_job_id(value)
+        if table == "media_delivery":
+            from ..shared.pg_fallback import pg_select_media_delivery_by_job_id
+            return pg_select_media_delivery_by_job_id(value)
+        raise
+
+
+@router.post("/jobs/{job_id}/retry-payout")
+async def retry_delivered_job_payout(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Retry the vendor payout for a delivered job whose payout failed.
+
+    Owner/admin only. Never re-runs post-production. Safe to call twice:
+    a paid payout returns as-is, and a retry reuses the same payouts row, so
+    the Stripe idempotency key (payout_<id>) is unchanged and Stripe returns
+    the original transfer instead of paying twice.
+    """
+    actor_id = await _require_admin(authorization, x_user_id)
+    db = await get_db()
+    job = await _load_one(db, "jobs", "id", job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if str(job.get("status") or "") != "delivered":
+        api_error(409, f"Job is '{job.get('status')}'; only delivered jobs can retry payout", "job_not_delivered")
+    if not await _load_one(db, "media_delivery", "job_id", job_id, "id"):
+        api_error(409, "Job has no delivery record; nothing has reached the client yet", "no_delivery")
+    payout = await _load_one(db, "payouts", "job_id", job_id)
+    if (payout or {}).get("status") == "paid" or str(job.get("payout_status") or "") == "paid":
+        return {
+            "status": "already_paid",
+            "job_id": job_id,
+            "payout_id": (payout or {}).get("id"),
+            "stripe_transfer_id": (payout or {}).get("stripe_transfer_id") or job.get("payout_transfer_id"),
+        }
+    from ..services.payout_service import trigger_payout_for_job
+    result = await trigger_payout_for_job(db, job_id)
+    logger.info("Admin %s retried payout for job %s: %s", actor_id, job_id,
+                {k: result.get(k) for k in ("payout_id", "status", "error")})
+    return {"status": result.get("status") or ("failed" if result.get("error") else "unknown"),
+            "job_id": job_id, **{k: result.get(k) for k in
+            ("payout_id", "base_amount", "net_amount", "stripe_transfer_id", "error") if result.get(k) is not None}}
+
+
+@router.post("/qc-holds/{upload_id}/release")
+async def release_qc_hold(
+    upload_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Release a QC-held still (rejected/flagged) to the client after review.
+
+    The owner re-edits or re-shoots, then releases: qc_status -> passed with a
+    'released by owner' note, and the still folds into the existing delivery
+    (or the delivery finalizes if it was waiting on it).
+    """
+    actor_id = await _require_admin(authorization, x_user_id)
+    from ..services.qc_media_kinds import is_qc_held
+    db = await get_db()
+    upload = await _load_one(db, "uploads", "id", upload_id,
+                             "id, job_id, qc_status, qc_notes, processing_status")
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    if not is_qc_held(upload):
+        api_error(409, f"Upload QC status is '{upload.get('qc_status')}', not held", "not_qc_held")
+    now = datetime.now(timezone.utc).isoformat()
+    note = (str(upload.get("qc_notes") or "").strip() + f" | released by owner {actor_id} {now}").strip(" |")
+    await db.table("uploads").update({"qc_status": "passed", "qc_notes": note[:2000], "qc_at": now}).eq(
+        "id", upload_id
+    ).execute()
+    job_id = str(upload.get("job_id") or "")
+    from . import post_production as pp
+    existing = await _load_one(db, "media_delivery", "job_id", job_id, "id, delivery_urls")
+    if existing:
+        folded = await pp._fold_late_into_existing_delivery(job_id, existing)
+    else:
+        await pp._finalize_job_if_complete(job_id)
+        folded = True
+    logger.info("Admin %s released QC hold on upload %s (job %s)", actor_id, upload_id, job_id)
+    return {"status": "released", "upload_id": upload_id, "job_id": job_id, "folded": bool(folded)}

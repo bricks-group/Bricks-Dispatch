@@ -5,7 +5,7 @@ import secrets
 import traceback
 import uuid
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Form, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Form, Request, Body
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,60 @@ Bricks Group · Ontario, Canada
 """.strip()
 
 
+# IC amendment A1 (accepted jobs), final text from counsel 2026-11-02
+# (legal/final/ic-amendment-A1-v1.0.md). It amends the live v1.9 above; current
+# vendors re-accept it in the GO "I agree" gate. It binds a vendor from the time
+# they accept it, or from _IC_AMENDMENT_NOTICE_BINDS (14 days' notice, v1.9 s.18).
+_IC_AMENDMENT_VERSION = "IC-A1 v1.0"
+_IC_AMENDMENT_EFFECTIVE_DATE = "2026-11-02"
+_IC_AMENDMENT_NOTICE_BINDS = "2026-11-16T00:00:00-05:00"  # midnight ET
+_IC_AMENDMENT_TEXT = """
+BRICKS INDEPENDENT CONTRACTOR AGREEMENT - AMENDMENT A1: ACCEPTED JOBS  IC-A1 v1.0
+
+Version: IC-A1 v1.0
+Effective: 2 November 2026 for vendors who accept it in the Bricks app, and for new vendors when they accept the agreement. For other current vendors, 16 November 2026 (14 days' notice).
+Applies to: every vendor and every trade, and to all jobs accepted on or after it takes effect for you.
+
+This amendment forms part of your Bricks independent contractor agreement. If it conflicts with the agreement, this amendment wins. Everything else in the agreement stays the same, including your status as an independent contractor and your right to turn down any job.
+
+No-show or cancellation of an accepted job
+Turning down a job before you accept it is always fine. Once you accept a job, you've agreed to do it.
+- Handing a job back. You can hand back an accepted job in the app up to 48 hours before the job window starts. That's not a breach and has no consequence.
+- What ends your agreement. If you no-show, or cancel an accepted job less than 48 hours before the job window starts, this agreement ends automatically and right away.
+- Cancellation. Cancelling, un-accepting or handing back an accepted job in the app, or telling Bricks you won't do it, less than 48 hours before the job window starts.
+- No-show. You haven't checked in through the Bricks app within 30 minutes after the job window starts. Checking in at minute 31 or later is a no-show, even if you then do the job. Check-in uses your device's location.
+- Doesn't count. It isn't a no-show or cancellation if:
+  - (a) Bricks or the client cancelled or rescheduled the job, or Bricks reassigned or changed it;
+  - (b) you, or a member of your immediate family (your spouse or partner, children, parents and siblings), had a medical emergency, or there was a death in your immediate family;
+  - (c) you had a vehicle accident or breakdown on the way to the job;
+  - (d) severe weather made travel or the job unsafe, or, for drone work, conditions made flying unsafe or illegal;
+  - (e) the site was unsafe, or the client didn't give access;
+  - (f) the Bricks app or device location service was down and you couldn't check in.
+  Tell Bricks in the app or at help@brxs.ca as soon as you safely can, and give reasonable proof if Bricks asks.
+- No substitutes. You can't send another vendor in your place. Helpers can assist, but you must attend the job.
+- What happens. Your access to the Bricks app ends, your open jobs are reassigned, and you can't apply to Bricks again.
+- Pay. Work you completed and delivered is still paid on the normal cycle, including a job you finished after a late check-in and any client no-show pay you've earned. Nothing is paid for a job you cancelled or didn't do.
+- Errors and appeal. If you think it happened by mistake, or one of (a)–(f) applies, email help@brxs.ca within 7 days. Bricks may reverse the ending at its discretion if it was a genuine error or one of (a)–(f) applies. If Bricks reverses it, your agreement continues as if it hadn't ended.
+- This amendment adds to the agreement's termination section. It doesn't limit Bricks' other rights to suspend or end the agreement.
+
+Questions: help@brxs.ca · Bricks · Ontario, Canada
+""".strip()
+
+
+@router.get("/ic-amendment")
+async def get_ic_amendment():
+    """The IC amendment every vendor accepts on top of the agreement (JSON)."""
+    return {"version": _IC_AMENDMENT_VERSION, "effective_date": _IC_AMENDMENT_EFFECTIVE_DATE,
+            "binds_without_acceptance": _IC_AMENDMENT_NOTICE_BINDS, "text": _IC_AMENDMENT_TEXT}
+
+
+@router.get("/ic-amendment.txt")
+async def get_ic_amendment_text():
+    """Plain text for the GO legal sheet (first line carries the version)."""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(_IC_AMENDMENT_TEXT, headers={"Cache-Control": "no-cache"})
+
+
 @router.get("/ic-agreement")
 async def get_ic_agreement():
     """Return the current Bricks IC agreement text and version number."""
@@ -197,6 +251,10 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
     from ..services.vendor_profile import normalize_vendor_type as _nvt
     _vtype_early = _nvt(getattr(application, "vendor_type", None) or "photographer")
     is_photographer = _vtype_early == "photographer"
+    # Paused trade (trade_specs.json enabled=false): no new applications.
+    from ..services.trade_specs import trade_enabled as _trade_enabled
+    if not _trade_enabled(_vtype_early):
+        raise HTTPException(status_code=400, detail="This trade isn't taking applications right now.")
 
     structured = application.equipment if isinstance(application.equipment, dict) else None
     if structured is not None:
@@ -225,21 +283,38 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         if p_ and p_ not in paths:
             paths.append(p_)
     cert_path = (application.rpas_cert_path or "").strip() or None
-    if paths or cert_path:
+    resume_path = (application.resume_path or "").strip() or None
+    if resume_path and not ev.is_resume_path(resume_path):
+        resume_path = None
+    paths = [x for x in paths if not ev.is_resume_path(x)]
+    uploaded = paths + ([cert_path] if cert_path else []) + ([resume_path] if resume_path else [])
+    if uploaded:
         if not ev.verify_upload_session(session):
-            errs.append("Your photo upload expired. Please re-add your sample photos.")
-        elif any(not ev.path_in_session(x, session) for x in paths + ([cert_path] if cert_path else [])):
-            errs.append("Sample photos must be uploaded through this form.")
+            errs.append("Your upload expired. Please re-add your sample photos and resume.")
+        elif any(not ev.path_in_session(x, session) for x in uploaded):
+            errs.append("Sample photos and your resume must be uploaded through this form.")
     application.sample_paths = paths
     application.rpas_cert_path = cert_path
+    application.resume_path = resume_path
+    application.resume_name = " ".join(str(application.resume_name or "").split())[:120] or None
     if is_photographer:
         if len(paths) < ev.MIN_SAMPLES:
             errs.append(
                 f"Upload {ev.MIN_SAMPLES}-{ev.MAX_SAMPLES} sample real estate photos "
-                "(update the Bricks GO app, or apply at brxs.ca/photographers)."
+                "(update the Bricks app, or apply at brxs.ca/photographers)."
             )
         elif len(paths) > ev.MAX_SAMPLES:
             errs.append(f"Upload at most {ev.MAX_SAMPLES} sample photos.")
+        if not application.samples_are_real_estate:
+            errs.append(
+                "Your samples must be real estate photos (interiors and exteriors of homes). "
+                "Confirm they are, then submit again."
+            )
+        if not resume_path:
+            errs.append(
+                "Upload your resume (PDF, DOC or DOCX) "
+                "(update the Bricks app, or apply at brxs.ca/photographers)."
+            )
 
     # Drone: a claim needs the number, the level and a photo of the certificate.
     if is_photographer and application.drone_certified:
@@ -293,6 +368,11 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         application.trade_credentials = None
 
     try:
+        application.vetting = _clean_vetting(vtype, application)
+    except ValueError as exc:
+        errs.append(str(exc))
+
+    try:
         application.source, application.source_detail = normalize_applicant_source(
             getattr(application, "source", None), getattr(application, "source_detail", None)
         )
@@ -303,6 +383,59 @@ async def _validate_application(application: "VendorApplicationCreate") -> None:
         raise HTTPException(status_code=400, detail=" ".join(errs))
 
 
+
+
+_REVIEW_HOSTS = ("google.", "g.page", "goo.gl", "homestars.com", "maps.app.goo.gl")
+
+
+def _clean_vetting(vtype: str, application) -> Optional[dict]:
+    """Identity and reputation for the trade (trade_specs.json identity rules).
+
+    Occupied-home trades need a reviews link (Google or HomeStars) or two references.
+    Every trade needs a business name or an HST number. Documents (ID, police check,
+    insurance, proof of work) are uploaded to /documents after apply.
+    Raises ValueError with an applicant-facing message.
+    """
+    from ..services.trade_specs import identity_rules, occupied_homes
+
+    if application.vetting is None and not getattr(application, "docs_pending", False):
+        # Older forms (live www before the vetting form ships) send no vetting block.
+        # Enforce once the form sends it; the admin review still asks for what's missing.
+        return None
+    raw = application.vetting if isinstance(application.vetting, dict) else {}
+    out: dict = {}
+    link = str(raw.get("reviews_link") or "").strip()[:300]
+    if link:
+        if not link.startswith("https://"):
+            raise ValueError("Your reviews link must be a full URL starting with https://.")
+        out["reviews_link"] = link
+        out["reviews_link_known_host"] = any(h in link.lower() for h in _REVIEW_HOSTS)
+    refs = []
+    for r in (raw.get("references") or [])[:3]:
+        if not isinstance(r, dict):
+            continue
+        name = " ".join(str(r.get("name") or "").split())[:120]
+        contact = " ".join(str(r.get("contact") or "").split())[:160]
+        if name and contact:
+            refs.append({"name": name, "contact": contact,
+                         "relationship": " ".join(str(r.get("relationship") or "").split())[:120]})
+    if refs:
+        out["references"] = refs
+    if raw.get("commercial_drone"):
+        out["commercial_drone"] = True
+    if raw.get("police_check_consent"):
+        out["police_check_consent"] = True
+    rules = identity_rules(vtype)
+    if vtype != "photographer" and occupied_homes(vtype) and rules.get("reviews_or_refs"):
+        if not link and len(refs) < 2:
+            raise ValueError("Add a Google or HomeStars reviews link, or two references.")
+    if vtype != "photographer" and rules.get("business_or_hst"):
+        business = str((application.trade_credentials or {}).get("business_name") or "").strip()
+        if not business and not (application.hst_number or "").strip():
+            raise ValueError("Add your business name or HST number.")
+    from ..services.trade_specs import registry
+    out["rules_version"] = registry().get("version")
+    return out
 
 
 _CREDENTIAL_TEXT_KEYS = ("insurer", "policy_number", "wsib_number", "licences", "service_notes", "business_name")
@@ -404,6 +537,13 @@ async def _store_applicant_jev_probability(member_id: str, existing_notes: str, 
             )
 
 
+@router.get("/trades")
+async def trade_registry():
+    """Public trade registry (labels, enabled, required uploads). No vendor data."""
+    from ..services.trade_specs import registry
+    return registry()
+
+
 @router.post("/apply")
 async def apply_to_bricks(application: VendorApplicationCreate, background_tasks: BackgroundTasks):
     """
@@ -439,7 +579,12 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     # vendor_applicant_reviews, then one short text + one HTML email to Kam.
     # Runs after the response; it never approves or rejects.
     from ..services.applicant_review_runner import review_application
-    background_tasks.add_task(review_application, result["member_id"], notify=True, trigger="apply")
+    if getattr(application, "docs_pending", False):
+        # The trade form uploads ID, insurance and proof next, then calls
+        # /apply/{id}/submitted. The daily backlog cron catches any that never do.
+        pass
+    else:
+        background_tasks.add_task(review_application, result["member_id"], notify=True, trigger="apply")
 
     found = found_us_line(getattr(application, "source", None), getattr(application, "source_detail", None))
     # In-app record only. Kam's text and raphael@brxs.ca email are the notify above.
@@ -463,6 +608,36 @@ async def apply_to_bricks(application: VendorApplicationCreate, background_tasks
     return result
 
 
+REAPPLY_COOLDOWN_DAYS = 90
+
+
+def _reapply_target(existing: dict) -> dict:
+    """Rejected applicants may apply again 90 days after the rejection.
+    Returns the row to reuse; raises for pending / approved / too-soon."""
+    status = (existing.get("onboarding_status") or "").lower()
+    if status == "terminated":
+        from ..services.vendor_termination import TERMINATED_APPLY_MESSAGE
+        raise HTTPException(status_code=400, detail=TERMINATED_APPLY_MESSAGE)
+    if status != "rejected":
+        raise HTTPException(status_code=400, detail="An application with this email already exists.")
+    raw = existing.get("rejected_at") or existing.get("updated_at") or existing.get("created_at")
+    try:
+        when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+    except Exception:
+        when = datetime.now(timezone.utc)
+    from datetime import timedelta
+    opens = when + timedelta(days=REAPPLY_COOLDOWN_DAYS)
+    if datetime.now(timezone.utc) < opens:
+        label = f"{opens.strftime('%B')} {opens.day}, {opens.year}"
+        raise HTTPException(
+            status_code=400,
+            detail=f"You applied recently. You can apply again from {label}.",
+        )
+    return existing
+
+
 async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     from ..shared.pg_fallback import (
         _is_rest_quota_error,
@@ -472,6 +647,10 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     )
 
     email_l = application.email.lower().strip()
+    # Terminated vendors can't reapply with the same email or phone (Kam, 2026-11-02).
+    from ..services.vendor_termination import blocked_identity, TERMINATED_APPLY_MESSAGE
+    if await blocked_identity(await get_db(), email=email_l, phone=getattr(application, "phone", None)):
+        raise HTTPException(status_code=400, detail=TERMINATED_APPLY_MESSAGE)
     existing = None
     try:
         res_existing = await (await get_db()).table("vendor_members").select("*").eq(
@@ -483,8 +662,9 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
             existing = pg_select_vendor_member(email=email_l)
         else:
             raise
+    reapply_of = None
     if existing:
-        raise HTTPException(status_code=400, detail="An application with this email already exists.")
+        reapply_of = _reapply_target(existing)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     application_token = secrets.token_urlsafe(32)
@@ -519,13 +699,28 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
                 "cert_path": application.rpas_cert_path if vtype == "photographer" else None,
             },
             "samples": [{"path": p} for p in (application.sample_paths or [])],
+            "samples_are_real_estate": bool(application.samples_are_real_estate),
             "upload_session": application.sample_upload_session or None,
         }
+        if application.resume_path:
+            path = application.resume_path
+            ext = path.rsplit(".", 1)[-1].lower()
+            application_profile["resume"] = {
+                "path": path,
+                "name": application.resume_name or f"resume.{ext}",
+                "mime": next((k for k, v in ev.RESUME_MIME.items() if v == ext), None),
+            }
+        if reapply_of:
+            application_profile["reapplied_at"] = now_iso
         if vtype != "photographer":
             application_profile["trade"] = vtype
             application_profile["credentials"] = getattr(application, "trade_credentials", None) or {}
+        if getattr(application, "vetting", None):
+            application_profile["vetting"] = application.vetting
+            if application.vetting.get("commercial_drone"):
+                application_profile.setdefault("trade_credentials", {})["commercial_drone"] = True
     member = VendorMember(
-        id=str(uuid.uuid4()),
+        id=str(reapply_of["id"]) if reapply_of else str(uuid.uuid4()),
         application_token=application_token,
         name=application.name,
         email=email_l,
@@ -574,49 +769,79 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
 
     db = await get_db()
     inserted_via_pg = False
-    try:
-        await db.table("vendor_members").insert(member_dict).execute()
-    except Exception as e:
-        if _is_rest_quota_error(e):
-            # Canada Fair Use REST often 402 — same PG fallback as payouts/Connect.
-            pg_row = pg_insert_vendor_application(member_dict)
-            if not pg_row:
-                logger.error("apply_to_bricks Fair-Use PG insert failed for %s", email_l)
-                raise HTTPException(
-                    status_code=503,
-                    detail="Could not process application right now. Please try again shortly.",
-                )
-            inserted_via_pg = True
-        else:
-            # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
-            # application_profile is kept: migration 0017 is live on Canada.
-            member_dict.pop("portfolio_samples", None)
-            try:
-                await db.table("vendor_members").insert(member_dict).execute()
-            except Exception as e2:
-                if _is_rest_quota_error(e2):
-                    pg_row = pg_insert_vendor_application(member_dict)
-                    if not pg_row:
-                        raise HTTPException(
-                            status_code=503,
-                            detail="Could not process application right now. Please try again shortly.",
-                        )
-                    inserted_via_pg = True
-                else:
-                    member_dict.pop("vendor_type", None)
-                    try:
-                        await db.table("vendor_members").insert(member_dict).execute()
-                    except Exception as e3:
-                        if _is_rest_quota_error(e3):
-                            pg_row = pg_insert_vendor_application(member_dict)
-                            if not pg_row:
-                                raise HTTPException(
-                                    status_code=503,
-                                    detail="Could not process application right now. Please try again shortly.",
-                                )
-                            inserted_via_pg = True
-                        else:
-                            raise
+    if reapply_of:
+        # Same row, fresh application: back to pending, cooldown cleared, history kept.
+        member_dict.pop("created_at", None)
+        member_dict["rejected_at"] = None
+        prior = (reapply_of.get("internal_notes") or "").strip()
+        member_dict["internal_notes"] = f"{prior}\nReapplied on {now_iso} (90-day cooldown passed). {member.internal_notes}".strip()
+        member.internal_notes = member_dict["internal_notes"]
+        try:
+            await db.table("vendor_members").update(member_dict).eq("id", member.id).execute()
+        except Exception as e:
+            if not _is_rest_quota_error(e):
+                raise
+            # The PG fallback can't rewrite a whole application; ask them to retry.
+            raise HTTPException(status_code=503, detail="Could not process application right now. Please try again shortly.")
+    else:
+        try:
+            await db.table("vendor_members").insert(member_dict).execute()
+        except Exception as e:
+            if _is_rest_quota_error(e):
+                # Canada Fair Use REST often 402 — same PG fallback as payouts/Connect.
+                pg_row = pg_insert_vendor_application(member_dict)
+                if not pg_row:
+                    logger.error("apply_to_bricks Fair-Use PG insert failed for %s", email_l)
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Could not process application right now. Please try again shortly.",
+                    )
+                inserted_via_pg = True
+            else:
+                # Soft-drop newer columns on older DBs (portfolio_samples, vendor_type).
+                # application_profile is kept: migration 0017 is live on Canada.
+                member_dict.pop("portfolio_samples", None)
+                try:
+                    await db.table("vendor_members").insert(member_dict).execute()
+                except Exception as e2:
+                    if _is_rest_quota_error(e2):
+                        pg_row = pg_insert_vendor_application(member_dict)
+                        if not pg_row:
+                            raise HTTPException(
+                                status_code=503,
+                                detail="Could not process application right now. Please try again shortly.",
+                            )
+                        inserted_via_pg = True
+                    else:
+                        member_dict.pop("vendor_type", None)
+                        try:
+                            await db.table("vendor_members").insert(member_dict).execute()
+                        except Exception as e3:
+                            if _is_rest_quota_error(e3):
+                                pg_row = pg_insert_vendor_application(member_dict)
+                                if not pg_row:
+                                    raise HTTPException(
+                                        status_code=503,
+                                        detail="Could not process application right now. Please try again shortly.",
+                                    )
+                                inserted_via_pg = True
+                            else:
+                                raise
+
+    if application.resume_path:
+        # Also list the resume with the applicant's documents (private storage).
+        try:
+            doc = VendorDocument(
+                id=str(uuid.uuid4()),
+                vendor_id=member.vendor_id,
+                member_id=member.id,
+                doc_type="resume",
+                file_url=application.resume_path,
+                status="pending",
+            )
+            await (await get_db()).table("vendor_documents").insert(doc.dict()).execute()
+        except Exception as e:
+            logger.warning("apply_to_bricks: resume document row not stored member=%s (%s)", member.id, type(e).__name__)
 
     availability = AvailabilitySettings(
         member_id=member.id,
@@ -640,7 +865,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
             "has_licence": av["has_licence"],
         })
     try:
-        await (await get_db()).table("vendor_availability").insert(avail_dict).execute()
+        _avail = (await get_db()).table("vendor_availability")
+        await (_avail.upsert(avail_dict) if reapply_of else _avail.insert(avail_dict)).execute()
     except Exception as e:
         if _is_rest_quota_error(e) or inserted_via_pg:
             if not pg_upsert_vendor_availability(avail_dict):
@@ -683,9 +909,22 @@ async def mint_sample_uploads(body: SampleUploadRequest):
         raise HTTPException(status_code=400, detail="No files.")
     samples = [f for f in files if (f.kind or "sample") == "sample"]
     certs = [f for f in files if f.kind == "rpas_cert"]
-    if len(samples) > ev.MAX_SAMPLES or len(certs) > 1 or len(samples) + len(certs) != len(files):
-        raise HTTPException(status_code=400, detail=f"Up to {ev.MAX_SAMPLES} sample photos and one certificate photo.")
+    resumes = [f for f in files if f.kind == "resume"]
+    if (len(samples) > ev.MAX_SAMPLES or len(certs) > 1 or len(resumes) > 1
+            or len(samples) + len(certs) + len(resumes) != len(files)):
+        raise HTTPException(status_code=400, detail=f"Up to {ev.MAX_SAMPLES} sample photos, one certificate photo and one resume.")
+    for f in resumes:
+        mime = ev.resume_mime_for(f.name, f.type)
+        if not mime:
+            raise HTTPException(status_code=400, detail="Your resume must be a PDF, DOC or DOCX file.")
+        if f.size < ev.MIN_RESUME_BYTES:
+            raise HTTPException(status_code=400, detail="Your resume file is too small (under 1 KB). Upload the full PDF, DOC or DOCX.")
+        if f.size > ev.MAX_RESUME_BYTES:
+            raise HTTPException(status_code=400, detail=f"Your resume must be under {ev.MAX_RESUME_BYTES // (1024 * 1024)} MB.")
+        f.type = mime
     for f in files:
+        if f.kind == "resume":
+            continue
         mime = (f.type or "").lower()
         if mime not in ev.SAMPLE_MIME:
             raise HTTPException(status_code=400, detail=f"{f.name or 'A file'} isn't a JPEG, PNG, WebP or HEIC photo.")
@@ -699,16 +938,17 @@ async def mint_sample_uploads(body: SampleUploadRequest):
         session = ev.mint_upload_session()
     out = []
     for i, f in enumerate(files):
-        kind = "cert" if f.kind == "rpas_cert" else "sample"
+        kind = {"rpas_cert": "cert", "resume": "resume"}.get(f.kind or "sample", "sample")
         path = ev.sample_path(session, i, kind, f.type.lower())
         signed = await create_signed_upload_url(path)
         if not signed or not signed.get("signed_url"):
-            raise HTTPException(status_code=503, detail="Photo upload is unavailable right now. Please try again shortly.")
+            raise HTTPException(status_code=503, detail="Upload is unavailable right now. Please try again shortly.")
         out.append({"name": f.name, "kind": f.kind, "path": signed.get("path") or path,
                     "signed_url": signed["signed_url"], "token": signed.get("token")})
     return {"session": session, "uploads": out,
             "limits": {"min_samples": ev.MIN_SAMPLES, "max_samples": ev.MAX_SAMPLES,
-                       "max_sample_mb": ev.MAX_SAMPLE_BYTES // (1024 * 1024)}}
+                       "max_sample_mb": ev.MAX_SAMPLE_BYTES // (1024 * 1024),
+                       "max_resume_mb": ev.MAX_RESUME_BYTES // (1024 * 1024)}}
 
 
 @router.get("/review-backlog")
@@ -731,6 +971,37 @@ async def applicant_review_backlog(request: Request, limit: int = 5):
         r = await review_application(mid, notify=False, trigger="backlog")
         done.append({"member_id": mid, "verdict": (r or {}).get("verdict"), "score": (r or {}).get("score")})
     return {"ok": True, "reviewed": done}
+
+
+@router.get("/credential-expiry")
+async def credential_expiry_cron(request: Request, dry_run: bool = False):
+    """Daily Vercel cron: pause approved vendors whose required credential has
+    expired; lift pauses this sweep set once credentials are current. Never
+    contacts anyone. Auth: Vercel CRON_SECRET bearer or internal key."""
+    from .vendor_os import _cron_authorized
+    from ..services.vendor_vetting import run_expiry_sweep
+
+    if not _cron_authorized(request.headers.get("Authorization"), request.headers.get("X-Internal-Key")
+                            or request.headers.get("X-Internal-Api-Key")):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return await run_expiry_sweep(await get_db(), dry_run=bool(dry_run))
+
+
+@router.api_route("/probation-sweep", methods=["GET", "POST"])
+async def probation_sweep(request: Request, job_id: Optional[str] = None):
+    """Probation payout hold sweep. Daily Vercel cron (GET, CRON_SECRET) and the
+    OS rating webhook (POST ?job_id=, X-Internal-Api-Key). Releases held payouts
+    on a good rating or after the auto-release window; a bad rating or QC fail
+    pauses the vendor and alerts the owner. Never contacts the vendor."""
+    from .vendor_os import _cron_authorized
+    from ..services.probation_hold import run_probation_sweep
+
+    if not _cron_authorized(request.headers.get("Authorization"), request.headers.get("X-Internal-Key")
+                            or request.headers.get("X-Internal-Api-Key")):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return await run_probation_sweep(await get_db(), job_id=job_id)
+
+
 
 
 @router.post("/review/{member_id}")
@@ -867,6 +1138,33 @@ async def get_application_status(member_id: str, token: Optional[str] = None):
     }
 
 
+@router.post("/apply/{member_id}/submitted")
+async def application_documents_submitted(member_id: str, background_tasks: BackgroundTasks, payload: dict = Body(default={})):
+    """The trade form finished uploading documents: review and notify Kam once."""
+    res_member = await (await get_db()).table("vendor_members").select("*").eq("id", member_id).maybe_single().execute()
+    member = maybe_single_row(res_member) or None
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found.")
+    _check_application_token(member, (payload or {}).get("token") or (payload or {}).get("application_token"))
+    try:
+        done = await (await get_db()).table("vendor_applicant_reviews").select("id").eq("member_id", member_id).limit(1).execute()
+        if done.data:
+            return {"ok": True, "already_reviewed": True}
+    except Exception:
+        pass
+    from ..services.applicant_review_runner import review_application
+    background_tasks.add_task(review_application, member_id, notify=True, trigger="submitted")
+    return {"ok": True}
+
+
+def _unique_upload_name(prefix: str, filename: str) -> str:
+    """Storage key name that can't collide: two docs both called scan.pdf
+    (ID and police check) used to land on the same path and overwrite."""
+    import re as _re
+    base = _re.sub(r"[^A-Za-z0-9._-]+", "-", (filename or "file").rsplit("/", 1)[-1]).strip("-.") or "file"
+    return f"{_re.sub(r'[^a-z0-9_]+', '_', prefix.lower())}-{uuid.uuid4().hex[:8]}-{base[-80:]}"
+
+
 @router.post("/documents")
 async def upload_compliance_document(
     member_id: str = Form(...),
@@ -888,13 +1186,26 @@ async def upload_compliance_document(
     _check_application_token(member, token or application_token)
 
     portfolio_docs = [portfolio_doc_type(t) for t in PORTFOLIO_MEDIA_TYPES]
-    valid_docs = ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume", *portfolio_docs]
+    from ..services.trade_specs import expiring_kinds, upload_kinds
+    valid_docs = list(dict.fromkeys(
+        ["coi", "wsib", "hst_registry", "id_verification", "rpas_certificate", "resume", *upload_kinds(), *portfolio_docs]
+    ))
     # Allow portfolio_<type> aliases passed as bare media type via normalize
     mt = normalize_media_type(doc_type)
     if mt and doc_type not in valid_docs:
         doc_type = portfolio_doc_type(mt)
     if doc_type not in valid_docs:
         raise HTTPException(status_code=400, detail=f"Invalid doc_type. Must be one of {valid_docs}")
+
+    if doc_type in expiring_kinds():
+        from datetime import date as _date
+        try:
+            exp = _date.fromisoformat(str(expiry_date or "")[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Add the expiry date for this document.")
+        if exp < datetime.now(timezone.utc).date():
+            raise HTTPException(status_code=400, detail="This document has expired. Upload a current one.")
+        expiry_date = exp.isoformat()
 
     import base64
     try:
@@ -913,7 +1224,7 @@ async def upload_compliance_document(
     mime_type = _ext_mime.get(filename.rsplit(".", 1)[-1].lower(), "application/pdf") if "." in filename else "application/pdf"
 
     file_key, _, _, _ = await upload_file(
-        raw_bytes, "onboarding", member_id, filename, mime_type
+        raw_bytes, "onboarding", member_id, _unique_upload_name(doc_type, filename), mime_type
     )
 
     doc = VendorDocument(
@@ -1084,7 +1395,7 @@ async def upload_portfolio_sample(
     mime_type = _ext_mime.get(ext, "image/jpeg")
 
     file_key, _, _, _ = await upload_file(
-        raw_bytes, "onboarding", member_id, filename, mime_type
+        raw_bytes, "onboarding", member_id, _unique_upload_name(mt, filename), mime_type
     )
 
     doc_type = portfolio_doc_type(mt)

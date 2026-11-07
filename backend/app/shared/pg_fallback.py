@@ -781,6 +781,8 @@ def pg_update_vendor_member_fields(member_id: str, fields: dict) -> bool:
         "updated_at",
         "terms_accepted_at",
         "ic_agreement_version",
+        "ic_amendment_version",
+        "ic_amendment_accepted_at",
     }
     cols: list[tuple[str, Any]] = []
     for k, v in fields.items():
@@ -3157,8 +3159,10 @@ def pg_select_contractor_by_vendor_id(vendor_id: str) -> Optional[dict]:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, stripe_account_id, connect_status, vendor_id, full_name, email "
-                "FROM public.contractors WHERE vendor_id = %s LIMIT 1",
+                "SELECT id, stripe_account_id, connect_status, vendor_id, full_name, email, member_id "
+                "FROM public.contractors WHERE member_id IS NULL AND (vendor_id = %s OR (vendor_id IS NULL "
+                "AND (SELECT count(*) FROM public.contractors c2 WHERE c2.vendor_id IS NULL AND c2.member_id IS NULL) = 1)) "
+                "ORDER BY (vendor_id IS NULL) LIMIT 1",
                 (vid,),
             )
             row = _row_from_cursor(cur)
@@ -3187,7 +3191,7 @@ def pg_select_contractor_by_stripe_account_id(stripe_account_id: str) -> Optiona
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, stripe_account_id, connect_status, vendor_id "
+                "SELECT id, stripe_account_id, connect_status, vendor_id, member_id "
                 "FROM public.contractors WHERE stripe_account_id = %s LIMIT 1",
                 (aid,),
             )
@@ -3197,6 +3201,36 @@ def pg_select_contractor_by_stripe_account_id(stripe_account_id: str) -> Optiona
             return row
     except Exception as e:
         logger.error("pg_select_contractor_by_stripe_account_id failed: %s", str(e)[:300])
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def pg_select_contractor_by_member_id(member_id: str) -> Optional[dict]:
+    """Fetch one photographer's contractors row (per-member Stripe Connect) via Postgres."""
+    mid = str(member_id or "").strip()
+    if not mid:
+        return None
+    conn = _pg_connect()
+    if not conn:
+        logger.warning("pg_select_contractor_by_member_id: no Postgres connection")
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, stripe_account_id, connect_status, vendor_id, full_name, email, member_id "
+                "FROM public.contractors WHERE member_id = %s LIMIT 1",
+                (mid,),
+            )
+            row = _row_from_cursor(cur)
+            if row and row.get("id") is not None:
+                row["id"] = str(row["id"])
+            return row
+    except Exception as e:
+        logger.error("pg_select_contractor_by_member_id failed: %s", str(e)[:300])
         return None
     finally:
         try:
@@ -3215,6 +3249,7 @@ def pg_insert_contractor(row: dict) -> Optional[dict]:
     allowed = {
         "id",
         "vendor_id",
+        "member_id",
         "full_name",
         "email",
         "stripe_account_id",
@@ -3225,7 +3260,7 @@ def pg_insert_contractor(row: dict) -> Optional[dict]:
         "created_at",
     }
     data = {k: row[k] for k in allowed if k in row and row[k] is not None}
-    if not data.get("vendor_id") or not data.get("full_name") or not data.get("email"):
+    if not (data.get("vendor_id") or data.get("member_id")) or not data.get("full_name") or not data.get("email"):
         return None
     if not data.get("id"):
         data["id"] = str(uuid.uuid4())
@@ -3321,7 +3356,7 @@ def pg_update_contractor(contractor_id: str, fields: dict) -> bool:
 # ---------------------------------------------------------------------------
 _APPLICANT_TABLES = {
     "vendor_applicant_reviews": (
-        ("member_id", "verdict", "needs_samples", "result", "model", "cost_usd", "trigger"),
+        ("member_id", "verdict", "needs_samples", "result", "model", "cost_usd", "trigger", "trade", "rubric_version"),
         {"result"},
     ),
     "vendor_applicant_image_hashes": (
