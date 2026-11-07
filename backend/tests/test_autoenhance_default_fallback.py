@@ -12,17 +12,6 @@ from app.services import autoenhance_service as ae
 from app.services import post_production as pp
 
 
-
-import pytest as _pytest
-
-
-@_pytest.fixture(autouse=True)
-def _explicit_autoenhance(monkeypatch):
-    """These tests cover the AE path + fallback; since 2026-11-07 AE runs only
-    when POSTPROD_STILLS_PROVIDER=autoenhance is set explicitly."""
-    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
-    monkeypatch.delenv("PAID_STILLS_PROCESSING_DISABLED", raising=False)
-
 def _run(coro):
     return asyncio.run(coro)
 
@@ -62,14 +51,13 @@ GROUP = [
 
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
-    # Since 2026-11-07 AE runs only when explicitly selected.
-    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
+    monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
     monkeypatch.setattr(ae, "_plan_blocked", False)
     monkeypatch.setattr(pp, "_ae_deadline", None)
     yield
 
 
-def test_explicit_autoenhance_env_calls_autoenhance(monkeypatch):
+def test_default_env_calls_autoenhance(monkeypatch):
     updates, uploaded, calls = [], [], []
     _fake_bracket_env(monkeypatch, updates, uploaded)
     monkeypatch.setattr(ae, "is_available", lambda: True)

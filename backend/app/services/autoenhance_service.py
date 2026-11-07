@@ -41,12 +41,6 @@ def api_key() -> str:
 
 
 def is_available() -> bool:
-    """Paid provider: only when explicitly selected (POSTPROD_STILLS_PROVIDER=autoenhance)
-    and the PAID_STILLS_PROCESSING_DISABLED kill switch is off."""
-    if (os.environ.get("PAID_STILLS_PROCESSING_DISABLED") or "").strip().lower() in ("1", "true", "yes", "on"):
-        return False
-    if (os.environ.get("POSTPROD_STILLS_PROVIDER") or "").strip().lower() not in ("autoenhance", "ae"):
-        return False
     return bool(api_key()) and not _plan_blocked
 
 
