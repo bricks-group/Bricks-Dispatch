@@ -14,7 +14,7 @@ import io
 import logging
 from typing import Optional
 
-import numpy as np
+# Native array processing is loaded only when stitching is requested.
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,8 @@ def station_is_stitchable(pans: list[dict]) -> bool:
 
 
 def _decode_bgr(data: bytes) -> Optional[np.ndarray]:
+    import numpy as np
+
     try:
         import cv2
         arr = np.frombuffer(data, dtype=np.uint8)
@@ -89,6 +91,8 @@ def _decode_bgr(data: bytes) -> Optional[np.ndarray]:
 
 
 def _resize_bgr(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    import numpy as np
+
     w, h = size
     try:
         import cv2
@@ -100,6 +104,8 @@ def _resize_bgr(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
 
 
 def _encode_jpeg(bgr: np.ndarray, quality: int = 85) -> bytes:
+    import numpy as np
+
     try:
         import cv2
         ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
@@ -115,6 +121,8 @@ def _encode_jpeg(bgr: np.ndarray, quality: int = 85) -> bytes:
 
 
 def _letterbox_equirect(pano: np.ndarray, out_w: int = EQUIRECT_W, out_h: int = EQUIRECT_H) -> np.ndarray:
+    import numpy as np
+
     h, w = pano.shape[:2]
     if w <= 0 or h <= 0:
         raise StitchError("Empty panorama")
@@ -147,12 +155,16 @@ def _opencv_stitch(images: list[np.ndarray]) -> Optional[np.ndarray]:
 
 def _luma_mean_bgr(img: np.ndarray) -> float:
     """Rec.601 luma from BGR float/uint8 array."""
+    import numpy as np
+
     x = img.astype(np.float64)
     return float(np.mean(0.114 * x[:, :, 0] + 0.587 * x[:, :, 1] + 0.299 * x[:, :, 2]))
 
 
 def _exposure_gains(lumas: list[float]) -> list[float]:
     """Per-frame gains toward the median pan luma (clamped)."""
+    import numpy as np
+
     valid = [L for L in lumas if L > 1e-3]
     if not valid:
         return [1.0] * len(lumas)
@@ -172,6 +184,8 @@ def _exposure_gains(lumas: list[float]) -> list[float]:
 
 def _feather_2d(strip_w: int, strip_h: int) -> np.ndarray:
     """Raised-cosine weight field: hard taper at edges (seams), soft floor in core."""
+    import numpy as np
+
     xs = np.linspace(-1.0, 1.0, strip_w, dtype=np.float64)
     ys = np.linspace(-1.0, 1.0, strip_h, dtype=np.float64)
     # Cosine → 0 at ±1, 1 at center. Vertical taper is gentler (0.85 mix) so
@@ -213,6 +227,8 @@ def _yaw_blend(frames: list[dict], out_w: int = EQUIRECT_W, out_h: int = EQUIREC
     Exposure-normalizes strips toward median luma, then blends with a 2D
     raised-cosine feather so overlapping seams prefer frame centers.
     """
+    import numpy as np
+
     canvas = np.zeros((out_h, out_w, 3), dtype=np.float64)
     weight = np.zeros((out_h, out_w), dtype=np.float64)
     strip_w = max(32, int(out_w * PHONE_HFOV / 360.0))

@@ -1408,7 +1408,7 @@ async def reconcile_stuck_uploads(
 
     # Kam 2026-11-07: in-house runs only when POSTPROD_STILLS_PROVIDER=inhouse.
     from ..services.post_production import stills_provider_preference as _stills_pref
-    if not fotello_available and not autoenhance_available and _stills_pref() == "inhouse":
+    if stuck and not fotello_available and not autoenhance_available and _stills_pref() == "inhouse":
         try:
             from ..services.photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
             from ..services.storage import get_signed_download_url as _sign_url
