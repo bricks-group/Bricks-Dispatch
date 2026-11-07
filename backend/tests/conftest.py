@@ -31,3 +31,18 @@ for _mod in (
 _mock_scs = MagicMock()
 _mock_scs.handle_payout_to_vendor = AsyncMock(return_value="tr_stub")
 sys.modules.setdefault("app.services.stripe_connect_service", _mock_scs)
+
+
+# Fulfillment gate (2026-11-07). Legacy finalize/payout tests exercise the
+# downstream mechanics on fixture jobs that predate editor sign-off, so the
+# gate is OFF by default in tests. Gate behaviour is covered in
+# test_fulfillment_gate.py, which sets FULFILLMENT_GATE=1 explicitly.
+import pytest as _pytest_fg
+
+
+@_pytest_fg.fixture(autouse=True)
+def _fulfillment_gate_default_off_for_legacy_tests(monkeypatch):
+    import os as _os
+    if "FULFILLMENT_GATE" not in _os.environ:
+        monkeypatch.setenv("FULFILLMENT_GATE", "0")
+    yield

@@ -313,6 +313,15 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         logger.error(f"Payout trigger failed: job {job_id} not found")
         return {"error": "job_not_found", "job_id": job_id}
 
+    # Fulfillment gate: pay only after a complete, editor-approved delivery.
+    # Approved client no-show claims pay half without delivery (Kam 2026-10-30).
+    if not noshow_claim_id:
+        from .fulfillment_gate import payout_release_allowed
+        allowed, why = payout_release_allowed(job)
+        if not allowed:
+            logger.info(f"Payout for job {job_id} held by fulfillment gate: {why}")
+            return {"skipped": "fulfillment_gate", "reason": why, "job_id": job_id}
+
     vendor_id = job.get("vendor_id", "default_vendor")
     # Always pay off rack_price, never package_price -- package_price may reflect a
     # member discount or brokerage credit consumption once that billing logic ships,

@@ -986,7 +986,8 @@ async def _listing_export_as_is_url(db, job_id: str, upload_id: str, asset: dict
 async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     """Mark an upload done so listing delivery can proceed without vendor APIs.
 
-    Photos get in-house enhance when possible; drone/reel/video stay as-is.
+    Photos get in-house enhance when possible; drone/reel stills stay as-is.
+    Raw video clips are parked as source_clip for the editor (fulfillment gate).
     Staging always delivers the original (honest — not virtually staged; no third-party).
     Twilight gets in-house enhance with apply_sky=False (preserve real dusk; no blue-sky invention).
     """
@@ -1052,6 +1053,23 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
     # HEIC/HEIF stills convert to sRGB JPEG for browser listing (format only).
     if route == "as_is":
         from .media_intake import infer_media_type, is_pdf_file
+        from .fulfillment_gate import PROVIDER_SOURCE_CLIP, gate_enabled, is_source_clip
+
+        # Fulfillment gate: raw reel/drone/video clips are editor source
+        # material, never a finished film. Park them (done, provider=source_clip)
+        # so finalize is not blocked and they never reach media_delivery.
+        if gate_enabled() and is_source_clip(asset):
+            await _safe_update_upload(db, upload_id, {
+                "processing_status": "done",
+                "processed_url": file_path,
+                "provider": PROVIDER_SOURCE_CLIP,
+                "processed_at": now,
+            })
+            logger.info(
+                f"Job {job_id}: video upload {upload_id} parked as source_clip "
+                "(editor must cut + mark final; never auto-delivered)"
+            )
+            return
 
         mt = infer_media_type(
             asset.get("filename"),

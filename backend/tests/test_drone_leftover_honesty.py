@@ -298,7 +298,12 @@ def test_deliver_cinematic_jpeg_applies_listing_export(monkeypatch):
 
 
 def test_deliver_reel_mp4_skips_listing_export(monkeypatch):
-    """Reel video must stay original path — no PropTx crop on motion files."""
+    """Reel video must stay original path — no PropTx crop on motion files.
+
+    Fulfillment gate (2026-11-07): a raw reel clip is parked as source_clip for
+    the editor instead of being marked as_is (deliverable).
+    """
+    monkeypatch.setenv("FULFILLMENT_GATE", "1")
     updates = []
     export_calls = []
 
@@ -333,7 +338,7 @@ def test_deliver_reel_mp4_skips_listing_export(monkeypatch):
     assert len(updates) == 1
     uid, update = updates[0]
     assert uid == "up-reel-vid"
-    assert update["provider"] == "as_is"
+    assert update["provider"] == "source_clip"
     assert update["processed_url"] == asset["file_url"]
     assert export_calls == []
 

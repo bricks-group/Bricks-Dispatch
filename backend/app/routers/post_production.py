@@ -716,6 +716,52 @@ async def _unstick_processing_without_delivery(job_id: str) -> None:
             pg_update_job(job_id, fields)
 
 
+async def _load_job_row(db, job_id: str) -> dict:
+    try:
+        res = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
+        return _maybe_single_row(res) or {}
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
+        if not _is_rest_quota_error(e):
+            raise
+        return pg_select_job_by_id(job_id) or {}
+
+
+async def _record_fulfillment_gate(db, job_id: str, verdict: dict) -> None:
+    """Best-effort: jobs.fulfillment_gate (migration 20261107). Never raises."""
+    fields = {"fulfillment_gate": verdict, "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        await db.table("jobs").update(fields).eq("id", job_id).execute()
+    except Exception as e:
+        try:
+            from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+            if _is_rest_quota_error(e) and pg_update_job(job_id, fields):
+                return
+        except Exception:
+            pass
+        logger.warning(f"Job {job_id}: could not record fulfillment_gate ({e})")
+
+
+async def _fulfillment_gate_allows(db, job_id: str, delivery_urls: list, *, visit_present: bool) -> bool:
+    from ..services import fulfillment_gate as fg
+
+    if not fg.gate_enabled():
+        return True
+    job = await _load_job_row(db, job_id)
+    if fg.is_trade_job(job):
+        return True
+    verdict = fg.evaluate(job, delivery_urls, visit_present=visit_present)
+    await _record_fulfillment_gate(db, job_id, verdict)
+    if verdict["ready"]:
+        return True
+    logger.info(
+        f"Job {job_id}: fulfillment gate HOLD — {'; '.join(verdict['reasons'])} "
+        f"(required={verdict['required']} present={verdict['present']}); "
+        "no delivery, no payout until editor approves a complete package"
+    )
+    return False
+
+
 async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, visit_delivery_urls: list | None = None) -> None:
     """
     Called after each upload is marked done.
@@ -944,6 +990,14 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
             f"Job {job_id}: capture-only delivery "
             f"({len(capture_urls)} floor/tour URL(s))"
         )
+
+    # Fulfillment gate (launch review 2026-11-07): no client delivery and no
+    # vendor payout until every purchased component is present AND an editor
+    # signed the job off. Holds here (status stays processing) and records why.
+    if not await _fulfillment_gate_allows(
+        db, job_id, delivery_urls, visit_present=bool(splat_upload or visit_bridge or visit_rows)
+    ):
+        return
 
     # Upsert media_delivery row (idempotent). Fair-Use: PostgREST 402 → Postgres
     # so enhance→listing does not hollow after Blob upload succeeds.

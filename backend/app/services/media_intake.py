@@ -412,6 +412,9 @@ def is_listing_still_delivery_row(upload: Any = None) -> bool:
     provider = _lower(row.get("provider"))
     if provider in ("bracket_sibling", "visit"):
         return False
+    # Raw vendor video held for the editor (fulfillment gate) — never delivered.
+    if provider == "source_clip":
+        return False
     return True
 
 

@@ -1162,3 +1162,97 @@ async def release_qc_hold(
         folded = True
     logger.info("Admin %s released QC hold on upload %s (job %s)", actor_id, upload_id, job_id)
     return {"status": "released", "upload_id": upload_id, "job_id": job_id, "folded": bool(folded)}
+
+
+# ── Fulfillment gate (launch review 2026-11-07) ─────────────────────────────
+# Delivery + payout wait for an editor sign-off on a complete package.
+
+
+@router.post("/uploads/{upload_id}/final-film")
+async def mark_final_film(
+    upload_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Mark an editor-cut video upload as the finished film (provider=editor_final).
+
+    Raw vendor clips (provider=source_clip) can never be marked final — the
+    editor uploads the cut as its own file, then marks that upload.
+    """
+    actor_id = await _require_admin(authorization, x_user_id)
+    from ..services.fulfillment_gate import PROVIDER_EDITOR_FINAL, PROVIDER_SOURCE_CLIP
+    db = await get_db()
+    upload = await _load_one(db, "uploads", "id", upload_id,
+                             "id, job_id, provider, qc_notes, processing_status")
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    if str(upload.get("provider") or "").lower() == PROVIDER_SOURCE_CLIP:
+        api_error(409, "Raw source clip — upload the edited cut as a new file", "source_clip")
+    now = datetime.now(timezone.utc).isoformat()
+    note = (str(upload.get("qc_notes") or "").strip() + f" | final cut approved by {actor_id} {now}").strip(" |")
+    await db.table("uploads").update({
+        "provider": PROVIDER_EDITOR_FINAL,
+        "processing_status": "done",
+        "qc_status": "passed",
+        "qc_notes": note[:2000],
+        "qc_at": now,
+    }).eq("id", upload_id).execute()
+    logger.info("Admin %s marked upload %s final film (job %s)", actor_id, upload_id, upload.get("job_id"))
+    return {"status": "final", "upload_id": upload_id, "job_id": upload.get("job_id")}
+
+
+@router.get("/jobs/{job_id}/fulfillment-gate")
+async def get_fulfillment_gate(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    await _require_admin(authorization, x_user_id)
+    from ..services import fulfillment_gate as fg
+    db = await get_db()
+    job = await _load_one(db, "jobs", "id", job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"job_id": job_id, "enabled": fg.gate_enabled(),
+            "required": sorted(fg.required_components(job)),
+            "editor_approved": fg.editor_approved(job),
+            "last_verdict": job.get("fulfillment_gate")}
+
+
+@router.post("/jobs/{job_id}/editor-approve")
+async def editor_approve_job(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Editor sign-off: the package is complete and creatively approved.
+
+    Records jobs.editor_approved_at/by, then re-runs finalize (delivery). If the
+    job was already delivered (pre-gate), triggers the held payout instead.
+    Finalize still refuses when a purchased component is missing.
+    """
+    actor_id = await _require_admin(authorization, x_user_id)
+    db = await get_db()
+    job = await _load_one(db, "jobs", "id", job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.table("jobs").update({
+        "editor_approved_at": now,
+        "editor_approved_by": str(actor_id),
+        "updated_at": now,
+    }).eq("id", job_id).execute()
+    from . import post_production as pp
+    existing = await _load_one(db, "media_delivery", "job_id", job_id, "id, delivery_urls")
+    payout = None
+    if existing and str(job.get("status") or "").lower() == "delivered":
+        from ..services.payout_service import trigger_payout_for_job
+        payout = await trigger_payout_for_job(db, job_id)
+    else:
+        await pp._finalize_job_if_complete(job_id)
+    fresh = await _load_one(db, "jobs", "id", job_id, "id, status, fulfillment_gate")
+    logger.info("Admin %s editor-approved job %s", actor_id, job_id)
+    return {"status": "approved", "job_id": job_id,
+            "job_status": (fresh or {}).get("status"),
+            "fulfillment_gate": (fresh or {}).get("fulfillment_gate"),
+            "payout": payout}
