@@ -248,15 +248,40 @@ def is_camera_raw_file(filename: Any = None, mime_type: Any = None) -> bool:
     return False
 
 
+RAW_INTAKE_ENV = "RAW_INTAKE_ENABLED"
+RAW_INTAKE_DISABLED_MESSAGE = (
+    "Camera RAW uploads are switched off right now. Upload the camera JPEG and keep the RAW."
+)
+
+
+def raw_intake_enabled() -> bool:
+    """Shoot standard v0.2 requires RAW (Kam 2026-11-07). Default ON.
+
+    RAW_INTAKE_ENABLED=0|false|off is an emergency kill switch (e.g. decoder
+    outage); RAW then gets a clear 415 instead of a silent hold.
+    """
+    import os
+
+    raw = (os.environ.get(RAW_INTAKE_ENV) or "").strip().lower()
+    return raw not in ("0", "false", "off", "no", "disabled")
+
+
 def assert_listing_still_decodable(
     filename: Any = None,
     mime_type: Any = None,
     media_type: Any = None,
 ) -> None:
-    """Kept for callers: camera RAW is accepted now (decoded to a working JPEG).
+    """Camera RAW is accepted (decoded to a working JPEG; RAW stays the master).
 
-    Nothing is rejected here any more; size is checked by assert_upload_size.
+    Only rejects RAW when the RAW_INTAKE_ENABLED kill switch is off. Size is
+    checked separately by assert_upload_size.
     """
+    if raw_intake_enabled():
+        return None
+    if is_camera_raw_file(filename, mime_type):
+        from ..shared.errors import api_error
+
+        api_error(415, RAW_INTAKE_DISABLED_MESSAGE, "raw_intake_disabled")
     return None
 
 
