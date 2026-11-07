@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, Alert, Linking, Image } from 'react-native';
+import { View, Text, StyleSheet, Alert, Image } from 'react-native';
 import { Calendar, Download, LogOut, Pencil, Settings } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { actorHeaders } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { VendorProfile, mediaUrl } from '../../lib/vendor';
+import { CALENDAR_NUDGE_TITLE, fetchVendorCalendars, PROVIDER_LABELS } from '../../lib/calendarConnect';
 import { color, type as T, space, radius } from '../../theme';
-import { Screen, PageHeader, Section, Group, Row, Button, Notice, StatGrid, Avatar, LoadingState, Toggle } from '../../components/ui';
+import { Screen, PageHeader, Section, Group, Row, Button, Notice, StatGrid, Avatar, LoadingState, Toggle, Pill } from '../../components/ui';
 import DeleteAccountRow from '../../components/DeleteAccountRow';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
@@ -19,15 +20,6 @@ function fmtMemberSince(iso?: string) {
   return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
-async function openCalendar(platform: 'google' | 'apple') {
-  const url = platform === 'google'
-    ? 'https://calendar.google.com'
-    : 'calshow://';
-  const supported = await Linking.canOpenURL(url);
-  if (supported) await Linking.openURL(url);
-  else Alert.alert('Calendar unavailable', 'Could not open the calendar app.');
-}
-
 export default function AccountScreen() {
   const router = useRouter();
   const [profile, setProfile] = useState<VendorProfile | null>(null);
@@ -35,6 +27,8 @@ export default function AccountScreen() {
   const [error, setError] = useState(false);
   const [availability, setAvailability] = useState(true);
   const [togglingAvail, setTogglingAvail] = useState(false);
+  const [calConnected, setCalConnected] = useState(false);
+  const [calDetail, setCalDetail] = useState('');
 
   const fetchProfile = useCallback(async () => {
     setError(false);
@@ -52,7 +46,24 @@ export default function AccountScreen() {
     }
   }, []);
 
+  const fetchCalendars = useCallback(async () => {
+    try {
+      const data = await fetchVendorCalendars();
+      const connected = (data.connections || []).filter((c) => c.connected);
+      setCalConnected(connected.length > 0);
+      setCalDetail(
+        connected.length
+          ? `${connected.map((c) => PROVIDER_LABELS[c.provider] || c.provider).join(', ')} — auto-assign skips busy slots`
+          : CALENDAR_NUDGE_TITLE,
+      );
+    } catch {
+      setCalConnected(false);
+      setCalDetail('Connect calendars in Settings');
+    }
+  }, []);
+
   useEffect(() => { fetchProfile(); }, [fetchProfile]);
+  useFocusEffect(useCallback(() => { fetchCalendars(); }, [fetchCalendars]));
 
   const toggleAvailability = async (val: boolean) => {
     setAvailability(val);
@@ -155,8 +166,14 @@ export default function AccountScreen() {
 
       <Section label="Calendar">
         <Group>
-          <Row icon={Calendar} title="Google Calendar" chevron onPress={() => openCalendar('google')} />
-          <Row icon={Calendar} title="Apple Calendar" chevron onPress={() => openCalendar('apple')} />
+          <Row
+            icon={Calendar}
+            title="Calendars"
+            subtitle={calDetail}
+            chevron
+            right={calConnected ? <Pill label="Connected" tone="ok" /> : undefined}
+            onPress={() => router.push('/settings')}
+          />
         </Group>
       </Section>
 

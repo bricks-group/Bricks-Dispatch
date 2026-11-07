@@ -59,7 +59,7 @@ export function AgreeTermsPage({ name, member, onAccepted, onLogout }: { name?: 
         ) : (
           <>
             <h1>{first ? `Welcome, ${first}` : 'Before you start'}</h1>
-            <p className="agree-lede">Read the contractor agreement, privacy policy and amendment A1 once before your first job.</p>
+            <p className="agree-lede">Read the contractor agreement, privacy policy and amendment A1 once before your first job. Then open Availability to connect your calendar so Dispatch can check when you’re free.</p>
             {REQUIRED_DOCS.includes('ic_a1') ? <p className="agree-lede">{A1_GUIDE_LINE}</p> : null}
           </>
         )}

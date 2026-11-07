@@ -19,9 +19,21 @@ import httpx
 logger = logging.getLogger(__name__)
 
 PROVIDERS = ("google", "microsoft", "apple", "ics")
-# Vendors see Google / Apple / ICS only — Microsoft Graph stays in FreeBusy for
-# any legacy connection, but Outlook Connect is not offered (Azure signup needs a card).
-UI_CONNECT_PROVIDERS = ("google", "apple", "ics")
+# Availability is not Google-only: every provider here is offered with honest Connect.
+UI_CONNECT_PROVIDERS = ("google", "microsoft", "apple", "ics")
+
+# Vendor-facing copy — connecting a calendar drives auto-assign, not a hidden setting.
+VENDOR_CALENDAR_EDU_COPY = (
+    "Connecting a calendar tells Bricks when you’re free so native auto-assign "
+    "only offers you jobs that fit your real schedule. Busy on any connected "
+    "calendar = you won’t get that slot. Manual hours and the available toggle "
+    "still apply if no calendar is connected."
+)
+VENDOR_CALENDAR_USED_FOR_OFFERS = "Used for job offers."
+VENDOR_CALENDAR_NUDGE = "Connect a calendar so we don’t double-book you."
+VENDOR_CALENDAR_WELCOME = (
+    "Connecting a calendar is how Dispatch knows your availability for auto-assign."
+)
 
 
 def _as_dict(obj: Any) -> dict:
@@ -86,15 +98,18 @@ def microsoft_client_secret() -> str:
 
 
 def microsoft_redirect_uri() -> str:
+    """Microsoft callback only — do not reuse the Google redirect (would mix codes)."""
     return (
         os.environ.get("MICROSOFT_OAUTH_REDIRECT_URI")
-        or os.environ.get("VENDOR_CALENDAR_OAUTH_REDIRECT")
+        or os.environ.get("MS_GRAPH_REDIRECT_URI")
         or ""
     ).strip()
 
 
-# Non-sensitive scope only (no unverified-app warning). Busy sync uses FreeBusy API.
+# FreeBusy-only on purpose: enough for the auto-assign busy gate, no Google app
+# verification screen. Event write-back on assign would need calendar.events — skip.
 GOOGLE_CAL_SCOPE = "https://www.googleapis.com/auth/calendar.freebusy"
+MICROSOFT_CAL_SCOPE = "Calendars.Read offline_access User.Read"
 
 
 def supabase_configured() -> bool:
@@ -216,15 +231,75 @@ def build_google_start_url(state: str) -> str:
     return f"{base}/start?" + urlencode({"state": state})
 
 
+def build_microsoft_start_url(state: str) -> str:
+    base = microsoft_redirect_uri().rsplit("/callback", 1)[0]
+    return f"{base}/start?" + urlencode({"state": state})
+
+
 def build_microsoft_authorize_url(state: str) -> str:
     params = {
         "client_id": microsoft_client_id(),
         "response_type": "code",
         "redirect_uri": microsoft_redirect_uri(),
-        "scope": "Calendars.Read offline_access User.Read",
+        "scope": MICROSOFT_CAL_SCOPE,
         "state": state,
+        "prompt": "consent",
     }
     return "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?" + urlencode(params)
+
+
+async def microsoft_calendar_ping(access_token: str) -> dict:
+    """Verify Graph calendar access before marking Outlook Connected."""
+    if not access_token:
+        return {"ok": False, "status": 0, "via": None}
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(
+                "https://graph.microsoft.com/v1.0/me/calendar",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code < 400:
+                return {"ok": True, "status": resp.status_code, "via": "graph"}
+            return {"ok": False, "status": resp.status_code, "via": "graph"}
+    except Exception as e:
+        logger.warning("Microsoft calendar ping error: %s", e)
+        return {"ok": False, "status": 0, "via": None}
+
+
+async def apple_caldav_ping(url: str, password: str, username: str) -> dict:
+    """Verify credentials using the same SSRF-safe path as availability reads."""
+    from .calendar_url_guard import guarded_request
+    now = datetime.now(timezone.utc)
+    try:
+        status, _ = await guarded_request(
+            "REPORT", url, timeout=12.0,
+            content=(
+                '<?xml version="1.0" encoding="utf-8" ?>'
+                '<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
+                '<D:prop><D:getetag/></D:prop><C:filter><C:comp-filter name="VCALENDAR">'
+                '<C:comp-filter name="VEVENT">'
+                f'<C:time-range start="{now.strftime("%Y%m%dT%H%M%SZ")}" '
+                f'end="{(now + timedelta(minutes=30)).strftime("%Y%m%dT%H%M%SZ")}"/>'
+                '</C:comp-filter></C:comp-filter></C:filter></C:calendar-query>'
+            ),
+            headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
+            auth=(username or "user", password),
+        )
+        return {"ok": 200 <= status < 300, "status": status, "via": "caldav"}
+    except Exception:
+        return {"ok": False, "status": 0, "via": "caldav"}
+
+
+async def ics_feed_ping(url: str) -> dict:
+    """Verify the feed using bounded, pinned, redirect-vetted HTTPS requests."""
+    from .calendar_url_guard import guarded_request
+    try:
+        status, text = await guarded_request("GET", url, timeout=12.0)
+        text = text.upper()
+        return {"ok": 200 <= status < 300 and ("BEGIN:VCALENDAR" in text or "BEGIN:VEVENT" in text),
+                "status": status, "via": "ics"}
+    except Exception:
+        return {"ok": False, "status": 0, "via": "ics"}
 
 
 def _expires_at_iso(expires_in: Any) -> Optional[str]:
@@ -350,6 +425,333 @@ async def upsert_oauth_connection(
             return stored
         raise
     return stored
+
+
+async def persist_google_oauth_if_verified(
+    db,
+    *,
+    member_id: str,
+    vendor_id: str,
+    access_token: str,
+    refresh_token: str,
+    expires_in: Any = 3600,
+    scope: str | None = None,
+) -> dict:
+    """Store Google tokens only after a refresh token + successful Calendar ping.
+
+    Never marks Connected on a token dump alone. Failures return an honest
+    connection_status-shaped payload (connected=False).
+    """
+    access = (access_token or "").strip()
+    refresh = (refresh_token or "").strip()
+    granted = (scope or "").strip()
+    if granted and "calendar" not in granted.lower():
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "noscope",
+            "detail": "Google Calendar permission is required. Approve calendar access and retry.",
+        }
+    if not refresh:
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "noscope",
+            "detail": (
+                "Google Calendar permission is required (missing refresh token). "
+                "Try Connect again and approve calendar access."
+            ),
+        }
+    if not access:
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "error",
+            "detail": "Could not connect Google Calendar (missing access token).",
+        }
+    ping = await google_calendar_ping(access)
+    if not ping.get("ok"):
+        logger.warning(
+            "Google Calendar ping failed (%s via %s) — not marking Connected",
+            ping.get("status"),
+            ping.get("via"),
+        )
+        if ping.get("status") in (401, 403):
+            return {
+                "provider": "google",
+                "connected": False,
+                "status": "noscope",
+                "detail": "Google Calendar permission is required. Approve calendar access and retry.",
+            }
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "error",
+            "detail": "Could not verify Google Calendar access. Try again.",
+        }
+    try:
+        row = await upsert_oauth_connection(
+            db,
+            member_id=member_id,
+            vendor_id=vendor_id or "default_vendor",
+            provider="google",
+            token_payload={
+                "access_token": access,
+                "refresh_token": refresh,
+                "expires_in": expires_in or 3600,
+                "scope": granted or GOOGLE_CAL_SCOPE,
+            },
+        )
+    except Exception as e:
+        logger.warning("Google calendar upsert failed: %s", e)
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "error",
+            "detail": f"Could not save calendar connection: {e}",
+        }
+    status = connection_status(row)
+    status["ping"] = ping.get("via")
+    return status
+
+
+async def persist_microsoft_oauth_if_verified(
+    db,
+    *,
+    member_id: str,
+    vendor_id: str,
+    access_token: str,
+    refresh_token: str,
+    expires_in: Any = 3600,
+    scope: str | None = None,
+) -> dict:
+    """Store Outlook tokens only after a refresh token + Graph calendar ping."""
+    access = (access_token or "").strip()
+    refresh = (refresh_token or "").strip()
+    granted = (scope or "").strip()
+    if granted and "calendar" not in granted.lower():
+        return {
+            "provider": "microsoft",
+            "connected": False,
+            "status": "noscope",
+            "detail": "Outlook calendar permission is required. Approve Calendars.Read and retry.",
+        }
+    if not refresh:
+        return {
+            "provider": "microsoft",
+            "connected": False,
+            "status": "noscope",
+            "detail": (
+                "Outlook calendar permission is required (missing refresh token). "
+                "Try Connect again and approve calendar access."
+            ),
+        }
+    if not access:
+        return {
+            "provider": "microsoft",
+            "connected": False,
+            "status": "error",
+            "detail": "Could not connect Outlook (missing access token).",
+        }
+    ping = await microsoft_calendar_ping(access)
+    if not ping.get("ok"):
+        logger.warning(
+            "Microsoft calendar ping failed (%s via %s) — not marking Connected",
+            ping.get("status"),
+            ping.get("via"),
+        )
+        if ping.get("status") in (401, 403):
+            return {
+                "provider": "microsoft",
+                "connected": False,
+                "status": "noscope",
+                "detail": "Outlook calendar permission is required. Approve Calendars.Read and retry.",
+            }
+        return {
+            "provider": "microsoft",
+            "connected": False,
+            "status": "error",
+            "detail": "Could not verify Outlook calendar access. Try again.",
+        }
+    try:
+        row = await upsert_oauth_connection(
+            db,
+            member_id=member_id,
+            vendor_id=vendor_id or "default_vendor",
+            provider="microsoft",
+            token_payload={
+                "access_token": access,
+                "refresh_token": refresh,
+                "expires_in": expires_in or 3600,
+                "scope": granted or MICROSOFT_CAL_SCOPE,
+            },
+        )
+    except Exception as e:
+        logger.warning("Microsoft calendar upsert failed: %s", e)
+        return {
+            "provider": "microsoft",
+            "connected": False,
+            "status": "error",
+            "detail": f"Could not save calendar connection: {e}",
+        }
+    status = connection_status(row)
+    status["ping"] = ping.get("via")
+    return status
+
+
+async def persist_apple_caldav_if_verified(
+    db,
+    *,
+    member_id: str,
+    vendor_id: str,
+    caldav_url: str,
+    password: str,
+    username: str,
+) -> dict:
+    """Store Apple/CalDAV only after a successful CalDAV ping. Never fake Connected."""
+    from .calendar_token_crypto import encrypt_connection_secrets
+
+    url = (caldav_url or "").strip()
+    pw = (password or "").strip()
+    user = (username or "").strip()
+    if not url or not pw:
+        return {
+            "provider": "apple",
+            "connected": False,
+            "status": "needs_app_password",
+            "detail": (
+                "Apple Calendar needs an iCloud CalDAV URL and an app-specific password. "
+                "Connected is only shown after CalDAV accepts both."
+            ),
+        }
+    from .calendar_url_guard import UnsafeCalendarURL, vet_url_for_save
+    try:
+        url = vet_url_for_save(url)
+    except (UnsafeCalendarURL, ValueError):
+        return {"connected": False, "status": "invalid_url", "detail": "Use a public HTTPS calendar address."}
+    ping = await apple_caldav_ping(url, pw, user)
+    if not ping.get("ok"):
+        logger.warning("Apple CalDAV ping failed (%s) — not marking Connected", ping.get("status"))
+        if ping.get("status") in (401, 403):
+            return {
+                "provider": "apple",
+                "connected": False,
+                "status": "needs_app_password",
+                "detail": (
+                    "Apple Calendar rejected those credentials. Use an iCloud app-specific "
+                    "password, not your Apple ID password."
+                ),
+            }
+        return {
+            "provider": "apple",
+            "connected": False,
+            "status": "error",
+            "detail": "Could not reach that CalDAV calendar. Check the URL and try again.",
+        }
+    now = datetime.now(timezone.utc).isoformat()
+    stored = encrypt_connection_secrets({
+        "member_id": member_id,
+        "vendor_id": vendor_id or "default_vendor",
+        "provider": "apple",
+        "caldav_url": url,
+        "caldav_password": pw,
+        "caldav_username": user,
+        "updated_at": now,
+        "created_at": now,
+    })
+    try:
+        await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
+    except Exception as e:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_upsert_vendor_calendar_connection,
+        )
+        if _is_rest_quota_error(e):
+            if not pg_upsert_vendor_calendar_connection(stored):
+                return {
+                    "provider": "apple",
+                    "connected": False,
+                    "status": "error",
+                    "detail": "Could not save calendar connection (Fair-Use).",
+                }
+        else:
+            logger.warning("Apple calendar upsert failed: %s", e)
+            return {
+                "provider": "apple",
+                "connected": False,
+                "status": "error",
+                "detail": f"Could not save CalDAV connection: {e}",
+            }
+    status = connection_status(stored)
+    status["ping"] = ping.get("via")
+    return status
+
+
+async def persist_ics_if_verified(
+    db,
+    *,
+    member_id: str,
+    vendor_id: str,
+    ics_url: str,
+) -> dict:
+    """Store an ICS URL only after it returns a calendar feed."""
+    url = (ics_url or "").strip()
+    if not url:
+        return {
+            "provider": "ics",
+            "connected": False,
+            "status": "not_connected",
+            "detail": "Paste a public ICS calendar URL",
+        }
+    from .calendar_url_guard import UnsafeCalendarURL, vet_url_for_save
+    try:
+        url = vet_url_for_save(url)
+    except (UnsafeCalendarURL, ValueError):
+        return {"connected": False, "status": "invalid_url", "detail": "Use a public HTTPS calendar address."}
+    ping = await ics_feed_ping(url)
+    if not ping.get("ok"):
+        logger.warning("ICS ping failed (%s) — not marking Connected", ping.get("status"))
+        return {
+            "provider": "ics",
+            "connected": False,
+            "status": "error",
+            "detail": "That URL did not return an ICS calendar. Check it is public and try again.",
+        }
+    now = datetime.now(timezone.utc).isoformat()
+    row = {
+        "member_id": member_id,
+        "vendor_id": vendor_id or "default_vendor",
+        "provider": "ics",
+        "ics_url": url,
+        "updated_at": now,
+        "created_at": now,
+    }
+    try:
+        await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
+    except Exception as e:
+        from ..shared.pg_fallback import (
+            _is_rest_quota_error,
+            pg_upsert_vendor_calendar_connection,
+        )
+        if _is_rest_quota_error(e):
+            if not pg_upsert_vendor_calendar_connection(row):
+                return {
+                    "provider": "ics",
+                    "connected": False,
+                    "status": "error",
+                    "detail": "Could not save calendar connection (Fair-Use).",
+                }
+        else:
+            logger.warning("ICS calendar upsert failed: %s", e)
+            return {
+                "provider": "ics",
+                "connected": False,
+                "status": "error",
+                "detail": f"Could not save ICS URL: {e}",
+            }
+    status = connection_status(row)
+    status["ping"] = ping.get("via")
+    return status
 
 
 def connection_status(conn: dict | None) -> dict:
@@ -494,22 +896,13 @@ async def _load_connections(db, member_id: str, *, decrypt: bool = True) -> list
 
 
 async def list_vendor_calendar_status(db, member_id: str) -> list[dict]:
-    """Status for UI Connect providers — Microsoft omitted unless already connected."""
+    """Status for every Connect provider — Google, Outlook, Apple, ICS."""
     # decrypt=False: Connected means token ciphertext/plaintext present; no key needed for UI.
     existing = {
         str(r.get("provider") or "").lower(): r
         for r in await _load_connections(db, member_id, decrypt=False)
     }
-    out = []
-    for p in UI_CONNECT_PROVIDERS:
-        out.append(connection_status(existing.get(p) or {"provider": p}))
-    # Keep a connected Microsoft row so disconnect still works; never offer Connect.
-    ms = existing.get("microsoft")
-    if ms:
-        st = connection_status(ms)
-        if st.get("connected"):
-            out.append(st)
-    return out
+    return [connection_status(existing.get(p) or {"provider": p}) for p in UI_CONNECT_PROVIDERS]
 
 
 # Sentinel: FreeBusy got 401 — caller should refresh and retry once.
@@ -693,10 +1086,39 @@ async def _google_freebusy(token: str, start: datetime, end: datetime):
 
 
 async def _microsoft_schedule(token: str, start: datetime, end: datetime, email: str | None) -> Optional[bool]:
-    if not email:
-        return None
+    """Busy if /me/calendarView (or getSchedule fallback) shows a busy block.
+
+    calendarView is the FreeBusy equivalent on the signed-in mailbox and does
+    not need the vendor email. getSchedule is used when calendarView is empty
+    and we have an email.
+    """
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                "https://graph.microsoft.com/v1.0/me/calendarView",
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "startDateTime": _iso(start),
+                    "endDateTime": _iso(end),
+                    "$select": "id,showAs",
+                    "$top": "20",
+                },
+            )
+            if resp.status_code == 401:
+                return _AUTH_EXPIRED
+            if resp.status_code == 403:
+                return None
+            if resp.status_code < 400:
+                data = resp.json() if hasattr(resp, "json") else {}
+                if callable(data):
+                    data = data()
+                for item in (data or {}).get("value") or []:
+                    show = str(item.get("showAs") or "").lower()
+                    if show in ("busy", "oof", "workingelsewhere", "tentative"):
+                        return True
+                return False
+            if not email:
+                return None
             resp = await client.post(
                 "https://graph.microsoft.com/v1.0/me/calendar/getSchedule",
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -748,10 +1170,11 @@ def _parse_ics_busy(text: str, start: datetime, end: datetime) -> Optional[bool]
                 if not v:
                     return None
                 if v.endswith("Z"):
-                    return datetime.strptime(v[:15], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
-                if "T" in v:
-                    return datetime.strptime(v[:15], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
-                return datetime.strptime(v[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
+                    v = v[:-1]
+                compact = v.replace("-", "").replace(":", "")
+                if "T" in compact:
+                    return datetime.strptime(compact[:15], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+                return datetime.strptime(compact[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
             s = _parse(ds)
             e = _parse(de) if de else (s + __import__("datetime").timedelta(hours=1) if s else None)
             if s and e:
@@ -875,10 +1298,12 @@ async def _provider_busy(conn: dict, member: dict, start: datetime, end: datetim
 
 
 async def vendor_is_busy(member: Any, start: datetime, end: datetime, db=None) -> Optional[bool]:
-    """True if busy on any connected calendar; False if free; None if unknown.
+    """True if ANY connected calendar is busy; False if at least one is free and none busy; None if unknown.
 
-    Fail-soft: network/auth errors → None so auto-assign continues with other rules.
-    Google/Microsoft access tokens are refreshed when expired (needs OAuth client secret).
+    Queries every Connected provider (Google, Outlook, Apple CalDAV, ICS). One busy
+    calendar excludes the vendor for that slot. No calendars → None (caller uses
+    Bricks job-overlap + manual hours). Fail-soft: API errors → None so auto-assign
+    continues with other rules instead of stranding the roster.
     """
     m = _as_dict(member)
     member_id = str(m.get("id") or "")

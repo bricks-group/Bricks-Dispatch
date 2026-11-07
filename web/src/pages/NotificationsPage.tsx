@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import BricksLoader from '../components/BricksLoader';
 
@@ -10,6 +11,7 @@ type Notification = {
   type?: string;
   read: boolean;
   created_at: string;
+  data?: { route?: string; type?: string; url?: string };
 };
 
 function timeAgo(iso: string) {
@@ -22,6 +24,7 @@ function timeAgo(iso: string) {
 }
 
 export function NotificationsPage() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -98,7 +101,12 @@ export function NotificationsPage() {
                 <button
                   type="button"
                   className="row-click"
-                  onClick={() => { if (!n.read) markRead(n.id); }}
+                  onClick={() => {
+                    if (!n.read) markRead(n.id);
+                    if (n.type === 'onboarding_approved' || n.data?.type === 'onboarding_approved') {
+                      navigate('/availability');
+                    }
+                  }}
                   style={{ all: 'unset', cursor: n.read ? 'default' : 'pointer', display: 'block', width: '100%' }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>

@@ -260,10 +260,16 @@ export default function ProfileEditScreen() {
             <Group>
               <Row
                 title="Available for assignments"
-                subtitle="Connect a calendar on Bricks web so you only get offers that fit."
+                subtitle="Connecting a calendar tells Bricks when you’re free so auto-assign only offers jobs that fit. Manual hours still apply if none is connected."
                 right={
                   <Toggle value={availability} onValueChange={setAvailability} accessibilityLabel="Available for assignments" />
                 }
+              />
+              <Row
+                title="Calendars"
+                subtitle="Google, Outlook, Apple, or ICS — never shown as Connected without a real ping."
+                chevron
+                onPress={() => router.push('/settings')}
               />
             </Group>
             <View style={s.fields}>
