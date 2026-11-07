@@ -60,31 +60,42 @@ def _as_is_qc_variant_fields(processed_url, file_path, asset: dict) -> dict:
 # Staging uploads deliver originals to the listing file — never call vendors or claim furniture was staged.
 # Owned Bricks staging ships later. Fotello/Autoenhance remain optional HDR enhance only.
 # POSTPROD_STILLS_PROVIDER selects leftover stills editor.
-#   autoenhance (default, Kam Oct 31) — prefer AE when key+plan/credits ok;
-#                 any AE refusal/failure (401/402/403/No Plan/no credits/timeout)
-#                 soft-fails to bricks_inhouse so the job never fails on AE.
-#   inhouse     — bricks_inhouse / Enfuse path; never call Autoenhance (kill switch)
-# Aliases: ae→autoenhance; bricks_inhouse→inhouse. Unknown values → autoenhance.
+#   inhouse     (DEFAULT since launch review 2026-11-07) — bricks_inhouse /
+#                 Enfuse path; free, never calls a paid provider.
+#   autoenhance — paid Autoenhance, ONLY when explicitly configured (and key +
+#                 plan/credits ok); any AE refusal/failure soft-fails to inhouse.
+# Aliases: ae→autoenhance; bricks_inhouse/manual/none/off→inhouse. Unknown → inhouse.
+# Kill switch: PAID_STILLS_PROCESSING_DISABLED=1 forces inhouse even when
+# POSTPROD_STILLS_PROVIDER=autoenhance (checked again in autoenhance_service).
 _POSTPROD_STILLS_PROVIDER_ENV = "POSTPROD_STILLS_PROVIDER"
+_PAID_STILLS_KILL_ENV = "PAID_STILLS_PROCESSING_DISABLED"
 AUTOENHANCE_API_KEY = os.environ.get("AUTOENHANCE_API_KEY")
 FOTELLO_API_KEY = os.environ.get("FOTELLO_API_KEY")
+
+
+def paid_stills_processing_disabled() -> bool:
+    raw = (os.environ.get(_PAID_STILLS_KILL_ENV) or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 def stills_provider_preference() -> str:
     """Return 'inhouse' or 'autoenhance' for leftover vendor stills.
 
-    Default is autoenhance (Kam: "Use Autoenhance for stills"); in-house stays
-    the automatic fallback. Set POSTPROD_STILLS_PROVIDER=inhouse to never call AE.
+    Default is inhouse (free). Paid Autoenhance runs only when
+    POSTPROD_STILLS_PROVIDER=autoenhance is set explicitly and the
+    PAID_STILLS_PROCESSING_DISABLED kill switch is not on.
     """
+    if paid_stills_processing_disabled():
+        return "inhouse"
     raw = (os.environ.get(_POSTPROD_STILLS_PROVIDER_ENV) or "").strip().lower()
-    if raw in ("autoenhance", "ae", ""):
+    if raw in ("autoenhance", "ae"):
         return "autoenhance"
-    if raw in ("inhouse", "bricks_inhouse"):
+    if raw in ("", "inhouse", "bricks_inhouse", "manual", "none", "off", "noop"):
         return "inhouse"
     logger.warning(
-        f"Unknown {_POSTPROD_STILLS_PROVIDER_ENV}={raw!r} — using autoenhance"
+        f"Unknown {_POSTPROD_STILLS_PROVIDER_ENV}={raw!r} — using inhouse (no paid processing)"
     )
-    return "autoenhance"
+    return "inhouse"
 
 
 # AE time budget per leftover run. process_job_assets claims the job once and
@@ -400,6 +411,8 @@ async def poll_boxbrownie_job(job_reference: str) -> Optional[str]:
 # --- Autoenhance Helpers ---
 
 async def trigger_autoenhance_edit(image_url: str) -> Optional[str]:
+    if stills_provider_preference() != "autoenhance":
+        return None  # paid processing not explicitly enabled
     if not AUTOENHANCE_API_KEY:
         logger.error("AUTOENHANCE_API_KEY not configured")
         return None
@@ -427,6 +440,8 @@ async def trigger_fotello_edit(image_url: str) -> Optional[str]:
     Specifically leverages their premium window pulls, sky replacements,
     and automatic object removals.
     """
+    if paid_stills_processing_disabled() or not (os.environ.get("POSTPROD_ALLOW_FOTELLO") or "").strip() in ("1", "true"):
+        return None  # paid processing only when explicitly enabled
     if not FOTELLO_API_KEY:
         logger.error("FOTELLO_API_KEY not configured")
         return None

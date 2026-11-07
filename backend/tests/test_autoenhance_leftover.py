@@ -592,12 +592,13 @@ def test_deliver_single_vendor_photo_inhouse_listing_export_soft_fail(monkeypatc
     assert uploaded == [b"\xff\xd8inhouse"]
 
 
-def test_stills_provider_preference_defaults_autoenhance(monkeypatch):
+def test_stills_provider_preference_defaults_inhouse(monkeypatch):
+    # Launch review 2026-11-07: paid Autoenhance only when explicitly configured.
     monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
-    assert pp.stills_provider_preference() == "autoenhance"
-    assert pp.prefer_autoenhance_stills() is True
+    assert pp.stills_provider_preference() == "inhouse"
+    assert pp.prefer_autoenhance_stills() is False
     monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "")
-    assert pp.stills_provider_preference() == "autoenhance"
+    assert pp.stills_provider_preference() == "inhouse"
     monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "autoenhance")
     assert pp.stills_provider_preference() == "autoenhance"
     monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "ae")
@@ -608,7 +609,7 @@ def test_stills_provider_preference_defaults_autoenhance(monkeypatch):
     monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "bricks_inhouse")
     assert pp.stills_provider_preference() == "inhouse"
     monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "nope")
-    assert pp.stills_provider_preference() == "autoenhance"
+    assert pp.stills_provider_preference() == "inhouse"
 
 
 def test_bracket_group_inhouse_env_skips_autoenhance(monkeypatch):
