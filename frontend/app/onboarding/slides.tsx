@@ -18,7 +18,7 @@ const SLIDES = [
   {
     eye: 'Auto-dispatch',
     head: 'Jobs come to you.',
-    body: 'No bidding, no DMs. Connect a calendar so auto-assign only offers jobs that fit your real schedule. Manual hours still apply if none is connected.',
+    body: 'No bidding or direct messages. Connect your calendar so we can avoid times you’ve already booked. Your working hours still apply.',
   },
   {
     eye: 'Tiered payouts',

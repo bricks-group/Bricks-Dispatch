@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { startGoogleCalendarOAuth } from '../lib/googleCalendarConnect';
 import BricksLoader from '../components/BricksLoader';
-import { CalendarConnectNudge } from '../components/CalendarConnectNudge';
-import { CALENDAR_EDU_LINES, CALENDAR_USED_FOR_OFFERS } from '../lib/calendarCopy';
+import { CALENDAR_EDU_LINES, CALENDAR_INTRO_TITLE, CALENDAR_PROVIDER_HINTS } from '../lib/calendarCopy';
 
 type Availability = {
   work_start: string;
@@ -23,12 +22,12 @@ type CalStatus = {
 };
 
 function syncedLabel(c: CalStatus): string {
-  if (c.last_sync_status === 'error') return 'Couldn’t read this calendar on the last sync';
-  if (!c.last_synced_at) return 'Syncing free/busy…';
+  if (c.last_sync_status === 'error') return 'We couldn’t check your calendar. Please try again.';
+  if (!c.last_synced_at) return 'We’ll check your calendar shortly.';
   const mins = Math.max(0, Math.round((Date.now() - new Date(c.last_synced_at).getTime()) / 60000));
-  if (mins < 1) return 'Free/busy synced just now';
-  if (mins < 60) return `Free/busy synced ${mins} min ago`;
-  return `Free/busy synced ${Math.round(mins / 60)} h ago`;
+  if (mins < 1) return 'Your calendar was checked just now.';
+  if (mins < 60) return `Your calendar was checked ${mins} minutes ago.`;
+  return `Your calendar was checked ${Math.round(mins / 60)} hours ago.`;
 }
 
 type CalResponse = {
@@ -39,9 +38,9 @@ type CalResponse = {
 
 const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google Calendar',
-  microsoft: 'Outlook / Microsoft 365',
-  apple: 'Apple Calendar (iCloud CalDAV)',
-  ics: 'Other calendar (ICS link)',
+  microsoft: 'Outlook Calendar',
+  apple: 'Apple Calendar',
+  ics: 'Calendar link',
 };
 
 const CONNECT_PROVIDERS = new Set(['google', 'microsoft', 'apple', 'ics']);
@@ -123,7 +122,7 @@ export function AvailabilityPage() {
         return;
       }
       if (!res.connected && !res.oauth_url) {
-        setErr(res.detail || 'Not connected');
+        setErr(res.status === 'needs_env' ? 'Calendar connection is not available yet.' : res.detail || 'We couldn’t connect your calendar. Please try again.');
       }
       if (res.connected) syncNow();
       load();
@@ -146,35 +145,26 @@ export function AvailabilityPage() {
     }
   };
 
-  const calendarsLoaded = cals !== null;
-  const anyConnected = (cals?.connections || []).some((c) => c.connected);
-
   return (
     <div className="page-content calendar-availability">
       <div className="page-header">
         <div>
           <h1>Availability</h1>
-          <p>Working hours, capacity, and calendars that feed auto-assign</p>
+          <p>Set your working hours and connect the calendars you use.</p>
         </div>
       </div>
 
       <section className="card full" data-testid="calendar-edu">
-        <h3>How auto-assign uses your calendar</h3>
-        <ul className="muted" style={{ margin: 0, padding: '14px 20px 18px 36px', maxWidth: 680, fontSize: 13, lineHeight: 1.55 }}>
-          {CALENDAR_EDU_LINES.map((line) => (
-            <li key={line} style={{ marginBottom: 8 }}>{line}</li>
-          ))}
-        </ul>
+        <h3>{CALENDAR_INTRO_TITLE}</h3>
+        <p className="muted calendar-intro">{CALENDAR_EDU_LINES.join(' ')}</p>
       </section>
 
-      {calendarsLoaded && !anyConnected && <CalendarConnectNudge linkToAvailability={false} />}
-
-      {!data && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
+      {!data && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading</p>}
       {err && <p className="error">{err}</p>}
 
       {data && (
         <section className="card full">
-          <h3>Working hours &amp; capacity</h3>
+          <h3>Working hours and capacity</h3>
           <div className="stack">
             <label>
               <input
@@ -194,7 +184,7 @@ export function AvailabilityPage() {
                 <input type="time" value={data.work_end} onChange={(e) => setData({ ...data, work_end: e.target.value })} />
               </label>
               <label>
-                Max jobs / day
+                Daily job limit
                 <input type="number" min={1} value={data.jobs_per_day} onChange={(e) => setData({ ...data, jobs_per_day: Number(e.target.value) })} style={{ width: 80 }} />
               </label>
             </div>
@@ -210,10 +200,10 @@ export function AvailabilityPage() {
         <h3>Calendars</h3>
         <ul className="list">
           {(cals?.connections || [
-            { provider: 'google', connected: false, status: 'not_connected', detail: 'Connect Google Calendar' },
-            { provider: 'microsoft', connected: false, status: 'not_connected', detail: 'Connect Outlook / Microsoft 365' },
-            { provider: 'apple', connected: false, status: 'needs_app_password', detail: 'Apple needs app-specific password' },
-            { provider: 'ics', connected: false, status: 'not_connected', detail: 'Paste a public ICS URL' },
+            { provider: 'google', connected: false, status: 'not_connected', detail: '' },
+            { provider: 'microsoft', connected: false, status: 'not_connected', detail: '' },
+            { provider: 'apple', connected: false, status: 'needs_app_password', detail: '' },
+            { provider: 'ics', connected: false, status: 'not_connected', detail: '' },
           ])
             .filter((c) => CONNECT_PROVIDERS.has(c.provider) || c.connected)
             .map((c) => (
@@ -221,12 +211,9 @@ export function AvailabilityPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                 <div>
                   <strong>{PROVIDER_LABELS[c.provider] || c.provider}</strong>
-                  <p className="muted" style={{ margin: '4px 0 0', padding: 0 }}>
-                    {CALENDAR_USED_FOR_OFFERS}
-                  </p>
-                  <p className="muted" style={{ margin: '4px 0 0', padding: 0 }}>
-                    {c.connected ? `Connected · ${syncedLabel(c)}` : c.detail}
-                    {c.status === 'needs_env' ? ' · Calendar connection is not available yet' : ''}
+                  <p className="muted calendar-provider-hint">
+                    {c.connected ? syncedLabel(c) : c.status === 'needs_env'
+                      ? 'Calendar connection is not available yet.' : CALENDAR_PROVIDER_HINTS[c.provider]}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -238,9 +225,10 @@ export function AvailabilityPage() {
                     <button
                       type="button"
                       disabled={busy === c.provider || c.status === 'needs_env'}
+                      aria-label={`Connect ${PROVIDER_LABELS[c.provider]}`}
                       onClick={() => connect(c.provider)}
                     >
-                      {busy === c.provider ? '…' : c.provider === 'google' ? 'Connect Google' : 'Connect Outlook'}
+                      {busy === c.provider ? 'Connecting' : 'Connect'}
                     </button>
                   ) : null}
                 </div>
@@ -248,7 +236,8 @@ export function AvailabilityPage() {
               {c.provider === 'apple' && !c.connected ? (
                 <div className="row" style={{ padding: 0, gap: 8, flexWrap: 'wrap' }}>
                   <input
-                    placeholder="CalDAV URL (iCloud)"
+                    aria-label="iCloud calendar address"
+                    placeholder="iCloud calendar address"
                     value={appleUrl}
                     onChange={(e) => setAppleUrl(e.target.value)}
                     style={{ flex: 1, minWidth: 200 }}
@@ -265,14 +254,15 @@ export function AvailabilityPage() {
                     disabled={busy === 'apple' || !appleUrl || !applePass}
                     onClick={() => connect('apple', { caldav_url: appleUrl, app_password: applePass })}
                   >
-                    Save Apple
+                    Connect
                   </button>
                 </div>
               ) : null}
               {c.provider === 'ics' && !c.connected ? (
                 <div className="row calendar-feed-form" style={{ padding: 0, gap: 8 }}>
                   <input
-                    placeholder="https://…/calendar.ics"
+                    aria-label="Calendar link"
+                    placeholder="Paste your calendar link"
                     value={icsUrl}
                     onChange={(e) => setIcsUrl(e.target.value)}
                     style={{ flex: 1, minWidth: 0 }}
@@ -282,7 +272,7 @@ export function AvailabilityPage() {
                     disabled={busy === 'ics' || !icsUrl}
                     onClick={() => connect('ics', { ics_url: icsUrl })}
                   >
-                    Save ICS
+                    Connect
                   </button>
                 </div>
               ) : null}

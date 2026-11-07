@@ -4,9 +4,9 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Bell, Calendar, CreditCard } from 'lucide-react-native';
 import { actorHeaders } from '../lib/api';
 import {
-  anyCalendarConnected,
   CALENDAR_EDU_LINES,
-  CALENDAR_USED_FOR_OFFERS,
+  CALENDAR_INTRO_TITLE,
+  CALENDAR_PROVIDER_HINTS,
   calendarRowSubtitle,
   connectAppleCalendar,
   connectGoogleCalendar,
@@ -21,7 +21,6 @@ import {
 } from '../lib/calendarConnect';
 import { color, type as T, space } from '../theme';
 import { Screen, NavBar, Section, Group, Row, Pill, Field } from '../components/ui';
-import { CalendarConnectNudge } from '../components/CalendarConnectNudge';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 
@@ -32,10 +31,9 @@ export default function SettingsScreen() {
   const [stripeBusy, setStripeBusy] = useState(false);
   const [stripeErr, setStripeErr] = useState('');
   const [connections, setConnections] = useState<CalendarConnection[]>([]);
-  const [calsLoaded, setCalsLoaded] = useState(false);
   const [calBusy, setCalBusy] = useState('');
   const [calErr, setCalErr] = useState('');
-  const [appleUrl, setAppleUrl] = useState('https://caldav.icloud.com/');
+  const [appleUrl, setAppleUrl] = useState('');
   const [applePass, setApplePass] = useState('');
   const [appleUser, setAppleUser] = useState('');
   const [icsUrl, setIcsUrl] = useState('');
@@ -65,10 +63,8 @@ export default function SettingsScreen() {
     try {
       const data = await fetchVendorCalendars();
       setConnections(data.connections || []);
-      setCalsLoaded(true);
     } catch {
       setConnections([]);
-      setCalsLoaded(false);
     }
   }, []);
 
@@ -173,7 +169,7 @@ export default function SettingsScreen() {
           />
         ) : (
           <Row
-            title={`Connect ${title}`}
+            title="Connect"
             tone="accent"
             chevron
             onPress={() =>
@@ -224,24 +220,22 @@ export default function SettingsScreen() {
         </Section>
       ) : null}
       <Section first={!stripeVisible} label="Calendars">
-        {calsLoaded && !anyCalendarConnected(connections) ? <CalendarConnectNudge /> : null}
         <View style={s.edu} testID="calendar-edu">
-          {CALENDAR_EDU_LINES.map((line) => (
-            <Text key={line} style={[T.bodySm, s.eduLine]}>{line}</Text>
-          ))}
+          <Text style={[T.bodySm, s.introTitle]}>{CALENDAR_INTRO_TITLE}</Text>
+          <Text style={T.bodySm}>{CALENDAR_EDU_LINES.join(' ')}</Text>
         </View>
-        <Group>
+        <Group style={s.square}>
           {oauthBlock('google')}
           {oauthBlock('microsoft')}
         </Group>
-        <Group style={s.gap}>
+        <Group style={[s.gap, s.square]}>
           <Row
             icon={Calendar}
             title="Apple Calendar"
             subtitle={
               apple?.connected
                 ? calendarRowSubtitle(apple, 'Apple Calendar')
-                : `${CALENDAR_USED_FOR_OFFERS} iCloud CalDAV + app-specific password — not your Apple ID password.`
+                : CALENDAR_PROVIDER_HINTS.apple
             }
             right={apple?.connected ? <Pill label="Connected" tone="ok" /> : undefined}
           />
@@ -250,12 +244,12 @@ export default function SettingsScreen() {
           ) : (
             <>
               <View style={s.fields}>
-                <Field label="CalDAV URL" value={appleUrl} onChangeText={setAppleUrl} autoCapitalize="none" autoCorrect={false} placeholder="https://caldav.icloud.com/" />
-                <Field label="Apple ID email" value={appleUser} onChangeText={setAppleUser} autoCapitalize="none" keyboardType="email-address" placeholder="name@icloud.com" />
-                <Field label="App-specific password" value={applePass} onChangeText={setApplePass} secureTextEntry autoCapitalize="none" placeholder="xxxx-xxxx-xxxx-xxxx" />
+                <Field boxStyle={s.square} label="iCloud calendar address" value={appleUrl} onChangeText={setAppleUrl} autoCapitalize="none" autoCorrect={false} placeholder="Paste your calendar address" />
+                <Field boxStyle={s.square} label="Apple ID email" value={appleUser} onChangeText={setAppleUser} autoCapitalize="none" keyboardType="email-address" placeholder="name@icloud.com" />
+                <Field boxStyle={s.square} label="App-specific password" value={applePass} onChangeText={setApplePass} secureTextEntry autoCapitalize="none" placeholder="Your app-specific password" />
               </View>
               <Row
-                title="Connect Apple Calendar"
+                title="Connect"
                 tone="accent"
                 onPress={() =>
                   runConnect('apple', () =>
@@ -268,26 +262,26 @@ export default function SettingsScreen() {
             </>
           )}
         </Group>
-        <Group style={s.gap}>
+        <Group style={[s.gap, s.square]}>
           <Row
             icon={Calendar}
-            title="Other calendar (ICS)"
+            title="Calendar link"
             subtitle={
               ics?.connected
-                ? calendarRowSubtitle(ics, 'Other calendar (ICS)')
-                : `${CALENDAR_USED_FOR_OFFERS} Paste a public ICS URL from Fastmail, Proton, or another provider.`
+                ? calendarRowSubtitle(ics, 'Calendar link')
+                : CALENDAR_PROVIDER_HINTS.ics
             }
             right={ics?.connected ? <Pill label="Connected" tone="ok" /> : undefined}
           />
           {ics?.connected ? (
-            <Row title="Disconnect ICS calendar" tone="bad" onPress={() => onDisconnect('ics')} loading={calBusy === 'ics'} />
+            <Row title="Disconnect" tone="bad" onPress={() => onDisconnect('ics')} loading={calBusy === 'ics'} />
           ) : (
             <>
               <View style={s.fields}>
-                <Field label="ICS URL" value={icsUrl} onChangeText={setIcsUrl} autoCapitalize="none" autoCorrect={false} placeholder="https://…/calendar.ics" />
+                <Field boxStyle={s.square} label="Calendar link" value={icsUrl} onChangeText={setIcsUrl} autoCapitalize="none" autoCorrect={false} placeholder="Paste your calendar link" />
               </View>
               <Row
-                title="Connect ICS calendar"
+                title="Connect"
                 tone="accent"
                 onPress={() => runConnect('ics', () => connectIcsCalendar(icsUrl))}
                 loading={calBusy === 'ics'}
@@ -317,7 +311,8 @@ const s = StyleSheet.create({
   top: { height: space[24] },
   err: { color: color.bad, marginTop: space[8] },
   gap: { marginTop: space[16] },
-  edu: { gap: space[8], marginBottom: space[16] },
-  eduLine: { color: color.textBody },
+  edu: { gap: space[8], marginBottom: space[16], padding: space[16], borderWidth: 1, borderColor: color.hair, borderRadius: 0 },
+  introTitle: { color: color.textBody, fontWeight: '600' },
+  square: { borderRadius: 0 },
   fields: { gap: space[12], paddingHorizontal: space[16], paddingTop: space[8] },
 });

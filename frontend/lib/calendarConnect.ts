@@ -32,16 +32,19 @@ export type CalendarsResponse = {
   nudge?: string;
 };
 
-/** Connecting a calendar drives auto-assign — not a hidden setting. */
+export const CALENDAR_INTRO_TITLE = 'Jobs that fit your schedule';
 export const CALENDAR_EDU_LINES = [
-  'Connecting a calendar tells Bricks when you’re free so native auto-assign only offers you jobs that fit your real schedule.',
-  'Busy on any connected calendar = you won’t get that slot.',
-  'Manual hours and the available toggle still apply if no calendar is connected.',
+  'Connect your calendar so we can avoid times you’ve already booked.',
+  'Your working hours still apply, with or without a connected calendar.',
 ] as const;
-export const CALENDAR_USED_FOR_OFFERS = 'Used for job offers.';
-export const CALENDAR_NUDGE_TITLE = 'Connect a calendar so we don’t double-book you.';
-export const CALENDAR_NUDGE_BODY =
-  'Connecting a calendar is how Dispatch knows your availability for auto-assign.';
+export const CALENDAR_PROVIDER_HINTS: Record<string, string> = {
+  google: 'Use the calendar you already use with Google.',
+  microsoft: 'Use your Outlook or Microsoft 365 calendar.',
+  apple: 'Create an app-specific password in your Apple Account security settings.',
+  ics: 'Paste a sharing link from your calendar settings.',
+};
+export const CALENDAR_NUDGE_TITLE = CALENDAR_INTRO_TITLE;
+export const CALENDAR_NUDGE_BODY = CALENDAR_EDU_LINES[0];
 
 export function anyCalendarConnected(data: CalendarsResponse | CalendarConnection[] | null | undefined): boolean {
   const rows = Array.isArray(data) ? data : data?.connections;
@@ -49,19 +52,17 @@ export function anyCalendarConnected(data: CalendarsResponse | CalendarConnectio
 }
 
 export function calendarRowSubtitle(c: CalendarConnection | null, title: string): string {
-  const used = CALENDAR_USED_FOR_OFFERS;
-  if (c?.connected) return `${used} Connected. Auto-assign skips slots that are busy here.`;
-  if (c?.status === 'needs_env') {
-    return `${used} ${c.detail || `${title} is not configured on this environment.`}`;
-  }
-  return `${used} ${c?.detail || 'Not connected.'}`;
+  if (c?.connected) return 'We’ll avoid times you’ve already booked here.';
+  if (c?.status === 'needs_env') return 'Calendar connection is not available yet.';
+  const provider = c?.provider || (title.includes('Google') ? 'google' : title.includes('Outlook') ? 'microsoft' : '');
+  return CALENDAR_PROVIDER_HINTS[provider] || 'Connect the calendar you use to plan your day.';
 }
 
 export const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google Calendar',
-  microsoft: 'Outlook / Microsoft 365',
+  microsoft: 'Outlook Calendar',
   apple: 'Apple Calendar',
-  ics: 'Other calendar (ICS)',
+  ics: 'Calendar link',
 };
 
 function detailOf(data: any, fallback: string) {
@@ -152,7 +153,7 @@ export async function connectGoogleCalendar(): Promise<{ connected: boolean; err
   const start = await postConnect('google');
   if (start.connected) return { connected: true };
   if (start.status === 'needs_env' || start.status === 'unavailable') {
-    return { connected: false, error: start.detail || 'Google Calendar is not configured on this environment.' };
+    return { connected: false, error: 'Google Calendar connection is not available yet.' };
   }
 
   if (start.oauth_url) {
@@ -242,7 +243,7 @@ export async function connectMicrosoftCalendar(): Promise<{ connected: boolean; 
   const start = await postConnect('microsoft');
   if (start.connected) return { connected: true };
   if (start.status === 'needs_env' || start.status === 'unavailable') {
-    return { connected: false, error: start.detail || 'Outlook is not configured on this environment.' };
+    return { connected: false, error: 'Outlook Calendar connection is not available yet.' };
   }
   if (start.oauth_url) {
     return finishOauthInBrowser(start.oauth_url, 'microsoft');
@@ -273,5 +274,5 @@ export async function connectIcsCalendar(icsUrl: string): Promise<{ connected: b
     await syncCalendarsSoft();
     return { connected: true };
   }
-  return { connected: false, error: data.detail || 'Could not connect that ICS calendar' };
+  return { connected: false, error: data.detail || 'Could not connect that calendar link' };
 }

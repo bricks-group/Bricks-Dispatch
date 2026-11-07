@@ -266,7 +266,7 @@ def onboarding_welcome_email(member: dict) -> tuple[str, str, str]:
             f"Hi {_first_name(member)},",
             "Welcome to Bricks. Before we send you paid jobs, finish a few quick steps in the Bricks app:",
             "When they're done you're live, and jobs that fit your schedule and area start coming to you automatically.",
-            "Open Availability to connect Google, Outlook, Apple, or an ICS feed. Dispatch checks calendar free/busy before offering jobs.",
+            "Open Availability to connect your calendar. We’ll avoid times you’ve already booked.",
         ],
         "Finish setup",
         link,

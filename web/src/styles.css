@@ -1088,3 +1088,6 @@ input.jobs-search { flex: 1 1 260px; min-width: 0; max-width: 420px; }
 .calendar-availability input { font-family: inherit; }
 .calendar-feed-form { flex-wrap: wrap; }
 .calendar-feed-form input { flex-basis: 220px !important; }
+
+.calendar-intro { max-width: 680px; line-height: 1.6; }
+.calendar-provider-hint { margin: 6px 0 0; padding: 0; line-height: 1.5; max-width: 540px; }

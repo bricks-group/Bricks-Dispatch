@@ -261,7 +261,7 @@ def welcome_approved_email_html(availability_url: str) -> str:
 </div>
 <div style="padding:24px">
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">You’re approved on Bricks GO.</p>
-<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Connecting a calendar is how Dispatch knows your availability for auto-assign.</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Connect your calendar so we can avoid times you’ve already booked.</p>
 <p style="color:#555;line-height:1.6;margin:0 0 12px 0">Busy on any connected calendar = you won’t get that slot. Manual hours still apply if none is connected.</p>
 <a href="{url}" style="display:inline-block;margin-top:8px;padding:12px 24px;background:#d2542b;color:#fff;text-decoration:none;border-radius:2px;font-weight:500">Open Availability</a>
 <p style="margin-top:24px;font-size:13px;color:#999;line-height:1.5">Or go to <a href="{url}" style="color:#d2542b">{url}</a></p>

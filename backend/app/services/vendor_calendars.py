@@ -24,16 +24,12 @@ UI_CONNECT_PROVIDERS = ("google", "microsoft", "apple", "ics")
 
 # Vendor-facing copy — connecting a calendar drives auto-assign, not a hidden setting.
 VENDOR_CALENDAR_EDU_COPY = (
-    "Connecting a calendar tells Bricks when you’re free so native auto-assign "
-    "only offers you jobs that fit your real schedule. Busy on any connected "
-    "calendar = you won’t get that slot. Manual hours and the available toggle "
-    "still apply if no calendar is connected."
+    "Connect your calendar so we can avoid times you’ve already booked. "
+    "Your working hours still apply, with or without a connected calendar."
 )
-VENDOR_CALENDAR_USED_FOR_OFFERS = "Used for job offers."
-VENDOR_CALENDAR_NUDGE = "Connect a calendar so we don’t double-book you."
-VENDOR_CALENDAR_WELCOME = (
-    "Connecting a calendar is how Dispatch knows your availability for auto-assign."
-)
+VENDOR_CALENDAR_USED_FOR_OFFERS = "Your calendar helps us find a time that works."
+VENDOR_CALENDAR_NUDGE = "Jobs that fit your schedule"
+VENDOR_CALENDAR_WELCOME = "Connect your calendar so we can avoid times you’ve already booked."
 
 
 def _as_dict(obj: Any) -> dict:
@@ -620,8 +616,8 @@ async def persist_apple_caldav_if_verified(
             "connected": False,
             "status": "needs_app_password",
             "detail": (
-                "Apple Calendar needs an iCloud CalDAV URL and an app-specific password. "
-                "Connected is only shown after CalDAV accepts both."
+                "Apple Calendar needs your iCloud calendar address and an app-specific password. "
+                "We’ll check both before connecting."
             ),
         }
     from .calendar_url_guard import UnsafeCalendarURL, vet_url_for_save
@@ -646,7 +642,7 @@ async def persist_apple_caldav_if_verified(
             "provider": "apple",
             "connected": False,
             "status": "error",
-            "detail": "Could not reach that CalDAV calendar. Check the URL and try again.",
+            "detail": "We couldn’t reach your calendar. Check the address and try again.",
         }
     now = datetime.now(timezone.utc).isoformat()
     stored = encrypt_connection_secrets({
@@ -680,7 +676,7 @@ async def persist_apple_caldav_if_verified(
                 "provider": "apple",
                 "connected": False,
                 "status": "error",
-                "detail": f"Could not save CalDAV connection: {e}",
+                "detail": "We couldn’t save your Apple Calendar connection. Please try again.",
             }
     status = connection_status(stored)
     status["ping"] = ping.get("via")
@@ -701,7 +697,7 @@ async def persist_ics_if_verified(
             "provider": "ics",
             "connected": False,
             "status": "not_connected",
-            "detail": "Paste a public ICS calendar URL",
+            "detail": "Paste a sharing link from your calendar settings.",
         }
     from .calendar_url_guard import UnsafeCalendarURL, vet_url_for_save
     try:
@@ -715,7 +711,7 @@ async def persist_ics_if_verified(
             "provider": "ics",
             "connected": False,
             "status": "error",
-            "detail": "That URL did not return an ICS calendar. Check it is public and try again.",
+            "detail": "We couldn’t read that calendar link. Check the sharing settings and try again.",
         }
     now = datetime.now(timezone.utc).isoformat()
     row = {
@@ -747,7 +743,7 @@ async def persist_ics_if_verified(
                 "provider": "ics",
                 "connected": False,
                 "status": "error",
-                "detail": f"Could not save ICS URL: {e}",
+                "detail": "We couldn’t save your calendar link. Please try again.",
             }
     status = connection_status(row)
     status["ping"] = ping.get("via")
@@ -798,18 +794,18 @@ def _connection_status(conn: dict | None) -> dict:
 
     if provider == "apple":
         if caldav and password:
-            return {"provider": "apple", "connected": True, "status": "connected", "detail": "Apple Calendar (CalDAV) connected"}
+            return {"provider": "apple", "connected": True, "status": "connected", "detail": "Apple Calendar is connected."}
         return {
             "provider": "apple",
             "connected": False,
             "status": "needs_app_password",
-            "detail": "Apple Calendar needs an app-specific password + CalDAV URL (iCloud)",
+            "detail": "Use your iCloud calendar address and an app-specific password.",
         }
 
     if provider == "ics":
         if ics:
-            return {"provider": "ics", "connected": True, "status": "connected", "detail": "ICS feed connected"}
-        return {"provider": "ics", "connected": False, "status": "not_connected", "detail": "Paste a public ICS calendar URL"}
+            return {"provider": "ics", "connected": True, "status": "connected", "detail": "Your calendar link is connected."}
+        return {"provider": "ics", "connected": False, "status": "not_connected", "detail": "Paste a sharing link from your calendar settings."}
 
     return {"provider": provider or "unknown", "connected": False, "status": "not_connected", "detail": "Not connected"}
 
