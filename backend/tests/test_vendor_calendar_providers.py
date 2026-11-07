@@ -75,16 +75,11 @@ async def test_microsoft_calendarview_busy_and_free():
 
 @pytest.mark.asyncio
 async def test_apple_caldav_busy_and_free():
-    class Busy(FakeClient):
-        async def request(self, method, url, content=None, headers=None, auth=None):
-            assert method == "REPORT"
-            return FakeResp(207, text="BEGIN:VEVENT\nDTSTART:20260910T140000Z\nEND:VEVENT")
+    async def busy_req(method, url, **k):
+        assert method == "REPORT"
+        return FakeResp(207, text="BEGIN:VEVENT\nDTSTART:20260910T140000Z\nEND:VEVENT")
 
-    class Free(FakeClient):
-        async def request(self, method, url, content=None, headers=None, auth=None):
-            return FakeResp(207, text="<D:multistatus xmlns:D='DAV:'></D:multistatus>")
-
-    with patch("app.services.vendor_calendars.httpx.AsyncClient", Busy):
+    with patch("app.services.calendar_url_guard.guarded_request", busy_req):
         assert await _apple_caldav_busy("https://caldav.icloud.com/", "pw", "u", START, END) is True
         member = {
             "id": "m1",
@@ -94,7 +89,10 @@ async def test_apple_caldav_busy_and_free():
         }
         assert await vendor_is_busy(member, START, END) is True
 
-    with patch("app.services.vendor_calendars.httpx.AsyncClient", Free):
+    async def free_req(method, url, **k):
+        return FakeResp(207, text="<D:multistatus xmlns:D='DAV:'></D:multistatus>")
+
+    with patch("app.services.calendar_url_guard.guarded_request", free_req):
         assert await _apple_caldav_busy("https://caldav.icloud.com/", "pw", "u", START, END) is False
         member = {
             "id": "m1",
@@ -113,20 +111,18 @@ async def test_ics_busy_and_free():
     )
     free_ics = "BEGIN:VCALENDAR\nEND:VCALENDAR"
 
-    class Busy(FakeClient):
-        async def get(self, url, *a, **k):
-            return FakeResp(200, text=busy_ics)
+    async def busy_get(method, url, **k):
+        return FakeResp(200, text=busy_ics)
 
-    class Free(FakeClient):
-        async def get(self, url, *a, **k):
-            return FakeResp(200, text=free_ics)
-
-    with patch("app.services.vendor_calendars.httpx.AsyncClient", Busy):
+    with patch("app.services.calendar_url_guard.guarded_request", busy_get):
         assert await _ics_busy("https://example.com/cal.ics", START, END) is True
         member = {"id": "m1", "calendar_ics_url": "https://example.com/cal.ics"}
         assert await vendor_is_busy(member, START, END) is True
 
-    with patch("app.services.vendor_calendars.httpx.AsyncClient", Free):
+    async def free_get(method, url, **k):
+        return FakeResp(200, text=free_ics)
+
+    with patch("app.services.calendar_url_guard.guarded_request", free_get):
         assert await _ics_busy("https://example.com/cal.ics", START, END) is False
         member = {"id": "m1", "ics_url": "https://example.com/cal.ics"}
         assert await vendor_is_busy(member, START, END) is False
@@ -264,11 +260,13 @@ async def test_microsoft_connect_starts_oauth(monkeypatch):
         "MICROSOFT_OAUTH_REDIRECT_URI",
         "https://dispatch-api.brxs.ca/api/vendor-os/calendars/microsoft/callback",
     )
+    monkeypatch.setenv("CALENDAR_OAUTH_STATE_SECRET", "test-state-secret")
 
     out = await vos.connect_vendor_calendar("microsoft", payload={}, authorization="Bearer x", x_user_id=None)
     assert out["connected"] is False
     assert out["status"] == "oauth_ready"
     assert "login.microsoftonline.com" in (out.get("oauth_url") or "")
+    assert f"state={actor}" not in (out.get("oauth_url") or "")
 
 
 @pytest.mark.asyncio

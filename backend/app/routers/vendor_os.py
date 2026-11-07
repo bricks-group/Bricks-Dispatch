@@ -1637,7 +1637,20 @@ async def connect_vendor_calendar(
                 "mode": None,
                 "connect_via": "direct" if google_direct_oauth() else None,
             }
-        oauth_url = build_google_authorize_url(actor_id)
+        try:
+            oauth_url = build_google_authorize_url(actor_id)
+        except Exception as e:
+            from ..services.vendor_calendars import OAuthStateError
+            if not isinstance(e, OAuthStateError):
+                raise
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "Calendar OAuth state signing is not configured on this environment.",
+                "oauth_url": None,
+                "mode": None,
+                "connect_via": "direct",
+            }
         return {
             "connected": False,
             "status": "oauth_ready",
@@ -1686,11 +1699,25 @@ async def connect_vendor_calendar(
                 "mode": None,
                 "connect_via": "direct",
             }
+        try:
+            oauth_url = build_microsoft_authorize_url(actor_id)
+        except Exception as e:
+            from ..services.vendor_calendars import OAuthStateError
+            if not isinstance(e, OAuthStateError):
+                raise
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "Calendar OAuth state signing is not configured on this environment.",
+                "oauth_url": None,
+                "mode": None,
+                "connect_via": "direct",
+            }
         return {
             "connected": False,
             "status": "oauth_ready",
             "detail": "Open Microsoft OAuth to connect Outlook / Microsoft 365",
-            "oauth_url": build_microsoft_authorize_url(actor_id),
+            "oauth_url": oauth_url,
             "mode": "direct",
             "connect_via": "direct",
             "scope": MICROSOFT_CAL_SCOPE,
@@ -1783,19 +1810,28 @@ async def google_calendar_oauth_callback(
     if error:
         return _err(error_description or error)
     if not code or not state:
-        return _err("Missing OAuth code or state (member id)")
+        return _err("Missing OAuth code or state")
     if not google_direct_oauth():
         return _err("Direct Google OAuth requires GOOGLE_CLIENT_SECRET on the API (use Supabase Connect instead)")
+
+    from ..services.vendor_calendars import OAuthStateError, consume_oauth_state, read_oauth_state
+    try:
+        read_oauth_state(state, "google")
+    except OAuthStateError as e:
+        return _err(str(e))
+    db = await get_db()
+    try:
+        member_id = await consume_oauth_state(state, "google", db)
+    except OAuthStateError as e:
+        return _err(str(e))
 
     try:
         tokens = await exchange_google_code(code)
     except Exception as e:
-        logger.warning("Google calendar OAuth exchange failed: %s", e)
-        return _err(str(e) or "Google token exchange failed")
+        logger.warning("Google calendar OAuth exchange failed: %s", type(e).__name__)
+        return _err("Google token exchange failed")
 
-    member_id = str(state).strip()
     vendor_id = "default_vendor"
-    db = await get_db()
     try:
         row = _maybe_single_row(
             await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
@@ -1804,7 +1840,7 @@ async def google_calendar_oauth_callback(
             return _err("Unknown vendor member in OAuth state")
         vendor_id = row.get("vendor_id") or vendor_id
     except Exception as e:
-        logger.warning("OAuth member lookup failed: %s", e)
+        logger.warning("OAuth member lookup failed: %s", type(e).__name__)
         return _err("Could not resolve vendor member for OAuth state")
     status = await persist_google_oauth_if_verified(
         db,
@@ -1847,19 +1883,28 @@ async def microsoft_calendar_oauth_callback(
     if error:
         return _err(error_description or error)
     if not code or not state:
-        return _err("Missing OAuth code or state (member id)")
+        return _err("Missing OAuth code or state")
     if not microsoft_oauth_configured():
         return _err("Microsoft OAuth client id/secret not configured on this environment")
+
+    from ..services.vendor_calendars import OAuthStateError, consume_oauth_state, read_oauth_state
+    try:
+        read_oauth_state(state, "microsoft")
+    except OAuthStateError as e:
+        return _err(str(e))
+    db = await get_db()
+    try:
+        member_id = await consume_oauth_state(state, "microsoft", db)
+    except OAuthStateError as e:
+        return _err(str(e))
 
     try:
         tokens = await exchange_microsoft_code(code)
     except Exception as e:
-        logger.warning("Microsoft calendar OAuth exchange failed: %s", e)
-        return _err(str(e) or "Microsoft token exchange failed")
+        logger.warning("Microsoft calendar OAuth exchange failed: %s", type(e).__name__)
+        return _err("Microsoft token exchange failed")
 
-    member_id = str(state).strip()
     vendor_id = "default_vendor"
-    db = await get_db()
     try:
         row = _maybe_single_row(
             await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
@@ -1868,7 +1913,7 @@ async def microsoft_calendar_oauth_callback(
             return _err("Unknown vendor member in OAuth state")
         vendor_id = row.get("vendor_id") or vendor_id
     except Exception as e:
-        logger.warning("OAuth member lookup failed: %s", e)
+        logger.warning("OAuth member lookup failed: %s", type(e).__name__)
         return _err("Could not resolve vendor member for OAuth state")
     status = await persist_microsoft_oauth_if_verified(
         db,

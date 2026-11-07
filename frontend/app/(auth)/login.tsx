@@ -5,6 +5,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
+import { codeFromAuthCallback } from '../../lib/oauthCallback';
 import { color, type as T, space, radius, layout } from '../../theme';
 import { Field, Button, Notice, Divider, TextLink } from '../../components/ui';
 import BricksWordmark from '../../components/BricksWordmark';
@@ -173,8 +174,7 @@ export default function LoginScreen() {
       if (oauthError || !data?.url) throw oauthError ?? new Error('No OAuth URL');
       const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
       if (result.type === 'success' && result.url) {
-        const url = new URL(result.url);
-        const code = url.searchParams.get('code');
+        const code = codeFromAuthCallback(result.url, redirectTo);
         if (code) {
           await supabase.auth.exchangeCodeForSession(code);
           router.replace('/(tabs)');
