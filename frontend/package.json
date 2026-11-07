@@ -9,7 +9,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "export:web": "expo export -p web --output-dir dist && node scripts/patch-web-html.mjs"
+    "export:web": "expo export -p web --output-dir dist && node scripts/patch-web-html.mjs",
+    "test": "node --import ./tests/stubs/register.mjs --test tests/*.test.mjs"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",

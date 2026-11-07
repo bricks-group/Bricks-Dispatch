@@ -2,6 +2,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { supabase } from './supabase';
 import { actorHeaders } from './api';
+import { AUTH_CALLBACK_MESSAGES, parseAuthCallback } from './oauthCallback';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -189,11 +190,12 @@ export async function connectGoogleCalendar(): Promise<{ connected: boolean; err
       return { connected: false, error: 'Could not finish Google Calendar connect' };
     }
     try {
-      const url = new URL(result.url);
-      const code = url.searchParams.get('code');
-      if (!code) {
-        return { connected: false, error: 'Google did not return an auth code' };
+      // Exchange only a code returned on exactly the redirect we opened.
+      const callback = parseAuthCallback(result.url, redirectTo);
+      if (!callback.ok) {
+        return { connected: false, error: AUTH_CALLBACK_MESSAGES[callback.reason] };
       }
+      const code = callback.code;
       let providerToken = '';
       let providerRefresh = '';
       try {
