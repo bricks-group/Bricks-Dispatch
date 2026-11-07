@@ -41,6 +41,9 @@ def api_key() -> str:
 
 
 def is_available() -> bool:
+    # PAID_STILLS_PROCESSING_DISABLED kill switch (default off → unchanged).
+    if (os.environ.get("PAID_STILLS_PROCESSING_DISABLED") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return False
     return bool(api_key()) and not _plan_blocked
 
 

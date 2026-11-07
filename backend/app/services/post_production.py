@@ -70,12 +70,21 @@ AUTOENHANCE_API_KEY = os.environ.get("AUTOENHANCE_API_KEY")
 FOTELLO_API_KEY = os.environ.get("FOTELLO_API_KEY")
 
 
+def paid_stills_processing_disabled() -> bool:
+    """Emergency kill switch (default OFF, so behaviour is unchanged unless set).
+    Kam 2026-11-07: keep Autoenhance as the default until in-house matches it."""
+    raw = (os.environ.get("PAID_STILLS_PROCESSING_DISABLED") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def stills_provider_preference() -> str:
     """Return 'inhouse' or 'autoenhance' for leftover vendor stills.
 
     Default is autoenhance (Kam: "Use Autoenhance for stills"); in-house stays
     the automatic fallback. Set POSTPROD_STILLS_PROVIDER=inhouse to never call AE.
     """
+    if paid_stills_processing_disabled():
+        return "inhouse"
     raw = (os.environ.get(_POSTPROD_STILLS_PROVIDER_ENV) or "").strip().lower()
     if raw in ("autoenhance", "ae", ""):
         return "autoenhance"
