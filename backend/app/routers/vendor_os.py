@@ -7,7 +7,7 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Body, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -1670,7 +1670,20 @@ async def connect_vendor_calendar(
                 "mode": None,
                 "connect_via": "direct" if google_direct_oauth() else None,
             }
-        oauth_url = build_google_authorize_url(actor_id)
+        from ..services.calendar_oauth_state import OAuthStateError, mint_state
+        from ..services.vendor_calendars import build_google_start_url
+        try:
+            oauth_state = mint_state(actor_id, "google")
+        except OAuthStateError:
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "Calendar OAuth state signing is not configured.",
+                "oauth_url": None,
+                "mode": None,
+                "connect_via": "direct",
+            }
+        oauth_url = build_google_start_url(oauth_state)
         return {
             "connected": False,
             "status": "oauth_ready",
@@ -1702,6 +1715,11 @@ async def connect_vendor_calendar(
                 "status": "needs_app_password",
                 "detail": "Apple Calendar needs an iCloud CalDAV URL and an app-specific password. Connected is only shown after both are saved.",
             }
+        from ..services.calendar_url_guard import UnsafeCalendarURL, vet_url_for_save
+        try:
+            caldav_url = vet_url_for_save(caldav_url)
+        except UnsafeCalendarURL as e:
+            return {"connected": False, "status": "invalid_url", "detail": str(e)}
         from ..services.calendar_token_crypto import encrypt_connection_secrets
         row = {
             "member_id": actor_id,
@@ -1737,6 +1755,11 @@ async def connect_vendor_calendar(
         ics_url = (payload.get("ics_url") or "").strip()
         if not ics_url:
             return {"connected": False, "status": "not_connected", "detail": "Paste a public ICS calendar URL"}
+        from ..services.calendar_url_guard import UnsafeCalendarURL, vet_url_for_save
+        try:
+            ics_url = vet_url_for_save(ics_url)
+        except UnsafeCalendarURL as e:
+            return {"connected": False, "status": "invalid_url", "detail": str(e)}
         row = {
             "member_id": actor_id,
             "vendor_id": vendor_id,
@@ -1852,8 +1875,29 @@ async def google_calendar_complete_session(
     return status
 
 
+@router.get("/calendars/google/start")
+async def google_calendar_oauth_start(state: str | None = None):
+    """Bind the OAuth flow to this browser (HttpOnly nonce cookie), then go to Google."""
+    from urllib.parse import urlencode
+    from ..services.calendar_oauth_state import COOKIE_NAME, STATE_TTL_SECONDS, OAuthStateError, read_state
+    from ..services.vendor_calendars import build_google_authorize_url, calendar_success_redirect_base
+
+    try:
+        payload = read_state(state or "", "google")
+    except OAuthStateError as e:
+        base = calendar_success_redirect_base()
+        return RedirectResponse(f"{base}?{urlencode({'calendar_error': str(e)})}", status_code=302)
+    resp = RedirectResponse(build_google_authorize_url(state or ""), status_code=302)
+    resp.set_cookie(
+        COOKIE_NAME, payload["nonce"], max_age=STATE_TTL_SECONDS, httponly=True,
+        secure=True, samesite="lax", path="/",
+    )
+    return resp
+
+
 @router.get("/calendars/google/callback")
 async def google_calendar_oauth_callback(
+    request: Request,
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
@@ -1870,11 +1914,17 @@ async def google_calendar_oauth_callback(
 
     base = calendar_success_redirect_base()
 
+    from ..services.calendar_oauth_state import COOKIE_NAME, consume_state, read_state as cos_read_state
+
+    def _done(r: RedirectResponse) -> RedirectResponse:
+        r.delete_cookie(COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
+        return r
+
     def _ok() -> RedirectResponse:
-        return RedirectResponse(f"{base}?{urlencode({'calendar_connected': 'google'})}", status_code=302)
+        return _done(RedirectResponse(f"{base}?{urlencode({'calendar_connected': 'google'})}", status_code=302))
 
     def _err(msg: str) -> RedirectResponse:
-        return RedirectResponse(f"{base}?{urlencode({'calendar_error': msg[:240]})}", status_code=302)
+        return _done(RedirectResponse(f"{base}?{urlencode({'calendar_error': msg[:240]})}", status_code=302))
 
     if error:
         return _err(error_description or error)
@@ -1884,14 +1934,22 @@ async def google_calendar_oauth_callback(
         return _err("Direct Google OAuth requires GOOGLE_CLIENT_SECRET on the API (use Supabase Connect instead)")
 
     try:
+        cos_read_state(state, "google")  # cheap signature/expiry check before any DB work
+        db = await get_db()
+        member_id = await consume_state(
+            state, "google", cookie_nonce=request.cookies.get(COOKIE_NAME), db=db,
+        )
+    except Exception as e:  # OAuthStateError or DB failure: fail closed
+        logger.warning("Google calendar OAuth state rejected: %s", e)
+        return _err("Calendar connection link is invalid or expired. Please start again from Availability.")
+
+    try:
         tokens = await exchange_google_code(code)
     except Exception as e:
         logger.warning("Google calendar OAuth exchange failed: %s", e)
         return _err(str(e) or "Google token exchange failed")
 
-    member_id = str(state).strip()
     vendor_id = "default_vendor"
-    db = await get_db()
     try:
         row = _maybe_single_row(
             await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()
@@ -1922,6 +1980,7 @@ async def google_calendar_oauth_callback(
 
 @router.get("/calendars/microsoft/callback")
 async def microsoft_calendar_oauth_callback(
+    request: Request,
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
@@ -1938,11 +1997,17 @@ async def microsoft_calendar_oauth_callback(
 
     base = calendar_success_redirect_base()
 
+    from ..services.calendar_oauth_state import COOKIE_NAME, consume_state, read_state as cos_read_state
+
+    def _done(r: RedirectResponse) -> RedirectResponse:
+        r.delete_cookie(COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
+        return r
+
     def _ok() -> RedirectResponse:
-        return RedirectResponse(f"{base}?{urlencode({'calendar_connected': 'microsoft'})}", status_code=302)
+        return _done(RedirectResponse(f"{base}?{urlencode({'calendar_connected': 'microsoft'})}", status_code=302))
 
     def _err(msg: str) -> RedirectResponse:
-        return RedirectResponse(f"{base}?{urlencode({'calendar_error': msg[:240]})}", status_code=302)
+        return _done(RedirectResponse(f"{base}?{urlencode({'calendar_error': msg[:240]})}", status_code=302))
 
     if error:
         return _err(error_description or error)
@@ -1952,14 +2017,22 @@ async def microsoft_calendar_oauth_callback(
         return _err("Microsoft OAuth client id/secret not configured on this environment")
 
     try:
+        cos_read_state(state, "microsoft")  # cheap signature/expiry check before any DB work
+        db = await get_db()
+        member_id = await consume_state(
+            state, "microsoft", cookie_nonce=request.cookies.get(COOKIE_NAME), db=db,
+        )
+    except Exception as e:  # OAuthStateError or DB failure: fail closed
+        logger.warning("Microsoft calendar OAuth state rejected: %s", e)
+        return _err("Calendar connection link is invalid or expired. Please start again from Availability.")
+
+    try:
         tokens = await exchange_microsoft_code(code)
     except Exception as e:
         logger.warning("Microsoft calendar OAuth exchange failed: %s", e)
         return _err(str(e) or "Microsoft token exchange failed")
 
-    member_id = str(state).strip()
     vendor_id = "default_vendor"
-    db = await get_db()
     try:
         row = _maybe_single_row(
             await db.table("vendor_members").select("id,vendor_id").eq("id", member_id).maybe_single().execute()

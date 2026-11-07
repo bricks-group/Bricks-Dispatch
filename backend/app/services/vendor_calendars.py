@@ -158,7 +158,8 @@ def google_supabase_redirect_uri() -> str:
     ).strip()
 
 
-def build_google_authorize_url(member_id: str) -> str:
+def build_google_authorize_url(state: str) -> str:
+    """``state`` must be a signed value from calendar_oauth_state.mint_state."""
     params = {
         "client_id": google_client_id(),
         "redirect_uri": google_redirect_uri(),
@@ -167,7 +168,7 @@ def build_google_authorize_url(member_id: str) -> str:
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",
-        "state": member_id,
+        "state": state,
     }
     return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
 
@@ -208,13 +209,20 @@ async def google_calendar_ping(access_token: str) -> dict:
         return {"ok": False, "status": 0, "via": None}
 
 
-def build_microsoft_authorize_url(member_id: str) -> str:
+def build_google_start_url(state: str) -> str:
+    """API hop that sets the browser-binding cookie, then redirects to Google."""
+    callback = google_redirect_uri().rstrip("/")
+    base = callback[: -len("/callback")] if callback.endswith("/callback") else callback.rsplit("/", 1)[0]
+    return f"{base}/start?" + urlencode({"state": state})
+
+
+def build_microsoft_authorize_url(state: str) -> str:
     params = {
         "client_id": microsoft_client_id(),
         "response_type": "code",
         "redirect_uri": microsoft_redirect_uri(),
         "scope": "Calendars.Read offline_access User.Read",
-        "state": member_id,
+        "state": state,
     }
     return "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?" + urlencode(params)
 
@@ -760,11 +768,12 @@ def _parse_ics_busy(text: str, start: datetime, end: datetime) -> Optional[bool]
 
 
 async def _ics_busy(url: str, start: datetime, end: datetime) -> Optional[bool]:
+    from .calendar_url_guard import guarded_request
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return _parse_ics_busy(resp.text, start, end)
+        status, text = await guarded_request("GET", url, timeout=10.0)
+        if status >= 400:
+            return None
+        return _parse_ics_busy(text, start, end)
     except Exception as e:
         logger.debug("ICS fetch failed (soft): %s", e)
         return None
@@ -785,25 +794,27 @@ async def _apple_caldav_busy(url: str, password: str, username: str, start: date
     </C:comp-filter>
   </C:filter>
 </C:calendar-query>"""
+    from .calendar_url_guard import guarded_request
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.request(
-                "REPORT",
-                url,
-                content=body,
-                headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
-                auth=(username or "user", password),
-            )
-            if resp.status_code in (401, 403):
+        status, text = await guarded_request(
+            "REPORT",
+            url,
+            content=body,
+            headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
+            auth=(username or "user", password),
+            timeout=12.0,
+        )
+        if True:
+            if status in (401, 403):
                 return None
-            if resp.status_code >= 400:
+            if status >= 400:
                 return None
             # Any VEVENT in response → busy for the window
-            if "BEGIN:VEVENT" in resp.text:
+            if "BEGIN:VEVENT" in text:
                 return True
             # Empty multistatus
             try:
-                root = ET.fromstring(resp.text)
+                root = ET.fromstring(text)
                 if list(root):
                     return True
             except ET.ParseError:

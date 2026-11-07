@@ -1,6 +1,7 @@
 """Vendor calendar OAuth: Supabase-first Google, optional direct, Microsoft needs secret."""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -210,7 +211,7 @@ async def test_google_callback_requires_direct_secret(monkeypatch):
     monkeypatch.setenv("SUPABASE_KEY", "anon")
     monkeypatch.setenv("VENDOR_CALENDAR_SUCCESS_REDIRECT", "https://go.brxs.ca/availability")
     # No secret → direct callback rejects (use supabase complete-session instead)
-    resp = await vos.google_calendar_oauth_callback(code="c", state="mem-1")
+    resp = await vos.google_calendar_oauth_callback(SimpleNamespace(cookies={}), code="c", state="mem-1")
     assert resp.status_code == 302
     assert "calendar_error=" in resp.headers["location"]
 
@@ -227,7 +228,7 @@ async def test_google_callback_redirects_on_exchange_fail(monkeypatch):
         "app.services.vendor_calendars.exchange_google_code",
         AsyncMock(side_effect=RuntimeError("Bad code")),
     ):
-        resp = await vos.google_calendar_oauth_callback(code="c", state="mem-1")
+        resp = await vos.google_calendar_oauth_callback(SimpleNamespace(cookies={}), code="c", state="mem-1")
 
     assert resp.status_code == 302
     assert "calendar_error=" in resp.headers["location"]
