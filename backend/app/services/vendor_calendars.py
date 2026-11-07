@@ -93,7 +93,8 @@ def microsoft_redirect_uri() -> str:
     ).strip()
 
 
-# Non-sensitive scope only (no unverified-app warning). Busy sync uses FreeBusy API.
+# FreeBusy-only on purpose: enough for the auto-assign busy gate, no Google app
+# verification screen. Event write-back on assign would need calendar.events — skip.
 GOOGLE_CAL_SCOPE = "https://www.googleapis.com/auth/calendar.freebusy"
 
 
@@ -342,6 +343,94 @@ async def upsert_oauth_connection(
             return stored
         raise
     return stored
+
+
+async def persist_google_oauth_if_verified(
+    db,
+    *,
+    member_id: str,
+    vendor_id: str,
+    access_token: str,
+    refresh_token: str,
+    expires_in: Any = 3600,
+    scope: str | None = None,
+) -> dict:
+    """Store Google tokens only after a refresh token + successful Calendar ping.
+
+    Never marks Connected on a token dump alone. Failures return an honest
+    connection_status-shaped payload (connected=False).
+    """
+    access = (access_token or "").strip()
+    refresh = (refresh_token or "").strip()
+    granted = (scope or "").strip()
+    if granted and "calendar" not in granted.lower():
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "noscope",
+            "detail": "Google Calendar permission is required. Approve calendar access and retry.",
+        }
+    if not refresh:
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "noscope",
+            "detail": (
+                "Google Calendar permission is required (missing refresh token). "
+                "Try Connect again and approve calendar access."
+            ),
+        }
+    if not access:
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "error",
+            "detail": "Could not connect Google Calendar (missing access token).",
+        }
+    ping = await google_calendar_ping(access)
+    if not ping.get("ok"):
+        logger.warning(
+            "Google Calendar ping failed (%s via %s) — not marking Connected",
+            ping.get("status"),
+            ping.get("via"),
+        )
+        if ping.get("status") in (401, 403):
+            return {
+                "provider": "google",
+                "connected": False,
+                "status": "noscope",
+                "detail": "Google Calendar permission is required. Approve calendar access and retry.",
+            }
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "error",
+            "detail": "Could not verify Google Calendar access. Try again.",
+        }
+    try:
+        row = await upsert_oauth_connection(
+            db,
+            member_id=member_id,
+            vendor_id=vendor_id or "default_vendor",
+            provider="google",
+            token_payload={
+                "access_token": access,
+                "refresh_token": refresh,
+                "expires_in": expires_in or 3600,
+                "scope": granted or GOOGLE_CAL_SCOPE,
+            },
+        )
+    except Exception as e:
+        logger.warning("Google calendar upsert failed: %s", e)
+        return {
+            "provider": "google",
+            "connected": False,
+            "status": "error",
+            "detail": f"Could not save calendar connection: {e}",
+        }
+    status = connection_status(row)
+    status["ping"] = ping.get("via")
+    return status
 
 
 def connection_status(conn: dict | None) -> dict:

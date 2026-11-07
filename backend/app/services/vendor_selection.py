@@ -970,7 +970,11 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
         except Exception:
             calendar_connected[v.id] = False
 
-    # Calendar FreeBusy hard gate (busy=True excludes; None/False continue)
+    # Calendar FreeBusy hard gate for the booked slot (selected_slot_* or
+    # scheduled_date + window + estimated duration). Same as a Bricks slot
+    # conflict when busy=True. Not connected → skip this probe (overlap +
+    # manual hours still apply). Calendar API errors → None (unknown): log
+    # and continue so a Google outage does not strand the whole roster.
     try:
         from .vendor_calendars import vendor_is_busy
         bounds = _slot_bounds(job, duration_min)
