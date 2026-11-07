@@ -60,10 +60,13 @@ def _as_is_qc_variant_fields(processed_url, file_path, asset: dict) -> dict:
 # Staging uploads deliver originals to the listing file — never call vendors or claim furniture was staged.
 # Owned Bricks staging ships later. Fotello/Autoenhance remain optional HDR enhance only.
 # POSTPROD_STILLS_PROVIDER selects leftover stills editor.
-#   autoenhance (default, Kam Oct 31) — prefer AE when key+plan/credits ok;
-#                 any AE refusal/failure (401/402/403/No Plan/no credits/timeout)
-#                 soft-fails to bricks_inhouse so the job never fails on AE.
-#   inhouse     — bricks_inhouse / Enfuse path; never call Autoenhance (kill switch)
+#   autoenhance (default, Kam Oct 31) — AE edits every day vendor still.
+#                 Kam 2026-11-07: when AE can't edit (401/402/403, No Plan, no
+#                 credits, kill switch, any AE error) the stills are HELD
+#                 (processing_status=held_autoenhance), never delivered, Kam is
+#                 alerted once per job, and the reconcile sweep re-runs them
+#                 once AE works. No automatic in-house fallback.
+#   inhouse     — bricks_inhouse / Enfuse path; only when set explicitly.
 # Aliases: ae→autoenhance; bricks_inhouse→inhouse. Unknown values → autoenhance.
 _POSTPROD_STILLS_PROVIDER_ENV = "POSTPROD_STILLS_PROVIDER"
 AUTOENHANCE_API_KEY = os.environ.get("AUTOENHANCE_API_KEY")
@@ -80,11 +83,10 @@ def paid_stills_processing_disabled() -> bool:
 def stills_provider_preference() -> str:
     """Return 'inhouse' or 'autoenhance' for leftover vendor stills.
 
-    Default is autoenhance (Kam: "Use Autoenhance for stills"); in-house stays
-    the automatic fallback. Set POSTPROD_STILLS_PROVIDER=inhouse to never call AE.
+    Default is autoenhance (Kam: "Use Autoenhance for stills"). In-house runs
+    only when POSTPROD_STILLS_PROVIDER=inhouse is set explicitly (Kam
+    2026-11-07); PAID_STILLS_PROCESSING_DISABLED now holds stills instead.
     """
-    if paid_stills_processing_disabled():
-        return "inhouse"
     raw = (os.environ.get(_POSTPROD_STILLS_PROVIDER_ENV) or "").strip().lower()
     if raw in ("autoenhance", "ae", ""):
         return "autoenhance"
@@ -396,6 +398,60 @@ def prefer_autoenhance_stills() -> bool:
     return stills_provider_preference() == "autoenhance"
 
 
+# ── Autoenhance hold (Kam 2026-11-07) ──────────────────────────────────────
+AE_HOLD_STATUS = "held_autoenhance"
+AE_HOLD_PROVIDER = "autoenhance_held"
+AE_BUDGET_REASON = "autoenhance run budget spent; queued for the next sweep"
+
+
+def autoenhance_hold_fields(reason: str) -> dict:
+    return {
+        "processing_status": AE_HOLD_STATUS,
+        "provider": AE_HOLD_PROVIDER,
+        "qc_notes": f"Held for Autoenhance (not delivered): {reason}"[:500],
+    }
+
+
+async def alert_autoenhance_hold(job_id: str, reason: str) -> bool:
+    """Tell Kam once per job (existing ops_alert path). Never raises."""
+    try:
+        from .editor_ledger import _get_event, _notify_kam, _upsert_event
+        event_id = f"ae-hold-{job_id}"
+        if await _get_event(event_id):
+            return False
+        await _upsert_event(event_id, "job", job_id, "autoenhance_hold", {"job_id": job_id, "reason": reason[:300]})
+        body = (f"Autoenhance could not edit job {job_id}: {reason}. The stills are held, not delivered. "
+                "They re-run automatically on the next ops sweep once Autoenhance works "
+                "(or POST /api/v1/post-production/autoenhance-holds/retry).")
+        html = (f"<p>Autoenhance could not edit job <b>{job_id}</b>.</p><p>Reason: {reason[:300]}</p>"
+                "<p>The stills are held and were not delivered. They re-run automatically on the next ops "
+                "sweep once Autoenhance works.</p>")
+        await _notify_kam("Stills held: Autoenhance unavailable", body,
+                          f"Stills held for job {job_id}: Autoenhance unavailable", html,
+                          {"job_id": job_id, "reason": reason[:300]})
+        return True
+    except Exception as e:
+        logger.error(f"Job {job_id}: Autoenhance hold alert failed: {e}")
+        return False
+
+
+async def hold_stills_for_autoenhance(db, job_id: str, assets: list, reason: str) -> None:
+    """Hold stills (and their bracket siblings) until Autoenhance can edit them."""
+    for a in assets or []:
+        uid = (a or {}).get("id")
+        if uid:
+            await _safe_update_upload(db, uid, autoenhance_hold_fields(reason))
+    logger.warning(f"Job {job_id}: {len(assets or [])} still(s) held for Autoenhance — {reason}")
+    if reason != AE_BUDGET_REASON:
+        await alert_autoenhance_hold(job_id, reason)
+
+
+def _ae_hold_reason(ae_timeout, ae_mod) -> str:
+    if ae_timeout is None:
+        return AE_BUDGET_REASON
+    return ae_mod.unavailable_reason() or "Autoenhance unavailable"
+
+
 async def trigger_boxbrownie_staging(source_url: str, room_type: str = "Living Room", style_preset: str = "modern") -> Optional[str]:
     """Disabled — no third-party virtual staging on the launch path."""
     logger.info("BoxBrownie staging skipped (disabled): owned pipeline only")
@@ -681,6 +737,14 @@ async def deliver_bracket_group_without_vendor(
         # the listing. Includes frames whose download failed — left "pending"
         # they block _finalize_job_if_complete (in_flight) until reconcile.
         pid = primary_asset.get("id")
+        if primary_processed == AE_HOLD_STATUS:
+            # Primary is held for Autoenhance: its exposures wait with it so
+            # the re-run merges the full set again.
+            for asset in group:
+                uid = asset.get("id")
+                if uid and uid != pid:
+                    await _safe_update_upload(db, uid, autoenhance_hold_fields("bracket held with its primary"))
+            return
         for asset in group:
             uid = asset.get("id")
             if not uid or uid == pid:
@@ -762,13 +826,18 @@ async def deliver_bracket_group_without_vendor(
     enhanced = None
     enhance_meta = {}
     provider = "bricks_inhouse"
-    # Day vendor brackets: Autoenhance by default (POSTPROD_STILLS_PROVIDER=inhouse
-    # disables; mls_safe: no invent sky). Twilight stays in-house.
-    # Fail-fast to bricks_inhouse on No Plan / errors so listing never hangs.
-    ae_timeout = ae_call_timeout_sec() if (apply_sky and prefer_autoenhance_stills()) else None
-    if ae_timeout is not None:
+    # Day vendor brackets: Autoenhance by default (mls_safe: no invent sky).
+    # Twilight stays in-house. Kam 2026-11-07: if AE can't edit, HOLD the
+    # group (no in-house fallback unless POSTPROD_STILLS_PROVIDER=inhouse).
+    use_ae = bool(apply_sky and prefer_autoenhance_stills())
+    ae_timeout = ae_call_timeout_sec() if use_ae else None
+    ae_hold_reason = None
+    if use_ae:
+        from . import autoenhance_service as ae
+        if ae_timeout is None or not ae.is_available():
+            ae_hold_reason = _ae_hold_reason(ae_timeout, ae)
+    if use_ae and ae_hold_reason is None:
         try:
-            from . import autoenhance_service as ae
             if ae.is_available():
                 enhanced, enhance_meta = ae.enhance_brackets_sync(
                     frames, filenames, apply_sky=False, timeout_sec=ae_timeout
@@ -792,10 +861,12 @@ async def deliver_bracket_group_without_vendor(
                         f"({export_err}) — keeping enhanced"
                     )
         except Exception as e:
-            logger.warning(
-                f"Job {job_id}: Autoenhance skipped ({e}) — bricks_inhouse fallback"
-            )
+            logger.warning(f"Job {job_id}: Autoenhance failed ({e}) — holding stills")
             enhanced = None
+            ae_hold_reason = f"{type(e).__name__}: {str(e)[:200]}"
+    if use_ae and enhanced is None:
+        await hold_stills_for_autoenhance(db, job_id, list(group), ae_hold_reason or "Autoenhance unavailable")
+        return
 
     try:
         if enhanced is None:
@@ -1259,9 +1330,14 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
             if original:
                 enhanced = None
                 filename = str(asset.get("filename") or "still.jpg")
-                # Autoenhance single-frame by default (inhouse env disables).
-                ae_timeout = ae_call_timeout_sec() if prefer_autoenhance_stills() else None
-                if ae_timeout is not None and ae.is_available():
+                # Autoenhance single-frame by default; Kam 2026-11-07: hold when
+                # AE can't edit (in-house only with POSTPROD_STILLS_PROVIDER=inhouse).
+                use_ae = prefer_autoenhance_stills()
+                ae_timeout = ae_call_timeout_sec() if use_ae else None
+                ae_hold_reason = None
+                if use_ae and (ae_timeout is None or not ae.is_available()):
+                    ae_hold_reason = _ae_hold_reason(ae_timeout, ae)
+                if use_ae and ae_hold_reason is None:
                     try:
                         enhanced, enhance_meta = ae.enhance_brackets_sync(
                             [original], [filename], apply_sky=False,
@@ -1285,12 +1361,13 @@ async def deliver_asset_without_vendor(db, job_id: str, asset: dict) -> None:
                                 f"single-frame failed ({export_err}) — keeping enhanced"
                             )
                     except Exception as e:
-                        logger.warning(
-                            f"Job {job_id}: Autoenhance single-frame skipped ({e}) "
-                            "— bricks_inhouse fallback"
-                        )
+                        logger.warning(f"Job {job_id}: Autoenhance single-frame failed ({e}) — holding")
                         enhanced = None
                         enhance_meta = {}
+                        ae_hold_reason = f"{type(e).__name__}: {str(e)[:200]}"
+                if use_ae and enhanced is None:
+                    await hold_stills_for_autoenhance(db, job_id, [asset], ae_hold_reason or "Autoenhance unavailable")
+                    return AE_HOLD_STATUS  # sentinel: bracket siblings are held too
                 if enhanced is None:
                     enhanced, enhance_meta = enhance_image(original, return_meta=True)
                     provider = "bricks_inhouse"

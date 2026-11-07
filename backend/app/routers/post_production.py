@@ -856,7 +856,9 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
     # Block finalization while any uploads are still in-flight or awaiting submission.
     # "pending" = provider submission failed/queued and never progressed; these are timed
     # out to "failed" by the reconcile endpoint after 2 h, at which point finalization proceeds.
-    in_flight = [u for u in uploads if u.get("processing_status") in ("processing", "pending")]
+    # held_autoenhance (Kam 2026-11-07): stills waiting for Autoenhance are not
+    # delivered and the job does not deliver short without them.
+    in_flight = [u for u in uploads if u.get("processing_status") in ("processing", "pending", "held_autoenhance")]
     if in_flight:
         logger.info(f"Job {job_id}: {len(in_flight)} upload(s) still in-flight (processing/pending) — waiting")
         return
@@ -1283,6 +1285,58 @@ async def boxbrownie_callback(
 # POST /api/v1/post-production/reconcile  (internal, requires X-Internal-Api-Key)
 # ---------------------------------------------------------------------------
 
+async def retry_autoenhance_holds(db, since: Optional[str] = None, job_id: Optional[str] = None,
+                                  max_jobs: int = 2) -> list:
+    """Re-run stills held for Autoenhance (Kam 2026-11-07).
+
+    Only when Autoenhance is available on this instance. Held rows go back to
+    pending, the job back to completed, and process_job_assets runs again
+    (done stills are never re-sent). Still failing -> held again, no second
+    alert for the same job. Returns the job ids re-run.
+    """
+    from ..services import autoenhance_service as ae
+    from ..services.post_production import AE_HOLD_STATUS, process_job_assets
+    if not ae.is_available():
+        return []
+    q = db.table("uploads").select("id, job_id").eq("processing_status", AE_HOLD_STATUS)
+    if job_id:
+        q = q.eq("job_id", job_id)
+    elif since:
+        q = q.gte("created_at", since)
+    res = await q.limit(500).execute()
+    by_job: dict = {}
+    for u in res.data or []:
+        if u.get("job_id"):
+            by_job.setdefault(u["job_id"], []).append(u["id"])
+    done = []
+    for jid in list(by_job)[:max(1, int(max_jobs))]:
+        await db.table("uploads").update({"processing_status": "pending", "provider": None}).in_(
+            "id", by_job[jid]).execute()
+        await db.table("jobs").update({"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}).eq(
+            "id", jid).eq("status", "processing").execute()
+        logger.info(f"Job {jid}: re-running {len(by_job[jid])} still(s) held for Autoenhance")
+        await process_job_assets(jid)
+        done.append(jid)
+    return done
+
+
+@router.post("/autoenhance-holds/retry")
+async def retry_autoenhance_holds_endpoint(
+    job_id: Optional[str] = None,
+    x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
+):
+    """Manual re-run of Autoenhance-held stills (internal key). The ops sweep
+    also does this every 15 minutes via /reconcile."""
+    from ..shared.auth import verify_internal_api_key
+    if not verify_internal_api_key(x_internal_api_key):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from ..services import autoenhance_service as ae
+    if not ae.is_available():
+        return {"ok": False, "retried": [], "reason": ae.unavailable_reason()}
+    db = await get_db()
+    return {"ok": True, "retried": await retry_autoenhance_holds(db, job_id=job_id, max_jobs=5)}
+
+
 @router.post("/reconcile")
 async def reconcile_stuck_uploads(
     x_internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-Api-Key"),
@@ -1347,7 +1401,9 @@ async def reconcile_stuck_uploads(
     autoenhance_available = bool(os.environ.get("AUTOENHANCE_API_KEY", ""))
     pil_tier3_count = 0
 
-    if not fotello_available and not autoenhance_available:
+    # Kam 2026-11-07: in-house runs only when POSTPROD_STILLS_PROVIDER=inhouse.
+    from ..services.post_production import stills_provider_preference as _stills_pref
+    if not fotello_available and not autoenhance_available and _stills_pref() == "inhouse":
         try:
             from ..services.photo_enhance_service import enhance_image, upload_enhanced, upload_qc_variant
             from ..services.storage import get_signed_download_url as _sign_url
@@ -1443,6 +1499,13 @@ async def reconcile_stuck_uploads(
                 pg_update_upload(sid, fail_fields)
         logger.warning(f"Reconcile: marked {len(stuck_ids)} stuck uploads as failed")
 
+    # Re-run stills held for Autoenhance once it works again (Kam 2026-11-07).
+    ae_retried = []
+    try:
+        ae_retried = await retry_autoenhance_holds(db, since=since, max_jobs=1)
+    except Exception as e:
+        logger.error(f"Reconcile: Autoenhance hold retry failed: {e}")
+
     # Await finalize in-request. Vercel serverless drops FastAPI BackgroundTasks after the
     # HTTP response (same hollow media_delivery bug as Mark complete create_task / upload-complete).
     # Finalize is idempotent via the media_delivery guard, so order across job ids does not matter.
@@ -1468,4 +1531,5 @@ async def reconcile_stuck_uploads(
         "pil_tier3_applied": pil_tier3_count,
         "timed_out": len(stuck_ids),
         "jobs_queued_for_finalization": len(job_ids_to_finalize),
+        "autoenhance_holds_retried": len(ae_retried),
     }

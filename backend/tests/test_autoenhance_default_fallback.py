@@ -52,9 +52,14 @@ GROUP = [
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
     monkeypatch.delenv("POSTPROD_STILLS_PROVIDER", raising=False)
-    monkeypatch.setattr(ae, "_plan_blocked", False)
+    ae.clear_plan_block()
     monkeypatch.setattr(pp, "_ae_deadline", None)
+
+    async def _no_alert(*_a, **_k):
+        return True
+    monkeypatch.setattr(pp, "alert_autoenhance_hold", _no_alert)
     yield
+    ae.clear_plan_block()
 
 
 def test_default_env_calls_autoenhance(monkeypatch):
@@ -92,7 +97,7 @@ def _http_resp(status, body='{"message":"Unauthorized"}'):
     (402, '{"message":"Insufficient credits"}'),
     (403, '{"message":"The user has no plan"}'),
 ])
-def test_ae_refusal_on_create_order_blocks_worker_and_falls_back(monkeypatch, status, body):
+def test_ae_refusal_on_create_order_blocks_worker_and_holds(monkeypatch, status, body):
     """Real enhance_brackets_sync against a refusing AE: job still delivers in-house."""
     updates, uploaded = [], []
     _fake_bracket_env(monkeypatch, updates, uploaded)
@@ -119,15 +124,16 @@ def test_ae_refusal_on_create_order_blocks_worker_and_falls_back(monkeypatch, st
 
     monkeypatch.setattr(ae, "httpx", SimpleNamespace(Client=FakeClient))
     _run(pp.deliver_bracket_group_without_vendor(MagicMock(storage=MagicMock()), "j", GROUP, apply_sky=True))
-    assert ae._plan_blocked is True
+    assert ae.plan_blocked() is True
     assert ae.is_available() is False
+    # Kam 2026-11-07: held for Autoenhance, never the in-house fallback.
     prim = [u for uid, u in updates if uid == "u2"]
-    assert prim and prim[0]["provider"] == "bricks_inhouse"
-    assert prim[0]["processing_status"] == "done"
-    assert uploaded == [b"\xff\xd8inhouse"]
+    assert prim and prim[0]["provider"] == "autoenhance_held"
+    assert prim[0]["processing_status"] == "held_autoenhance"
+    assert uploaded == []
 
 
-def test_no_credits_on_download_falls_back_and_blocks(monkeypatch):
+def test_no_credits_on_download_holds_and_blocks(monkeypatch):
     updates, uploaded = [], []
     _fake_bracket_env(monkeypatch, updates, uploaded)
     monkeypatch.setattr(ae, "api_key", lambda: "k" * 36)
@@ -151,8 +157,9 @@ def test_no_credits_on_download_falls_back_and_blocks(monkeypatch):
 
     monkeypatch.setattr(ae, "httpx", SimpleNamespace(Client=FakeClient))
     _run(pp.deliver_bracket_group_without_vendor(MagicMock(storage=MagicMock()), "j", GROUP, apply_sky=True))
-    assert ae._plan_blocked is True
-    assert any(u.get("provider") == "bricks_inhouse" for _, u in updates)
+    assert ae.plan_blocked() is True
+    assert updates and all(u["processing_status"] == "held_autoenhance" for _, u in updates)
+    assert not any(u.get("provider") == "bricks_inhouse" for _, u in updates)
 
 
 def test_ae_budget_spent_skips_autoenhance(monkeypatch):
@@ -164,7 +171,9 @@ def test_ae_budget_spent_skips_autoenhance(monkeypatch):
     pp.start_ae_budget()
     assert pp.ae_call_timeout_sec() is None
     _run(pp.deliver_bracket_group_without_vendor(MagicMock(storage=MagicMock()), "j", GROUP, apply_sky=True))
-    assert any(u.get("provider") == "bricks_inhouse" for _, u in updates)
+    # Budget spent: held quietly and re-run on the next sweep (no in-house).
+    assert updates and all(u["processing_status"] == "held_autoenhance" for _, u in updates)
+    assert pp.AE_BUDGET_REASON in updates[0][1]["qc_notes"]
 
 
 def test_ae_budget_caps_call_timeout(monkeypatch):

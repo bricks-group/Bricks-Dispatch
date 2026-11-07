@@ -93,7 +93,8 @@ def test_bracket_group_prefers_autoenhance_then_uploads(monkeypatch):
     assert uploaded and uploaded[0] == b"\xff\xd8mls"  # listing-export bytes, not raw AE
 
 
-def test_bracket_group_falls_back_inhouse_on_no_plan(monkeypatch):
+def test_bracket_group_holds_on_no_plan(monkeypatch):
+    """Kam 2026-11-07: AE No Plan holds the bracket set (no in-house fallback) and alerts once."""
     updates = []
 
     async def fake_safe(_db, uid, update):
@@ -152,14 +153,22 @@ def test_bracket_group_falls_back_inhouse_on_no_plan(monkeypatch):
         {"id": "a", "file_url": "p1", "filename": "x_-1.jpg"},
         {"id": "b", "file_url": "p2", "filename": "x_0.jpg"},
     ]
+    alerts = []
+
+    async def fake_alert(job_id, reason):
+        alerts.append((job_id, reason))
+        return True
+    monkeypatch.setattr(pp, "alert_autoenhance_hold", fake_alert)
     _run(pp.deliver_bracket_group_without_vendor(MagicMock(storage=MagicMock()), "job-y", group, apply_sky=True))
-    assert any(u.get("provider") == "bricks_inhouse" for _, u in updates)
-    assert export_calls == [b"\xff\xd8inhouse"]
-    assert uploaded and uploaded[0] == b"\xff\xd8mls_ih"
+    assert {uid for uid, _ in updates} == {"a", "b"}
+    assert all(u["processing_status"] == "held_autoenhance" for _, u in updates)
+    assert not any(u.get("provider") == "bricks_inhouse" for _, u in updates)
+    assert export_calls == [] and uploaded == []
+    assert alerts and alerts[0][0] == "job-y" and "No Plan" in alerts[0][1]
 
 
 def test_autoenhance_no_plan_marks_worker_blocked(monkeypatch):
-    ae._plan_blocked = False
+    ae.clear_plan_block()
     monkeypatch.setattr(ae, "api_key", lambda: "k" * 36)
 
     class FakeResp:
@@ -177,9 +186,9 @@ def test_autoenhance_no_plan_marks_worker_blocked(monkeypatch):
 
     with pytest.raises(ae.AutoenhanceNoPlan):
         ae._download_enhanced(FakeClient(), "k" * 36, "img-1")
-    assert ae._plan_blocked is True
+    assert ae.plan_blocked() is True
     # reset for other tests
-    ae._plan_blocked = False
+    ae.clear_plan_block()
 
 
 def test_apply_listing_export_fixes_ae_3x2_oversized():
@@ -220,7 +229,7 @@ def test_deliver_bracket_source_calls_listing_export_after_ae():
 
 def test_enhance_brackets_sync_accepts_single_frame(monkeypatch):
     """Single still leftovers: AE accepts 1+ frames (number_of_brackets_per_image=1)."""
-    ae._plan_blocked = False
+    ae.clear_plan_block()
     monkeypatch.setattr(ae, "api_key", lambda: "k" * 36)
 
     calls = {}
@@ -296,11 +305,11 @@ def test_enhance_brackets_sync_accepts_single_frame(monkeypatch):
     assert meta["sky_replacement"] is False
     assert calls["process_body"]["number_of_brackets_per_image"] == 1
     assert calls["process_body"]["sky_replacement"] is False
-    ae._plan_blocked = False
+    ae.clear_plan_block()
 
 
 def test_enhance_brackets_sync_rejects_empty_and_sky(monkeypatch):
-    ae._plan_blocked = False
+    ae.clear_plan_block()
     monkeypatch.setattr(ae, "api_key", lambda: "k" * 36)
     with pytest.raises(ae.AutoenhanceError, match="sky_replacement forbidden"):
         ae.enhance_brackets_sync([b"a", b"b"], apply_sky=True)
@@ -368,7 +377,7 @@ def test_deliver_single_vendor_photo_prefers_autoenhance(monkeypatch):
     assert uploaded and uploaded[0] == b"\xff\xd8mls_single"
 
 
-def test_deliver_single_vendor_photo_falls_back_inhouse(monkeypatch):
+def test_deliver_single_vendor_photo_holds_on_no_plan(monkeypatch):
     updates = []
 
     async def fake_safe(_db, uid, update):
@@ -428,10 +437,17 @@ def test_deliver_single_vendor_photo_falls_back_inhouse(monkeypatch):
     monkeypatch.setattr(ae, "enhance_brackets_sync", boom)
 
     asset = {"id": "u-fb", "file_url": "raw/p.jpg", "filename": "room.jpg"}
-    _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-fb", asset))
-    assert any(u.get("provider") == "bricks_inhouse" for _, u in updates)
-    assert export_calls == [b"\xff\xd8inhouse"]
-    assert uploaded and uploaded[0] == b"\xff\xd8mls_ih"
+    alerts = []
+
+    async def fake_alert(job_id, reason):
+        alerts.append(job_id)
+        return True
+    monkeypatch.setattr(pp, "alert_autoenhance_hold", fake_alert)
+    out = _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-fb", asset))
+    assert out == pp.AE_HOLD_STATUS
+    assert updates == [("u-fb", pp.autoenhance_hold_fields("AutoenhanceNoPlan: No Plan"))]
+    assert export_calls == [] and uploaded == []
+    assert alerts == ["job-fb"]
 
 
 def test_as_is_heic_converts_to_jpeg(monkeypatch):
@@ -585,6 +601,8 @@ def test_deliver_single_vendor_photo_inhouse_listing_export_soft_fail(monkeypatc
 
     monkeypatch.setattr(pp, "_safe_update_upload", fake_safe)
     monkeypatch.setattr(ae, "is_available", lambda: False)
+    # In-house only when chosen explicitly (Kam 2026-11-07).
+    monkeypatch.setenv("POSTPROD_STILLS_PROVIDER", "inhouse")
 
     asset = {"id": "u-sf", "file_url": "raw/p.jpg", "filename": "room.jpg"}
     _run(pp.deliver_asset_without_vendor(MagicMock(storage=MagicMock()), "job-sf", asset))

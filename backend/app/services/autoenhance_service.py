@@ -4,7 +4,8 @@ Kam chose Autoenhance as the Dispatch post-prod path (client absorbs download co
 mls_safe preferences: window pull ON, sky replacement OFF (AS_SHOT).
 
 Returns JPEG bytes on success. Raises AutoenhanceError subclasses on failure so
-callers can fail-fast to bricks_inhouse (especially AutoenhanceNoPlan).
+callers hold the stills for a re-run (Kam 2026-11-07: no in-house fallback
+unless POSTPROD_STILLS_PROVIDER=inhouse is set explicitly).
 """
 from __future__ import annotations
 
@@ -20,8 +21,43 @@ logger = logging.getLogger(__name__)
 BASE = "https://api.autoenhance.ai/v3"
 POLL_INTERVAL_SEC = 5
 POLL_TIMEOUT_SEC = 8 * 60  # serverless-friendly upper bound
-# After a No Plan / 402 on full-res, skip AE for the rest of this cold start.
-_plan_blocked: bool = False
+# After a No Plan / 401-403 on full-res, skip AE on this instance for a short
+# while (AUTOENHANCE_PLAN_BLOCK_TTL_SEC, default 300s). It expires on its own so
+# a plan bought later is picked up without a redeploy/restart (Kam 2026-11-07).
+_plan_blocked_until: float = 0.0
+_plan_blocked_reason: str = ""
+
+
+def _plan_block_ttl_sec() -> float:
+    try:
+        return max(0.0, float(os.environ.get("AUTOENHANCE_PLAN_BLOCK_TTL_SEC") or 300))
+    except ValueError:
+        return 300.0
+
+
+def plan_blocked() -> bool:
+    return time.monotonic() < _plan_blocked_until
+
+
+def clear_plan_block() -> None:
+    global _plan_blocked_until, _plan_blocked_reason
+    _plan_blocked_until = 0.0
+    _plan_blocked_reason = ""
+
+
+def paid_disabled() -> bool:
+    return (os.environ.get("PAID_STILLS_PROCESSING_DISABLED") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def unavailable_reason() -> str:
+    """Why is_available() is False ('' when it is available)."""
+    if paid_disabled():
+        return "PAID_STILLS_PROCESSING_DISABLED is on"
+    if not api_key():
+        return "AUTOENHANCE_API_KEY not set"
+    if plan_blocked():
+        return f"Autoenhance plan blocked: {_plan_blocked_reason or 'no plan / credits'}"
+    return ""
 
 
 class AutoenhanceError(Exception):
@@ -42,9 +78,7 @@ def api_key() -> str:
 
 def is_available() -> bool:
     # PAID_STILLS_PROCESSING_DISABLED kill switch (default off → unchanged).
-    if (os.environ.get("PAID_STILLS_PROCESSING_DISABLED") or "").strip().lower() in ("1", "true", "yes", "on"):
-        return False
-    return bool(api_key()) and not _plan_blocked
+    return not unavailable_reason()
 
 
 def _headers(key: str, *, json_body: bool = False) -> dict:
@@ -56,9 +90,10 @@ def _headers(key: str, *, json_body: bool = False) -> dict:
 
 
 def _mark_plan_blocked(reason: str) -> None:
-    global _plan_blocked
-    _plan_blocked = True
-    logger.warning("Autoenhance plan blocked for this worker: %s", reason)
+    global _plan_blocked_until, _plan_blocked_reason
+    _plan_blocked_until = time.monotonic() + _plan_block_ttl_sec()
+    _plan_blocked_reason = str(reason or "")[:200]
+    logger.warning("Autoenhance plan blocked on this worker for %ss: %s", int(_plan_block_ttl_sec()), reason)
 
 
 def enhance_brackets_sync(
@@ -75,8 +110,8 @@ def enhance_brackets_sync(
     """
     if apply_sky:
         raise AutoenhanceError("sky_replacement forbidden on launch mls_safe path")
-    if _plan_blocked:
-        raise AutoenhanceNoPlan("cached No Plan for this worker")
+    if plan_blocked():
+        raise AutoenhanceNoPlan(f"cached No Plan for this worker ({_plan_blocked_reason})")
     key = api_key()
     if not key:
         raise AutoenhanceNotConfigured("AUTOENHANCE_API_KEY not set")
