@@ -42,12 +42,11 @@ def test_welcome_approved_email_links_availability():
 
 
 def test_approve_sends_welcome_with_availability_link():
-    src = (ROOT / "app/routers/admin_ops.py").read_text()
-    assert "welcome_approved_email_html" in src
-    assert "calendar_success_redirect_base" in src
-    assert "VENDOR_CALENDAR_WELCOME" in src
-    assert 'ntype="onboarding_approved"' in src
-    assert "member_id=member_id" in src
+    admin = (ROOT / "app/routers/admin_ops.py").read_text()
+    onboarding = (ROOT / "app/services/vendor_onboarding.py").read_text()
+    assert "await _vo.send_onboarding_welcome(approved_row)" in admin
+    assert "Open Availability to connect Google, Outlook, Apple, or an ICS feed" in onboarding
+    assert "Dispatch checks calendar free/busy before offering jobs" in onboarding
 
 
 def test_go_surfaces_carry_the_nudge():

@@ -84,7 +84,7 @@ async def test_apple_caldav_busy_and_free():
         async def request(self, method, url, content=None, headers=None, auth=None):
             return FakeResp(207, text="<D:multistatus xmlns:D='DAV:'></D:multistatus>")
 
-    with patch("app.services.vendor_calendars.httpx.AsyncClient", Busy):
+    with patch("app.services.calendar_url_guard.guarded_request", AsyncMock(return_value=(207, "BEGIN:VEVENT\nDTSTART:20260910T140000Z\nEND:VEVENT"))):
         assert await _apple_caldav_busy("https://caldav.icloud.com/", "pw", "u", START, END) is True
         member = {
             "id": "m1",
@@ -94,7 +94,7 @@ async def test_apple_caldav_busy_and_free():
         }
         assert await vendor_is_busy(member, START, END) is True
 
-    with patch("app.services.vendor_calendars.httpx.AsyncClient", Free):
+    with patch("app.services.calendar_url_guard.guarded_request", AsyncMock(return_value=(207, "<D:multistatus/>"))):
         assert await _apple_caldav_busy("https://caldav.icloud.com/", "pw", "u", START, END) is False
         member = {
             "id": "m1",
@@ -121,12 +121,12 @@ async def test_ics_busy_and_free():
         async def get(self, url, *a, **k):
             return FakeResp(200, text=free_ics)
 
-    with patch("app.services.vendor_calendars.httpx.AsyncClient", Busy):
+    with patch("app.services.calendar_url_guard.guarded_request", AsyncMock(return_value=(200, busy_ics))):
         assert await _ics_busy("https://example.com/cal.ics", START, END) is True
         member = {"id": "m1", "calendar_ics_url": "https://example.com/cal.ics"}
         assert await vendor_is_busy(member, START, END) is True
 
-    with patch("app.services.vendor_calendars.httpx.AsyncClient", Free):
+    with patch("app.services.calendar_url_guard.guarded_request", AsyncMock(return_value=(200, free_ics))):
         assert await _ics_busy("https://example.com/cal.ics", START, END) is False
         member = {"id": "m1", "ics_url": "https://example.com/cal.ics"}
         assert await vendor_is_busy(member, START, END) is False
@@ -250,6 +250,7 @@ def test_ui_offers_all_four_providers():
 async def test_microsoft_connect_starts_oauth(monkeypatch):
     from app.routers import vendor_os as vos
 
+    monkeypatch.setenv("CALENDAR_OAUTH_STATE_SECRET", "unit-test-only")
     actor = "photog-ms-1"
     monkeypatch.setattr(vos, "resolve_vendor_actor_id", AsyncMock(return_value=actor))
     monkeypatch.setattr(
@@ -268,7 +269,7 @@ async def test_microsoft_connect_starts_oauth(monkeypatch):
     out = await vos.connect_vendor_calendar("microsoft", payload={}, authorization="Bearer x", x_user_id=None)
     assert out["connected"] is False
     assert out["status"] == "oauth_ready"
-    assert "login.microsoftonline.com" in (out.get("oauth_url") or "")
+    assert "/calendars/microsoft/start?state=" in (out.get("oauth_url") or "")
 
 
 @pytest.mark.asyncio

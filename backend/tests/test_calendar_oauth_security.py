@@ -131,7 +131,7 @@ def test_callback_accepts_bound_state_and_rejects_replay():
     db = NonceDb()
     s = cos.mint_state("member-a", "google")
     exch = AsyncMock(return_value={"access_token": "t", "refresh_token": "r", "expires_in": 3600})
-    upsert = AsyncMock()
+    upsert = AsyncMock(return_value={"provider": "google", "access_token": "t", "refresh_token": "r"})
     with patch("app.services.vendor_calendars.exchange_google_code", exch), \
          patch("app.services.vendor_calendars.google_calendar_ping", AsyncMock(return_value={"ok": True})), \
          patch("app.services.vendor_calendars.upsert_oauth_connection", upsert), \

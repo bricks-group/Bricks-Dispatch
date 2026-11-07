@@ -122,7 +122,7 @@ export function AvailabilityPage() {
         window.location.href = res.oauth_url;
         return;
       }
-      if (res.status === 'needs_env' || res.status === 'needs_app_password' || res.status === 'noscope') {
+      if (!res.connected && !res.oauth_url) {
         setErr(res.detail || 'Not connected');
       }
       if (res.connected) syncNow();
@@ -150,7 +150,7 @@ export function AvailabilityPage() {
   const anyConnected = (cals?.connections || []).some((c) => c.connected);
 
   return (
-    <div className="page-content">
+    <div className="page-content calendar-availability">
       <div className="page-header">
         <div>
           <h1>Availability</h1>
@@ -226,7 +226,7 @@ export function AvailabilityPage() {
                   </p>
                   <p className="muted" style={{ margin: '4px 0 0', padding: 0 }}>
                     {c.connected ? `Connected · ${syncedLabel(c)}` : c.detail}
-                    {c.status === 'needs_env' ? ' · OAuth not configured on this environment' : ''}
+                    {c.status === 'needs_env' ? ' · Calendar connection is not available yet' : ''}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -270,12 +270,12 @@ export function AvailabilityPage() {
                 </div>
               ) : null}
               {c.provider === 'ics' && !c.connected ? (
-                <div className="row" style={{ padding: 0, gap: 8 }}>
+                <div className="row calendar-feed-form" style={{ padding: 0, gap: 8 }}>
                   <input
                     placeholder="https://…/calendar.ics"
                     value={icsUrl}
                     onChange={(e) => setIcsUrl(e.target.value)}
-                    style={{ flex: 1, minWidth: 220 }}
+                    style={{ flex: 1, minWidth: 0 }}
                   />
                   <button
                     type="button"
