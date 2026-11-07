@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { api, Job, PaginatedJobsResponse } from '../lib/api';
 import { captureNeitherCopy, jobCaptureModes } from '../lib/capture-modes';
 import { formatShootWhen, formatShootWindow } from '../lib/shoot-window';
 import BricksLoader from '../components/BricksLoader';
 import { captureLinks } from '../components/CaptureLinks';
+import { CalendarConnectNudge } from '../components/CalendarConnectNudge';
 
 type Overview = {
   jobs_assigned_today: number;
@@ -29,6 +30,7 @@ export function OverviewPage() {
   const [data, setData] = useState<Overview | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState('');
+  const [needCalendar, setNeedCalendar] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -40,6 +42,11 @@ export function OverviewPage() {
         setJobs(jobData.items || []);
       })
       .catch((e) => setError(e.message));
+    api.get<{ connections?: Array<{ connected?: boolean }> }>('/api/vendor-os/calendars')
+      .then((cals) => {
+        setNeedCalendar(!(cals.connections || []).some((c) => c.connected));
+      })
+      .catch(() => setNeedCalendar(false));
   }, []);
 
   const today = calendarToday();
@@ -57,6 +64,7 @@ export function OverviewPage() {
       </div>
 
       {error && <p className="error">{error}</p>}
+      {needCalendar ? <CalendarConnectNudge /> : null}
 
       {data && (
         <>

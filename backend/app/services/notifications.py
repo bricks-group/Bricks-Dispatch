@@ -242,6 +242,35 @@ async def notify_arrive_confirmed(job: dict, photographer: dict | None = None) -
     return result
 
 
+def welcome_approved_email_html(availability_url: str) -> str:
+    """Welcome after Hiring approval — calendar connect is how auto-assign sees availability."""
+    url = (availability_url or "https://go.brxs.ca/availability").strip()
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px">
+<div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
+<tr>
+<td width="16" height="16" style="width:16px;height:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
+<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
+<td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
+</tr>
+</table>
+<div style="background:#d2542b;padding:16px 24px;margin-top:12px">
+<h1 style="color:#fff;margin:0;font-size:20px;font-weight:600;font-family:{_EMAIL_FONT_STACK}">You’re approved</h1>
+</div>
+<div style="padding:24px">
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">You’re approved on Bricks GO.</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Connecting a calendar is how Dispatch knows your availability for auto-assign.</p>
+<p style="color:#555;line-height:1.6;margin:0 0 12px 0">Busy on any connected calendar = you won’t get that slot. Manual hours still apply if none is connected.</p>
+<a href="{url}" style="display:inline-block;margin-top:8px;padding:12px 24px;background:#d2542b;color:#fff;text-decoration:none;border-radius:2px;font-weight:500">Open Availability</a>
+<p style="margin-top:24px;font-size:13px;color:#999;line-height:1.5">Or go to <a href="{url}" style="color:#d2542b">{url}</a></p>
+</div>
+<div style="padding:12px 24px;border-top:1px solid #eee;font-size:12px;color:#888;font-family:{_EMAIL_FONT_STACK}">
+<p style="margin:0">Bricks · brxs.ca</p></div>
+</div></body></html>"""
+
+
 def _assignment_email_html(name: str, address: str, when_line: str, go_url: str) -> str:
     who = (name or "").strip() or "there"
     addr = (address or "").strip() or "a property"

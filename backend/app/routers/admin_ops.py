@@ -156,23 +156,26 @@ async def update_applicant_status(
         try:
             email = (approved_row.get("email") or "").strip()
             if email:
-                from ..services.notifications import create_notification
+                from ..services.notifications import create_notification, welcome_approved_email_html
+                from ..services.vendor_calendars import calendar_success_redirect_base, VENDOR_CALENDAR_WELCOME
+                availability_url = calendar_success_redirect_base()
                 await create_notification(
                     title="Welcome to Bricks GO",
                     body=(
-                        "You’re approved. Connect a calendar on Availability so auto-assign "
-                        "only offers jobs that fit your real schedule."
+                        f"{VENDOR_CALENDAR_WELCOME} "
+                        "Open Availability and connect Google, Outlook, Apple, or an ICS feed."
                     ),
                     ntype="onboarding_approved",
-                    data={"member_id": member_id},
+                    data={
+                        "member_id": member_id,
+                        "type": "onboarding_approved",
+                        "route": "/settings",
+                        "url": availability_url,
+                    },
+                    member_id=member_id,
                     email_to=email,
                     email_subject="You’re approved — connect your calendar",
-                    email_html=(
-                        "<p>You’re approved on Bricks GO.</p>"
-                        "<p>Connect a calendar on <b>Availability</b> so auto-assign only "
-                        "offers jobs that fit your real schedule. Busy on any connected "
-                        "calendar = you won’t get that slot.</p>"
-                    ),
+                    email_html=welcome_approved_email_html(availability_url),
                 )
         except Exception:
             pass

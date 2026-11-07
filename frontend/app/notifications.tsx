@@ -22,6 +22,7 @@ type Notification = {
   type: string;
   read: boolean;
   created_at: string;
+  data?: { route?: string; type?: string; job_id?: string };
 };
 
 const TYPE_ICON: Record<string, React.ComponentType<any>> = {
@@ -77,12 +78,22 @@ export default function NotificationsScreen() {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
 
+  const openNotification = (item: Notification) => {
+    markRead(item.id);
+    if (item.type === 'onboarding_approved' || item.data?.type === 'onboarding_approved') {
+      router.push('/settings');
+      return;
+    }
+    const route = item.data?.route;
+    if (typeof route === 'string' && route.startsWith('/')) router.push(route as any);
+  };
+
   const renderItem = ({ item }: { item: Notification }) => {
     const Icon = TYPE_ICON[item.type] || Bell;
     return (
       <Pressable
         style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-        onPress={() => markRead(item.id)}
+        onPress={() => openNotification(item)}
         accessibilityRole="button"
         accessibilityLabel={`${item.read ? '' : 'Unread. '}${item.title}. ${item.message || ''}`}
       >

@@ -1536,10 +1536,18 @@ async def list_vendor_calendars(
 ):
     """List calendar connection status for the actor — honest Connected only."""
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    from ..services.vendor_calendars import list_vendor_calendar_status, google_oauth_configured, microsoft_oauth_configured
+    from ..services.vendor_calendars import (
+        list_vendor_calendar_status,
+        google_oauth_configured,
+        microsoft_oauth_configured,
+        google_connect_via,
+        google_direct_oauth,
+        VENDOR_CALENDAR_EDU_COPY,
+        VENDOR_CALENDAR_USED_FOR_OFFERS,
+        VENDOR_CALENDAR_NUDGE,
+    )
     db = await get_db()
     statuses = await list_vendor_calendar_status(db, actor_id)
-    from ..services.vendor_calendars import google_connect_via, google_direct_oauth
     return {
         "connections": statuses,
         "oauth": {
@@ -1548,12 +1556,9 @@ async def list_vendor_calendars(
             "google_connect_via": google_connect_via(),
             "google_direct_oauth": google_direct_oauth(),
         },
-        "copy": (
-            "Connecting a calendar tells Bricks when you’re free so auto-assign "
-            "only offers jobs that fit your real schedule. Busy on any connected "
-            "calendar = you won’t get that slot. Manual hours still apply if no "
-            "calendar is connected."
-        ),
+        "copy": VENDOR_CALENDAR_EDU_COPY,
+        "used_for_offers": VENDOR_CALENDAR_USED_FOR_OFFERS,
+        "nudge": VENDOR_CALENDAR_NUDGE,
     }
 
 
@@ -1572,14 +1577,12 @@ async def connect_vendor_calendar(
     payload = payload or {}
     from ..services.vendor_calendars import (
         google_oauth_configured,
-        connection_status,
         PROVIDERS,
     )
     if provider not in PROVIDERS:
         api_error(400, "Unknown calendar provider", "invalid_provider")
 
     db = await get_db()
-    now = datetime.now(timezone.utc).isoformat()
 
     if provider == "google":
         from ..services.vendor_calendars import (
@@ -1588,8 +1591,7 @@ async def connect_vendor_calendar(
             build_google_supabase_connect_payload,
             google_connect_via,
             google_direct_oauth,
-            google_calendar_ping,
-            upsert_oauth_connection,
+            persist_google_oauth_if_verified,
             GOOGLE_CAL_SCOPE,
         )
         if not google_oauth_configured():
@@ -1601,38 +1603,17 @@ async def connect_vendor_calendar(
                 "mode": None,
                 "connect_via": None,
             }
-        # Persist tokens only when supplied — Connected only after real tokens (and ping on complete-session).
-        if payload.get("access_token"):
-            from ..services.calendar_token_crypto import encrypt_connection_secrets
-            from ..services.vendor_calendars import _expires_at_iso
-            row = {
-                "member_id": actor_id,
-                "vendor_id": vendor_id,
-                "provider": "google",
-                "access_token": payload.get("access_token"),
-                "refresh_token": payload.get("refresh_token"),
-                "token_expires_at": _expires_at_iso(payload.get("expires_in") or 3600),
-                "updated_at": now,
-                "created_at": now,
-            }
-            stored = encrypt_connection_secrets(row)
-            try:
-                await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
-            except Exception as e:
-                from ..shared.pg_fallback import (
-                    _is_rest_quota_error,
-                    pg_upsert_vendor_calendar_connection,
-                )
-                if _is_rest_quota_error(e):
-                    if not pg_upsert_vendor_calendar_connection(stored):
-                        return {
-                            "connected": False,
-                            "status": "error",
-                            "detail": "Could not save calendar connection (Fair-Use).",
-                        }
-                else:
-                    logger.warning("calendar upsert soft-fail: %s", e)
-            return connection_status(stored)
+        # Persist tokens only after refresh token + Calendar ping — never fake Connected.
+        if payload.get("access_token") or payload.get("refresh_token"):
+            return await persist_google_oauth_if_verified(
+                db,
+                member_id=actor_id,
+                vendor_id=vendor_id,
+                access_token=payload.get("access_token") or "",
+                refresh_token=payload.get("refresh_token") or "",
+                expires_in=payload.get("expires_in") or 3600,
+                scope=payload.get("scope"),
+            )
 
         via = google_connect_via()
         # Default: Supabase-mediated Google OAuth (secret lives in Supabase).
@@ -1669,86 +1650,72 @@ async def connect_vendor_calendar(
         }
 
     if provider == "microsoft":
-        # Outlook Connect not offered to vendors (Azure/M365 free signup requires a card).
-        # FreeBusy + disconnect paths remain for any legacy connection.
+        from ..services.vendor_calendars import (
+            microsoft_oauth_configured,
+            microsoft_redirect_uri,
+            build_microsoft_authorize_url,
+            persist_microsoft_oauth_if_verified,
+            MICROSOFT_CAL_SCOPE,
+        )
+        if payload.get("access_token") or payload.get("refresh_token"):
+            return await persist_microsoft_oauth_if_verified(
+                db,
+                member_id=actor_id,
+                vendor_id=vendor_id,
+                access_token=payload.get("access_token") or "",
+                refresh_token=payload.get("refresh_token") or "",
+                expires_in=payload.get("expires_in") or 3600,
+                scope=payload.get("scope"),
+            )
+        if not microsoft_oauth_configured():
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "Outlook OAuth is not configured on this environment (needs Microsoft client id and secret).",
+                "oauth_url": None,
+                "mode": None,
+                "connect_via": None,
+            }
+        redirect = microsoft_redirect_uri()
+        if not redirect:
+            return {
+                "connected": False,
+                "status": "needs_env",
+                "detail": "MICROSOFT_OAUTH_REDIRECT_URI is not set — cannot start Outlook OAuth.",
+                "oauth_url": None,
+                "mode": None,
+                "connect_via": "direct",
+            }
         return {
             "connected": False,
-            "status": "unavailable",
-            "detail": "Outlook Connect isn’t offered without an Azure directory (no card). Use Google, Apple, or an ICS feed.",
-            "oauth_url": None,
+            "status": "oauth_ready",
+            "detail": "Open Microsoft OAuth to connect Outlook / Microsoft 365",
+            "oauth_url": build_microsoft_authorize_url(actor_id),
+            "mode": "direct",
+            "connect_via": "direct",
+            "scope": MICROSOFT_CAL_SCOPE,
+            "redirect_uri": redirect,
         }
 
     if provider == "apple":
-        caldav_url = (payload.get("caldav_url") or "").strip()
-        password = (payload.get("app_password") or payload.get("caldav_password") or "").strip()
-        username = (payload.get("username") or member.get("email") or "").strip()
-        if not caldav_url or not password:
-            return {
-                "connected": False,
-                "status": "needs_app_password",
-                "detail": "Apple Calendar needs an iCloud CalDAV URL and an app-specific password. Connected is only shown after both are saved.",
-            }
-        from ..services.calendar_token_crypto import encrypt_connection_secrets
-        row = {
-            "member_id": actor_id,
-            "vendor_id": vendor_id,
-            "provider": "apple",
-            "caldav_url": caldav_url,
-            "caldav_password": password,
-            "caldav_username": username,
-            "updated_at": now,
-            "created_at": now,
-        }
-        stored = encrypt_connection_secrets(row)
-        try:
-            await db.table("vendor_calendar_connections").upsert(stored, on_conflict="member_id,provider").execute()
-        except Exception as e:
-            from ..shared.pg_fallback import (
-                _is_rest_quota_error,
-                pg_upsert_vendor_calendar_connection,
-            )
-            if _is_rest_quota_error(e):
-                if not pg_upsert_vendor_calendar_connection(stored):
-                    return {
-                        "connected": False,
-                        "status": "error",
-                        "detail": "Could not save calendar connection (Fair-Use).",
-                    }
-            else:
-                logger.warning("calendar upsert soft-fail: %s", e)
-                return {"connected": False, "status": "error", "detail": f"Could not save CalDAV connection: {e}"}
-        return connection_status(stored)
+        from ..services.vendor_calendars import persist_apple_caldav_if_verified
+        return await persist_apple_caldav_if_verified(
+            db,
+            member_id=actor_id,
+            vendor_id=vendor_id,
+            caldav_url=payload.get("caldav_url") or "",
+            password=payload.get("app_password") or payload.get("caldav_password") or "",
+            username=payload.get("username") or member.get("email") or "",
+        )
 
     if provider == "ics":
-        ics_url = (payload.get("ics_url") or "").strip()
-        if not ics_url:
-            return {"connected": False, "status": "not_connected", "detail": "Paste a public ICS calendar URL"}
-        row = {
-            "member_id": actor_id,
-            "vendor_id": vendor_id,
-            "provider": "ics",
-            "ics_url": ics_url,
-            "updated_at": now,
-            "created_at": now,
-        }
-        try:
-            await db.table("vendor_calendar_connections").upsert(row, on_conflict="member_id,provider").execute()
-        except Exception as e:
-            from ..shared.pg_fallback import (
-                _is_rest_quota_error,
-                pg_upsert_vendor_calendar_connection,
-            )
-            if _is_rest_quota_error(e):
-                if not pg_upsert_vendor_calendar_connection(row):
-                    return {
-                        "connected": False,
-                        "status": "error",
-                        "detail": "Could not save calendar connection (Fair-Use).",
-                    }
-            else:
-                logger.warning("calendar upsert soft-fail: %s", e)
-                return {"connected": False, "status": "error", "detail": f"Could not save ICS URL: {e}"}
-        return connection_status(row)
+        from ..services.vendor_calendars import persist_ics_if_verified
+        return await persist_ics_if_verified(
+            db,
+            member_id=actor_id,
+            vendor_id=vendor_id,
+            ics_url=payload.get("ics_url") or "",
+        )
 
     api_error(400, "Unsupported provider", "invalid_provider")
 
@@ -1772,69 +1739,20 @@ async def google_calendar_complete_session(
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     member = await get_vendor_member(actor_id)
     vendor_id = member.get("vendor_id", "default_vendor")
-    from ..services.vendor_calendars import (
-        google_calendar_ping,
-        upsert_oauth_connection,
-        connection_status,
-        GOOGLE_CAL_SCOPE,
-    )
-
-    access = (body.provider_token or "").strip()
-    refresh = (body.provider_refresh_token or "").strip()
-    scope = (body.scope or "").strip()
-    if not refresh:
-        return {
-            "connected": False,
-            "status": "noscope",
-            "detail": "Google Calendar permission is required (missing refresh token). Try Connect again and approve calendar access.",
-        }
-    if not access:
-        return {
-            "connected": False,
-            "status": "error",
-            "detail": "Could not connect Google Calendar (missing access token).",
-        }
-    if scope and "calendar" not in scope:
-        return {
-            "connected": False,
-            "status": "noscope",
-            "detail": "Google Calendar permission is required. Approve calendar access and retry.",
-        }
-    ping = await google_calendar_ping(access)
-    if not ping.get("ok"):
-        logger.warning("Google complete-session ping failed (%s via %s)", ping.get("status"), ping.get("via"))
-        if ping.get("status") in (401, 403):
-            return {
-                "connected": False,
-                "status": "noscope",
-                "detail": "Google Calendar permission is required. Approve calendar access and retry.",
-            }
-        return {
-            "connected": False,
-            "status": "error",
-            "detail": "Could not verify Google Calendar access. Try again.",
-        }
+    from ..services.vendor_calendars import persist_google_oauth_if_verified
 
     db = await get_db()
-    try:
-        row = await upsert_oauth_connection(
-            db,
-            member_id=actor_id,
-            vendor_id=vendor_id,
-            provider="google",
-            token_payload={
-                "access_token": access,
-                "refresh_token": refresh,
-                "expires_in": 3600,
-                "scope": scope or GOOGLE_CAL_SCOPE,
-            },
-        )
-    except Exception as e:
-        logger.warning("Google complete-session upsert failed: %s", e)
-        return {"connected": False, "status": "error", "detail": f"Could not save calendar connection: {e}"}
-    status = connection_status(row)
-    status["ping"] = ping.get("via")
-    status["connect_via"] = "supabase"
+    status = await persist_google_oauth_if_verified(
+        db,
+        member_id=actor_id,
+        vendor_id=vendor_id,
+        access_token=body.provider_token or "",
+        refresh_token=body.provider_refresh_token or "",
+        expires_in=3600,
+        scope=body.scope,
+    )
+    if status.get("connected"):
+        status["connect_via"] = "supabase"
     return status
 
 
@@ -1851,7 +1769,7 @@ async def google_calendar_oauth_callback(
         calendar_success_redirect_base,
         exchange_google_code,
         google_direct_oauth,
-        upsert_oauth_connection,
+        persist_google_oauth_if_verified,
     )
 
     base = calendar_success_redirect_base()
@@ -1888,21 +1806,17 @@ async def google_calendar_oauth_callback(
     except Exception as e:
         logger.warning("OAuth member lookup failed: %s", e)
         return _err("Could not resolve vendor member for OAuth state")
-    from ..services.vendor_calendars import google_calendar_ping
-    ping = await google_calendar_ping(tokens.get("access_token") or "")
-    if not ping.get("ok"):
-        return _err("Google Calendar permission could not be verified after OAuth")
-    try:
-        await upsert_oauth_connection(
-            db,
-            member_id=member_id,
-            vendor_id=vendor_id,
-            provider="google",
-            token_payload=tokens,
-        )
-    except Exception as e:
-        logger.warning("Google calendar upsert failed: %s", e)
-        return _err(f"Connected tokens could not be saved: {e}")
+    status = await persist_google_oauth_if_verified(
+        db,
+        member_id=member_id,
+        vendor_id=vendor_id,
+        access_token=tokens.get("access_token") or "",
+        refresh_token=tokens.get("refresh_token") or "",
+        expires_in=tokens.get("expires_in"),
+        scope=tokens.get("scope"),
+    )
+    if not status.get("connected"):
+        return _err(status.get("detail") or "Google Calendar permission could not be verified after OAuth")
     return _ok()
 
 
@@ -1919,7 +1833,7 @@ async def microsoft_calendar_oauth_callback(
         calendar_success_redirect_base,
         exchange_microsoft_code,
         microsoft_oauth_configured,
-        upsert_oauth_connection,
+        persist_microsoft_oauth_if_verified,
     )
 
     base = calendar_success_redirect_base()
@@ -1956,17 +1870,17 @@ async def microsoft_calendar_oauth_callback(
     except Exception as e:
         logger.warning("OAuth member lookup failed: %s", e)
         return _err("Could not resolve vendor member for OAuth state")
-    try:
-        await upsert_oauth_connection(
-            db,
-            member_id=member_id,
-            vendor_id=vendor_id,
-            provider="microsoft",
-            token_payload=tokens,
-        )
-    except Exception as e:
-        logger.warning("Microsoft calendar upsert failed: %s", e)
-        return _err(f"Connected tokens could not be saved: {e}")
+    status = await persist_microsoft_oauth_if_verified(
+        db,
+        member_id=member_id,
+        vendor_id=vendor_id,
+        access_token=tokens.get("access_token") or "",
+        refresh_token=tokens.get("refresh_token") or "",
+        expires_in=tokens.get("expires_in"),
+        scope=tokens.get("scope"),
+    )
+    if not status.get("connected"):
+        return _err(status.get("detail") or "Outlook calendar permission could not be verified after OAuth")
     return _ok()
 
 

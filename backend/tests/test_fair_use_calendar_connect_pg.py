@@ -226,6 +226,10 @@ def test_connect_apple_falls_back_on_402(monkeypatch):
         "app.shared.pg_fallback.pg_upsert_vendor_calendar_connection",
         lambda row: upsert_calls.append(dict(row)) or row,
     )
+    monkeypatch.setattr(
+        "app.services.vendor_calendars.apple_caldav_ping",
+        AsyncMock(return_value={"ok": True, "status": 207, "via": "caldav"}),
+    )
 
     out = asyncio.get_event_loop().run_until_complete(
         vos.connect_vendor_calendar(
@@ -270,6 +274,10 @@ def test_connect_ics_falls_back_on_402(monkeypatch):
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_upsert_vendor_calendar_connection",
         lambda row: upsert_calls.append(dict(row)) or row,
+    )
+    monkeypatch.setattr(
+        "app.services.vendor_calendars.ics_feed_ping",
+        AsyncMock(return_value={"ok": True, "status": 200, "via": "ics"}),
     )
 
     out = asyncio.get_event_loop().run_until_complete(

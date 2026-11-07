@@ -5,11 +5,13 @@ import { useRouter } from 'expo-router';
 import { Bell, Navigation, Phone, Check as CheckIcon, Sun, Box, LayoutGrid, Video } from 'lucide-react-native';
 import { actorHeaders } from '../../lib/api';
 import { cachedJson } from '../../lib/offline';
+import { anyCalendarConnected, fetchVendorCalendars } from '../../lib/calendarConnect';
 import { captureNeitherCopy, jobCaptureModes } from '../../lib/capture-modes';
 import { formatShootWindow, minutesUntilShoot } from '../../lib/shoot-window';
 import { color, type as T, space, radius, layout, hairline } from '../../theme';
 import { Screen, PageHeader, Section, Group, Row, Button, IconButton, StatGrid, Avatar, EmptyState, LoadingState } from '../../components/ui';
 import { EnterFadeDown, PressScale } from '../../components/motion';
+import { CalendarConnectNudge } from '../../components/CalendarConnectNudge';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 const VENDOR_RATE = 0.62;
@@ -69,6 +71,7 @@ export default function TodayScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [unread, setUnread] = useState(0);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [needCalendar, setNeedCalendar] = useState(false);
   const today = todayISO();
 
   const fetchData = useCallback(async () => {
@@ -76,11 +79,12 @@ export default function TodayScreen() {
       const headers = await actorHeaders();
       // Jobs are network-first with an on-device fallback so the day's addresses and
       // access notes stay readable without signal. Unread count is best-effort.
-      const [jobsResult, notifData] = await Promise.all([
+      const [jobsResult, notifData, calData] = await Promise.all([
         cachedJson<any>('vendor-os-jobs', `${API}/api/vendor-os/jobs`, { headers }),
         fetch(`${API}/api/notifications/unread-count`, { headers })
           .then(r => (r.ok ? r.json() : { count: 0 }))
           .catch(() => ({ count: 0 })),
+        fetchVendorCalendars().catch(() => null),
       ]);
       const payload = jobsResult.data;
       setSavedAt(jobsResult.fromCache ? jobsResult.savedAt : null);
@@ -90,6 +94,7 @@ export default function TodayScreen() {
         .sort((a, b) => a.time_window_start.localeCompare(b.time_window_start));
       setJobs(todayJobs);
       setUnread(notifData.count || 0);
+      setNeedCalendar(calData ? !anyCalendarConnected(calData) : false);
     } catch (e) {
       console.error('Today fetch error', e);
     } finally {
@@ -143,6 +148,10 @@ export default function TodayScreen() {
             <IconButton icon={Bell} label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'} badge={unread > 0} onPress={() => router.push('/notifications')} />
           }
         />
+
+        {needCalendar ? (
+          <CalendarConnectNudge onPress={() => router.push('/settings')} />
+        ) : null}
 
         {loading && jobs.length === 0 ? (
           <LoadingState />

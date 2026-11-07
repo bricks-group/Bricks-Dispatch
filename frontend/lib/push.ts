@@ -72,6 +72,9 @@ export async function registerForPush(): Promise<string | null> {
 export function routeForNotification(data: any): string | null {
   const jobId = data?.job_id || data?.jobId;
   if (jobId) return `/job/${jobId}`;
+  const route = data?.route;
+  if (typeof route === 'string' && route.startsWith('/')) return route;
+  if (data?.type === 'onboarding_approved' || data?.kind === 'onboarding_approved') return '/settings';
   if (data?.type || data?.kind) return '/notifications';
   return null;
 }

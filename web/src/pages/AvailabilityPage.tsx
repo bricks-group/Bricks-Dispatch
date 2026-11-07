@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { startGoogleCalendarOAuth } from '../lib/googleCalendarConnect';
 import BricksLoader from '../components/BricksLoader';
+import { CalendarConnectNudge } from '../components/CalendarConnectNudge';
+import { CALENDAR_EDU_LINES, CALENDAR_USED_FOR_OFFERS } from '../lib/calendarCopy';
 
 type Availability = {
   work_start: string;
@@ -37,13 +39,12 @@ type CalResponse = {
 
 const PROVIDER_LABELS: Record<string, string> = {
   google: 'Google Calendar',
-  apple: 'Apple / iCloud Calendar',
+  microsoft: 'Outlook / Microsoft 365',
+  apple: 'Apple Calendar (iCloud CalDAV)',
   ics: 'Other calendar (ICS link)',
-  microsoft: 'Microsoft calendar', // disconnect-only if already connected
 };
 
-/** Vendors connect Google / Apple / ICS only — Microsoft/Outlook not offered. */
-const CONNECT_PROVIDERS = new Set(['google', 'apple', 'ics']);
+const CONNECT_PROVIDERS = new Set(['google', 'microsoft', 'apple', 'ics']);
 
 export function AvailabilityPage() {
   const [data, setData] = useState<Availability | null>(null);
@@ -118,7 +119,8 @@ export function AvailabilityPage() {
         if (started.error) setErr(started.error);
         if (started.redirected) return; // navigating away
       } else if (res.oauth_url) {
-        window.open(res.oauth_url, '_blank', 'noopener,noreferrer');
+        window.location.href = res.oauth_url;
+        return;
       }
       if (res.status === 'needs_env' || res.status === 'needs_app_password' || res.status === 'noscope') {
         setErr(res.detail || 'Not connected');
@@ -144,8 +146,8 @@ export function AvailabilityPage() {
     }
   };
 
+  const calendarsLoaded = cals !== null;
   const anyConnected = (cals?.connections || []).some((c) => c.connected);
-  const assignable = !!data?.available;
 
   return (
     <div className="page-content">
@@ -156,23 +158,16 @@ export function AvailabilityPage() {
         </div>
       </div>
 
-      <section className="card full">
+      <section className="card full" data-testid="calendar-edu">
         <h3>How auto-assign uses your calendar</h3>
-        <p className="muted" style={{ margin: 0, padding: '14px 20px 18px', maxWidth: 680, fontSize: 13 }}>
-          {cals?.copy ||
-            'Connecting a calendar tells Bricks when you’re free so auto-assign only offers jobs that fit your real schedule. If you’re busy on any connected calendar, you won’t be offered that slot. Manual hours still apply if no calendar is connected.'}
-        </p>
+        <ul className="muted" style={{ margin: 0, padding: '14px 20px 18px 36px', maxWidth: 680, fontSize: 13, lineHeight: 1.55 }}>
+          {CALENDAR_EDU_LINES.map((line) => (
+            <li key={line} style={{ marginBottom: 8 }}>{line}</li>
+          ))}
+        </ul>
       </section>
 
-      {assignable && !anyConnected && (
-        <section className="card full" style={{ borderColor: 'var(--brick, #c45)' }}>
-          <h3>Connect a calendar</h3>
-          <p className="muted" style={{ margin: '8px 0 0' }}>
-            You’re marked available, but no calendar is connected yet. Connect Google, Apple, or an ICS feed
-            so auto-assign can skip slots you’re already busy.
-          </p>
-        </section>
-      )}
+      {calendarsLoaded && !anyConnected && <CalendarConnectNudge linkToAvailability={false} />}
 
       {!data && <p className="muted"><BricksLoader variant="assemble" size={40} style={{ display: 'block', marginBottom: 12 }} />Loading…</p>}
       {err && <p className="error">{err}</p>}
@@ -216,6 +211,7 @@ export function AvailabilityPage() {
         <ul className="list">
           {(cals?.connections || [
             { provider: 'google', connected: false, status: 'not_connected', detail: 'Connect Google Calendar' },
+            { provider: 'microsoft', connected: false, status: 'not_connected', detail: 'Connect Outlook / Microsoft 365' },
             { provider: 'apple', connected: false, status: 'needs_app_password', detail: 'Apple needs app-specific password' },
             { provider: 'ics', connected: false, status: 'not_connected', detail: 'Paste a public ICS URL' },
           ])
@@ -226,6 +222,9 @@ export function AvailabilityPage() {
                 <div>
                   <strong>{PROVIDER_LABELS[c.provider] || c.provider}</strong>
                   <p className="muted" style={{ margin: '4px 0 0', padding: 0 }}>
+                    {CALENDAR_USED_FOR_OFFERS}
+                  </p>
+                  <p className="muted" style={{ margin: '4px 0 0', padding: 0 }}>
                     {c.connected ? `Connected · ${syncedLabel(c)}` : c.detail}
                     {c.status === 'needs_env' ? ' · OAuth not configured on this environment' : ''}
                   </p>
@@ -235,9 +234,13 @@ export function AvailabilityPage() {
                     <button type="button" disabled={busy === c.provider} onClick={() => disconnect(c.provider)}>
                       Disconnect
                     </button>
-                  ) : c.provider === 'google' ? (
-                    <button type="button" disabled={busy === c.provider} onClick={() => connect(c.provider)}>
-                      {busy === c.provider ? '…' : 'Connect Google'}
+                  ) : c.provider === 'google' || c.provider === 'microsoft' ? (
+                    <button
+                      type="button"
+                      disabled={busy === c.provider || c.status === 'needs_env'}
+                      onClick={() => connect(c.provider)}
+                    >
+                      {busy === c.provider ? '…' : c.provider === 'google' ? 'Connect Google' : 'Connect Outlook'}
                     </button>
                   ) : null}
                 </div>
