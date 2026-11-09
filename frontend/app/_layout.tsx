@@ -14,6 +14,8 @@ import { supabase } from '../lib/supabase';
 import { configureNotificationHandler, ensureAndroidChannel, registerForPush, routeForNotification } from '../lib/push';
 import { clearOfflineCache } from '../lib/offline';
 import OfflineBanner from '../components/OfflineBanner';
+import { needsTermsStep } from '../lib/legal-terms';
+import { markTermsCleared, resetTermsGate, termsCleared } from '../lib/terms-gate';
 import type { Session } from '@supabase/supabase-js';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? '';
@@ -69,6 +71,7 @@ export default function RootLayout() {
       if (event === 'SIGNED_OUT') {
         setOnboardingChecked(false);
         clearOfflineCache();
+        resetTermsGate();
       }
     });
     return () => subscription.unsubscribe();
@@ -114,6 +117,29 @@ export default function RootLayout() {
         // Gate Today/Jobs/Capture until Kam approves in Hiring.
         // Detect pending via onboarding_status, is_active, app_access, or Applicant role
         // (public_profile historically masked role as Photographer IC).
+        const onAgreeTerms = segs[0] === 'agree-terms';
+        if (hasAppAccess(profile)) {
+          // Contractor agreement step (amendment A1 for vendors on v1.9), same rule as web.
+          const uid = session.user?.id;
+          if (!termsCleared(uid)) {
+            try {
+              const meRes = await fetch(`${API}/api/vendor-os/auth/me`, { headers });
+              if (meRes.ok) {
+                const me = await meRes.json();
+                if (needsTermsStep(me, true)) {
+                  if (!onAgreeTerms) router.replace('/agree-terms' as any);
+                } else {
+                  markTermsCleared(uid);
+                  if (onAgreeTerms) router.replace('/(tabs)');
+                }
+              }
+            } catch (e) {
+              // Older API or offline: never block on the agreement check.
+            }
+          } else if (onAgreeTerms) {
+            router.replace('/(tabs)');
+          }
+        }
         if (!hasAppAccess(profile)) {
           if (needsRegister(profile)) {
             if (!onRegister && !onSlides) {
@@ -190,6 +216,7 @@ export default function RootLayout() {
             presentation: 'card',
           }}
         />
+        <Stack.Screen name="agree-terms" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="profile-edit" options={{ headerShown: false, presentation: 'card' }} />
         <Stack.Screen name="settings" options={{ headerShown: false, presentation: 'card' }} />
       </Stack>

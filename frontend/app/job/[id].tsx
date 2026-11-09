@@ -12,6 +12,7 @@ import {
 import { User, MapPin, CheckCircle, Navigation, Phone, AlertTriangle, X, Home, Box, LayoutGrid, Video, Camera, Upload as UploadIcon } from 'lucide-react-native';
 import { useNoShow, formatCountdown, LOCATION_REQUIRED_COPY, NOSHOW_RULE_COPY, NOSHOW_REVIEW_COPY } from '../../lib/noshow';
 import { actorHeaders } from '../../lib/api';
+import { CANCEL_REASONS, HANDBACK_RULE_COPY, IMMEDIATE_FAMILY_COPY, handbackBody } from '../../lib/legal-terms';
 import { TradeChecklist, type ChecklistPalette } from '../../components/TradeChecklist';
 import { isPickerMember, isVendorAdmin, TeamMember } from '../../lib/vendor';
 import { getCaptureSession } from '../../lib/capture-api';
@@ -100,6 +101,11 @@ export default function JobDetailScreen() {
   const [escalationSentAt, setEscalationSentAt] = useState<number | null>(null);
   const [noShowVisible, setNoShowVisible] = useState(false);
   const [noShowNotes, setNoShowNotes] = useState('');
+  const [handbackVisible, setHandbackVisible] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelNote, setCancelNote] = useState('');
+  const [handingBack, setHandingBack] = useState(false);
+  const [handbackErr, setHandbackErr] = useState('');
   const [listingQuery, setListingQuery] = useState('');
   const [listingHits, setListingHits] = useState<ListingHit[]>([]);
   const [listingSearching, setListingSearching] = useState(false);
@@ -311,7 +317,7 @@ export default function JobDetailScreen() {
       } catch {
         // Fall through — API will still reject incomplete brackets.
       }
-      const bracketBlock = validateHdrUploadsForComplete(uploads);
+      const bracketBlock = job.trade_job ? null : validateHdrUploadsForComplete(uploads);
       if (bracketBlock) {
         Alert.alert('Incomplete brackets', bracketBlock.message || BRACKET_HINT);
         return;
@@ -436,7 +442,31 @@ export default function JobDetailScreen() {
 
   const statusTone: Tone = STATUS_TONE[job.status] || 'neutral';
   const isComplete = job.status === 'completed';
+  const closeHandback = () => { setHandbackVisible(false); setCancelReason(''); setCancelNote(''); setHandbackErr(''); };
+  const submitHandback = async () => {
+    if (!cancelReason || handingBack) return;
+    setHandingBack(true); setHandbackErr('');
+    try {
+      const res = await fetch(`${API}/api/vendor-os/jobs/${job.id}/status`, {
+        method: 'PUT',
+        headers: await actorHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(handbackBody(cancelReason, cancelNote)),
+      });
+      if (!res.ok) {
+        let msg = "Couldn't hand back this job. Try again.";
+        try { const b = await res.json(); const d = b?.detail ?? b?.message; if (typeof d === 'string' && d) msg = d; else if (typeof d?.message === 'string') msg = d.message; } catch {}
+        throw new Error(msg);
+      }
+      setJob(prev => prev ? { ...prev, status: 'declined' } : prev);
+      closeHandback();
+    } catch (e: any) {
+      setHandbackErr(e?.message || "Couldn't hand back this job. Try again.");
+    } finally {
+      setHandingBack(false);
+    }
+  };
   const isActive = ['assigned', 'in_progress'].includes(job.status);
+  const isDeclined = job.status === 'declined';
   const captureFlags = jobCaptureModes(job);
   const hasCaptureMode = captureFlags.tour || captureFlags.floorplan || captureFlags.visit;
   const openCapture = (kind: CaptureKind | 'visit') => {
@@ -657,6 +687,17 @@ export default function JobDetailScreen() {
             </Section>
           ) : null}
 
+          {job.status === 'assigned' ? (
+            <Section label="Can’t make it?">
+              <Text style={[T.bodySm, { color: color.textBody }]}>{HANDBACK_RULE_COPY}</Text>
+              <View style={s.blockGapSm}>
+                <Button variant="secondary" title="Hand back this job" onPress={() => setHandbackVisible(true)} testID="handback-open" />
+              </View>
+            </Section>
+          ) : job.status === 'declined' ? (
+            <View style={s.blockGap}><Notice>You handed back this job.</Notice></View>
+          ) : null}
+
           <Section label="Assigned to">
             <Group>
               <Row icon={User} title={job.assignee_name || (job.assignee_id ? job.assignee_id : 'Unassigned')} />
@@ -728,14 +769,14 @@ export default function JobDetailScreen() {
         {/* One primary (Mark complete). Navigate + capture are quiet secondaries, equal width. */}
         <View style={s.buttonRowFooter}>
           <Button style={s.flex} variant="secondary" icon={Navigation} title="Navigate" onPress={openMaps} />
-          {!isComplete && hasCaptureMode ? (
+          {!isComplete && !isDeclined && hasCaptureMode ? (
             <Button style={s.flex} variant="secondary" icon={captureStartIcon} title={captureStartLabel} onPress={startCapture} disabled={actioning} />
           ) : null}
-          {!isComplete && !hasCaptureMode ? (
+          {!isComplete && !isDeclined && !hasCaptureMode ? (
             <Button style={s.flex} icon={CheckCircle} title="Mark complete" onPress={markComplete} loading={actioning} />
           ) : null}
         </View>
-        {!isComplete && hasCaptureMode ? (
+        {!isComplete && !isDeclined && hasCaptureMode ? (
           <Button style={s.footerPrimary} icon={CheckCircle} title="Mark complete" onPress={markComplete} loading={actioning} />
         ) : null}
       </Footer>
@@ -764,6 +805,47 @@ export default function JobDetailScreen() {
                   />
                 </View>
                 <Button style={s.blockGapSm} variant="danger" title="Confirm no-show" onPress={submitNoShow} loading={noShow.busy === 'report'} />
+              </SafeAreaView>
+            </SheetEnter>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={handbackVisible} animationType="fade" transparent onRequestClose={closeHandback}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.flex}>
+          <View style={s.modalOverlay}>
+            <SheetEnter style={[s.modalSheet, { maxHeight: '90%' }]}>
+              <SafeAreaView edges={['bottom']}>
+                <ScrollView keyboardShouldPersistTaps="handled">
+                  <View style={s.modalHeader}>
+                    <Text style={[T.headline, s.flex, { color: color.text }]}>Hand back this job</Text>
+                    <IconButton icon={X} label="Close" tint={color.textMuted} onPress={closeHandback} />
+                  </View>
+                  <Text style={[T.bodySm, { color: color.textBody }]}>{HANDBACK_RULE_COPY}</Text>
+                  <Text style={[T.caption, s.hint]}>{cancelReason ? 'Reason' : 'Pick a reason'}</Text>
+                  <Group style={s.blockGapSm}>
+                    {CANCEL_REASONS.map(([value, label]) => (
+                      <Row key={value} title={label} right={<Check checked={cancelReason === value} />} onPress={() => setCancelReason(value)} accessibilityLabel={label} testID={`handback-reason-${value}`} />
+                    ))}
+                  </Group>
+                  {cancelReason === 'medical' || cancelReason === 'bereavement' ? (
+                    <Text style={[T.caption, s.hint]}>{IMMEDIATE_FAMILY_COPY}</Text>
+                  ) : null}
+                  <View style={s.blockGapSm}>
+                    <Field
+                      placeholder="Anything Bricks should know (optional)"
+                      multiline
+                      numberOfLines={3}
+                      value={cancelNote}
+                      onChangeText={setCancelNote}
+                      maxLength={1000}
+                      style={s.notes}
+                      testID="handback-note"
+                    />
+                  </View>
+                  {handbackErr ? <Text style={[T.caption, s.err, s.blockGapSm]} accessibilityRole="alert">{handbackErr}</Text> : null}
+                  <Button style={s.blockGapSm} title="Hand back job" onPress={submitHandback} loading={handingBack} disabled={!cancelReason} testID="handback-submit" />
+                </ScrollView>
               </SafeAreaView>
             </SheetEnter>
           </View>

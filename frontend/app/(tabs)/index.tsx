@@ -12,6 +12,7 @@ import { color, type as T, space, radius, layout, hairline } from '../../theme';
 import { Screen, PageHeader, Section, Group, Row, Button, IconButton, StatGrid, Avatar, EmptyState, LoadingState } from '../../components/ui';
 import { EnterFadeDown, PressScale } from '../../components/motion';
 import { CalendarConnectNudge } from '../../components/CalendarConnectNudge';
+import { AmendmentBanner } from '../../components/AmendmentBanner';
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
 const VENDOR_RATE = 0.62;
@@ -28,6 +29,7 @@ type Job = {
   agent_name: string | null; agent_phone?: string | null; client_instructions: string | null;
   checklist: ChecklistItem[];
   checklist_title?: string | null;
+  trade_job?: boolean;
   package_id?: string | null;
   add_ons?: unknown;
   capture?: { tour?: boolean; floorplan?: boolean; visit?: boolean } | null;
@@ -43,6 +45,7 @@ const fmtMoney = (v: number) => fmtMoneyExact(v);
 function TodayCaptureEntry({ job, onOpen }: { job: Job; onOpen: (kind?: 'splat' | 'floorplan' | 'visit' | 'mode') => void }) {
   const flags = jobCaptureModes(job);
   const hasMode = flags.tour || flags.floorplan || flags.visit;
+  if (job.trade_job) return null;
   if (!hasMode) {
     return <Text style={[T.bodySm, s.captureNone]}>{captureNeitherCopy(flags)}</Text>;
   }
@@ -139,6 +142,7 @@ export default function TodayScreen() {
     <Screen
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={color.accent} />}
     >
+      <AmendmentBanner />
       <EnterFadeDown>
         <PageHeader
           overline={dateLabel}
