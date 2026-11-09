@@ -17,6 +17,14 @@ class DuplicateKey(Exception):
         return "duplicate key value violates unique constraint"
 
 
+class CheckViolation(Exception):
+    """Mirrors live `payouts_amount_positive CHECK (amount > 0)` (pg 23514)."""
+    code = "23514"
+
+    def __str__(self):
+        return 'new row for relation "payouts" violates check constraint "payouts_amount_positive"'
+
+
 class _Res:
     def __init__(self, data):
         self.data = data
@@ -60,6 +68,14 @@ class _Q:
     def _match(self):
         return [r for r in self.db.tables.setdefault(self.table, []) if all(f(r) for f in self.filters)]
 
+    def _check_payouts_amount(self, row):
+        if self.table != "payouts" or not self.db.enforce_payouts_amount:
+            return
+        if "amount" not in row:
+            return
+        if not (row.get("amount") or 0) > 0:
+            raise CheckViolation()
+
     def _check_unique(self, row, ignore=None):
         rows = self.db.tables.setdefault(self.table, [])
         for col in ("id",) + UNIQUE.get(self.table, ()):
@@ -88,6 +104,7 @@ class _Q:
             new = [dict(r) for r in (self.payload if isinstance(self.payload, list) else [self.payload])]
             for r in new:
                 r.setdefault("id", str(uuid.uuid4()))
+                self._check_payouts_amount(r)
                 self._check_unique(r)
                 rows.append(r)
             return _Res(copy.deepcopy(new))
@@ -96,14 +113,19 @@ class _Q:
             key = self._conflict or "id"
             hit = next((x for x in rows if str(x.get(key)) == str(r.get(key))), None)
             if hit:
+                merged = {**hit, **r}
+                self._check_payouts_amount(merged)
                 hit.update(r)
                 return _Res([copy.deepcopy(hit)])
+            self._check_payouts_amount(r)
             r.setdefault("id", str(uuid.uuid4()))
             rows.append(r)
             return _Res([copy.deepcopy(r)])
         if self.op == "update":
             hit = self._match()
             for r in hit:
+                merged = {**r, **copy.deepcopy(self.payload)}
+                self._check_payouts_amount(merged)
                 r.update(copy.deepcopy(self.payload))
             return _Res(copy.deepcopy(hit))
         if self.op == "delete":
@@ -117,6 +139,9 @@ class FakeSupabase:
     def __init__(self):
         self.tables: dict[str, list[dict]] = {}
         self.down: dict[str, bool] = {}
+        # Live CHECK payouts_amount_positive: amount > 0. Set False only to
+        # simulate a DB that has not yet applied the constraint.
+        self.enforce_payouts_amount = True
 
     def table(self, name):
         return _Q(self, name)

@@ -34,7 +34,15 @@ class _Q:
         self.patch = fields
         return self
 
+    def insert(self, row):
+        self._insert = row
+        return self
+
     async def execute(self):
+        if getattr(self, "_insert", None) is not None:
+            row = dict(self._insert)
+            self.db.rows.setdefault(self.table, []).append(row)
+            return SimpleNamespace(data=[row])
         rows = [r for r in self.db.rows.get(self.table, [])
                 if all(str(r.get(k)) == str(v) for k, v in self.filters.items())]
         if self.patch is not None:

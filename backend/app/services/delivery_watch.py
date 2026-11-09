@@ -70,8 +70,12 @@ async def _retry_emails(db, now: datetime, jobs_by_id: dict, out: dict) -> None:
                        status_in=["failed", "sending", "pending"], col="notification_status")
     for md in rows:
         jid = str(md.get("job_id") or "")
-        job = jobs_by_id.get(jid) or {}
-        if not jid or is_test_job(job):
+        job = jobs_by_id.get(jid)
+        if not jid or job is None:
+            continue  # cancelled, unknown, or outside the active set — do not email
+        if str(job.get("status") or "").lower() != "delivered":
+            continue
+        if is_test_job(job):
             continue
         delivered = _ts(md.get("delivered_at"))
         if not delivered or now - delivered > timedelta(days=LOOKBACK_DAYS):

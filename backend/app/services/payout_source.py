@@ -100,9 +100,17 @@ async def _lookup(db, table: str, cols: str, booking_id: str) -> Optional[dict]:
 
 
 def retrieve_session_charge(session_id: str) -> dict:
-    """Live session -> {charge_id, refunded, amount, amount_refunded}. Never raises."""
+    """Session -> {charge_id, refunded, partial, disputed, amount, ...}.
+
+    Never pretends a lookup succeeded: any Stripe (or parse) error sets
+    error=True so the caller can fail closed. Partial refunds are
+    0 < amount_refunded < amount. Disputes/chargebacks set disputed.
+    """
     out: dict = {}
-    if not session_id or stripe_key_mode() is None:
+    if not session_id:
+        return out
+    if stripe_key_mode() is None:
+        out["error"] = "stripe_key_unknown"
         return out
     try:
         from .stripe_connect_service import stripe_lib
@@ -110,18 +118,36 @@ def retrieve_session_charge(session_id: str) -> dict:
         pi = sess.get("payment_intent") if hasattr(sess, "get") else None
         charge = pi.get("latest_charge") if (pi is not None and hasattr(pi, "get")) else None
         if isinstance(charge, str):
-            out["charge_id"] = charge
-        elif charge is not None and hasattr(charge, "get"):
+            try:
+                charge = stripe_lib.Charge.retrieve(charge)
+            except Exception as e:
+                return {"charge_id": charge, "error": type(e).__name__}
+        if charge is not None and hasattr(charge, "get"):
+            try:
+                amount = int(charge.get("amount") or 0)
+                refunded_amt = int(charge.get("amount_refunded") or 0)
+            except (TypeError, ValueError):
+                return {"error": "charge_incomplete"}
             out["charge_id"] = charge.get("id")
-            amount = int(charge.get("amount") or 0)
-            refunded_amt = int(charge.get("amount_refunded") or 0)
             out["amount"] = amount
             out["amount_refunded"] = refunded_amt
-            out["refunded"] = bool(charge.get("refunded")) or (amount > 0 and refunded_amt >= amount)
-            out["livemode"] = charge.get("livemode")
+            raw_refunded = charge.get("refunded")
+            out["refunded"] = raw_refunded is True or (amount > 0 and refunded_amt >= amount)
+            out["partial"] = amount > 0 and 0 < refunded_amt < amount
+            raw_disputed = charge.get("disputed")
+            dispute = charge.get("dispute")
+            out["disputed"] = raw_disputed is True or (
+                isinstance(dispute, str) and bool(dispute)
+            ) or (
+                isinstance(dispute, dict) and bool(dispute.get("id"))
+            )
+            lm = charge.get("livemode")
+            if isinstance(lm, bool):
+                out["livemode"] = lm
+        return out
     except Exception as e:
-        logger.info("payout_source: session %s charge lookup skipped (%s)", session_id[:14], type(e).__name__)
-    return out
+        logger.info("payout_source: session %s charge lookup failed (%s)", str(session_id)[:14], type(e).__name__)
+        return {"error": type(e).__name__}
 
 
 async def booking_source(db, job: Optional[dict], with_charge: bool = True) -> dict:
@@ -155,22 +181,40 @@ async def booking_source(db, job: Optional[dict], with_charge: bool = True) -> d
                     src.update(livemode=mode, source="commercial_bookings")
                 if str(cb.get("status") or "").lower() in REFUNDED_LEAD_STATUSES:
                     src["refunded"] = True
-    if (with_charge and src["livemode"] is True and src["session_id"]
-            and stripe_key_mode() is True and str(src["session_id"]).startswith("cs_live_")):
+    # Always ask Stripe when we have a session and a key. A lookup error fails
+    # closed (stripe_error) instead of reading as "not refunded".
+    if with_charge and src.get("session_id") and stripe_key_mode() is not None:
         ch = retrieve_session_charge(str(src["session_id"]))
-        if ch.get("charge_id"):
-            src["charge_id"] = ch["charge_id"]
-        if ch.get("refunded"):
-            src["refunded"] = True
+        if ch.get("error"):
+            src["stripe_error"] = True
+        else:
+            if ch.get("charge_id"):
+                src["charge_id"] = ch["charge_id"]
+            if ch.get("refunded"):
+                src["refunded"] = True
+            amt, refunded_amt = int(ch.get("amount") or 0), int(ch.get("amount_refunded") or 0)
+            if ch.get("partial") or (amt > 0 and 0 < refunded_amt < amt):
+                src["partial"] = True
+            if ch.get("disputed") is True:
+                src["disputed"] = True
+            if ch.get("livemode") is not None and src.get("livemode") is None:
+                src["livemode"] = ch["livemode"]
     return src
 
 
 def payout_block_reason(src: dict, key_mode: Optional[bool] = None) -> Optional[str]:
     """Why a transfer must not happen for this booking, or None."""
+    src = src or {}
+    if src.get("disputed"):
+        return "booking_disputed"
+    if src.get("partial"):
+        return "booking_partially_refunded"
     km = stripe_key_mode() if key_mode is None else key_mode
     if src.get("livemode") is False and km is not False:
-        # Sandbox booking + live (or unknown) key: never move real money.
+        # Known test-mode booking: block even if the Stripe lookup failed.
         return "sandbox_booking"
+    if src.get("stripe_error"):
+        return "booking_lookup_failed"
     if src.get("refunded"):
         return "booking_refunded"
     return None
@@ -191,17 +235,18 @@ LEAD_PAID = frozenset({"paid", "booked", "confirmed", "scheduled", "dispatched",
 CB_PAID = frozenset({"paid", "active", "dispatched", "completed", "complete", "delivered"})
 PARTIAL_REFUND = frozenset({"partially_refunded", "partial_refund"})
 # Retried by the ops sweep (status "failed"); every other reason is "blocked".
-TRANSIENT_BLOCKS = frozenset({"booking_lookup_failed"})
+TRANSIENT_BLOCKS = frozenset({"booking_lookup_failed", "stripe_key_unknown"})
 # Kam can confirm an off-Stripe payment (cheque, invoice, brokerage credit) on
 # the order; that only covers "we cannot see a payment", never test/refund.
 MANUALLY_CONFIRMABLE = frozenset({"no_booking", "booking_not_found", "booking_unpaid",
-                                  "payment_mode_unknown", "booking_lookup_failed"})
+                                  "payment_mode_unknown"})
 
 BLOCK_TEXT = {
     "test_booking": "This is a test order (its booking id starts with e2e- or test-). Test orders never pay out.",
     "sandbox_booking": "The booking was paid in Stripe test mode, so no real money came in.",
     "live_payment_test_key": "The booking was paid for real, but the server is on a Stripe test key.",
     "booking_refunded": "The client was refunded.",
+    "booking_disputed": "The client payment is disputed. Decide by hand what the vendor is owed.",
     "booking_partially_refunded": "The client was partly refunded. Decide by hand what the vendor is owed.",
     "no_booking": "The order has no booking linked, so there is no payment on record.",
     "booking_not_found": "The linked booking was not found, so there is no payment on record.",
@@ -243,9 +288,30 @@ async def _lookup_strict(db, table: str, cols: str, booking_id: str) -> Optional
         return _pg_one(f"SELECT {safe_cols} FROM public.{table} WHERE id::text = %s LIMIT 1", (booking_id,))
 
 
+def _merge_charge(out: dict, ch: dict) -> None:
+    """Overlay Stripe charge fields onto a proof dict. ch['error'] must be handled by the caller."""
+    if ch.get("disputed"):
+        out["disputed"] = True
+    if ch.get("refunded"):
+        out["refunded"] = True
+    if ch.get("partial"):
+        out["partial"] = True
+    if ch.get("livemode") is not None:
+        out["livemode"] = ch["livemode"]
+    if ch.get("charge_id"):
+        out["charge_id"] = ch["charge_id"]
+
+
 async def payment_proof(db, booking_id: str) -> dict:
-    """{found, paid, livemode, refunded, partial, table}. Raises BookingLookupFailed."""
-    out = {"found": False, "paid": False, "livemode": None, "refunded": False, "partial": False, "table": None}
+    """{found, paid, livemode, refunded, partial, disputed, table}. Raises BookingLookupFailed.
+
+    Proof of payment comes from Stripe or from webhook-written lead/commercial
+    rows. public.bookings.stripe_payment_status / stripe_session_id are staff-
+    writable today, so they are never treated as paid on their own: a bookings
+    row is only a pointer to a Stripe Session, and the charge must be retrieved.
+    """
+    out = {"found": False, "paid": False, "livemode": None, "refunded": False,
+           "partial": False, "disputed": False, "table": None}
     bid = str(booking_id or "").strip()
     cb_id = bid[3:] if bid.lower().startswith("cb_") else bid
     if _looks_like_uuid(bid):
@@ -266,20 +332,20 @@ async def payment_proof(db, booking_id: str) -> dict:
                        refunded=st in REFUNDED_LEAD_STATUSES, partial=st in PARTIAL_REFUND)
             return out
     if _looks_like_uuid(bid):
-        bk = await _lookup_strict(db, "bookings", "status, stripe_session_id, stripe_payment_status, paid_at, "
-                                  "refunded_at, refund_amount, total_cents", bid)
+        # Pointer only — never read stripe_payment_status as proof.
+        bk = await _lookup_strict(db, "bookings", "stripe_session_id, payment_intent_id", bid)
         if bk:
-            pay = str(bk.get("stripe_payment_status") or "").lower()
-            refunded = bool(bk.get("refunded_at"))
-            partial = False
-            try:
-                amt, total = int(bk.get("refund_amount") or 0), int(bk.get("total_cents") or 0)
-                partial = refunded and 0 < amt < total
-            except (TypeError, ValueError):
-                pass
-            out.update(found=True, table="bookings", paid=pay == "paid",
-                       livemode=session_mode(bk.get("stripe_session_id")),
-                       refunded=refunded and not partial, partial=partial)
+            out.update(found=True, table="bookings")
+            sid = str(bk.get("stripe_session_id") or "").strip()
+            if not sid:
+                return out  # found, unpaid
+            ch = retrieve_session_charge(sid)
+            if ch.get("error"):
+                raise BookingLookupFailed(f"stripe: {ch.get('error')}")
+            _merge_charge(out, ch)
+            out["paid"] = bool(ch.get("charge_id") or ch.get("amount")) and not ch.get("refunded")
+            if session_mode(sid) is not None and out.get("livemode") is None:
+                out["livemode"] = session_mode(sid)
     return out
 
 
@@ -316,6 +382,8 @@ async def payment_block(db, job: Optional[dict], src: Optional[dict] = None,
         if proof is not None:
             if not proof["found"]:
                 reason = "booking_not_found"
+            elif proof.get("disputed"):
+                return "booking_disputed"
             elif proof["refunded"]:
                 return "booking_refunded"
             elif proof["partial"]:

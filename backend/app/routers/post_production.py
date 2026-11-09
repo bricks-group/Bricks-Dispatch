@@ -446,7 +446,7 @@ def _delivery_url_kind_for_upload(upload: dict) -> Optional[str]:
 
 def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
     """listing still delivery_urls row; floorplan/drone/reel/staging/twilight get kind stamps."""
-    from ..services.delivery_ledger import path_ref
+    from ..services.delivery_ledger import content_ref
     entry = {
         "upload_id": upload["id"],
         "filename": _listing_delivery_filename(upload),
@@ -456,7 +456,7 @@ def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
     }
     # Fingerprint of the stored file (not the signed URL), so the editor's
     # approval is bound to these exact files (delivery_ledger.manifest).
-    ref = path_ref(upload.get("processed_url") or upload.get("file_url"))
+    ref = content_ref(upload, upload.get("processed_url") or upload.get("file_url"))
     if ref:
         entry["ref"] = ref
     kind = _delivery_url_kind_for_upload(upload)

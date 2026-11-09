@@ -34,7 +34,7 @@ from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 logger = logging.getLogger(__name__)
 
 # Delivery email retry schedule (after the first try): 15 min, 1 h, 6 h, 24 h.
-EMAIL_BACKOFF_MIN = (15, 60, 360, 1440)
+EMAIL_BACKOFF_MIN = (15, 60, 360, 720)
 EMAIL_MAX_TRIES = 1 + len(EMAIL_BACKOFF_MIN)
 SENDING_STALE_MIN = 15
 
@@ -55,6 +55,26 @@ def path_ref(path: Any) -> str:
     """Short fingerprint of the stored file a deliverable points at."""
     p = _strip_query(path)
     return hashlib.sha256(p.encode()).hexdigest()[:16] if p else ""
+
+
+def content_ref(upload: Optional[dict] = None, path: Any = None) -> str:
+    """Fingerprint of file bytes at a storage key: etag/hash + size + path.
+
+    path_ref alone does not change when the object at the same key is overwritten
+    (R2/S3 presigned PUT). Size, etag, content hash or updated_at do.
+    """
+    u = upload if isinstance(upload, dict) else {}
+    etag = u.get("etag") or u.get("content_hash") or u.get("checksum") or u.get("sha256") or u.get("md5")
+    size = u.get("file_size")
+    if size is None:
+        size = u.get("size") if u.get("size") is not None else u.get("byte_size")
+    raw = "|".join([
+        _strip_query(path or u.get("processed_url") or u.get("file_url")),
+        str(etag or ""),
+        "" if size is None else str(size),
+        str(u.get("updated_at") or ""),
+    ])
+    return hashlib.sha256(raw.encode()).hexdigest()[:16] if raw.strip("|") else ""
 
 
 def entry_identity(entry: Any) -> Optional[str]:
@@ -266,6 +286,13 @@ async def send_delivery_email_once(
         return "failed"
     if any((t.get("details") or {}).get("status") in ("sent", "muted", "skipped") for t in tries):
         return "sent_before"
+    # One in-flight send at a time: a second worker used to take try n+1 while
+    # try n was still calling the mailer (only Resend's 24h key deduped them).
+    sending = [t for t in tries if (t.get("details") or {}).get("status") == "sending"]
+    if sending:
+        last = max((_parse(t.get("created_at")) or _now() for t in sending), default=_now())
+        if _now() - last < timedelta(minutes=SENDING_STALE_MIN):
+            return "in_progress"
     n = len(tries) + 1
     if n > EMAIL_MAX_TRIES:
         return DEAD

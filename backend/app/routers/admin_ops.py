@@ -1316,8 +1316,11 @@ async def confirm_job_payment(
     are never released this way. Recorded once in audit_events with who and why.
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    from ..shared.vendor_identity import is_owner_member
-    if not is_owner_member(await get_vendor_member(actor_id)):
+    from ..shared.vendor_identity import OWNER_MEMBER_ID
+    member = await get_vendor_member(actor_id)
+    # Kam only: bind to the platform owner id, never role/title/payout_mode
+    # (those are writable by any vendor admin via PUT /api/vendor-os/team/{id}).
+    if str((member or {}).get("id") or "").lower() != OWNER_MEMBER_ID.lower():
         api_error(403, "Only the owner can confirm a payment.", "owner_only")
     from ..services import delivery_ledger as dl
     from ..services import payout_source as ps

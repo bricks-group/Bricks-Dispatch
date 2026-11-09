@@ -335,7 +335,9 @@ def test_no_confirmed_payment_never_reaches_stripe_and_tells_kam_once(chain, mon
     assert not c.transfers
     for jid, (_, reason) in cases.items():
         assert c.job(jid)["status"] == "delivered"
-        assert [(p["status"], p["block_reason"], p["amount"]) for p in c.payouts(jid)] == [("blocked", reason, 0)], jid
+        pays = c.payouts(jid)
+        assert [(p["status"], p["block_reason"]) for p in pays] == [("blocked", reason)], jid
+        assert pays[0]["amount"] > 0, jid  # live CHECK amount > 0; blocked is not a $0 paid row
         assert len(c.emails(f"kam-alert-payout-blocked:{jid}:")) == 1, jid
         assert not c.emails(f"kam-alert-payout-stuck:{jid}"), jid
         trail = [r for r in run(c.dl.trail(jid)) if r["action"] == "delivery.payout_blocked"]
@@ -355,11 +357,12 @@ def test_no_confirmed_payment_never_reaches_stripe_and_tells_kam_once(chain, mon
     # The owner can record an off-Stripe payment for a "no payment on record"
     # hold; the payout then runs once. Test orders and refunds cannot be released.
     monkeypatch.setattr(payout_source, "stripe_key_mode", lambda: False)
-    owner = {"id": "own", "role": "owner"}
+    from app.shared.vendor_identity import OWNER_MEMBER_ID
+    owner = {"id": OWNER_MEMBER_ID, "role": "owner"}
     async def member(_a):
         return owner
     async def actor(*_a, **_k):
-        return "own"
+        return OWNER_MEMBER_ID
     monkeypatch.setattr(c.admin, "get_vendor_member", member)
     monkeypatch.setattr(c.admin, "resolve_vendor_actor_id", actor)
     body = c.admin.ConfirmPaymentBody(note="e-transfer received Nov 9")
@@ -374,7 +377,8 @@ def test_no_confirmed_payment_never_reaches_stripe_and_tells_kam_once(chain, mon
             run(c.admin.confirm_job_payment(jid, body))
         assert e.value.status_code == 409
     assert len(c.transfers) == 1
-    owner["role"] = "admin"
+    owner["id"] = "someone-else"
+    owner["role"] = "Owner"
     with pytest.raises(HTTPException) as e:
         run(c.admin.confirm_job_payment("job-np-unknown", body))
     assert e.value.status_code == 403 and len(c.transfers) == 1

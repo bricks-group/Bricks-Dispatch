@@ -80,19 +80,26 @@ def test_commercial_booking_with_cb_prefix():
     assert block(db, {"id": "j", "booking_id": f"cb_{c}"}) == "sandbox_booking"
 
 
-def test_app_booking_needs_a_paid_stripe_session():
+def test_app_booking_proof_comes_from_stripe_not_row_fields(monkeypatch):
+    """bookings.stripe_payment_status / stripe_session_id are staff-writable; only a
+    successful Stripe charge retrieve counts as paid."""
     b = U()
-    row = {"id": b, "status": "confirmed", "stripe_session_id": "cs_live_b", "stripe_payment_status": "unpaid"}
-    db = _db(bookings=[row])
-    assert block(db, {"id": "j", "booking_id": b}) == "booking_unpaid"
-    row["stripe_payment_status"] = "paid"
+    db = _db(bookings=[{"id": b, "stripe_session_id": "cs_live_FORGED",
+                        "stripe_payment_status": "paid"}])
+    # No retrieve mock: a forged session must not release a payout.
+    assert block(db, {"id": "j", "booking_id": b}) is not None
+    monkeypatch.setattr(ps, "retrieve_session_charge", lambda sid: {
+        "charge_id": "ch_1", "amount": 10000, "amount_refunded": 0, "refunded": False,
+        "livemode": True})
     assert block(db, {"id": "j", "booking_id": b}) is None
-    row["stripe_session_id"] = None
-    assert block(db, {"id": "j", "booking_id": b}) == "payment_mode_unknown"
-    row.update(stripe_session_id="cs_live_b", refunded_at="2026-11-09", refund_amount=500, total_cents=10000)
+    monkeypatch.setattr(ps, "retrieve_session_charge", lambda sid: {
+        "charge_id": "ch_1", "amount": 10000, "amount_refunded": 5000, "refunded": False,
+        "partial": True, "livemode": True})
     assert block(db, {"id": "j", "booking_id": b}) == "booking_partially_refunded"
-    row["refund_amount"] = 10000
-    assert block(db, {"id": "j", "booking_id": b}) == "booking_refunded"
+    monkeypatch.setattr(ps, "retrieve_session_charge", lambda sid: {"error": "stripe 500"})
+    assert block(db, {"id": "j", "booking_id": b}) == "booking_lookup_failed"
+    db = _db(bookings=[{"id": b, "stripe_session_id": None, "stripe_payment_status": "paid"}])
+    assert block(db, {"id": "j", "booking_id": b}) == "booking_unpaid"
 
 
 def test_lookup_error_is_not_read_as_paid():

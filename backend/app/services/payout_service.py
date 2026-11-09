@@ -271,18 +271,36 @@ async def _write_payout_fields(db, payout_id: str, fields: dict) -> None:
             await _db_update_payout(db, payout_id, rest)
 
 
+def _positive_block_amount(job: dict, existing: dict | None = None) -> int:
+    """A blocked row still needs amount > 0 for the live payouts_amount_positive CHECK.
+
+    Prefer the amount already on the row or the job's stored payout; otherwise 1
+    (a placeholder, never treated as a $0 paid transfer because status is blocked).
+    """
+    for raw in ((existing or {}).get("amount"), (job or {}).get("payout_amount")):
+        try:
+            n = int(raw)
+            if n > 0:
+                return n
+        except (TypeError, ValueError):
+            pass
+    return 1
+
+
 async def _record_block(db, job: dict, reason: str) -> dict:
     """Record why a payout did not run on its payout row + audit trail, alert Kam once.
 
     Never touches a row that is paid or has a Stripe transfer. A lookup failure
-    is recorded as "failed" so the ops sweep checks again; every other reason
-    is "blocked" until the payment is confirmed. Never raises.
+    (or a missing Stripe key) is recorded as "failed" so the ops sweep checks
+    again; every other reason is "blocked" until the payment is confirmed.
+    Insert/update errors are not swallowed — they raise after the audit write.
     """
     from .payout_source import BLOCK_TEXT, TRANSIENT_BLOCKS
     from . import delivery_ledger as dl
     job_id = str(job.get("id") or "")
     status = "failed" if reason in TRANSIENT_BLOCKS else "blocked"
     payout_id = None
+    write_error = None
     try:
         existing = await _db_select_payout_by_job(db, job_id)
         if existing and (existing.get("status") == "paid" or existing.get("stripe_transfer_id")):
@@ -291,11 +309,15 @@ async def _record_block(db, job: dict, reason: str) -> dict:
             payout_id = existing.get("id")  # a run in flight owns it; leave it alone
         elif existing:
             payout_id = existing["id"]
-            await _write_payout_fields(db, payout_id, {"status": status, "block_reason": reason})
+            await _write_payout_fields(db, payout_id, {
+                "status": status, "block_reason": reason,
+                "amount": _positive_block_amount(job, existing),
+            })
         else:
             row = {"id": payout_row_id(job_id), "job_id": job_id,
                    "vendor_id": job.get("vendor_id", "default_vendor"),
-                   "contractor_id": job.get("assignee_id") or "", "amount": 0,
+                   "contractor_id": job.get("assignee_id") or "",
+                   "amount": _positive_block_amount(job, None),
                    "status": status, "block_reason": reason,
                    "created_at": datetime.now(timezone.utc).isoformat()}
             try:
@@ -306,9 +328,15 @@ async def _record_block(db, job: dict, reason: str) -> dict:
                 row.pop("block_reason", None)
                 inserted, concurrent = await _insert_payout_once(db, job_id, row)
             payout_id = ((inserted or concurrent) or {}).get("id")
-    except Exception as e:  # noqa: BLE001 - the audit row and alert below still record it
+            if not payout_id:
+                raise RuntimeError("blocked payout row was not written")
+    except Exception as e:  # noqa: BLE001
+        write_error = e
         logger.error(f"Payout for job {job_id}: could not record block {reason}: {type(e).__name__}")
-    await dl.audit(job_id, "payout_blocked", {"reason": reason, "payout_id": payout_id, "status": status})
+    await dl.audit(job_id, "payout_blocked", {"reason": reason, "payout_id": payout_id, "status": status,
+                                              **({"write_error": type(write_error).__name__} if write_error else {})})
+    if write_error:
+        raise write_error
     alerted = False
     if status == "blocked":
         if reason in ("no_booking", "booking_not_found", "booking_unpaid", "payment_mode_unknown"):
@@ -582,9 +610,10 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         existing_transfer_id = existing_data.get("stripe_transfer_id")
         logger.info(f"Payout already exists for job {job_id}: {existing_payout_id} (status={existing_status})")
 
-        if existing_status == "pending" and existing_transfer_id:
-            # Stripe transfer succeeded but the post-Stripe DB update was lost.
-            # Complete reconciliation now: promote to paid.
+        if existing_transfer_id:
+            # A transfer already exists: never create a second one, even if the
+            # row was later marked failed (lost post-Stripe write, or a racing
+            # retry clobbered status). Reconcile to paid.
             logger.info(
                 f"Reconciling orphaned payout {existing_payout_id} for job {job_id}: "
                 f"transfer {existing_transfer_id} already succeeded"
@@ -596,15 +625,24 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
                 })
             except Exception as e:
                 logger.error(f"Reconciliation update failed for payout {existing_payout_id}: {e}")
-            await _db_update_job_fields(db, job_id, {
-                "payout_status": "paid", "payout_transfer_id": existing_transfer_id,
-            })
+            if existing_status != "paid" or str(job.get("payout_status") or "") != "paid":
+                await _db_update_job_fields(db, job_id, {
+                    "payout_status": "paid", "payout_transfer_id": existing_transfer_id,
+                })
+            if noshow_claim_id:
+                try:
+                    await _db_update_noshow_claim(db, noshow_claim_id, {
+                        "status": "paid_out",
+                        "paid_via_payout_id": existing_payout_id,
+                    })
+                except Exception as e:
+                    logger.error(f"No-show claim close-out failed for {noshow_claim_id}: {e}")
             return {
                 "payout_id": existing_payout_id,
                 "status": "paid",
                 "base_amount": existing_data.get("amount"),
                 "already_exists": True,
-                "reconciled": True,
+                "reconciled": existing_status != "paid",
             }
 
         # A pending record with no Stripe transfer ID means the process crashed before the
@@ -651,6 +689,15 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
     # Create or reset the payout record
     if is_retry:
         # Update existing failed record in-place — same payout_id preserves Stripe idempotency key
+        fresh = await _db_select_payout_by_job(db, job_id) or existing_data or {}
+        if fresh.get("status") == "paid" or fresh.get("stripe_transfer_id"):
+            return {
+                "payout_id": fresh.get("id") or reuse_payout_id,
+                "status": "paid",
+                "base_amount": fresh.get("amount") or payout_amount,
+                "already_exists": True,
+                "reconciled": True,
+            }
         await _db_update_payout(db, reuse_payout_id, {
             "amount": payout_amount,
             "hst_paid_cents": hst_paid_cents,
@@ -705,7 +752,18 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         )
     except Exception as e:
         logger.error(f"Stripe transfer failed for payout {payout_id} job {job_id}: {e}")
-        # Stripe never charged — mark failed
+        # A racing retry may already have written paid + transfer id. Never
+        # clobber that to failed (the sweep would send a second transfer once
+        # Stripe's 24h idempotency key expires).
+        latest = await _db_select_payout_by_job(db, job_id) or {}
+        if latest.get("status") == "paid" or latest.get("stripe_transfer_id"):
+            return {
+                "payout_id": payout_id,
+                "status": "paid",
+                "base_amount": latest.get("amount") or payout_amount,
+                "already_exists": True,
+                "reconciled": True,
+            }
         await _db_update_payout(db, payout_id, {"status": "failed"})
         await _db_update_job_fields(db, job_id, {"payout_status": "failed"})
         # Keep the reason on the order (payouts has no error column): the ops
