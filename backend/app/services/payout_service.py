@@ -36,17 +36,16 @@ TIER_PERCENTAGES = {
 
 DEFAULT_TIER_PERCENTAGE = 0.35  # fallback to Tier C (entry)
 
-# Weekly Monday vendor payouts (America/Toronto). Default ON so an approved,
-# paid job is marked scheduled and transferred on the next Monday sweep.
-# Tests set PAYOUT_SCHEDULE_MONDAY=0 (see conftest) so Sentinel and the
-# existing immediate-transfer cases keep working. Do not call Stripe Account
-# payout-schedule APIs from here — Express weekly bank deposits are a later
-# ship step, not a live write.
+# Weekly Monday vendor payouts (America/Toronto). Default OFF when the env
+# var is unset, so a new host cannot start Monday transfers by accident.
+# Set PAYOUT_SCHEDULE_MONDAY=1 to enable. Tests also pin 0 in conftest.
+# Do not call Stripe Account payout-schedule APIs from here — Express weekly
+# bank deposits are a later ship step, not a live write.
 _TORONTO = ZoneInfo("America/Toronto")
 
 
 def monday_payouts_enabled() -> bool:
-    raw = (os.environ.get("PAYOUT_SCHEDULE_MONDAY") or "1").strip().lower()
+    raw = (os.environ.get("PAYOUT_SCHEDULE_MONDAY") or "0").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
 

@@ -294,3 +294,19 @@ def test_transfers_use_explicit_http_timeout():
     body = src.split("def handle_payout_to_vendor", 1)[1]
     assert "stripe_lib.Transfer.create" not in body
     assert body.count("_create_transfer(") == 3
+
+
+def test_monday_payouts_default_off_when_unset(monkeypatch):
+    monkeypatch.delenv("PAYOUT_SCHEDULE_MONDAY", raising=False)
+    from app.services.payout_service import monday_payouts_enabled
+
+    assert monday_payouts_enabled() is False
+
+
+def test_monday_payouts_enabled_only_when_explicitly_on(monkeypatch):
+    from app.services.payout_service import monday_payouts_enabled
+
+    monkeypatch.setenv("PAYOUT_SCHEDULE_MONDAY", "1")
+    assert monday_payouts_enabled() is True
+    monkeypatch.setenv("PAYOUT_SCHEDULE_MONDAY", "0")
+    assert monday_payouts_enabled() is False
