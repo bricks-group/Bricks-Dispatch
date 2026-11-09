@@ -253,8 +253,10 @@ def _agent_allows(email: str, field: str) -> bool:
     return agent_allows(email, field)
 
 
-async def _email_agent_direct(to: str, subject: str, html: str) -> bool:
+async def _email_agent_direct(to: str, subject: str, html: str, idempotency_key: str | None = None) -> bool:
     from .notifications import send_email_via_resend
+    if idempotency_key:
+        return bool(await send_email_via_resend(to, subject, html, idempotency_key=idempotency_key))
     return bool(await send_email_via_resend(to, subject, html))
 
 
@@ -670,7 +672,8 @@ def _looks_like_uuid(v: str) -> bool:
 
 
 async def notify_photos_delivered(
-    job_id: str, delivery_urls: list | None = None, *, to_override: str | None = None
+    job_id: str, delivery_urls: list | None = None, *, to_override: str | None = None,
+    idempotency_key: str | None = None,
 ) -> str:
     """Email the agent that the listing media is delivered.
 
@@ -704,7 +707,9 @@ async def notify_photos_delivered(
             agent_name=agent_name, address=address, share_url=share_url,
             desk_url=desk_url, has_video=has_video, client=client,
         )
-        ok = await _email_agent_direct(agent_email, subject, html)
+        ok = await _email_agent_direct(
+            agent_email, subject, html, **({"idempotency_key": idempotency_key} if idempotency_key else {})
+        )
         logger.info(
             "Job %s: delivery email %s (share_link=%s)", job_id, "sent" if ok else "failed", bool(share_url)
         )
@@ -725,6 +730,7 @@ async def notify_photos_delivered(
         "desk_url": desk_url,
         "has_video": has_video,
         "splat_pending": False,
+        **({"idempotency_key": idempotency_key} if idempotency_key else {}),
     })
     if body is None:
         return "failed"

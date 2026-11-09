@@ -17,6 +17,7 @@ _finalize_job_if_complete()'s splat_url resolution below.
 Internal reconciliation (admin-only, for stuck uploads):
   POST /api/v1/post-production/reconcile
 """
+import json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -445,6 +446,7 @@ def _delivery_url_kind_for_upload(upload: dict) -> Optional[str]:
 
 def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
     """listing still delivery_urls row; floorplan/drone/reel/staging/twilight get kind stamps."""
+    from ..services.delivery_ledger import path_ref
     entry = {
         "upload_id": upload["id"],
         "filename": _listing_delivery_filename(upload),
@@ -452,6 +454,11 @@ def _still_delivery_url_entry(upload: dict, url: str, expires_at: str) -> dict:
         "expires_at": expires_at,
         "qc_flagged": upload.get("qc_status") == "flagged",
     }
+    # Fingerprint of the stored file (not the signed URL), so the editor's
+    # approval is bound to these exact files (delivery_ledger.manifest).
+    ref = path_ref(upload.get("processed_url") or upload.get("file_url"))
+    if ref:
+        entry["ref"] = ref
     kind = _delivery_url_kind_for_upload(upload)
     if kind:
         entry["kind"] = kind
@@ -679,6 +686,9 @@ async def _fold_late_into_existing_delivery(
         if merged_visit is not None
         else (merged_capture if merged_capture is not None else merged_stills)
     )
+    merged = await _hold_unapproved_additions(db, job_id, raw_urls, merged)
+    if merged is None:
+        return False
     await _patch_media_delivery(job_id, {"delivery_urls": merged})
     logger.info(
         "Job %s: folded late stills/capture/Visit into existing media_delivery (%s URL(s) total)",
@@ -686,6 +696,49 @@ async def _fold_late_into_existing_delivery(
         len(merged),
     )
     return True
+
+
+def _base_key(entry) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    from ..services.delivery_ledger import _strip_query
+    return str(entry.get("upload_id") or entry.get("session_id") or _strip_query(entry.get("url")) or "")
+
+
+async def _hold_unapproved_additions(db, job_id: str, raw_urls, merged: list) -> list | None:
+    """Files added to a delivered order reach the client only after an editor
+    approves the new exact set (same hash binding as the first delivery).
+    Removals (QC rejects) always apply. Returns the list to save, or None."""
+    from ..services import fulfillment_gate as fg
+    from ..services import delivery_ledger as dl
+
+    if not fg.gate_enabled():
+        return merged
+    job = await _load_job_row(db, job_id)
+    if fg.is_trade_job(job):
+        return merged
+    before = {_base_key(e) for e in (raw_urls if isinstance(raw_urls, list) else [])}
+    additions = [e for e in merged if _base_key(e) and _base_key(e) not in before]
+    if not additions:
+        return merged
+    saved = _saved_gate(job)
+    m = dl.manifest(merged)
+    if dl.same_hash(saved.get("approved_manifest_hash"), m["hash"]):
+        await dl.audit(job_id, "late_fold_approved", {"manifest_hash": m["hash"], "added": len(additions)})
+        return merged
+    # Keep the approved set (minus any QC removals) and record what waits.
+    kept = [e for e in merged if e not in additions]
+    saved.update({"pending_manifest_hash": m["hash"], "pending_manifest_count": m["count"],
+                  "pending_manifest_ids": m["ids"], "pending_added": len(additions),
+                  "pending_since": saved.get("pending_since") or datetime.now(timezone.utc).isoformat()})
+    await _record_fulfillment_gate(db, job_id, saved)
+    await dl.audit(job_id, "late_fold_held", {"manifest_hash": m["hash"], "added": len(additions)})
+    from ..services.editor_review import queue_url
+    await dl.alert_kam(f"late:{job_id}:{m['hash'][:16]}", job_id, "New files are waiting for your sign-off",
+                       [f"Job {job_id} at {job.get('address') or 'an unknown address'} was already delivered.",
+                        f"{len(additions)} new file(s) came in. The client does not see them until you approve.",
+                        f"Review queue: {queue_url(job_id)}"])
+    return kept if kept != list(raw_urls or []) else None
 
 
 # Back-compat alias for older call sites / tests
@@ -742,8 +795,24 @@ async def _record_fulfillment_gate(db, job_id: str, verdict: dict) -> None:
         logger.warning(f"Job {job_id}: could not record fulfillment_gate ({e})")
 
 
+def _saved_gate(job: dict) -> dict:
+    saved = (job or {}).get("fulfillment_gate") or {}
+    if isinstance(saved, str):
+        try:
+            saved = json.loads(saved)
+        except ValueError:
+            saved = {}
+    return saved if isinstance(saved, dict) else {}
+
+
+# Approval keys carried across every verdict write (they are the sign-off itself).
+_APPROVAL_KEYS = ("approved_manifest_hash", "approved_manifest_count", "approved_manifest_ids",
+                  "approved_at", "approved_by")
+
+
 async def _fulfillment_gate_allows(db, job_id: str, delivery_urls: list, *, visit_present: bool) -> bool:
     from ..services import fulfillment_gate as fg
+    from ..services import delivery_ledger as dl
 
     if not fg.gate_enabled():
         return True
@@ -751,12 +820,39 @@ async def _fulfillment_gate_allows(db, job_id: str, delivery_urls: list, *, visi
     if fg.is_trade_job(job):
         return True
     verdict = fg.evaluate(job, delivery_urls, visit_present=visit_present)
+    previous = _saved_gate(job)
+    # Hash-bound sign-off (scheduler payload_changed): the editor approved one
+    # exact set. Deliver only that set; anything added, removed or re-edited
+    # since then needs a fresh approval.
+    m = dl.manifest(delivery_urls, visit_present=visit_present)
+    verdict["manifest_hash"], verdict["manifest_count"], verdict["manifest_ids"] = m["hash"], m["count"], m["ids"]
+    for k in _APPROVAL_KEYS:
+        if previous.get(k) is not None:
+            verdict[k] = previous[k]
+    changed = False
+    if verdict["editor_approved"] and not dl.same_hash(previous.get("approved_manifest_hash"), m["hash"]):
+        changed = True
+        verdict["ready"] = False
+        verdict["editor_approved"] = False
+        verdict["reasons"] = list(verdict.get("reasons") or []) + [
+            "files changed since the editor approved them" if previous.get("approved_manifest_hash")
+            else "editor approval does not name the files (approve again)"
+        ]
     if not verdict["ready"]:
-        previous = job.get("fulfillment_gate") or {}
-        verdict["held_at"] = (previous.get("held_at") if isinstance(previous, dict) else None) or datetime.now(timezone.utc).isoformat()
+        verdict["held_at"] = previous.get("held_at") or datetime.now(timezone.utc).isoformat()
     await _record_fulfillment_gate(db, job_id, verdict)
     if verdict["ready"]:
+        await dl.audit(job_id, "gate_pass", {"manifest_hash": m["hash"], "count": m["count"]})
         return True
+    await dl.audit(job_id, "gate_hold", {"reasons": verdict.get("reasons"), "manifest_hash": m["hash"]})
+    if changed:
+        from ..services.editor_review import queue_url
+        await dl.alert_kam(f"changed:{job_id}:{m['hash'][:16]}", job_id,
+                           "Files changed after the editor approved them",
+                           [f"Job {job_id} at {job.get('address') or 'an unknown address'}.",
+                            "Nothing was delivered or paid. Look at the files again and approve the new set.",
+                            f"Review queue: {queue_url(job_id)}"])
+        return False
     from ..services.editor_review import alert_editor_hold
     await alert_editor_hold(job, verdict)
     logger.info(
@@ -1040,6 +1136,9 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
             raise
 
     logger.info(f"Job {job_id}: all {len(uploads)} uploads processed → status=delivered, {len(delivery_urls)} URLs generated")
+    from ..services import delivery_ledger as _dl
+    _m = _dl.manifest(delivery_urls, visit_present=bool(splat_upload or visit_bridge or visit_rows))
+    await _dl.audit(job_id, "delivered", {"manifest_hash": _m["hash"], "count": _m["count"]})
 
     # Register the property visit on Bricks-OS now that the job is delivered.
     # Failure is logged loudly — Visit-only deliveries must not silently hollow.
@@ -1071,12 +1170,17 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
                 f"internal storage path — skipping visit-ready"
             )
 
-    # Trigger vendor payout now that job is delivered (best-effort — payout_service is idempotent)
+    # Trigger vendor payout now that job is delivered (payout_service is idempotent).
+    # A failure is recorded on the order and retried by the ops sweep, which
+    # alerts Kam when it keeps failing (delivery_watch).
     try:
         from ..services.payout_service import trigger_payout_for_job
-        await trigger_payout_for_job(db, job_id)
+        _p = await trigger_payout_for_job(db, job_id) or {}
+        await _dl.audit(job_id, "payout", {k: _p.get(k) for k in ("status", "skipped", "reason", "error", "payout_id")
+                                            if _p.get(k) is not None})
     except Exception as e:
         logger.error(f"Job {job_id}: payout trigger failed after delivery: {e}")
+        await _dl.audit(job_id, "payout", {"status": "failed", "error": type(e).__name__})
 
     # Job ledger: Autoenhance cost per edited still comes out of Bricks' cut
     # (never vendor pay or the client price). Best-effort, never raises.
@@ -1088,6 +1192,7 @@ async def _finalize_job_if_complete(job_id: str, *, visit_bridge: bool = False, 
     # skip the photo-delivery template so agents are not double-messaged.
     if not visit_bridge:
         await _send_delivery_notification(job_id, delivery_urls)
+    await _push_delivery_ready(job_id)
 
 
 async def _restore_delivered_status(job_id: str) -> bool:
@@ -1134,21 +1239,47 @@ async def _send_delivery_notification(job_id: str, delivery_urls: list) -> str:
     Links point at the never-expiring client share page, not 1h signed URLs.
     """
     from ..services.client_comms import notify_photos_delivered
+    from ..services.delivery_ledger import send_delivery_email_once
 
+    async def _send(jid, urls, idempotency_key=None):
+        return await notify_photos_delivered(jid, urls, idempotency_key=idempotency_key)
+
+    # Once-only (claim per try + Resend Idempotency-Key), retried with backoff by
+    # delivery_watch; after the last try the row goes 'dead' and Kam is told.
     try:
-        status = await notify_photos_delivered(job_id, delivery_urls)
+        status = await send_delivery_email_once(job_id, delivery_urls, _send)
     except Exception as e:  # noqa: BLE001 - never fail the delivery over email
         logger.error(f"Job {job_id}: delivery notification failed: {e}")
         status = "failed"
-    fields = {"notification_status": status}
-    if status == "sent":
-        fields["notified_at"] = datetime.now(timezone.utc).isoformat()
-    try:
-        await _patch_media_delivery(job_id, fields)
-    except Exception as e2:
-        logger.error(f"Job {job_id}: media_delivery notification patch failed: {e2}")
     logger.info(f"Job {job_id}: delivery notification {status}")
     return status
+
+
+async def _push_delivery_ready(job_id: str) -> dict:
+    """Web Push 'Photos ready' to the agent's devices, once per job.
+
+    Same opt-in as the 'Shoot confirmed' push (notification_prefs.new_booking_push).
+    Never raises: the email and share page are the record; the push is a nudge.
+    """
+    try:
+        from ..services.client_comms import _client_share_link, _load_job, _push_agent_new_booking
+        from ..services.delivery_ledger import push_once
+        job = await _load_job(job_id, "id, address, agent_email")
+        email = str((job or {}).get("agent_email") or "").strip()
+        if not email:
+            return {"skipped": "no_agent_email"}
+
+        async def _push():
+            share = await _client_share_link(job_id)
+            return await _push_agent_new_booking(
+                email, (job.get("address") or "your listing").strip(), "Tap to view and download", "",
+                job_id, title_word="Photos ready", url=share or None,
+            )
+
+        return await push_once(job_id, _push)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Job {job_id}: delivery push failed: {type(e).__name__}")
+        return {"error": type(e).__name__}
 
 
 # ---------------------------------------------------------------------------

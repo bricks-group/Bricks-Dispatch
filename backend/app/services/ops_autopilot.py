@@ -206,8 +206,8 @@ ACTION_LABELS = {
 
 # ---------------------------------------------------------------- once markers
 
-async def once(db, key: str, data: Optional[dict] = None) -> bool:
-    """True the first time a key is claimed; False after that (or on error)."""
+async def _claim(db, key: str, data: Optional[dict] = None) -> Optional[bool]:
+    """True = claimed now, False = claimed before, None = the store failed."""
     try:
         res = await db.table("ops_autopilot_events").select("key").eq("key", key).limit(1).execute()
         if res.data:
@@ -215,8 +215,25 @@ async def once(db, key: str, data: Optional[dict] = None) -> bool:
         await db.table("ops_autopilot_events").insert({"key": key, "data": data or {}}).execute()
         return True
     except Exception as e:
-        logger.warning("ops once(%s) failed: %s", key, e)
-        return False
+        if "duplicate key" in str(e).lower() or str(getattr(e, "code", "")) == "23505":
+            return False
+        logger.error("ops once(%s) failed: %s", key, e)
+        return None
+
+
+async def once(db, key: str, data: Optional[dict] = None) -> bool:
+    """True the first time a key is claimed; False after that (or on error).
+
+    For actions (reassign, reminders, payouts) an unclear store means do not
+    act: acting twice is worse. Alerts to Kam use send_kam, which fails loud."""
+    return (await _claim(db, key, data)) is True
+
+
+async def _unclaim(db, key: str) -> None:
+    try:
+        await db.table("ops_autopilot_events").delete().eq("key", key).execute()
+    except Exception as e:
+        logger.error("ops unclaim(%s) failed: %s", key, e)
 
 
 async def seen(db, key: str) -> bool:
@@ -258,21 +275,41 @@ def _kam_html(title: str, lines: list[str], actions: list[tuple[str, str]]) -> s
 
 async def send_kam(db, key: str, title: str, lines: list[str], actions: list[tuple] = (),
                    ntype: str = "ops_autopilot", data: Optional[dict] = None) -> bool:
-    """Escalate to Kam once per key: in-app notification + email with one-tap links."""
-    if key and not await once(db, key, {"title": title, **(data or {})}):
-        return False
+    """Escalate to Kam once per key: in-app notification + email with one-tap links.
+
+    Fail loud (Sentinel N1 lesson, 2026-11-09): if the once-store is down the
+    alert still goes (a duplicate beats silence); if the send fails the key is
+    released so the next 15-minute sweep tries again."""
+    claimed = True
+    if key:
+        got = await _claim(db, key, {"title": title, **(data or {})})
+        if got is False:
+            return False
+        claimed = got is True
     links = [((x[2] if len(x) > 2 else ACTION_LABELS.get(x[0], x[0])), action_url(x[0], x[1])) for x in actions]
+    # Email first: it is the alert. The in-app row is a copy and can't block it
+    # (create_notification used to swallow a failed email and report success).
+    from .notifications import send_email_via_resend
+    sent = False
+    try:
+        sent = bool(await send_email_via_resend(
+            to=kam_email(), subject=f"[Bricks] {title}", html=_kam_html(title, lines, links),
+            idempotency_key=f"ops-{key}"[:250] if key else None,
+        ))
+    except Exception as e:
+        logger.error("ops escalation email raised (%s): %s", key, type(e).__name__)
     try:
         from .notifications import create_notification
         await create_notification(
             title, "\n".join(lines), ntype, {**(data or {}), "actions": [x[0] for x in actions]},
-            email_to=kam_email(), email_subject=f"[Bricks] {title}",
-            email_html=_kam_html(title, lines, links),
         )
-        return True
     except Exception as e:
-        logger.error("ops escalation send failed (%s): %s", key, e)
-        return False
+        logger.error("ops escalation in-app copy failed (%s): %s", key, e)
+    if not sent:
+        logger.error("ops escalation NOT emailed (%s); released for the next sweep", key)
+        if key and claimed:
+            await _unclaim(db, key)
+    return sent
 
 
 async def send_external(to: str, subject: str, title: str, body: str) -> bool:
@@ -480,6 +517,16 @@ async def sweep(db, now: Optional[datetime] = None, *, run_reconcile: bool = Tru
             await _payout_retries(db, now, out)
         except Exception as e:
             out["errors"].append({"step": "payouts", "error": str(e)[:200]})
+    # Delivery watch (2026-11-09): delivery email retries + dead letter, and
+    # one Kam alert per stuck order (not reviewed / approved not delivered /
+    # delivered not paid), independent of the 3-day scheduled-date window.
+    try:
+        from .delivery_watch import run as run_delivery_watch
+        dw = await run_delivery_watch(db, now)
+        out["delivery_watch"] = {k: v for k, v in dw.items() if v}
+        out["errors"].extend(dw.get("errors") or [])
+    except Exception as e:
+        out["errors"].append({"step": "delivery_watch", "error": type(e).__name__})
     # IC amendment A1 notice (runs only when its request marker exists; idempotent).
     try:
         from .amendment_notice import run as run_ic_a1_notice
@@ -530,9 +577,14 @@ async def _payout_retries(db, now: datetime, out: dict) -> None:
         tries = await events_like(db, f"payout_retry:{jid}:")
         last = max((_parse_ts(t.get("created_at")) for t in tries), default=None)
         if len(tries) >= PAYOUT_MAX_TRIES:
+            try:
+                from .delivery_watch import _last_payout_reason
+                reason = await _last_payout_reason(jid)
+            except Exception:
+                reason = "unknown"
             if await send_kam(db, f"payout_esc:{jid}", "A vendor payout keeps failing",
                               [_job_line(job), f"{PAYOUT_MAX_TRIES} automatic tries failed. Usually the vendor has not finished "
-                               "Stripe payout setup, or the Stripe balance is short."],
+                               "Stripe payout setup, or the Stripe balance is short.", f"Last reason: {reason}"],
                               [("retry_payout", {"job_id": jid}), ("dismiss", {"job_id": jid})], data={"job_id": jid}):
                 out["payout_escalated"].append(jid)
             continue

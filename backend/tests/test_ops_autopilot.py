@@ -93,8 +93,12 @@ def _job(**kw):
 
 
 def _sweep(db, **kw):
+    # 2026-11-09: Kam alerts are emailed directly (fail loud), so the alert
+    # mock is send_email_via_resend; the in-app copy is still created.
     with patch.object(ops, "send_kam", wraps=ops.send_kam) as sk, \
-         patch("app.services.notifications.create_notification", new=AsyncMock()) as cn, \
+         patch("app.services.notifications.create_notification", new=AsyncMock()), \
+         patch("app.services.notifications.send_email_via_resend", new=AsyncMock(return_value=True)) as cn, \
+         patch("app.services.delivery_watch.run", new=AsyncMock(return_value={})), \
          patch("app.services.vendor_selection.assign_vendor_for_job", new=AsyncMock(return_value="m2")) as av:
         out = run(ops.sweep(db, NOW, run_reconcile=False, run_payouts=False))
     return out, cn, av
@@ -115,7 +119,7 @@ def test_noshow_flags_kam_once_with_reassign_link():
     db = FakeDB(jobs=[_job(status="assigned", selected_slot_start=(NOW - timedelta(minutes=45)).isoformat())])
     out, cn, _ = _sweep(db)
     assert out["noshow_flagged"] == ["j1"]
-    html = cn.await_args.kwargs["email_html"]
+    html = cn.await_args.kwargs["html"]
     assert "/api/ops/act?t=" in html and "Reassign" in html
     out2, cn2, _ = _sweep(db)
     assert out2["noshow_flagged"] == [] and not cn2.await_count
@@ -136,7 +140,7 @@ def test_qc_failed_escalates_with_retry_processing():
     db = FakeDB(jobs=[_job(status="qc_failed", selected_slot_start=(NOW - timedelta(hours=30)).isoformat())])
     out, cn, _ = _sweep(db)
     assert out["stuck_escalated"] == ["j1"]
-    assert "Retry editing" in cn.await_args.kwargs["email_html"]
+    assert "Retry editing" in cn.await_args.kwargs["html"]
 
 
 def test_payout_retry_spacing_and_escalation():
@@ -144,7 +148,9 @@ def test_payout_retry_spacing_and_escalation():
     db = FakeDB(jobs=[job], payouts=[{"job_id": "p1", "status": "failed"}])
     tp = AsyncMock(return_value={"status": "failed"})
     with patch("app.services.payout_service.trigger_payout_for_job", new=tp), \
-         patch("app.services.notifications.create_notification", new=AsyncMock()) as cn:
+         patch("app.services.notifications.create_notification", new=AsyncMock()), \
+         patch("app.services.delivery_watch._last_payout_reason", new=AsyncMock(return_value="no Stripe account")), \
+         patch("app.services.notifications.send_email_via_resend", new=AsyncMock(return_value=True)) as cn:
         out = {"payout_retried": [], "payout_escalated": []}
         run(ops._payout_retries(db, NOW, out))
         assert len(out["payout_retried"]) == 1
@@ -171,14 +177,16 @@ def test_daily_quiet_when_healthy_and_emails_when_broken():
     db = FakeDB(ops_autopilot_runs=[{"kind": "sweep", "ok": True, "created_at": (NOW - timedelta(minutes=10)).isoformat()}])
     with patch.object(ops, "check_urls", new=AsyncMock(return_value=[])), \
          patch.object(ops, "pg_cron_failures", return_value=[]), \
-         patch("app.services.notifications.create_notification", new=AsyncMock()) as cn:
+         patch("app.services.notifications.create_notification", new=AsyncMock()), \
+         patch("app.services.notifications.send_email_via_resend", new=AsyncMock(return_value=True)) as cn:
         out = run(ops.daily(db, NOW, do_backup=False))
         assert out["problems"] == [] and out["emailed"] is False and not cn.await_count
     with patch.object(ops, "check_urls", new=AsyncMock(return_value=["https://x returned 500"])), \
          patch.object(ops, "pg_cron_failures", return_value=[]), \
-         patch("app.services.notifications.create_notification", new=AsyncMock()) as cn:
+         patch("app.services.notifications.create_notification", new=AsyncMock()), \
+         patch("app.services.notifications.send_email_via_resend", new=AsyncMock(return_value=True)) as cn:
         out = run(ops.daily(db, NOW + timedelta(days=1), do_backup=False))
-        assert out["emailed"] is True and cn.await_args.kwargs["email_to"] == ops.kam_email()
+        assert out["emailed"] is True and cn.await_args.kwargs["to"] == ops.kam_email()
 
 
 def test_daily_flags_stale_sweep():

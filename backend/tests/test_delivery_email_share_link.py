@@ -85,11 +85,17 @@ def test_companion_fallback_reads_sent_flag(monkeypatch):
 
 
 def test_post_production_records_status(monkeypatch):
+    # 2026-11-09: sends go through the once-only delivery ledger.
+    from tests._fake_ledger import FakeLedger
+    FakeLedger(monkeypatch)
     patched = []
     monkeypatch.setattr(cc, "notify_photos_delivered", AsyncMock(return_value="sent"))
     monkeypatch.setattr(pp, "_patch_media_delivery", AsyncMock(side_effect=lambda j, f: patched.append(f)))
     assert asyncio.run(pp._send_delivery_notification("j1", [])) == "sent"
-    assert patched[0]["notification_status"] == "sent" and "notified_at" in patched[0]
+    assert patched[0] == {"notification_status": "sending"}
+    assert patched[1]["notification_status"] == "sent" and "notified_at" in patched[1]
+    # Never twice: a second call for the same job does not send again.
+    assert asyncio.run(pp._send_delivery_notification("j1", [])) == "sent_before"
     monkeypatch.setattr(cc, "notify_photos_delivered", AsyncMock(side_effect=RuntimeError("x")))
-    assert asyncio.run(pp._send_delivery_notification("j1", [])) == "failed"
-    assert patched[1] == {"notification_status": "failed"}
+    assert asyncio.run(pp._send_delivery_notification("j2", [])) == "failed"
+    assert patched[-1] == {"notification_status": "failed"}

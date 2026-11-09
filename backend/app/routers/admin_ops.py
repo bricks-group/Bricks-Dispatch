@@ -1220,43 +1220,93 @@ async def get_fulfillment_gate(
             "last_verdict": job.get("fulfillment_gate")}
 
 
+class EditorApproveBody(_BaseModel):
+    # The manifest_hash the review page showed. Required: whatever is approved
+    # is exactly what ships (social scheduler payload_hash pattern).
+    manifest_hash: Optional[str] = None
+
+
 @router.post("/jobs/{job_id}/editor-approve")
 async def editor_approve_job(
     job_id: str,
+    body: Optional[EditorApproveBody] = None,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
-    """Editor sign-off: the package is complete and creatively approved.
+    """Editor sign-off on one exact set of files.
 
-    Records jobs.editor_approved_at/by, then re-runs finalize (delivery). If the
-    job was already delivered (pre-gate), triggers the held payout instead.
-    Finalize still refuses when a purchased component is missing.
+    The page sends the manifest_hash it showed. The approval is stored with that
+    hash, and delivery only ships a set with the same hash: if the files changed
+    since the page loaded, this refuses (payload_changed) and nothing moves.
+    Then re-runs finalize (delivery). For an already-delivered job it releases
+    held late files, or triggers the held payout.
     """
     actor_id = await _require_admin(authorization, x_user_id)
+    from ..services import delivery_ledger as dl
+    from . import post_production as pp
     db = await get_db()
     job = await _load_one(db, "jobs", "id", job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    saved = pp._saved_gate(job)
+    existing = await _load_one(db, "media_delivery", "job_id", job_id, "id, delivery_urls")
+    delivered = bool(existing) and str(job.get("status") or "").lower() == "delivered"
+    if delivered and saved.get("pending_manifest_hash"):
+        target = {"hash": saved["pending_manifest_hash"], "count": saved.get("pending_manifest_count"),
+                  "ids": saved.get("pending_manifest_ids")}
+    elif delivered:
+        target = dl.manifest((existing or {}).get("delivery_urls") or [])
+    elif saved.get("manifest_hash"):
+        target = {"hash": saved["manifest_hash"], "count": saved.get("manifest_count"),
+                  "ids": saved.get("manifest_ids")}
+    else:
+        api_error(409, "Nothing is ready to approve yet. Refresh the queue in a few minutes.", "nothing_to_approve")
+    shown = (body.manifest_hash if body else None) or ""
+    if not dl.same_hash(shown, target["hash"]):
+        await dl.audit(job_id, "approve_refused", {"reason": "payload_changed", "by": str(actor_id)}, actor=str(actor_id))
+        api_error(409, "The files changed since you opened this page. Refresh and look again before approving.",
+                  "payload_changed")
     now = datetime.now(timezone.utc).isoformat()
+    gate = {**saved, "approved_manifest_hash": target["hash"], "approved_manifest_count": target.get("count"),
+            "approved_manifest_ids": target.get("ids"), "approved_at": now, "approved_by": str(actor_id)}
+    for k in ("pending_manifest_hash", "pending_manifest_count", "pending_manifest_ids", "pending_added", "pending_since"):
+        gate.pop(k, None)
     await db.table("jobs").update({
         "editor_approved_at": now,
         "editor_approved_by": str(actor_id),
+        "fulfillment_gate": gate,
         "updated_at": now,
     }).eq("id", job_id).execute()
-    from . import post_production as pp
-    existing = await _load_one(db, "media_delivery", "job_id", job_id, "id, delivery_urls")
+    await dl.audit(job_id, "editor_approved", {"manifest_hash": target["hash"], "count": target.get("count"),
+                                               "by": str(actor_id)}, actor=str(actor_id))
     payout = None
-    if existing and str(job.get("status") or "").lower() == "delivered":
+    if delivered and saved.get("pending_manifest_hash"):
+        await pp._fold_late_into_existing_delivery(job_id, existing)
+    elif delivered:
         from ..services.payout_service import trigger_payout_for_job
         payout = await trigger_payout_for_job(db, job_id)
+        await dl.audit(job_id, "payout", {k: (payout or {}).get(k) for k in ("status", "skipped", "reason", "error")
+                                          if (payout or {}).get(k) is not None})
     else:
         await pp._finalize_job_if_complete(job_id)
     fresh = await _load_one(db, "jobs", "id", job_id, "id, status, fulfillment_gate")
-    logger.info("Admin %s editor-approved job %s", actor_id, job_id)
+    logger.info("Admin %s editor-approved job %s (%s files)", actor_id, job_id, target.get("count"))
     return {"status": "approved", "job_id": job_id,
             "job_status": (fresh or {}).get("status"),
             "fulfillment_gate": (fresh or {}).get("fulfillment_gate"),
             "payout": payout}
+
+
+@router.get("/jobs/{job_id}/delivery-trail")
+async def get_delivery_trail(
+    job_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Read-only audit trail for one order: gate holds, approvals, delivery, emails, push, payout."""
+    await _require_admin(authorization, x_user_id)
+    from ..services.delivery_ledger import trail
+    return {"job_id": job_id, "events": await trail(job_id)}
 
 
 @router.get("/editor-review")

@@ -420,10 +420,13 @@ def _paid_booking_admin_email_html(
 
 async def send_email_via_resend(
     to: str, subject: str, html: str, text: str | None = None, from_addr: str | None = None,
+    idempotency_key: str | None = None,
 ) -> bool:
     """Send transactional email via Resend. Returns True on success.
 
-    text: optional plain-text alternative (multipart/alternative)."""
+    text: optional plain-text alternative (multipart/alternative).
+    idempotency_key: Resend Idempotency-Key (24h). A retry with the same key
+    after an unclear failure returns the first send instead of emailing twice."""
     api_key = os.environ.get("RESEND_API_KEY", "")
     if not api_key:
         logger.debug("RESEND_API_KEY not set — skipping email")
@@ -436,6 +439,7 @@ async def send_email_via_resend(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    **({"Idempotency-Key": idempotency_key[:256]} if idempotency_key else {}),
                 },
                 json={
                     "from": from_addr or "BRICKS <notifications@brxs.ca>",

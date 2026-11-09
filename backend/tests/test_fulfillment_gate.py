@@ -232,10 +232,15 @@ def test_finalize_delivers_when_complete_and_approved(monkeypatch):
                                       "capture_sessions": caps, "jobs": jobs}.get(n, MagicMock())
     monkeypatch.setattr(pp, "get_db", AsyncMock(return_value=db))
     monkeypatch.setattr(pp, "run_qc_for_job", AsyncMock(return_value={}))
+    # The approval names the exact files (2026-11-09 hash binding).
+    from app.services.delivery_ledger import manifest
+    approved = manifest([pp._still_delivery_url_entry(still, "x", "")])["hash"]
     monkeypatch.setattr(pp, "_load_job_row", AsyncMock(return_value={
-        "id": "j", "package_id": "photos_only", "editor_approved_at": "2026-11-07T15:00:00Z"}))
+        "id": "j", "package_id": "photos_only", "editor_approved_at": "2026-11-07T15:00:00Z",
+        "fulfillment_gate": {"approved_manifest_hash": approved}}))
     monkeypatch.setattr(pp, "_record_fulfillment_gate", AsyncMock())
     monkeypatch.setattr(pp, "_send_delivery_notification", AsyncMock(return_value="sent"))
+    monkeypatch.setattr(pp, "_push_delivery_ready", AsyncMock(return_value={}))
     payout = AsyncMock()
     with patch("app.services.qc_hold_notify.notify_owner_qc_hold", AsyncMock()), \
          patch("app.services.payout_service.trigger_payout_for_job", payout), \

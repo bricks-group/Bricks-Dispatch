@@ -211,6 +211,33 @@ async def _db_update_payout(db, payout_id: str, fields: dict) -> None:
         raise
 
 
+def payout_row_id(job_id: str) -> str:
+    """One payouts row per job, enforced by the primary key.
+
+    payouts.job_id has no unique index, so two deliveries finishing at the same
+    moment each inserted a row with a fresh uuid4 and each sent its own Stripe
+    transfer (idempotency key payout_<id> differed). A per-job uuid5 makes the
+    second insert collide, so only one transfer can ever be created per job.
+    """
+    import uuid as _uuid
+    return str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"https://dispatch-api.brxs.ca/payouts/{job_id}"))
+
+
+def _is_duplicate_key(err: Exception) -> bool:
+    return str(getattr(err, "code", "")) == "23505" or "duplicate key" in str(err).lower()
+
+
+async def _insert_payout_once(db, job_id: str, payout_record: dict) -> tuple[dict | None, dict | None]:
+    """(inserted, existing). existing is set when another run already created the row."""
+    try:
+        return await _db_insert_payout(db, payout_record), None
+    except Exception as e:
+        if not _is_duplicate_key(e):
+            raise
+        logger.warning(f"Payout for job {job_id}: row already created by a concurrent run")
+        return None, (await _db_select_payout_by_job(db, job_id) or {"id": payout_record["id"], "status": "pending"})
+
+
 async def _db_insert_payout(db, payout_record: dict) -> dict | None:
     from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_payout
     try:
@@ -442,11 +469,13 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             await _db_update_payout(db, existing_data["id"], held_fields)
             payout_id = existing_data["id"]
         else:
-            import uuid as _uuid
-            inserted = await _db_insert_payout(db, {
-                "id": str(_uuid.uuid4()), "job_id": job_id, "vendor_id": vendor_id,
+            inserted, concurrent = await _insert_payout_once(db, job_id, {
+                "id": payout_row_id(job_id), "job_id": job_id, "vendor_id": vendor_id,
                 "created_at": now, **held_fields,
             })
+            if concurrent:
+                return {"payout_id": concurrent.get("id"), "status": concurrent.get("status"),
+                        "already_exists": True, "concurrent": True}
             if not inserted:
                 return {"error": "payout_record_creation_failed", "job_id": job_id}
             payout_id = inserted["id"]
@@ -551,9 +580,8 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
     else:
         # payouts.id is text NOT NULL with no default: REST inserts without an id
         # fail 23502, so every first payout died after delivery (Kam E2E, 2026-11-02).
-        import uuid as _uuid
         payout_record = {
-            "id": str(_uuid.uuid4()),
+            "id": payout_row_id(job_id),
             "job_id": job_id,
             "vendor_id": vendor_id,
             "contractor_id": contractor_id,
@@ -564,7 +592,11 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             "status": "pending",
             "created_at": now,
         }
-        inserted = await _db_insert_payout(db, payout_record)
+        inserted, concurrent = await _insert_payout_once(db, job_id, payout_record)
+        if concurrent:
+            # Another run owns this payout (and its Stripe idempotency key). Never pay twice.
+            return {"payout_id": concurrent.get("id"), "status": concurrent.get("status"),
+                    "already_exists": True, "concurrent": True}
         if not inserted:
             logger.error(f"Failed to create payout record for job {job_id}")
             return {"error": "payout_record_creation_failed", "job_id": job_id}
@@ -591,6 +623,13 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         # Stripe never charged — mark failed
         await _db_update_payout(db, payout_id, {"status": "failed"})
         await _db_update_job_fields(db, job_id, {"payout_status": "failed"})
+        # Keep the reason on the order (payouts has no error column): the ops
+        # sweep retries and tells Kam why when it keeps failing.
+        try:
+            from .delivery_ledger import audit
+            await audit(job_id, "payout_failed", {"payout_id": payout_id, "reason": str(e)[:300]})
+        except Exception:  # noqa: BLE001
+            logger.error(f"Job {job_id}: payout failure reason could not be recorded")
         return {
             "payout_id": payout_id,
             "status": "failed",
