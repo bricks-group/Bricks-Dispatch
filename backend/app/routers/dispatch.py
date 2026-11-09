@@ -376,21 +376,22 @@ async def update_job_status(
     require_vendor_admin) instead of depending on X-User-Id: default_user,
     which is dev seed data, not a guaranteed row in production.
     """
-    from ..shared.auth import resolve_vendor_actor_id, get_vendor_member, verify_internal_api_key
+    from ..shared.auth import verify_internal_api_key
     from ..services.webhooks import send_dispatch_status_update_webhook
 
+    # HOTFIX 2026-11-09 (Sentinel cx-roles round 2, HIGH): internal services
+    # only. The old vendor branch filtered by vendor org alone (every live
+    # contractor shares default_vendor), with no assignee, status allow-list or
+    # contractor-terms check, so any contractor could start or accept a job
+    # while owing terms, complete someone else's job (triggering its payout) or
+    # cancel it. Contractors use /api/vendor-os/jobs/{id}/status and the watch
+    # actions, which carry those checks. The only caller here is Companion's
+    # booking cancellation, which sends X-Internal-Api-Key.
+    if not x_internal_api_key or not verify_internal_api_key(x_internal_api_key):
+        raise HTTPException(status_code=403, detail="Internal services only")
     db = await get_db()
-
-    if x_internal_api_key is not None:
-        if not verify_internal_api_key(x_internal_api_key):
-            raise HTTPException(status_code=403, detail="Invalid internal API key")
-        actor_id = "internal_service"
-        job_query = db.table("jobs").select("*").eq("id", job_id)
-    else:
-        actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-        actor_member = await get_vendor_member(actor_id)
-        vendor_id = actor_member.get("vendor_id", "default_vendor")
-        job_query = db.table("jobs").select("*").eq("id", job_id).eq("vendor_id", vendor_id)
+    actor_id = "internal_service"
+    job_query = db.table("jobs").select("*").eq("id", job_id)
 
     # Fetch job to get current status and booking_id
     try:
@@ -401,10 +402,6 @@ async def update_job_status(
         if not _is_rest_quota_error(e):
             raise
         job = pg_select_job_by_id(job_id)
-        if job and x_internal_api_key is None:
-            # Mirror vendor_id filter used on the REST query for non-internal callers.
-            if str(job.get("vendor_id") or "") != str(vendor_id):
-                job = None
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 

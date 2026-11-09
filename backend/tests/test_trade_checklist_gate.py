@@ -331,10 +331,11 @@ def test_dispatch_status_route_gates_vendors_on_trade_jobs(monkeypatch):
     monkeypatch.setattr(dispatch_router, "get_db", fake_get_db)
     monkeypatch.setattr(auth, "resolve_vendor_actor_id", AsyncMock(return_value=ACTOR))
     monkeypatch.setattr(auth, "get_vendor_member", AsyncMock(return_value={"id": ACTOR, "vendor_id": "default_vendor"}))
+    # Hotfix 2026-11-09: this route is internal-only now, so a vendor is
+    # refused outright (403) before any checklist or status logic runs.
     with pytest.raises(HTTPException) as e:
         _run(dispatch_router.update_job_status(JOB_ID, JobStatusUpdate(status="completed"), "Bearer t", None, None))
-    assert e.value.status_code == 400
-    assert "Finish the job checklist" in _detail(e)
+    assert e.value.status_code == 403
     assert db.tables["jobs"][0]["status"] == "in_progress"
 
 
