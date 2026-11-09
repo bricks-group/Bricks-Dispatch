@@ -190,6 +190,49 @@ async def release_claim(key: str) -> None:
     await _delete(key)
 
 
+def _parse_claim_time(raw) -> Optional[datetime]:
+    if isinstance(raw, datetime):
+        stamp = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            stamp = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp
+
+
+async def lookup_claim(key: str) -> Optional[dict]:
+    rows = await _rows_like(key)
+    for row in rows:
+        if row.get("id") == key:
+            return row
+    return None
+
+
+async def claim_lease(key: str, job_id: str, action: str, details: Optional[dict] = None,
+                      *, max_age: timedelta, now: Optional[datetime] = None) -> bool:
+    """Claim a key, or take over one whose created_at is older than max_age."""
+    if await claim(key, job_id, action, details):
+        return True
+    try:
+        row = await lookup_claim(key)
+    except LedgerUnavailable:
+        return False
+    created = _parse_claim_time((row or {}).get("created_at"))
+    clock = now or _now()
+    if created is None or (clock - created) < max_age:
+        return False
+    await release_claim(key)
+    return await claim(key, job_id, action, details)
+
+
 async def audit(job_id: str, action: str, details: Optional[dict] = None, actor: str = "system") -> bool:
     """Append one step to the order's audit trail. Never raises; logs ERROR when it cannot write."""
     key = f"dlv-{job_id}-{action}-{uuid.uuid4().hex[:12]}"

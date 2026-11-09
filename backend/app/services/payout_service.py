@@ -892,6 +892,14 @@ def monday_batch_budget_sec() -> float:
         return 20.0
 
 
+def monday_claim_lease_sec() -> float:
+    raw = (os.environ.get("PAYOUT_MONDAY_CLAIM_LEASE_SEC") or "1800").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 1800.0
+
+
 async def release_scheduled_payouts(db, now: datetime | None = None,
                                    deadline: datetime | None = None) -> dict:
     """Move scheduled rows that still have payment proof onto Stripe.
@@ -907,7 +915,8 @@ async def release_scheduled_payouts(db, now: datetime | None = None,
         rows = await db.table("payouts").select("*").eq("status", "scheduled").execute()
         payouts = rows.data or []
     except Exception as e:
-        return {"released": [], "skipped": [], "errors": [type(e).__name__], "incomplete": False}
+        return {"released": [], "skipped": [], "errors": [type(e).__name__],
+                "incomplete": False, "list_failed": True}
     for i, row in enumerate(payouts):
         if i > 0 and deadline is not None and datetime.now(timezone.utc) >= deadline:
             incomplete = True
@@ -933,10 +942,11 @@ async def maybe_run_monday_payouts(db, now: datetime | None = None) -> dict | No
     local = (now or datetime.now(timezone.utc)).astimezone(_TORONTO)
     if local.weekday() != 0 or local.hour < 9:
         return None
-    from .delivery_ledger import claim, release_claim
+    from .delivery_ledger import alert_kam, claim_lease, release_claim
     week = local.strftime("%G-W%V")
     key = f"payouts:monday-batch:{week}"
-    if not await claim(key, "payouts", "monday_batch", {"week": week}):
+    lease = timedelta(seconds=monday_claim_lease_sec())
+    if not await claim_lease(key, "payouts", "monday_batch", {"week": week}, max_age=lease):
         return {"skipped": "already_ran", "week": week}
     deadline = datetime.now(timezone.utc) + timedelta(seconds=monday_batch_budget_sec())
     try:
@@ -949,5 +959,18 @@ async def maybe_run_monday_payouts(db, now: datetime | None = None) -> dict | No
         result["claim"] = "released"
     else:
         result["claim"] = "held"
+        if result.get("list_failed"):
+            await alert_kam(
+                f"monday-payout-list:{week}",
+                "payouts",
+                "Monday payout list failed",
+                [
+                    f"Could not list scheduled vendor payouts for week {week}.",
+                    "The weekly run was left marked as done so no one is paid twice.",
+                    "It will be retried after the claim lease (about 30 minutes).",
+                    f"Error: {(result.get('errors') or ['unknown'])[0]}",
+                ],
+            )
+            result["alerted"] = True
     return {"week": week, **result}
 

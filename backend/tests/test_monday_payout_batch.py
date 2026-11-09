@@ -190,3 +190,72 @@ def test_monday_batch_time_budget_retries_unpaid_rows(pay_env, monkeypatch):
     again = run(svc.maybe_run_monday_payouts(db, monday.replace(hour=12)))
     assert again["skipped"] == "already_ran"
     assert len(calls) == 2
+
+
+def test_stale_monday_claim_lease_is_reclaimed(pay_env, monkeypatch):
+    from datetime import timedelta, timezone
+    svc, calls = pay_env
+    ledger = FakeLedger(monkeypatch)
+    db = FakeSupabase()
+    db.tables["jobs"] = [_job()]
+    run(svc.trigger_payout_for_job(db, "j1"))
+    monday = datetime(2026, 11, 9, 9, 5, tzinfo=TORONTO)
+    key = "payouts:monday-batch:2026-W46"
+    ledger.rows[key] = {
+        "id": key, "entity_id": "payouts", "action": "monday_batch",
+        "created_at": (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat(),
+    }
+    out = run(svc.maybe_run_monday_payouts(db, monday))
+    assert out.get("skipped") != "already_ran"
+    assert out["released"][0]["result"]["status"] == "paid"
+    assert len(calls) == 1
+
+
+def test_fresh_monday_claim_is_not_reclaimed(pay_env, monkeypatch):
+    from datetime import timezone
+    svc, calls = pay_env
+    ledger = FakeLedger(monkeypatch)
+    db = FakeSupabase()
+    db.tables["jobs"] = [_job()]
+    run(svc.trigger_payout_for_job(db, "j1"))
+    monday = datetime(2026, 11, 9, 9, 5, tzinfo=TORONTO)
+    key = "payouts:monday-batch:2026-W46"
+    ledger.rows[key] = {
+        "id": key, "entity_id": "payouts", "action": "monday_batch",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    out = run(svc.maybe_run_monday_payouts(db, monday))
+    assert out["skipped"] == "already_ran"
+    assert calls == []
+    assert db.rows("payouts", job_id="j1")[0]["status"] == "scheduled"
+
+
+def test_monday_list_failure_holds_week_and_alerts(pay_env, monkeypatch):
+    svc, calls = pay_env
+    alerts = []
+
+    async def alert(key, job_id, title, lines):
+        alerts.append({"key": key, "job_id": job_id, "title": title, "lines": lines})
+        return True
+
+    monkeypatch.setattr("app.services.delivery_ledger.alert_kam", alert)
+
+    class Boom:
+        def table(self, name):
+            raise RuntimeError("db down")
+
+    listed = run(svc.release_scheduled_payouts(Boom()))
+    assert listed["list_failed"] is True
+    assert listed["incomplete"] is False
+    assert listed["released"] == []
+
+    monday = datetime(2026, 11, 9, 9, 5, tzinfo=TORONTO)
+    out = run(svc.maybe_run_monday_payouts(Boom(), monday))
+    assert out["claim"] == "held"
+    assert out["list_failed"] is True
+    assert out["alerted"] is True
+    assert calls == []
+    assert alerts[0]["key"] == "monday-payout-list:2026-W46"
+    again = run(svc.maybe_run_monday_payouts(Boom(), monday.replace(hour=10)))
+    assert again["skipped"] == "already_ran"
+    assert len(alerts) == 1
