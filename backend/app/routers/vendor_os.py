@@ -181,6 +181,37 @@ def _valid_coord(lat, lng) -> bool:
         return False
 
 
+def _require_terms_cleared(member: Optional[dict]) -> None:
+    """403 terms_required on accept, claim and start while the contractor
+    agreement is owed (vendor_identity.terms_block). The GO app's own gate
+    fails open when it can't check; this is the check that can't be skipped
+    from the web, an old build or the API directly."""
+    from ..shared.vendor_identity import TERMS_REQUIRED_CODE, TERMS_REQUIRED_MESSAGE, terms_block
+    if terms_block(member):
+        api_error(403, TERMS_REQUIRED_MESSAGE, TERMS_REQUIRED_CODE)
+
+
+async def _flag_completed_with_terms_owed(db, job: dict, member: Optional[dict]) -> None:
+    """Completed work is always paid, so completion is never blocked. If the
+    contractor still owes the agreement, Kam gets one alert per job."""
+    from ..shared.vendor_identity import terms_block
+    why = terms_block(member)
+    if not why:
+        return
+    try:
+        from ..services import ops_autopilot as ops
+        m = member or {}
+        name = m.get("name") or "A contractor"
+        what = "the contractor agreement and privacy policy" if why == "ic_agreement" else "amendment IC-A1"
+        await ops.send_kam(db, f"terms_owed_complete:{m.get('id')}:{job.get('id')}",
+                           f"Job completed without the agreement: {name}",
+                           [f"{name} ({m.get('email') or 'no email'}) completed {ops._job_line(job)} but hasn't accepted {what}.",
+                            "Their payout for this job is not held. They can't accept or start new jobs until they accept it in Bricks GO."],
+                           data={"member_id": m.get("id"), "job_id": job.get("id"), "terms": why})
+    except Exception as e:
+        logger.warning("terms-owed flag failed for job %s: %s", job.get("id"), type(e).__name__)
+
+
 @router.post("/jobs/{job_id}/check-in")
 async def check_in_job(
     job_id: str,
@@ -201,6 +232,8 @@ async def check_in_job(
     db = await get_db()
     job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=False)
     ensure_assigned_to_actor(job, actor_id, actor_member)
+    if job.get("status") != "in_progress":
+        _require_terms_cleared(actor_member)
 
     has_gps = _valid_coord(payload.lat, payload.lng)
     radius = noshow_policy.CHECKIN_RADIUS_M
@@ -2310,6 +2343,11 @@ async def update_vendor_job_status(
         )
 
 
+    # Starting a job needs the contractor agreement (Sentinel 2026-11-09 Q1).
+    # Completing or handing back never does.
+    if new_status == "in_progress" and old_status != "in_progress":
+        _require_terms_cleared(actor_member)
+
     # Trade jobs: every checklist item ticked with its proof (Kam, 2026-10-31).
     # Media jobs return None here and keep their completion rules.
     if new_status == "completed" and old_status != "completed":
@@ -2390,6 +2428,9 @@ async def update_vendor_job_status(
         await on_vendor_drop(db, job, assignee_id, old_status, new_status,  # policy: cancel after accept
                              reason=getattr(payload, "cancel_reason", None), note=getattr(payload, "cancel_note", None))
         await _auto_reassign_after_decline(db, job, assignee_id)
+
+    if new_status == "completed" and old_status != "completed":
+        await _flag_completed_with_terms_owed(db, job, actor_member)
 
     if new_status in ("completed", "delivered") and old_status not in ("completed", "delivered"):
         # Probation: hold one of the vendor's first N jobs for admin review (soft-fail).
@@ -2527,6 +2568,9 @@ async def watch_job_action(
     new_status = _WATCH_ACTION_STATUS_MAP[body.action]
     if new_status == old_status:
         return {"status": "no_change", "job_id": job_id, "current_status": old_status}
+    # Accepting or starting needs the contractor agreement; declining never does.
+    if body.action in ("accept", "on_way", "arrived"):
+        _require_terms_cleared(actor_member)
 
     now = datetime.now(timezone.utc).isoformat()
     status_fields = {"status": new_status, "updated_at": now}

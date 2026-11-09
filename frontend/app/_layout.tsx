@@ -14,6 +14,7 @@ import { supabase } from '../lib/supabase';
 import { configureNotificationHandler, ensureAndroidChannel, registerForPush, routeForNotification } from '../lib/push';
 import { clearOfflineCache } from '../lib/offline';
 import OfflineBanner from '../components/OfflineBanner';
+import TermsRetryBanner from '../components/TermsRetryBanner';
 import { needsTermsStep } from '../lib/legal-terms';
 import { markTermsCleared, resetTermsGate, termsCleared } from '../lib/terms-gate';
 import type { Session } from '@supabase/supabase-js';
@@ -59,6 +60,11 @@ export default function RootLayout() {
   const [fontsLoaded] = useFonts(fontAssets);
 
   const [onboardingChecked, setOnboardingChecked] = useState(false);
+  // The agreement check at sign-in fails open (never locks someone out of the
+  // app); when it can't run, a banner offers a retry. The server refuses
+  // accept/start with 403 terms_required either way.
+  const [termsCheckFailed, setTermsCheckFailed] = useState(false);
+  const [termsRetry, setTermsRetry] = useState(0);
 
   // Auth session management
   useEffect(() => {
@@ -126,15 +132,19 @@ export default function RootLayout() {
               const meRes = await fetch(`${API}/api/vendor-os/auth/me`, { headers });
               if (meRes.ok) {
                 const me = await meRes.json();
+                setTermsCheckFailed(false);
                 if (needsTermsStep(me, true)) {
                   if (!onAgreeTerms) router.replace('/agree-terms' as any);
                 } else {
                   markTermsCleared(uid);
                   if (onAgreeTerms) router.replace('/(tabs)');
                 }
+              } else {
+                setTermsCheckFailed(true);
               }
             } catch (e) {
-              // Older API or offline: never block on the agreement check.
+              // Older API or offline: never block on the agreement check; offer a retry.
+              setTermsCheckFailed(true);
             }
           } else if (onAgreeTerms) {
             router.replace('/(tabs)');
@@ -157,7 +167,11 @@ export default function RootLayout() {
         setOnboardingChecked(true);
       }
     })();
-  }, [fontsLoaded, authChecked, session, segments]);
+  }, [fontsLoaded, authChecked, session, segments, termsRetry]);
+
+  useEffect(() => {
+    if (!session) setTermsCheckFailed(false);
+  }, [session]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -221,6 +235,7 @@ export default function RootLayout() {
         <Stack.Screen name="settings" options={{ headerShown: false, presentation: 'card' }} />
       </Stack>
       <OfflineBanner />
+      <TermsRetryBanner visible={!!session && termsCheckFailed} onRetry={() => setTermsRetry(n => n + 1)} />
     </ThemeProvider>
   );
 }

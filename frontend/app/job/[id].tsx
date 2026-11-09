@@ -393,6 +393,14 @@ export default function JobDetailScreen() {
       await noShow.checkIn();
       setJob(prev => prev ? { ...prev, status: 'in_progress' } : prev);
     } catch (e: any) {
+      if (e?.code === 'terms_required') {
+        // The server won't start jobs until the contractor agreement is accepted.
+        Alert.alert('Agreement needed', e.message, [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Review and agree', onPress: () => router.push('/agree-terms' as any) },
+        ]);
+        return;
+      }
       Alert.alert('Could not check in', e?.message || 'Try again.');
     }
   };

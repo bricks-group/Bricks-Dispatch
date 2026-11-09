@@ -67,6 +67,34 @@ def needs_terms(member: Optional[dict]) -> bool:
     return needs_ic_terms(member) or needs_amendment(member)
 
 
+TERMS_REQUIRED_CODE = "terms_required"
+TERMS_REQUIRED_MESSAGE = ("Terms required: accept the contractor agreement in Bricks GO before you accept, "
+                          "claim or start jobs. Open Bricks GO and tap I agree.")
+
+
+def terms_block(member: Optional[dict], now=None) -> Optional[str]:
+    """Server-side contractor agreement check (Sentinel 2026-11-09 Q1).
+
+    "ic_agreement" while the IC agreement and privacy policy are owed;
+    "amendment" while amendment A1 is owed, from the day it binds by notice
+    (2026-11-16 00:00 ET); otherwise None. Owners are never blocked. Used to
+    refuse accept, claim and start, and to keep auto-allocation off them.
+    Completing work already started is never blocked (completed work is
+    always paid); it is flagged for Kam instead."""
+    if not member or is_owner_member(member):
+        return None
+    if needs_ic_terms(member):
+        return "ic_agreement"
+    if needs_amendment(member):
+        from datetime import datetime, timezone
+        from ..routers.onboarding import _IC_AMENDMENT_NOTICE_BINDS
+        binds = datetime.fromisoformat(_IC_AMENDMENT_NOTICE_BINDS)
+        now = now or datetime.now(timezone.utc)
+        if now >= binds:
+            return "amendment"
+    return None
+
+
 def member_title(member: Optional[dict]) -> str:
     if is_owner_member(member):
         return OWNER_TITLE

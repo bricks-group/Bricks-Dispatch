@@ -21,7 +21,7 @@ def _member(member_id: str, quality: float) -> VendorMember:
         skills=["photo"],
         is_active=True,
         status="available",
-        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00",
+        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", terms_accepted_at="2026-10-01T00:00:00+00:00", ic_amendment_version="IC-A1 v1.0",
         quality_rating=quality,
     )
 

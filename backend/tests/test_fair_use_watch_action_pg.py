@@ -65,7 +65,7 @@ def test_watch_job_action_accept_pg_on_rest_402(monkeypatch):
     monkeypatch.setattr(
         vos,
         "get_vendor_member",
-        AsyncMock(return_value={"id": "photog-1", "vendor_id": "default_vendor"}),
+        AsyncMock(return_value={"id": "photog-1", "vendor_id": "default_vendor", "terms_accepted_at": "2026-10-01T00:00:00+00:00", "ic_agreement_version": "1.9", "ic_amendment_version": "IC-A1 v1.0"}),
     )
     monkeypatch.setattr(vos, "get_db", AsyncMock(return_value=Db()))
     monkeypatch.setattr(vos, "_load_visible_job", AsyncMock(return_value=job))
@@ -128,7 +128,7 @@ def test_watch_job_action_load_uses_load_visible_job(monkeypatch):
     monkeypatch.setattr(
         vos,
         "get_vendor_member",
-        AsyncMock(return_value={"id": "photog-1", "vendor_id": "default_vendor"}),
+        AsyncMock(return_value={"id": "photog-1", "vendor_id": "default_vendor", "terms_accepted_at": "2026-10-01T00:00:00+00:00", "ic_agreement_version": "1.9", "ic_amendment_version": "IC-A1 v1.0"}),
     )
     monkeypatch.setattr(vos, "get_db", AsyncMock(return_value=Db()))
     monkeypatch.setattr(vos, "_load_visible_job", _load)
@@ -189,7 +189,7 @@ def test_watch_job_action_decline_rate_pg_on_402(monkeypatch):
     monkeypatch.setattr(
         vos,
         "get_vendor_member",
-        AsyncMock(return_value={"id": "photog-1", "vendor_id": "default_vendor"}),
+        AsyncMock(return_value={"id": "photog-1", "vendor_id": "default_vendor", "terms_accepted_at": "2026-10-01T00:00:00+00:00", "ic_agreement_version": "1.9", "ic_amendment_version": "IC-A1 v1.0"}),
     )
     monkeypatch.setattr(vos, "get_db", AsyncMock(return_value=Db()))
     monkeypatch.setattr(vos, "_load_visible_job", AsyncMock(return_value=job))

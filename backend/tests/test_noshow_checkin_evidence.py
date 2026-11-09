@@ -145,7 +145,7 @@ def env(monkeypatch):
 
         monkeypatch.setattr(vos, "get_db", fake_get_db)
         monkeypatch.setattr(vos, "resolve_vendor_actor_id", AsyncMock(return_value=ACTOR))
-        monkeypatch.setattr(vos, "get_vendor_member", AsyncMock(return_value={"id": ACTOR, "vendor_id": "default_vendor", "role": "photographer"}))
+        monkeypatch.setattr(vos, "get_vendor_member", AsyncMock(return_value={"id": ACTOR, "vendor_id": "default_vendor", "role": "photographer", "terms_accepted_at": "2026-10-01T00:00:00+00:00", "ic_agreement_version": "1.9", "ic_amendment_version": "IC-A1 v1.0"}))
         monkeypatch.setattr(vos, "write_audit_event", AsyncMock())
         monkeypatch.setattr(vos, "send_dispatch_status_update_webhook", AsyncMock())
 

@@ -55,7 +55,12 @@ async function readError(res: Response): Promise<string> {
 async function call<T>(path: string, init: RequestInit = {}, json = true): Promise<T> {
   const headers = await actorHeaders(json && init.body ? { 'Content-Type': 'application/json' } : undefined);
   const res = await fetch(`${API}${path}`, { ...init, headers: { ...(headers as any), ...(init.headers as any) } });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) {
+    const copy = res.clone();
+    const err: any = new Error(await readError(res));
+    try { const b = await copy.json(); err.code = b?.detail?.code || b?.code; } catch { /* plain text */ }
+    throw err;
+  }
   return res.json();
 }
 

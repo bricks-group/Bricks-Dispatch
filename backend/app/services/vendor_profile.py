@@ -709,6 +709,11 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     # Approved vendors finish the onboarding checklist first (Kam, 2026-10-31).
     if not onboarding_complete(m):
         return False
+    # Contractor agreement owed (IC terms, or amendment A1 once it binds):
+    # never auto-allocated (Sentinel 2026-11-09 Q1).
+    from ..shared.vendor_identity import terms_block
+    if terms_block(m):
+        return False
     # Paused vendor (expired credential, probation) or paused trade (Kam, 2026-11-01).
     from ..shared.vendor_identity import is_vendor_paused
     if is_vendor_paused(m):

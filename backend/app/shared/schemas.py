@@ -438,6 +438,10 @@ class VendorMember(BaseModel):
     home_lng: Optional[float] = None
     ic_agreement_version: Optional[str] = None
     terms_accepted_at: Optional[str] = None
+    # Amendment A1 acceptance. Read by terms_block() so auto-allocation skips a
+    # contractor who still owes it once it binds (Sentinel 2026-11-09 Q1).
+    ic_amendment_version: Optional[str] = None
+    ic_amendment_accepted_at: Optional[str] = None
     # Separate bearer credential for the pre-approval onboarding endpoints
     # (GET /status/{member_id}, POST /documents), which have no real login
     # session to check against yet. Only set for applicants created via
