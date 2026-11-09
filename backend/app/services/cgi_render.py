@@ -94,7 +94,7 @@ from ..shared.database import get_db
 
 logger = logging.getLogger(__name__)
 
-OS_API_URL = os.environ.get("OS_API_URL", "https://bricks-brokerage-api.vercel.app")
+OS_API_URL = os.environ.get("OS_API_URL", "https://api.brxs.ca")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 ASTRA_MODEL = "gpt-6-astra"

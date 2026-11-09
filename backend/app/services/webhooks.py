@@ -68,7 +68,7 @@ async def send_dispatch_status_update_webhook(
         return False
 
 
-OS_API_URL = os.environ.get("OS_API_URL", "https://bricks-brokerage-api.vercel.app")
+OS_API_URL = os.environ.get("OS_API_URL", "https://api.brxs.ca")
 
 # Dispatch's own job status values that mean "this capture visit is done, one
 # way or another" -- dev_capture_visits has no in-progress state of its own
