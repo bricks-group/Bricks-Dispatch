@@ -59,7 +59,7 @@ export function LoginSlides({ slides = DISPATCH_SLIDES }: { slides?: Slide[] }) 
               className="ls-img"
               src={`${s.src}-${WIDTHS[0]}.webp`}
               srcSet={WIDTHS.map((w) => `${s.src}-${w}.webp ${w}w`).join(', ')}
-              sizes="(min-width: 1810px) 760px, 42vw"
+              sizes="(min-width: 1810px) 760px, (min-width: 900px) 50vw, 100vw"
               alt={s.alt}
               decoding="async"
               loading={k === 0 ? 'eager' : 'lazy'}
