@@ -572,8 +572,8 @@ async def _payout_retries(db, now: datetime, out: dict) -> None:
         if not upd or now - upd < timedelta(hours=PAYOUT_MIN_AGE_H):
             continue
         pres = await db.table("payouts").select("status").eq("job_id", jid).execute()
-        if any((r.get("status") or "") in ("paid", "held") for r in (pres.data or [])):
-            continue  # "held" = probation hold; released by the probation sweep, not retried
+        if any((r.get("status") or "") in ("paid", "held", "blocked") for r in (pres.data or [])):
+            continue  # "held" = probation hold (probation sweep); "blocked" = no confirmed payment (Kam already told)
         tries = await events_like(db, f"payout_retry:{jid}:")
         last = max((_parse_ts(t.get("created_at")) for t in tries), default=None)
         if len(tries) >= PAYOUT_MAX_TRIES:

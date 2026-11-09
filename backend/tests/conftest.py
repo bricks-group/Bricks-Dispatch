@@ -46,3 +46,24 @@ def _fulfillment_gate_default_off_for_legacy_tests(monkeypatch):
     if "FULFILLMENT_GATE" not in _os.environ:
         monkeypatch.setenv("FULFILLMENT_GATE", "0")
     yield
+
+
+# No confirmed payment, no payout (2026-11-09). Legacy payout tests use fixture
+# jobs with no real booking, so the payment-proof rule is bypassed by default;
+# tests of the rule itself are marked @pytest.mark.real_payment_proof.
+@_pytest_fg.fixture(autouse=True)
+def _payment_proof_bypass_for_legacy_tests(request, monkeypatch):
+    if request.node.get_closest_marker("real_payment_proof") is None:
+        try:
+            from app.services import payout_source as _ps
+
+            async def _no_block(*_a, **_k):
+                return None
+            monkeypatch.setattr(_ps, "payment_block", _no_block)
+        except Exception:
+            pass
+    yield
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_payment_proof: run the real no-payment-no-payout rule")

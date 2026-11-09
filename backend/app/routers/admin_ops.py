@@ -1297,6 +1297,50 @@ async def editor_approve_job(
             "payout": payout}
 
 
+class ConfirmPaymentBody(_BaseModel):
+    # How the client paid (cheque, e-transfer, invoice #, brokerage credit). Required.
+    note: str = _Field(min_length=3, max_length=500)
+
+
+@router.post("/jobs/{job_id}/confirm-payment")
+async def confirm_job_payment(
+    job_id: str,
+    body: ConfirmPaymentBody,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    """Owner only: record that the client paid outside Stripe, then run the payout.
+
+    Covers only "no payment on record" holds (no booking, booking not found,
+    unpaid, mode unknown). Test orders, Stripe test-mode payments and refunds
+    are never released this way. Recorded once in audit_events with who and why.
+    """
+    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
+    from ..shared.vendor_identity import is_owner_member
+    if not is_owner_member(await get_vendor_member(actor_id)):
+        api_error(403, "Only the owner can confirm a payment.", "owner_only")
+    from ..services import delivery_ledger as dl
+    from ..services import payout_source as ps
+    db = await get_db()
+    job = await _load_one(db, "jobs", "id", job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    src = await ps.booking_source(db, job)
+    reason = ps.payout_block_reason(src) or await ps.payment_block(db, job, src)
+    if reason and reason not in ps.MANUALLY_CONFIRMABLE:
+        api_error(409, ps.BLOCK_TEXT.get(reason, "This payout cannot be released by hand."), "not_confirmable")
+    try:
+        await dl.claim(f"payment-confirmed:{job_id}", job_id, "delivery.payment_confirmed",
+                       {"by": str(actor_id), "note": body.note.strip(), "was": reason})
+    except dl.LedgerUnavailable:
+        api_error(503, "Could not save the confirmation. Nothing was paid. Try again in a minute.", "ledger_unavailable")
+    from ..services.payout_service import trigger_payout_for_job
+    payout = await trigger_payout_for_job(db, job_id)
+    await dl.audit(job_id, "payout", {k: (payout or {}).get(k) for k in ("status", "skipped", "reason", "error")
+                                      if (payout or {}).get(k) is not None}, actor=str(actor_id))
+    return {"status": "confirmed", "job_id": job_id, "payout": payout}
+
+
 @router.get("/jobs/{job_id}/delivery-trail")
 async def get_delivery_trail(
     job_id: str,

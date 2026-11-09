@@ -251,6 +251,83 @@ async def _db_insert_payout(db, payout_record: dict) -> dict | None:
         raise
 
 
+_BLOCK_OPTIONAL = ("block_reason",)  # column added by 20261109_payout_payment_proof.sql
+
+
+def _missing_column(err: Exception) -> bool:
+    t = f"{getattr(err, 'code', '')} {err}".lower()
+    return "block_reason" in t or "pgrst204" in t or "42703" in t
+
+
+async def _write_payout_fields(db, payout_id: str, fields: dict) -> None:
+    """Update a payout row; drops block_reason if that column is not there yet."""
+    try:
+        await _db_update_payout(db, payout_id, fields)
+    except Exception as e:
+        if not _missing_column(e):
+            raise
+        rest = {k: v for k, v in fields.items() if k not in _BLOCK_OPTIONAL}
+        if rest:
+            await _db_update_payout(db, payout_id, rest)
+
+
+async def _record_block(db, job: dict, reason: str) -> dict:
+    """Record why a payout did not run on its payout row + audit trail, alert Kam once.
+
+    Never touches a row that is paid or has a Stripe transfer. A lookup failure
+    is recorded as "failed" so the ops sweep checks again; every other reason
+    is "blocked" until the payment is confirmed. Never raises.
+    """
+    from .payout_source import BLOCK_TEXT, TRANSIENT_BLOCKS
+    from . import delivery_ledger as dl
+    job_id = str(job.get("id") or "")
+    status = "failed" if reason in TRANSIENT_BLOCKS else "blocked"
+    payout_id = None
+    try:
+        existing = await _db_select_payout_by_job(db, job_id)
+        if existing and (existing.get("status") == "paid" or existing.get("stripe_transfer_id")):
+            payout_id = existing.get("id")
+        elif existing and existing.get("status") not in ("failed", "held", "blocked"):
+            payout_id = existing.get("id")  # a run in flight owns it; leave it alone
+        elif existing:
+            payout_id = existing["id"]
+            await _write_payout_fields(db, payout_id, {"status": status, "block_reason": reason})
+        else:
+            row = {"id": payout_row_id(job_id), "job_id": job_id,
+                   "vendor_id": job.get("vendor_id", "default_vendor"),
+                   "contractor_id": job.get("assignee_id") or "", "amount": 0,
+                   "status": status, "block_reason": reason,
+                   "created_at": datetime.now(timezone.utc).isoformat()}
+            try:
+                inserted, concurrent = await _insert_payout_once(db, job_id, row)
+            except Exception as e:
+                if not _missing_column(e):
+                    raise
+                row.pop("block_reason", None)
+                inserted, concurrent = await _insert_payout_once(db, job_id, row)
+            payout_id = ((inserted or concurrent) or {}).get("id")
+    except Exception as e:  # noqa: BLE001 - the audit row and alert below still record it
+        logger.error(f"Payout for job {job_id}: could not record block {reason}: {type(e).__name__}")
+    await dl.audit(job_id, "payout_blocked", {"reason": reason, "payout_id": payout_id, "status": status})
+    alerted = False
+    if status == "blocked":
+        if reason in ("no_booking", "booking_not_found", "booking_unpaid", "payment_mode_unknown"):
+            todo = ("If the client paid another way, record that payment for this order "
+                    "(admin confirm-payment) and the payout runs. Otherwise nothing is owed.")
+        elif reason in ("test_booking", "sandbox_booking"):
+            todo = "Nothing to do. No money was sent."
+        else:
+            todo = "No money was sent. Decide by hand what the vendor is owed."
+        try:
+            alerted = await dl.alert_kam(
+                f"payout-blocked:{job_id}:{reason}", job_id, "Vendor payout on hold: no confirmed payment",
+                [f"Order {job_id} at {job.get('address') or 'an unknown address'}.",
+                 BLOCK_TEXT.get(reason, "The payment could not be confirmed."), todo])
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Payout for job {job_id}: block alert failed: {type(e).__name__}")
+    return {"payout_id": payout_id, "status": status, "alerted": alerted}
+
+
 async def _db_update_job_payout_amount(db, job_id: str, payout_amount: int) -> None:
     from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
     try:
@@ -342,12 +419,17 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
 
     # Money source (Kam 2026-11-07): a Stripe sandbox booking never moves live
     # money, and a refunded booking never pays out. Applies to no-show halves too.
-    from .payout_source import booking_source, payout_block_reason
+    # No confirmed payment, no payout (Kam 2026-11-09): unknown, unpaid,
+    # refunded or test bookings never reach Stripe. Recorded on the payout row
+    # and Kam is told once (fail loud).
+    from .payout_source import booking_source, payment_block, payout_block_reason
     source = await booking_source(db, job)
-    blocked = payout_block_reason(source)
+    blocked = payout_block_reason(source) or await payment_block(db, job, source)
     if blocked:
         logger.warning(f"Payout for job {job_id} blocked: {blocked} (source={source.get('source')})")
-        return {"skipped": blocked, "job_id": job_id, "livemode": source.get("livemode")}
+        out = {"skipped": blocked, "blocked": True, "job_id": job_id, "livemode": source.get("livemode")}
+        out.update(await _record_block(db, job, blocked))
+        return out
 
     # Fulfillment gate: pay only after a complete, editor-approved delivery.
     # Approved client no-show claims pay half without delivery (Kam 2026-10-30).
@@ -528,7 +610,8 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         # A pending record with no Stripe transfer ID means the process crashed before the
         # Stripe call was made — treat it as retriable, same as "failed".
         # "held" = probation hold that has since been released (or cleared).
-        is_retriable = existing_status in ("failed", "held") or (
+        # "blocked" = no confirmed payment earlier; it is confirmed now (checked above).
+        is_retriable = existing_status in ("failed", "held", "blocked") or (
             existing_status == "pending" and not existing_transfer_id
         )
         if not is_retriable:
@@ -577,6 +660,8 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             "status": "pending",
         })
         payout_id = reuse_payout_id
+        if existing_status == "blocked":
+            await _write_payout_fields(db, payout_id, {"block_reason": None})
     else:
         # payouts.id is text NOT NULL with no default: REST inserts without an id
         # fail 23502, so every first payout died after delivery (Kam E2E, 2026-11-02).

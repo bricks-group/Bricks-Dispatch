@@ -125,8 +125,8 @@ async def _stuck_orders(db, now: datetime, jobs: list[dict], out: dict) -> None:
                 if await _ops_seen(db, f"payout_esc:{jid}"):
                     continue  # ops sweep already escalated this one
                 pres = (await db.table("payouts").select("status").eq("job_id", jid).execute()).data or []
-                if any((r.get("status") or "") in ("paid", "held") for r in pres):
-                    continue  # paid, or a probation hold with its own review
+                if any((r.get("status") or "") in ("paid", "held", "blocked") for r in pres):
+                    continue  # paid, a probation hold, or blocked (no confirmed payment; own alert)
                 if updated and now - updated >= timedelta(hours=PAYOUT_STALE_H):
                     reason = await _last_payout_reason(jid)
                     if await dl.alert_kam(f"payout-stuck:{jid}", jid, "Delivered, but the vendor is not paid",

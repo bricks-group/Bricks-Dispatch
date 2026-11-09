@@ -174,7 +174,7 @@ async def _job_and_uploads(job_id: str) -> tuple[dict, list[dict], Optional[int]
         p = pg_select_payout_by_job_id(job_id)
         pays = [p] if p else []
     payout = None
-    live = [p for p in pays if (p or {}).get("status") != "failed"]
+    live = [p for p in pays if (p or {}).get("status") not in ("failed", "blocked")]
     if live:
         payout = sum(int(p.get("net_amount") or p.get("amount") or 0) for p in live)
     elif job.get("payout_amount") is not None:

@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from tests._fake_supabase import FakeSupabase
 
 KAM = "raph@brxs.ca"
+pytestmark = pytest.mark.real_payment_proof
 
 
 def run(c):
@@ -123,10 +124,18 @@ class Chain:
         monkeypatch.setattr(admin_ops, "_require_admin", admin)
         monkeypatch.setattr(dl, "_now", lambda: self.clock[0])
 
-    def add_job(self, jid, files=("a", "b")):
+    def add_job(self, jid, files=("a", "b"), booking="paid"):
+        """booking: "paid" (test-mode paid lead), None (no booking), or a booking id to use as is."""
+        import uuid as _u
         now = datetime.now(timezone.utc).isoformat()
+        if booking == "paid":
+            bid = str(_u.uuid5(_u.NAMESPACE_URL, f"lead/{jid}"))
+            self.db.tables.setdefault("media_booking_leads", []).append(
+                {"id": bid, "stripe_session_id": f"cs_test_{jid}", "status": "paid"})
+        else:
+            bid = booking
         self.db.tables.setdefault("jobs", []).append({
-            "id": jid, "booking_id": f"bk-{jid}", "vendor_id": "default_vendor", "assignee_id": "m1",
+            "id": jid, "booking_id": bid, "vendor_id": "default_vendor", "assignee_id": "m1",
             "package_id": "photos_only", "status": "processing", "agent_email": KAM, "agent_name": "Kam",
             "address": "1 Test Lane", "rack_price": 30000, "created_at": now, "updated_at": now,
         })
@@ -251,7 +260,8 @@ def test_live_stripe_key_never_pays_a_test_booking(chain, monkeypatch):
     c.add_job(J)
     run(c.pp._finalize_job_if_complete(J))
     c.approve(J, c.gate(J)["manifest_hash"])
-    assert c.job(J)["status"] == "delivered" and not c.transfers and not c.payouts(J)
+    assert c.job(J)["status"] == "delivered" and not c.transfers
+    assert [(p["status"], p.get("block_reason")) for p in c.payouts(J)] == [("blocked", "sandbox_booking")]
 
 
 def test_failed_payout_is_recorded_and_kam_told_once_after_24h(chain):
@@ -293,3 +303,78 @@ def test_delivery_email_retries_then_goes_dead_and_tells_kam_once(chain):
     assert c.db.one("media_delivery", job_id=J)["notification_status"] == c.dl.DEAD
     assert len(c.emails(f"kam-alert-email-dead:{J}")) == 1
     assert all(m["to"] == KAM for m in c.outbox)
+
+
+def test_no_confirmed_payment_never_reaches_stripe_and_tells_kam_once(chain, monkeypatch):
+    """Kam 2026-11-09: unknown, unpaid, refunded or test bookings never pay out."""
+    import uuid as _u
+    from app.services import delivery_watch, ops_autopilot
+    from app.services.payout_service import trigger_payout_for_job
+    from app.services import payout_source
+    c = chain
+    cb, lead_ref = str(_u.uuid4()), str(_u.uuid4())
+    c.db.tables.setdefault("commercial_bookings", []).append(
+        {"id": cb, "stripe_session_id": "cs_test_cb", "livemode": False, "status": "pending"})
+    c.db.tables.setdefault("media_booking_leads", []).append(
+        {"id": lead_ref, "stripe_session_id": "cs_test_r", "status": "refunded"})
+    cases = {
+        "job-np-test": ("e2e-go-fairuse-1", "test_booking"),
+        "job-np-none": (None, "no_booking"),
+        "job-np-unknown": (str(_u.uuid4()), "booking_not_found"),
+        "job-np-unpaid": (f"cb_{cb}", "booking_unpaid"),
+        "job-np-refund": (lead_ref, "booking_refunded"),
+    }
+    for jid, (bid, _) in cases.items():
+        c.add_job(jid, booking=bid)
+        run(c.pp._finalize_job_if_complete(jid))
+        c.approve(jid, c.gate(jid)["manifest_hash"])
+        run(trigger_payout_for_job(c.db, jid))  # a retry changes nothing
+    later = datetime.now(timezone.utc) + timedelta(hours=30)
+    c.clock[0] = later
+    run(delivery_watch.run(c.db, now=later))
+    assert not c.transfers
+    for jid, (_, reason) in cases.items():
+        assert c.job(jid)["status"] == "delivered"
+        assert [(p["status"], p["block_reason"], p["amount"]) for p in c.payouts(jid)] == [("blocked", reason, 0)], jid
+        assert len(c.emails(f"kam-alert-payout-blocked:{jid}:")) == 1, jid
+        assert not c.emails(f"kam-alert-payout-stuck:{jid}"), jid
+        trail = [r for r in run(c.dl.trail(jid)) if r["action"] == "delivery.payout_blocked"]
+        assert trail and trail[-1]["details"]["reason"] == reason
+    assert all(m["to"] == KAM for m in c.outbox)
+
+    # A live key never pays a test-mode payment, even a "paid" one.
+    monkeypatch.setattr(payout_source, "stripe_key_mode", lambda: True)
+    async def live_src(db, job):
+        return {"source": None, "livemode": None}
+    monkeypatch.setattr(payout_source, "booking_source", live_src)
+    c.add_job("job-np-mode")
+    run(c.pp._finalize_job_if_complete("job-np-mode"))
+    c.approve("job-np-mode", c.gate("job-np-mode")["manifest_hash"])
+    assert c.payouts("job-np-mode")[0]["block_reason"] == "sandbox_booking" and not c.transfers
+
+    # The owner can record an off-Stripe payment for a "no payment on record"
+    # hold; the payout then runs once. Test orders and refunds cannot be released.
+    monkeypatch.setattr(payout_source, "stripe_key_mode", lambda: False)
+    owner = {"id": "own", "role": "owner"}
+    async def member(_a):
+        return owner
+    async def actor(*_a, **_k):
+        return "own"
+    monkeypatch.setattr(c.admin, "get_vendor_member", member)
+    monkeypatch.setattr(c.admin, "resolve_vendor_actor_id", actor)
+    body = c.admin.ConfirmPaymentBody(note="e-transfer received Nov 9")
+    out = run(c.admin.confirm_job_payment("job-np-none", body))
+    assert out["payout"]["status"] == "paid" and len(c.transfers) == 1
+    assert [p["status"] for p in c.payouts("job-np-none")] == ["paid"]
+    assert c.payouts("job-np-none")[0]["block_reason"] is None
+    run(c.admin.confirm_job_payment("job-np-none", body))
+    assert len(c.transfers) == 1  # confirming twice never pays twice
+    for jid in ("job-np-test", "job-np-refund"):
+        with pytest.raises(HTTPException) as e:
+            run(c.admin.confirm_job_payment(jid, body))
+        assert e.value.status_code == 409
+    assert len(c.transfers) == 1
+    owner["role"] = "admin"
+    with pytest.raises(HTTPException) as e:
+        run(c.admin.confirm_job_payment("job-np-unknown", body))
+    assert e.value.status_code == 403 and len(c.transfers) == 1
