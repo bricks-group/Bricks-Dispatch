@@ -527,6 +527,13 @@ async def sweep(db, now: Optional[datetime] = None, *, run_reconcile: bool = Tru
         out["errors"].extend(dw.get("errors") or [])
     except Exception as e:
         out["errors"].append({"step": "delivery_watch", "error": type(e).__name__})
+    try:
+        from .payout_service import maybe_run_monday_payouts
+        monday = await maybe_run_monday_payouts(db, now)
+        if monday:
+            out["monday_payouts"] = monday
+    except Exception as e:
+        out["errors"].append({"step": "monday_payouts", "error": type(e).__name__})
     # IC amendment A1 notice (runs only when its request marker exists; idempotent).
     try:
         from .amendment_notice import run as run_ic_a1_notice
@@ -572,7 +579,7 @@ async def _payout_retries(db, now: datetime, out: dict) -> None:
         if not upd or now - upd < timedelta(hours=PAYOUT_MIN_AGE_H):
             continue
         pres = await db.table("payouts").select("status").eq("job_id", jid).execute()
-        if any((r.get("status") or "") in ("paid", "held", "blocked") for r in (pres.data or [])):
+        if any((r.get("status") or "") in ("paid", "held", "blocked", "scheduled") for r in (pres.data or [])):
             continue  # "held" = probation hold (probation sweep); "blocked" = no confirmed payment (Kam already told)
         tries = await events_like(db, f"payout_retry:{jid}:")
         last = max((_parse_ts(t.get("created_at")) for t in tries), default=None)

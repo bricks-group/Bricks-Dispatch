@@ -48,6 +48,14 @@ def _fulfillment_gate_default_off_for_legacy_tests(monkeypatch):
     yield
 
 
+@_pytest_fg.fixture(autouse=True)
+def _monday_payouts_default_off_for_legacy_tests(monkeypatch):
+    import os as _os
+    if "PAYOUT_SCHEDULE_MONDAY" not in _os.environ:
+        monkeypatch.setenv("PAYOUT_SCHEDULE_MONDAY", "0")
+    yield
+
+
 # No confirmed payment, no payout (2026-11-09). Legacy payout tests use fixture
 # jobs with no real booking, so the payment-proof rule is bypassed by default;
 # tests of the rule itself are marked @pytest.mark.real_payment_proof.

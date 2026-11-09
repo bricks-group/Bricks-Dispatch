@@ -15,7 +15,9 @@ HST on contractor payouts (ETA principal model):
 """
 
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,27 @@ TIER_PERCENTAGES = {
 }
 
 DEFAULT_TIER_PERCENTAGE = 0.35  # fallback to Tier C (entry)
+
+# Weekly Monday vendor payouts (America/Toronto). Default ON so an approved,
+# paid job is marked scheduled and transferred on the next Monday sweep.
+# Tests set PAYOUT_SCHEDULE_MONDAY=0 (see conftest) so Sentinel and the
+# existing immediate-transfer cases keep working. Do not call Stripe Account
+# payout-schedule APIs from here — Express weekly bank deposits are a later
+# ship step, not a live write.
+_TORONTO = ZoneInfo("America/Toronto")
+
+
+def monday_payouts_enabled() -> bool:
+    raw = (os.environ.get("PAYOUT_SCHEDULE_MONDAY") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def next_monday_0930(now: datetime | None = None) -> datetime:
+    local = (now or datetime.now(timezone.utc)).astimezone(_TORONTO)
+    days = (7 - local.weekday()) % 7
+    if days == 0 and (local.hour, local.minute) >= (9, 0):
+        days = 7
+    return (local + timedelta(days=days)).replace(hour=9, minute=0, second=0, microsecond=0)
 
 
 def calculate_payout_amount(rack_price: int | None, vendor_tier: int | None) -> int:
@@ -251,16 +274,16 @@ async def _db_insert_payout(db, payout_record: dict) -> dict | None:
         raise
 
 
-_BLOCK_OPTIONAL = ("block_reason",)  # column added by 20261109_payout_payment_proof.sql
+_BLOCK_OPTIONAL = ("block_reason", "scheduled_for")  # optional until matching migrations land
 
 
 def _missing_column(err: Exception) -> bool:
     t = f"{getattr(err, 'code', '')} {err}".lower()
-    return "block_reason" in t or "pgrst204" in t or "42703" in t
+    return any(c in t for c in _BLOCK_OPTIONAL) or "pgrst204" in t or "42703" in t
 
 
 async def _write_payout_fields(db, payout_id: str, fields: dict) -> None:
-    """Update a payout row; drops block_reason if that column is not there yet."""
+    """Update a payout row; drops optional columns if they are not there yet."""
     try:
         await _db_update_payout(db, payout_id, fields)
     except Exception as e:
@@ -422,7 +445,7 @@ async def _db_update_noshow_claim(db, claim_id: str, fields: dict) -> None:
 
 
 async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = None,
-                                 release: bool = False) -> dict:
+                                 release: bool = False, pay_now: bool = False) -> dict:
     """
     Trigger a payout for a completed job.
 
@@ -651,7 +674,23 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         # "blocked" = no confirmed payment earlier; it is confirmed now (checked above).
         is_retriable = existing_status in ("failed", "held", "blocked") or (
             existing_status == "pending" and not existing_transfer_id
-        )
+            and (pay_now or not monday_payouts_enabled())
+        ) or (existing_status == "scheduled" and pay_now)
+        if existing_status in ("pending", "scheduled") and monday_payouts_enabled() and not pay_now and not existing_transfer_id:
+            when = next_monday_0930()
+            if existing_status != "scheduled":
+                await _write_payout_fields(db, existing.get("id"), {
+                    "status": "scheduled",
+                    "scheduled_for": when.isoformat(),
+                })
+                await _db_update_job_fields(db, job_id, {"payout_status": "scheduled"})
+            return {
+                "payout_id": existing.get("id"),
+                "status": "scheduled",
+                "already_exists": True,
+                "base_amount": existing.get("amount") or 0,
+                "scheduled_for": when.isoformat(),
+            }
         if not is_retriable:
             # Already paid — idempotent return (close out the no-show claim if a prior
             # post-Stripe update was lost).
@@ -721,7 +760,7 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
             "hst_paid_cents": hst_paid_cents,
             "contractor_hst_rate": contractor_hst_rate,
             "payout_basis_cents": job.get("subtotal_cents"),
-            "status": "pending",
+            "status": "scheduled" if (monday_payouts_enabled() and not pay_now) else "pending",
             "created_at": now,
         }
         inserted, concurrent = await _insert_payout_once(db, job_id, payout_record)
@@ -736,7 +775,30 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
 
     # Update job with payout_amount (+ ledger: vendor_payout, platform_margin)
     await _db_update_job_payout_amount(db, job_id, payout_amount)
-    await _db_update_job_fields(db, job_id, {**ledger_fields(job, payout_amount), "payout_status": "pending"})
+    schedule_only = monday_payouts_enabled() and not pay_now
+    await _db_update_job_fields(db, job_id, {
+        **ledger_fields(job, payout_amount),
+        "payout_status": "scheduled" if schedule_only else "pending",
+    })
+    if schedule_only:
+        when = next_monday_0930()
+        await _write_payout_fields(db, payout_id, {
+            "status": "scheduled",
+            "scheduled_for": when.isoformat(),
+        })
+        from .delivery_ledger import audit
+        await audit(job_id, "payout_scheduled", {
+            "payout_id": payout_id,
+            "amount": payout_amount,
+            "scheduled_for": when.isoformat(),
+        })
+        logger.info(f"Payout {payout_id} scheduled for {when.isoformat()} job {job_id}")
+        return {
+            "payout_id": payout_id,
+            "status": "scheduled",
+            "base_amount": payout_amount,
+            "scheduled_for": when.isoformat(),
+        }
 
     # Attempt Stripe transfer — separate try/except so post-Stripe DB failures
     # don't roll back a transfer that already cleared.
@@ -820,3 +882,46 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         "net_amount": net_payout,
         "stripe_transfer_id": stripe_transfer_id,
     }
+
+
+async def release_scheduled_payouts(db, now: datetime | None = None) -> dict:
+    """Move every scheduled row that still has payment proof onto Stripe.
+
+    Re-checks payment at transfer time so a refund between approval and Monday
+    cancels (or blocks) the row instead of sending money.
+    """
+    released, skipped, errors = [], [], []
+    try:
+        rows = await db.table("payouts").select("*").eq("status", "scheduled").execute()
+        payouts = rows.data or []
+    except Exception as e:
+        return {"released": [], "skipped": [], "errors": [type(e).__name__]}
+    for row in payouts:
+        job_id = row.get("job_id")
+        if not job_id:
+            skipped.append({"payout_id": row.get("id"), "reason": "no_job"})
+            continue
+        try:
+            result = await trigger_payout_for_job(db, job_id, pay_now=True)
+            released.append({"job_id": job_id, "result": result})
+        except Exception as e:
+            logger.error(f"Monday payout release failed for job {job_id}: {e}")
+            errors.append({"job_id": job_id, "error": type(e).__name__})
+    return {"released": released, "skipped": skipped, "errors": errors}
+
+
+async def maybe_run_monday_payouts(db, now: datetime | None = None) -> dict | None:
+    """Idempotent weekly run: Monday 09:00 America/Toronto, once per calendar week."""
+    if not monday_payouts_enabled():
+        return None
+    local = (now or datetime.now(timezone.utc)).astimezone(_TORONTO)
+    if local.weekday() != 0 or local.hour < 9:
+        return None
+    from .delivery_ledger import claim
+    week = local.strftime("%G-W%V")
+    key = f"payouts:monday-batch:{week}"
+    if not await claim(key, "payouts", "monday_batch", {"week": week}):
+        return {"skipped": "already_ran", "week": week}
+    result = await release_scheduled_payouts(db, now=local)
+    return {"week": week, **result}
+

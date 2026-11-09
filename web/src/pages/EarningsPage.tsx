@@ -10,7 +10,7 @@ type EarningJob = {
   scheduled_date: string;
   status: string;
   payout_amount: number;
-  payout_status: 'paid' | 'pending';
+  payout_status: 'paid' | 'pending' | 'scheduled';
 };
 
 type Earnings = {
@@ -28,8 +28,9 @@ type Earnings = {
 };
 
 const PAYOUT_BADGE: Record<string, string> = {
-  paid:    'badge-green',
-  pending: 'badge-yellow',
+  paid:      'badge-green',
+  pending:   'badge-yellow',
+  scheduled: 'badge-yellow',
 };
 
 export function EarningsPage() {
@@ -106,7 +107,7 @@ export function EarningsPage() {
                       <td data-label="Date" className="muted"><DayCell d={job.scheduled_date} /></td>
                       <td data-label="Status" className="c-s">
                         <span className={`badge ${PAYOUT_BADGE[job.payout_status] ?? 'badge-gray'}`}>
-                          {job.payout_status}
+                          {job.payout_status === 'scheduled' ? 'Pays Monday' : job.payout_status}
                         </span>
                       </td>
                       <td data-label="Payout" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>
