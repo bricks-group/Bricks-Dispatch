@@ -9,7 +9,7 @@ type Slide = { src: string; alt: string; line: string; pos?: string };
 const WIDTHS = [1000, 1600];
 
 export const DISPATCH_SLIDES: Slide[] = [
-  { src: '/login/shoots', pos: '40% 55%', alt: 'Row of brick homes, listing photo by a Bricks photographer', line: 'Listing shoots near you, at an exact time.' },
+  { src: '/login/shoots', pos: '40% 55%', alt: 'Row of brick homes, listing photo by a Bricks photographer', line: 'Jobs near you, at an exact time.' },
   { src: '/login/interiors', pos: '45% 50%', alt: 'Condo living room with a city view, shot for Bricks', line: 'Homes, condos and commercial work.' },
   { src: '/login/drone', pos: '50% 50%', alt: 'Drone view of a new commercial development', line: 'Drone jobs for licensed pilots.' },
 ];

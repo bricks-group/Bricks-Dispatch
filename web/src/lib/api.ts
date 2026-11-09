@@ -367,7 +367,7 @@ export async function isAuthRestricted(): Promise<boolean> {
 export async function loginWithGoogle(): Promise<void> {
   if (await isAuthRestricted()) {
     throw new Error(
-      'Auth is restricted (Fair Use / 402). Google sign-in is unavailable until Auth unlocks.',
+      'Google sign-in is paused for now. Sign in with your email and password.',
     );
   }
   // A disabled provider makes Supabase answer /authorize with raw JSON (400

@@ -165,7 +165,7 @@ function authErrorMessage(err: unknown): string {
     || low.includes('fair use')
     || low.includes('restricted')
   ) {
-    return 'Sign-in is temporarily limited. Use email and password — magic links and Google may be unavailable.';
+    return 'Google sign-in and email links are paused for now. Sign in with your email and password.';
   }
   return msg;
 }
@@ -326,7 +326,7 @@ export function LoginPage() {
         <p className="muted" style={{ margin: 0 }}>Sign in to Bricks.</p>
         {authRestricted && (
           <p className="muted" style={{ margin: '8px 0 0' }} data-testid="auth-fair-use-banner">
-            Google and magic link are unavailable under Fair Use — use email and password.
+            Google sign-in is paused for now. Sign in with your email and password.
           </p>
         )}
         <label className="login-field">
@@ -378,7 +378,7 @@ export function LoginPage() {
           disabled={submitting || googleLoading || otpLoading || authRestricted}
         >
           {googleLoading ? <BricksLoader variant="cycle" size={16} color="currentColor" /> : <GoogleMark />}
-          {googleLoading ? 'Redirecting…' : authRestricted ? 'Google unavailable' : 'Continue with Google'}
+          {googleLoading ? 'Redirecting…' : authRestricted ? 'Google sign-in paused' : 'Continue with Google'}
         </button>
         {phoneEnabled !== false && !authRestricted && (
           <button
