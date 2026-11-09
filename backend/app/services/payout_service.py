@@ -942,20 +942,22 @@ async def maybe_run_monday_payouts(db, now: datetime | None = None) -> dict | No
     local = (now or datetime.now(timezone.utc)).astimezone(_TORONTO)
     if local.weekday() != 0 or local.hour < 9:
         return None
-    from .delivery_ledger import alert_kam, claim_lease, release_claim
+    from .delivery_ledger import alert_kam, claim_lease, lookup_claim, release_claim
     week = local.strftime("%G-W%V")
     key = f"payouts:monday-batch:{week}"
     lease = timedelta(seconds=monday_claim_lease_sec())
     if not await claim_lease(key, "payouts", "monday_batch", {"week": week}, max_age=lease):
         return {"skipped": "already_ran", "week": week}
+    owned = await lookup_claim(key)
+    owned_at = None if not owned else owned.get("created_at")
     deadline = datetime.now(timezone.utc) + timedelta(seconds=monday_batch_budget_sec())
     try:
         result = await release_scheduled_payouts(db, now=local, deadline=deadline)
     except Exception:
-        await release_claim(key)
+        await release_claim(key, created_at=owned_at)
         raise
     if result.get("incomplete"):
-        await release_claim(key)
+        await release_claim(key, created_at=owned_at)
         result["claim"] = "released"
     else:
         result["claim"] = "held"

@@ -259,3 +259,38 @@ def test_monday_list_failure_holds_week_and_alerts(pay_env, monkeypatch):
     again = run(svc.maybe_run_monday_payouts(Boom(), monday.replace(hour=10)))
     assert again["skipped"] == "already_ran"
     assert len(alerts) == 1
+
+
+def test_claim_lease_does_not_delete_a_replaced_row(monkeypatch):
+    from datetime import timedelta, timezone
+    from app.services import delivery_ledger as dl
+    ledger = FakeLedger(monkeypatch)
+    key = "payouts:monday-batch:atomic"
+    old = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
+    ledger.rows[key] = {
+        "id": key, "entity_id": "payouts", "action": "monday_batch",
+        "created_at": old,
+    }
+    real_delete = dl._delete
+
+    async def race(key, created_at=None):
+        if key in ledger.rows:
+            ledger.rows[key]["created_at"] = datetime.now(timezone.utc).isoformat()
+        return await real_delete(key, created_at=created_at)
+
+    monkeypatch.setattr(dl, "_delete", race)
+    got = run(dl.claim_lease(key, "payouts", "monday_batch", {"week": "t"},
+                             max_age=timedelta(minutes=30)))
+    assert got is False
+    assert key in ledger.rows
+    assert ledger.rows[key]["created_at"] != old
+
+
+def test_transfers_use_explicit_http_timeout():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "app/services/stripe_connect_service.py").read_text()
+    assert "TRANSFER_HTTP_TIMEOUT_SEC = 25" in src
+    assert "RequestsClient(timeout=TRANSFER_HTTP_TIMEOUT_SEC)" in src
+    body = src.split("def handle_payout_to_vendor", 1)[1]
+    assert "stripe_lib.Transfer.create" not in body
+    assert body.count("_create_transfer(") == 3

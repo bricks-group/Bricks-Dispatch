@@ -20,8 +20,14 @@ class FakeLedger:
                 raise dl.LedgerUnavailable("store down")
             return [r for k, r in self.rows.items() if k.startswith(prefix)]
 
-        async def _delete(key):
+        async def _delete(key, created_at=None):
+            row = self.rows.get(key)
+            if not row:
+                return False
+            if created_at is not None and str(row.get("created_at")) != str(created_at):
+                return False
             self.rows.pop(key, None)
+            return True
 
         async def _record_try(job_id, n, status):
             key = f"delivery-email-try:{job_id}:{n}"

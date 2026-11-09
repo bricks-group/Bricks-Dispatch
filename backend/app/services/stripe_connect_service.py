@@ -18,6 +18,27 @@ from app.shared.payee import payee_label
 logger = logging.getLogger(__name__)
 
 stripe_lib.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+TRANSFER_HTTP_TIMEOUT_SEC = 25
+
+
+def _ensure_transfer_http_timeout() -> None:
+    client = getattr(stripe_lib, "default_http_client", None)
+    if getattr(client, "_timeout", None) == TRANSFER_HTTP_TIMEOUT_SEC:
+        return
+    RequestsClient = getattr(getattr(stripe_lib, "http_client", None), "RequestsClient", None)
+    if RequestsClient is None:
+        return
+    try:
+        stripe_lib.default_http_client = RequestsClient(timeout=TRANSFER_HTTP_TIMEOUT_SEC)
+    except Exception:
+        logger.warning("could not set Stripe transfer HTTP timeout")
+
+
+def _create_transfer(**params):
+    _ensure_transfer_http_timeout()
+    return stripe_lib.Transfer.create(**params)
+
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 # contractors has RLS (service_role or owner-only). SUPABASE_KEY alone is not the
 # service role in prod, so reads came back empty and inserts hit 42501 and every
@@ -263,7 +284,7 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
         # come from that charge and the link survives for refund reconciliation.
         metadata["source_charge"] = source_charge_id
         try:
-            transfer = stripe_lib.Transfer.create(
+            transfer = _create_transfer(
                 amount=amount,
                 currency="cad",
                 destination=stripe_account_id,
@@ -279,7 +300,7 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
                 f"source_transaction {source_charge_id} rejected for payout {payout_id} "
                 f"({getattr(e, 'param', None) or type(e).__name__}); paying from balance"
             )
-            transfer = stripe_lib.Transfer.create(
+            transfer = _create_transfer(
                 amount=amount,
                 currency="cad",
                 destination=stripe_account_id,
@@ -288,7 +309,7 @@ async def handle_payout_to_vendor(vendor_id: str, amount: int, booking_id: str, 
                 idempotency_key=f"{idempotency_key}_bal",
             )
     else:
-        transfer = stripe_lib.Transfer.create(
+        transfer = _create_transfer(
             amount=amount,
             currency="cad",
             destination=stripe_account_id,

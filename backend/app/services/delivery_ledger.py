@@ -147,16 +147,46 @@ async def _insert(row: dict) -> bool:
             raise LedgerUnavailable(f"audit_events PG insert failed: {type(exc2).__name__}") from exc2
 
 
-async def _delete(key: str) -> None:
+async def _delete(key: str, created_at: Optional[str] = None) -> bool:
+    """Remove a claim row. If created_at is set, only that exact row is removed."""
     from ..shared.database import get_db
     try:
-        await (await get_db()).table("audit_events").delete().eq("id", key).execute()
+        q = (await get_db()).table("audit_events").delete().eq("id", key)
+        if created_at is not None:
+            q = q.eq("created_at", created_at)
+        res = await q.execute()
+        data = getattr(res, "data", None)
+        if data:
+            return True
+        if created_at is None:
+            return True
     except Exception as exc:  # noqa: BLE001
         try:
             from .editor_ledger import _pg_exec
-            _pg_exec("DELETE FROM public.audit_events WHERE id=%s", (key,))
+            if created_at is None:
+                _pg_exec("DELETE FROM public.audit_events WHERE id=%s", (key,))
+                return True
+            rows = _pg_exec(
+                "DELETE FROM public.audit_events WHERE id=%s AND created_at=%s RETURNING id",
+                (key, created_at),
+                fetch=True,
+            )
+            return bool(rows)
         except Exception:  # noqa: BLE001
             logger.error("delivery ledger: could not release claim %s (%s)", key, type(exc).__name__)
+            return False
+    if created_at is None:
+        return True
+    try:
+        from .editor_ledger import _pg_exec
+        rows = _pg_exec(
+            "DELETE FROM public.audit_events WHERE id=%s AND created_at=%s RETURNING id",
+            (key, created_at),
+            fetch=True,
+        )
+        return bool(rows)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def _rows_like(prefix: str) -> list[dict]:
@@ -185,9 +215,13 @@ async def claim(key: str, job_id: str, action: str, details: Optional[dict] = No
     return await _insert(_row(key, job_id, action, details or {}))
 
 
-async def release_claim(key: str) -> None:
-    """Drop a once-only key so a later sweep can retry an unfinished run."""
-    await _delete(key)
+async def release_claim(key: str, created_at: Optional[str] = None) -> bool:
+    """Drop a once-only key so a later sweep can retry an unfinished run.
+
+    When created_at is given, only that exact row is removed so a newer
+    reclaim cannot be deleted by an older runner.
+    """
+    return await _delete(key, created_at)
 
 
 def _parse_claim_time(raw) -> Optional[datetime]:
@@ -229,7 +263,9 @@ async def claim_lease(key: str, job_id: str, action: str, details: Optional[dict
     clock = now or _now()
     if created is None or (clock - created) < max_age:
         return False
-    await release_claim(key)
+    old = (row or {}).get("created_at")
+    if not await release_claim(key, created_at=None if old is None else str(old)):
+        return False
     return await claim(key, job_id, action, details)
 
 
