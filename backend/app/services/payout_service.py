@@ -679,16 +679,16 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         if existing_status in ("pending", "scheduled") and monday_payouts_enabled() and not pay_now and not existing_transfer_id:
             when = next_monday_0930()
             if existing_status != "scheduled":
-                await _write_payout_fields(db, existing.get("id"), {
+                await _write_payout_fields(db, existing_payout_id, {
                     "status": "scheduled",
                     "scheduled_for": when.isoformat(),
                 })
                 await _db_update_job_fields(db, job_id, {"payout_status": "scheduled"})
             return {
-                "payout_id": existing.get("id"),
+                "payout_id": existing_payout_id,
                 "status": "scheduled",
                 "already_exists": True,
-                "base_amount": existing.get("amount") or 0,
+                "base_amount": existing_data.get("amount") or 0,
                 "scheduled_for": when.isoformat(),
             }
         if not is_retriable:
@@ -884,19 +884,35 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
     }
 
 
-async def release_scheduled_payouts(db, now: datetime | None = None) -> dict:
-    """Move every scheduled row that still has payment proof onto Stripe.
+def monday_batch_budget_sec() -> float:
+    raw = (os.environ.get("PAYOUT_MONDAY_BUDGET_SEC") or "20").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 20.0
+
+
+async def release_scheduled_payouts(db, now: datetime | None = None,
+                                   deadline: datetime | None = None) -> dict:
+    """Move scheduled rows that still have payment proof onto Stripe.
 
     Re-checks payment at transfer time so a refund between approval and Monday
-    cancels (or blocks) the row instead of sending money.
+    cancels (or blocks) the row instead of sending money. Stops before
+    `deadline` (after at least one row) so a host timeout cannot leave the
+    weekly claim stuck while vendors remain unpaid.
     """
     released, skipped, errors = [], [], []
+    incomplete = False
     try:
         rows = await db.table("payouts").select("*").eq("status", "scheduled").execute()
         payouts = rows.data or []
     except Exception as e:
-        return {"released": [], "skipped": [], "errors": [type(e).__name__]}
-    for row in payouts:
+        return {"released": [], "skipped": [], "errors": [type(e).__name__], "incomplete": False}
+    for i, row in enumerate(payouts):
+        if i > 0 and deadline is not None and datetime.now(timezone.utc) >= deadline:
+            incomplete = True
+            skipped.extend({"payout_id": r.get("id"), "reason": "time_budget"} for r in payouts[i:])
+            break
         job_id = row.get("job_id")
         if not job_id:
             skipped.append({"payout_id": row.get("id"), "reason": "no_job"})
@@ -907,7 +923,7 @@ async def release_scheduled_payouts(db, now: datetime | None = None) -> dict:
         except Exception as e:
             logger.error(f"Monday payout release failed for job {job_id}: {e}")
             errors.append({"job_id": job_id, "error": type(e).__name__})
-    return {"released": released, "skipped": skipped, "errors": errors}
+    return {"released": released, "skipped": skipped, "errors": errors, "incomplete": incomplete}
 
 
 async def maybe_run_monday_payouts(db, now: datetime | None = None) -> dict | None:
@@ -917,11 +933,21 @@ async def maybe_run_monday_payouts(db, now: datetime | None = None) -> dict | No
     local = (now or datetime.now(timezone.utc)).astimezone(_TORONTO)
     if local.weekday() != 0 or local.hour < 9:
         return None
-    from .delivery_ledger import claim
+    from .delivery_ledger import claim, release_claim
     week = local.strftime("%G-W%V")
     key = f"payouts:monday-batch:{week}"
     if not await claim(key, "payouts", "monday_batch", {"week": week}):
         return {"skipped": "already_ran", "week": week}
-    result = await release_scheduled_payouts(db, now=local)
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=monday_batch_budget_sec())
+    try:
+        result = await release_scheduled_payouts(db, now=local, deadline=deadline)
+    except Exception:
+        await release_claim(key)
+        raise
+    if result.get("incomplete"):
+        await release_claim(key)
+        result["claim"] = "released"
+    else:
+        result["claim"] = "held"
     return {"week": week, **result}
 

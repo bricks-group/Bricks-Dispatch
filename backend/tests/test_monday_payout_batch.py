@@ -130,3 +130,63 @@ def test_next_monday_skips_the_current_monday_after_nine():
     assert nxt.date().isoformat() == "2026-11-16"
     before = datetime(2026, 11, 9, 8, 0, tzinfo=TORONTO)
     assert next_monday_0930(before).date().isoformat() == "2026-11-09"
+
+
+def test_monday_batch_releases_claim_after_crash(pay_env, monkeypatch):
+    svc, calls = pay_env
+    db = FakeSupabase()
+    second = dict(_job())
+    second["id"] = "j2"
+    second["booking_id"] = "L2"
+    db.tables["jobs"] = [_job(), second]
+    run(svc.trigger_payout_for_job(db, "j1"))
+    run(svc.trigger_payout_for_job(db, "j2"))
+
+    async def boom(db, now=None, deadline=None):
+        rows = (await db.table("payouts").select("*").eq("status", "scheduled").execute()).data or []
+        first = rows[0]
+        await svc.trigger_payout_for_job(db, first["job_id"], pay_now=True)
+        raise RuntimeError("host timeout")
+
+    original_release = svc.release_scheduled_payouts
+    monkeypatch.setattr(svc, "release_scheduled_payouts", boom)
+    monday = datetime(2026, 11, 9, 9, 5, tzinfo=TORONTO)
+    with pytest.raises(RuntimeError, match="host timeout"):
+        run(svc.maybe_run_monday_payouts(db, monday))
+    statuses = {row["job_id"]: row["status"] for row in db.tables["payouts"]}
+    assert statuses["j1"] != statuses["j2"]
+    assert "paid" in statuses.values() and "scheduled" in statuses.values()
+    assert len(calls) == 1
+
+    monkeypatch.setattr(svc, "release_scheduled_payouts", original_release)
+    again = run(svc.maybe_run_monday_payouts(db, monday.replace(hour=10)))
+    assert again.get("skipped") != "already_ran"
+    assert {row["status"] for row in db.tables["payouts"]} == {"paid"}
+    assert len(calls) == 2
+
+
+def test_monday_batch_time_budget_retries_unpaid_rows(pay_env, monkeypatch):
+    monkeypatch.setenv("PAYOUT_MONDAY_BUDGET_SEC", "0")
+    svc, calls = pay_env
+    db = FakeSupabase()
+    second = dict(_job())
+    second["id"] = "j2"
+    second["booking_id"] = "L2"
+    db.tables["jobs"] = [_job(), second]
+    run(svc.trigger_payout_for_job(db, "j1"))
+    run(svc.trigger_payout_for_job(db, "j2"))
+    monday = datetime(2026, 11, 9, 9, 5, tzinfo=TORONTO)
+    first = run(svc.maybe_run_monday_payouts(db, monday))
+    assert first["incomplete"] is True
+    assert first["claim"] == "released"
+    assert len(first["released"]) == 1
+    assert len(calls) == 1
+    second_run = run(svc.maybe_run_monday_payouts(db, monday.replace(hour=10)))
+    assert second_run.get("skipped") != "already_ran"
+    assert second_run.get("incomplete") is False
+    assert second_run.get("claim") == "held"
+    assert {row["status"] for row in db.tables["payouts"]} == {"paid"}
+    assert len(calls) == 2
+    again = run(svc.maybe_run_monday_payouts(db, monday.replace(hour=12)))
+    assert again["skipped"] == "already_ran"
+    assert len(calls) == 2

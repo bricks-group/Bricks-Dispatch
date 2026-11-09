@@ -185,6 +185,11 @@ async def claim(key: str, job_id: str, action: str, details: Optional[dict] = No
     return await _insert(_row(key, job_id, action, details or {}))
 
 
+async def release_claim(key: str) -> None:
+    """Drop a once-only key so a later sweep can retry an unfinished run."""
+    await _delete(key)
+
+
 async def audit(job_id: str, action: str, details: Optional[dict] = None, actor: str = "system") -> bool:
     """Append one step to the order's audit trail. Never raises; logs ERROR when it cannot write."""
     key = f"dlv-{job_id}-{action}-{uuid.uuid4().hex[:12]}"
