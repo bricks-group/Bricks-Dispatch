@@ -800,8 +800,19 @@ def dump_database() -> tuple[bytes, dict]:
 
 async def backup(now: datetime) -> dict:
     data, counts = dump_database()
-    url, headers = _storage_headers()
     name = f"{now.strftime('%Y-%m-%d')}.jsonl.gz"
+    from .r2_storage import r2_delete, r2_put, read_backend_is_r2
+
+    if read_backend_is_r2():
+        if not await r2_put(name, data, "application/gzip", supabase_bucket=BACKUP_BUCKET):
+            raise RuntimeError("backup upload to R2 failed")
+        # Names are dated, so prune the week just past the keep window.
+        old = [f"{(now - timedelta(days=BACKUP_KEEP_DAYS + d)).strftime('%Y-%m-%d')}.jsonl.gz" for d in range(1, 8)]
+        await r2_delete(old, supabase_bucket=BACKUP_BUCKET)
+        bad_tables = [t for t, n in counts.items() if n < 0]
+        return {"object": f"r2:{BACKUP_BUCKET}/{name}", "bytes": len(data), "tables": len(counts),
+                "rows": sum(n for n in counts.values() if n > 0), "skipped_tables": bad_tables, "pruned": old}
+    url, headers = _storage_headers()
     async with httpx.AsyncClient(timeout=120.0) as client:
         r = await client.post(f"{url}/storage/v1/object/{BACKUP_BUCKET}/{name}", content=data,
                               headers={**headers, "Content-Type": "application/gzip", "x-upsert": "true"})

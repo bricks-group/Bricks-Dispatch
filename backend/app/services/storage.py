@@ -54,6 +54,13 @@ def make_qc_variant_bytes(image_bytes: bytes, size: Tuple[int, int] = QC_VARIANT
     return buf.getvalue()
 
 
+def _on_r2(storage_path: Optional[str]) -> bool:
+    """True when this path should be served from Cloudflare R2."""
+    from .r2_storage import is_r2_path, read_backend_is_r2
+
+    return is_r2_path(storage_path) or read_backend_is_r2()
+
+
 async def upload_file(
     file_bytes: bytes,
     job_id: str,
@@ -83,6 +90,33 @@ async def upload_file(
     file_path = f"{prefix}/{safe_filename}"
     thumb_path = f"{prefix}/thumb_{safe_filename.rsplit('.', 1)[0]}.jpg"
     qc_path = f"{prefix}/qc_{safe_filename.rsplit('.', 1)[0]}.jpg"
+
+    from .upload_backend import backend_name
+
+    if backend_name() == "r2":
+        from .r2_storage import R2_PREFIX, r2_put
+
+        file_path, thumb_path, qc_path = (R2_PREFIX + p for p in (file_path, thumb_path, qc_path))
+        if not await r2_put(file_path, file_bytes, mime_type or "application/octet-stream"):
+            try:
+                thumb_b64 = base64.b64encode(_make_thumbnail_bytes(file_bytes)).decode()[:200]
+            except Exception:
+                thumb_b64 = base64.b64encode(file_bytes[:150]).decode()[:200]
+            return None, None, thumb_b64, None
+        try:
+            thumb_bytes = _make_thumbnail_bytes(file_bytes)
+            thumb_b64 = base64.b64encode(thumb_bytes).decode()[:200]
+            if not await r2_put(thumb_path, thumb_bytes, "image/jpeg"):
+                thumb_path = None
+        except Exception:
+            thumb_path = None
+            thumb_b64 = base64.b64encode(file_bytes[:150]).decode()[:200]
+        try:
+            if not await r2_put(qc_path, make_qc_variant_bytes(file_bytes), "image/jpeg"):
+                qc_path = None
+        except Exception:
+            qc_path = None
+        return file_path, thumb_path, thumb_b64, qc_path
 
     try:
         db = await get_db()
@@ -349,9 +383,9 @@ async def get_signed_download_url(storage_path: str, expiry: int = SIGNED_URL_EX
     """Return a Supabase signed URL, or HMAC Blob proxy URL on Fair-Use fallback."""
     if not storage_path:
         return None
-    from .r2_storage import is_r2_path, r2_presign
+    from .r2_storage import r2_presign
 
-    if is_r2_path(storage_path):
+    if _on_r2(storage_path):
         return r2_presign("GET", storage_path, min(max(60, int(expiry or 3600)), 7 * 24 * 3600))
     try:
         db = await get_db()
@@ -406,6 +440,12 @@ async def create_signed_upload_url(storage_path: str) -> Optional[dict]:
     """
     if not storage_path:
         return None
+    if _on_r2(storage_path):
+        from .r2_storage import r2_presign
+
+        url = r2_presign("PUT", storage_path, DEFAULT_PUT_EXPIRY)
+        # token=None makes GO's capture-api.ts use its plain PUT branch.
+        return {"path": storage_path, "token": None, "signed_url": url} if url else None
     try:
         db = await get_db()
         bucket = db.storage.from_(STORAGE_BUCKET)
@@ -467,9 +507,9 @@ async def download_bytes(storage_path: str) -> Optional[bytes]:
     """Fetch object bytes from brxs-deliverables. Blob fallback when Supabase fails."""
     if not storage_path:
         return None
-    from .r2_storage import is_r2_path, r2_get
+    from .r2_storage import r2_get
 
-    if is_r2_path(storage_path):
+    if _on_r2(storage_path):
         return await r2_get(storage_path)
     try:
         db = await get_db()
@@ -520,6 +560,13 @@ async def delete_objects(storage_paths: list[str]) -> bool:
     paths = sorted(paths_set)
     if not paths:
         return True
+    from .r2_storage import r2_delete
+
+    r2_paths = [p for p in paths if _on_r2(p)]
+    paths = [p for p in paths if not _on_r2(p)]
+    r2_ok = await r2_delete(r2_paths) if r2_paths else True
+    if not paths:
+        return r2_ok
     ok = False
     try:
         db = await get_db()
@@ -543,7 +590,7 @@ async def delete_objects(storage_paths: list[str]) -> bool:
                     _logger.warning("blob delete failed: %s %s", resp.status_code, resp.text[:300])
         except Exception as e:
             _logger.warning("blob delete error: %s", e)
-    return ok
+    return ok and r2_ok
 
 
 async def upload_bytes(
@@ -555,9 +602,9 @@ async def upload_bytes(
     """Upload raw bytes to brxs-deliverables (Blob fallback on failure). Returns True on success."""
     if not storage_path or not data:
         return False
-    from .r2_storage import is_r2_path, r2_put
+    from .r2_storage import r2_put
 
-    if is_r2_path(storage_path):
+    if _on_r2(storage_path):
         return await r2_put(storage_path, data, content_type or "application/octet-stream")
     try:
         db = await get_db()
@@ -584,6 +631,10 @@ async def upload_to_bucket(bucket_id: str, storage_path: str, data: bytes, conte
     """
     if not bucket_id or not storage_path or not data:
         return False
+    from .r2_storage import r2_put
+
+    if _on_r2(storage_path):
+        return await r2_put(storage_path, data, content_type or "image/jpeg", supabase_bucket=bucket_id)
     try:
         db = await get_db()
         await db.storage.from_(bucket_id).upload(
@@ -602,6 +653,10 @@ async def remove_from_bucket(bucket_id: str, storage_paths: list[str]) -> bool:
     paths = [p for p in (storage_paths or []) if p]
     if not bucket_id or not paths:
         return True
+    from .r2_storage import r2_delete
+
+    if _on_r2(paths[0]):
+        return await r2_delete(paths, supabase_bucket=bucket_id)
     try:
         db = await get_db()
         await db.storage.from_(bucket_id).remove(paths)
@@ -615,6 +670,10 @@ async def signed_url_in_bucket(bucket_id: str, storage_path: str, expiry: int = 
     """Short-lived signed GET URL for an object in a named private bucket."""
     if not bucket_id or not storage_path:
         return None
+    from .r2_storage import r2_presign
+
+    if _on_r2(storage_path):
+        return r2_presign("GET", storage_path, expiry, supabase_bucket=bucket_id)
     try:
         db = await get_db()
         result = await db.storage.from_(bucket_id).create_signed_url(storage_path, expiry)

@@ -1,7 +1,7 @@
 """Cloudflare R2 (S3 API) presigned URLs — no SDK, SigV4 query signing.
 
-Not active until Kam creates the R2 account/bucket/keys. Switching is config:
-  STILLS_UPLOAD_BACKEND=r2
+Activated by config (preview first):
+  STILLS_UPLOAD_BACKEND=r2 (new uploads) and STORAGE_READ_BACKEND=r2 (all paths)
   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
   (optional R2_ENDPOINT, UPLOAD_MAX_FILE_MB)
 plus a CORS rule on the bucket allowing PUT/GET from https://go.brxs.ca.
@@ -45,6 +45,37 @@ def r2_config() -> Optional[dict]:
 
 def r2_configured() -> bool:
     return r2_config() is not None
+
+
+# Supabase bucket -> (R2 bucket env, default R2 bucket, key prefix). Keys are
+# copied unchanged, so the same path works on both sides during the move.
+_BUCKET_MAP = {
+    "brxs-deliverables": ("R2_BUCKET_DELIVERABLES", "bricks-deliverables", ""),
+    "noshow-evidence": ("R2_BUCKET_EVIDENCE", "bricks-evidence", ""),
+    "job-checklist-proof": ("R2_BUCKET_EVIDENCE", "bricks-evidence", "job-checklist-proof/"),
+    "db-backups": ("R2_BUCKET_BACKUPS", "bricks-backups", ""),
+    "Bricks Images": ("R2_BUCKET_IMAGES", "bricks-images", ""),
+}
+
+
+def read_backend_is_r2() -> bool:
+    """STORAGE_READ_BACKEND=r2: every storage path (prefixed or not) lives on R2."""
+    raw = (os.getenv("STORAGE_READ_BACKEND") or "supabase").strip().lower()
+    return raw == "r2" and r2_configured()
+
+
+def r2_target(supabase_bucket: Optional[str], path: str) -> tuple[str, str]:
+    """(R2 bucket, object key) for a Supabase bucket id + storage path."""
+    cfg = r2_config() or {}
+    key = r2_key(path)
+    entry = _BUCKET_MAP.get(supabase_bucket or "brxs-deliverables")
+    if not entry:
+        return cfg.get("bucket", ""), key
+    env_name, default, prefix = entry
+    bucket = (os.getenv(env_name) or "").strip()
+    if not bucket and env_name == "R2_BUCKET_DELIVERABLES":
+        bucket = cfg.get("bucket", "")
+    return bucket or default, f"{prefix}{key}"
 
 
 def _sign(key: bytes, msg: str) -> bytes:
@@ -102,18 +133,24 @@ def presign_url(
     return f"{scheme}://{host}{canonical_uri}?{canonical_qs}&X-Amz-Signature={signature}"
 
 
-def r2_presign(method: str, path: str, expires: int = 3600) -> Optional[str]:
+def r2_presign(
+    method: str, path: str, expires: int = 3600, supabase_bucket: Optional[str] = None
+) -> Optional[str]:
     cfg = r2_config()
     if not cfg:
         return None
+    if supabase_bucket is None:
+        bucket, key = cfg["bucket"], r2_key(path)
+    else:
+        bucket, key = r2_target(supabase_bucket, path)
     return presign_url(
-        method, r2_key(path), expires=expires, endpoint=cfg["endpoint"], bucket=cfg["bucket"],
+        method, key, expires=expires, endpoint=cfg["endpoint"], bucket=bucket,
         access_key=cfg["key"], secret_key=cfg["secret"], region=cfg["region"],
     )
 
 
-async def r2_get(path: str) -> Optional[bytes]:
-    url = r2_presign("GET", path, 300)
+async def r2_get(path: str, supabase_bucket: Optional[str] = None) -> Optional[bytes]:
+    url = r2_presign("GET", path, 300, supabase_bucket)
     if not url:
         return None
     import httpx
@@ -123,8 +160,13 @@ async def r2_get(path: str) -> Optional[bytes]:
     return resp.content if resp.status_code < 400 else None
 
 
-async def r2_put(path: str, data: bytes, content_type: str = "application/octet-stream") -> bool:
-    url = r2_presign("PUT", path, 600)
+async def r2_put(
+    path: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+    supabase_bucket: Optional[str] = None,
+) -> bool:
+    url = r2_presign("PUT", path, 600, supabase_bucket)
     if not url:
         return False
     import httpx
@@ -132,3 +174,19 @@ async def r2_put(path: str, data: bytes, content_type: str = "application/octet-
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.put(url, content=data, headers={"Content-Type": content_type})
     return resp.status_code < 400
+
+
+async def r2_delete(paths: list[str], supabase_bucket: Optional[str] = None) -> bool:
+    """Delete objects one presigned DELETE at a time. Missing keys count as deleted."""
+    import httpx
+
+    ok = True
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for path in paths or []:
+            url = r2_presign("DELETE", path, 300, supabase_bucket)
+            if not url:
+                return False
+            resp = await client.delete(url)
+            if resp.status_code >= 400 and resp.status_code != 404:
+                ok = False
+    return ok
