@@ -15,8 +15,8 @@ export function EditorReviewPage() {
   const [busy, setBusy] = useState('');
   const [results, setResults] = useState<Record<string, Approval>>({});
   const [enabled, setEnabled] = useState(true);
-  const load = async () => {
-    setLoading(true); setError('');
+  const load = async (keep = '') => {
+    setLoading(true); setError(keep);
     try {
       const data = await api.get<{ items: Item[]; gate_enabled: boolean }>('/api/admin/editor-review');
       setItems(data.items); setEnabled(data.gate_enabled);
@@ -37,8 +37,10 @@ export function EditorReviewPage() {
       const result = await api.post<Approval>(`/api/admin/jobs/${encodeURIComponent(item.id)}/editor-approve`, { manifest_hash: item.manifest_hash || '' });
       setResults(r => ({ ...r, [item.id]: result }));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Approval did not go through. Refresh and try again.');
-      if (e instanceof Error && /changed since you opened/i.test(e.message)) void load();
+      const msg = e instanceof Error ? e.message : 'Approval did not go through. Refresh and try again.';
+      setError(msg);
+      // Files changed: reload the new set and keep the message on screen.
+      if (/changed since you opened/i.test(msg)) void load(msg);
     }
     finally { setBusy(''); }
   };
@@ -46,10 +48,10 @@ export function EditorReviewPage() {
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center' }}><div>
       <p className="overline">Dispatch admin</p><h1>Editor review</h1>
       <p>Watch the films and check the stills. Delivery and payout stay held until the package is complete and approved.</p>
-    </div><button onClick={load} disabled={loading || !!busy}>Refresh</button></div>
+    </div><button onClick={() => void load()} disabled={loading || !!busy}>Refresh</button></div>
     {!enabled && <p role="alert">Warning: the fulfillment gate emergency override is OFF. Holds are not enforced.</p>}
     {error && <p role="alert" style={{ color: '#cf5555' }}>{error}</p>}
-    {loading ? <p role="status">Loading review queue…</p> : !error && <p>{items.length} open jobs · {items.filter(j => j.waiting_since).length} recorded editor holds · Dates shown in Toronto time (ET).</p>}
+    {loading ? <p role="status">Loading review queue…</p> : (!error || items.length > 0) && <p>{items.length} open jobs · {items.filter(j => j.waiting_since).length} recorded editor holds · Dates shown in Toronto time (ET).</p>}
     {!loading && !error && !items.length && <p>No jobs waiting for your sign-off.</p>}
     {items.map(item => <article key={item.id} id={item.id} style={{ border: '1px solid var(--c-line, #555)', borderRadius: 0, padding: 22, margin: '20px 0', scrollMarginTop: 24 }}>
       <h2>{item.address || 'Address not recorded'}</h2><p>{item.client} · {item.status}</p>
