@@ -3330,8 +3330,13 @@ def pg_update_contractor(contractor_id: str, fields: dict) -> bool:
         return False
     try:
         with conn.cursor() as cur:
+            # COALESCE so connect_onboarded_at is only set the first time.
+            set_sql = ", ".join(
+                f"{c} = COALESCE({c}, %s)" if c == "connect_onboarded_at" else part
+                for (c, _v), part in zip(cols, set_parts)
+            )
             cur.execute(
-                f"UPDATE public.contractors SET {', '.join(set_parts)} WHERE id = %s::uuid",
+                f"UPDATE public.contractors SET {set_sql} WHERE id = %s::uuid",
                 vals,
             )
             ok = cur.rowcount > 0

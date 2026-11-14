@@ -497,7 +497,7 @@ async def resolve_vendor_actor_id(
                         if not member:
                             api_error(403, "Vendor member not found", "vendor_member_not_found")
                         return member["id"]
-                api_error(401, f"Invalid session: {str(e)}", "invalid_session_token")
+                api_error(401, "Invalid session", "invalid_session_token")
 
     if x_user_id and verify_internal_api_key(x_internal_api_key):
         raw = resolve_actor_id(x_user_id)

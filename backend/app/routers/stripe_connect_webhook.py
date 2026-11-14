@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import stripe as stripe_lib
@@ -62,7 +63,7 @@ async def stripe_connect_webhook(
 
     db = await get_db()
     try:
-        res = await db.table("contractors").select("id, member_id").eq(
+        res = await db.table("contractors").select("id, member_id, connect_onboarded_at").eq(
             "stripe_account_id", account_id
         ).maybe_single().execute()
         data = getattr(res, "data", None) if res is not None else None
@@ -76,13 +77,19 @@ async def stripe_connect_webhook(
         logger.info("account.updated for unknown stripe account %s", account_id)
         return {"received": True, "ok": False, "detail": "contractor not found"}
 
+    fields = {"connect_status": status}
+    if status == "connected" and not row.get("connect_onboarded_at"):
+        fields["connect_onboarded_at"] = datetime.now(timezone.utc).isoformat()
     try:
-        await db.table("contractors").update({"connect_status": status}).eq(
-            "id", row["id"]
-        ).execute()
+        status_only = {"connect_status": status}
+        await db.table("contractors").update(status_only).eq("id", row["id"]).execute()
+        if "connect_onboarded_at" in fields:
+            await db.table("contractors").update(
+                {"connect_onboarded_at": fields["connect_onboarded_at"]}
+            ).eq("id", row["id"]).is_("connect_onboarded_at", "null").execute()
     except Exception as e:
         if _is_rest_quota_error(e):
-            if not pg_update_contractor(row["id"], {"connect_status": status}):
+            if not pg_update_contractor(row["id"], fields):
                 logger.warning(
                     "connect webhook Fair-Use PG update failed contractor=%s",
                     row["id"],

@@ -35,10 +35,21 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers.set('Content-Type', 'application/json');
   }
 
-  const res = await fetch(buildUrl(path, options.query), {
-    ...options,
-    headers,
-  });
+  let res: Response;
+  try {
+    res = await fetch(buildUrl(path, options.query), {
+      ...options,
+      headers,
+    });
+  } catch (err) {
+    if (err instanceof TypeError) {
+      throw new ApiError("Couldn't reach Bricks. Check your connection and try again.", {
+        status: 0,
+        code: 'network',
+      });
+    }
+    throw err;
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({} as { detail?: unknown; error?: unknown; retry_after?: unknown }));

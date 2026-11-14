@@ -8,8 +8,10 @@ Honesty: Connected means Stripe-verified payout-ready — never mere stripe_acco
 presence after Account.create (that stays pending until details_submitted + payouts_enabled).
 """
 
+import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 import stripe as stripe_lib
 from supabase import create_client, Client
 from app.shared.database import maybe_single_row
@@ -116,6 +118,30 @@ def _capability(account, name: str):
     return getattr(caps, name, None)
 
 
+
+def _connect_status_fields(payload: dict) -> dict:
+    """Fields to persist after a Stripe status sync. connect_onboarded_at is set
+    when status first becomes connected; COALESCE in PG / a null filter in REST
+    keeps an existing timestamp."""
+    fields = {"connect_status": payload["connect_status"]}
+    if payload.get("connect_status") == "connected":
+        fields["connect_onboarded_at"] = datetime.now(timezone.utc).isoformat()
+    return fields
+
+
+def _persist_connect_status(contractor_id: str, fields: dict) -> None:
+    supabase.table("contractors").update(
+        {k: v for k, v in fields.items() if k != "connect_onboarded_at"}
+    ).eq("id", contractor_id).execute()
+    onboarded = fields.get("connect_onboarded_at")
+    if onboarded:
+        # Only fill the column when it is still empty, so later account.updated
+        # events keep the original connected time.
+        supabase.table("contractors").update(
+            {"connect_onboarded_at": onboarded}
+        ).eq("id", contractor_id).is_("connect_onboarded_at", "null").execute()
+
+
 def sync_contractor_connect_status(contractor_id: str, stripe_account_id: str) -> dict:
     """Retrieve Stripe account, persist connect_status, return honest status payload."""
     if not stripe_account_id:
@@ -150,14 +176,13 @@ def sync_contractor_connect_status(contractor_id: str, stripe_account_id: str) -
         }
 
     payload = classify_connect_account(account)
+    fields = _connect_status_fields(payload)
     try:
-        supabase.table("contractors").update({
-            "connect_status": payload["connect_status"],
-        }).eq("id", contractor_id).execute()
+        _persist_connect_status(contractor_id, fields)
     except Exception as e:
         from app.shared.pg_fallback import _is_rest_quota_error, pg_update_contractor
         if _is_rest_quota_error(e):
-            if not pg_update_contractor(contractor_id, {"connect_status": payload["connect_status"]}):
+            if not pg_update_contractor(contractor_id, fields):
                 logger.warning(
                     "Could not persist connect_status (Fair-Use PG) for contractor %s",
                     contractor_id,
@@ -400,7 +425,9 @@ async def create_connect_account_and_link(
 
     stripe_account_id = contractor.get("stripe_account_id")
     if not stripe_account_id:
-        account = stripe_lib.Account.create(
+        _ensure_transfer_http_timeout()
+        account = await asyncio.to_thread(
+            stripe_lib.Account.create,
             type="express",
             country="CA",
             capabilities={"transfers": {"requested": True}},
@@ -424,7 +451,9 @@ async def create_connect_account_and_link(
             else:
                 raise
 
-    account_link = stripe_lib.AccountLink.create(
+    _ensure_transfer_http_timeout()
+    account_link = await asyncio.to_thread(
+        stripe_lib.AccountLink.create,
         account=stripe_account_id,
         refresh_url=refresh_url,
         return_url=return_url,

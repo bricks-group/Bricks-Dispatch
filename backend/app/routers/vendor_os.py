@@ -5,6 +5,7 @@ import httpx
 import os
 import re
 import uuid
+from urllib.parse import urlparse
 from typing import Optional
 
 from fastapi import APIRouter, Body, File, Form, Header, HTTPException, Request, UploadFile
@@ -48,6 +49,27 @@ from ..shared.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _safe_write_audit_event(*args, **kwargs) -> None:
+    """Audit writes must never fail a successful mutation (e.g. Stripe account create)."""
+    try:
+        await write_audit_event(*args, **kwargs)
+    except Exception as exc:
+        logger.warning("audit write failed type=%s", type(exc).__name__)
+
+
+def is_allowed_connect_return_url(url: str) -> bool:
+    """Stripe return/refresh URLs may only point at https brxs.ca hosts."""
+    try:
+        parsed = urlparse((url or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").lower()
+    return host == "brxs.ca" or host.endswith(".brxs.ca")
+
 
 router = APIRouter(prefix="/api/vendor-os", tags=["vendor-os"])
 
@@ -830,7 +852,7 @@ async def create_vendor_member(
     member_dict = member.dict()
     await (await get_db()).table("vendor_members").insert(member_dict).execute()
     member_dict["assigned_jobs"] = 0
-    await write_audit_event(actor_id, "vendor_member", member_dict["id"], "create", vendor_id=member_dict["vendor_id"], details={"email": member_dict["email"]})
+    await _safe_write_audit_event(actor_id, "vendor_member", member_dict["id"], "create", vendor_id=member_dict["vendor_id"], details={"email": member_dict["email"]})
     return member_dict
 
 
@@ -858,7 +880,7 @@ async def update_vendor_member(
     member = res.data[0]
     res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member_id).neq("status", "completed").execute()
     member["assigned_jobs"] = res_count.count or 0
-    await write_audit_event(actor_id, "vendor_member", member_id, "update", vendor_id=vendor_id, details=update_data)
+    await _safe_write_audit_event(actor_id, "vendor_member", member_id, "update", vendor_id=vendor_id, details=update_data)
     return member
 
 
@@ -881,7 +903,7 @@ async def delete_vendor_member(
         api_error(404, "Member not found", "member_not_found")
     
     await (await get_db()).table("jobs").update({"assignee_id": "default_user", "updated_at": datetime.now(timezone.utc).isoformat()}).eq("assignee_id", member_id).eq("vendor_id", vendor_id).execute()
-    await write_audit_event(actor_id, "vendor_member", member_id, "delete", vendor_id=vendor_id)
+    await _safe_write_audit_event(actor_id, "vendor_member", member_id, "delete", vendor_id=vendor_id)
     return {"deleted": True}
 
 
@@ -1121,7 +1143,7 @@ async def attach_job_listing(
     job["transaction_id"] = txn_id
     job["updated_at"] = now
     listings = {listing["id"]: listing} if listing else {}
-    await write_audit_event(
+    await _safe_write_audit_event(
         actor_id, "job", job_id, "attach_listing",
         vendor_id=vendor_id,
         details={"transaction_id": txn_id},
@@ -1295,7 +1317,7 @@ async def assign_job_to_member(
             except Exception as _ne:
                 logger.error("Assignment notify failed for job %s: %s", job_id, _ne)
 
-    await write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if member_id == "auto" else "manual"})
+    await _safe_write_audit_event(actor_id, "job", job_id, "assign", vendor_id=vendor_id, details={"from": existing_job.get("assignee_id"), "to": new_assignee_id, "method": "auto" if member_id == "auto" else "manual"})
     try:
         res_final = await db.table("jobs").select("*").eq("id", job_id).maybe_single().execute()
         final = _maybe_single_row(res_final)
@@ -1433,7 +1455,7 @@ async def update_vendor_availability(
             raise
         upserted = pg_upsert_vendor_availability(row)
         try:
-            await write_audit_event(
+            await _safe_write_audit_event(
                 actor_id,
                 "availability",
                 actor_id,
@@ -1446,7 +1468,7 @@ async def update_vendor_availability(
         return upserted or pg_select_vendor_availability(actor_id, vendor_id)
 
     try:
-        await write_audit_event(
+        await _safe_write_audit_event(
             actor_id,
             "availability",
             actor_id,
@@ -2098,7 +2120,7 @@ async def update_vendor_settings(
         **update_data
     }).execute()
     
-    await write_audit_event(actor_id, "settings", vendor_id, "update", vendor_id=vendor_id, details=update_data)
+    await _safe_write_audit_event(actor_id, "settings", vendor_id, "update", vendor_id=vendor_id, details=update_data)
     res = await (await get_db()).table("vendor_settings").select("*").eq("vendor_id", vendor_id).maybe_single().execute()
     # Upsert already wrote; a null re-read must not 500 — return merged defaults.
     row = _maybe_single_row(res)
@@ -2152,6 +2174,9 @@ async def start_stripe_connect_onboarding(
     if not os.environ.get("STRIPE_SECRET_KEY"):
         api_error(503, "Payouts are not configured yet", "stripe_not_configured")
 
+    if not is_allowed_connect_return_url(payload.return_url):
+        api_error(400, "Return URL must be an https brxs.ca address", "invalid_return_url")
+
     from ..services.stripe_connect_service import connect_member_key, create_connect_account_and_link
     try:
         url = await create_connect_account_and_link(
@@ -2170,7 +2195,7 @@ async def start_stripe_connect_onboarding(
         logger.exception("stripe-connect/onboard failed for member %s: %s", actor_member.get("id"), e)
         api_error(502, "Could not open Stripe payout setup. Try again in a minute.", "stripe_connect_failed")
 
-    await write_audit_event(actor_id, "stripe_connect", vendor_id, "onboard_started", vendor_id=vendor_id)
+    await _safe_write_audit_event(actor_id, "stripe_connect", vendor_id, "onboard_started", vendor_id=vendor_id)
     return {"url": url}
 
 
@@ -2996,7 +3021,7 @@ async def report_agent_no_show(
         except Exception as exc:
             logger.warning(f"No-show Booking penalty callback failed for {booking_id}: {exc}")
 
-    await write_audit_event(
+    await _safe_write_audit_event(
         actor_id, "job", job_id, "agent_no_show", vendor_id=vendor_id,
         details={
             "assignee_id": assignee_id,
@@ -3075,7 +3100,7 @@ async def report_contractor_no_show(
         except Exception as e:
             logger.error(f"cancel_rate update failed for member {assignee_id}: {e}")
 
-    await write_audit_event(
+    await _safe_write_audit_event(
         actor_id, "job", job_id, "contractor_no_show", vendor_id=vendor_id,
         details={"assignee_id": assignee_id}
     )

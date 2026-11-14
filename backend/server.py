@@ -14,7 +14,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
-from app.shared.cors_config import install_browser_middleware
+from app.shared.cors_config import cors_headers_for_origin, install_browser_middleware
 from pythonjsonlogger import jsonlogger
 
 _SEED_ENABLED = os.environ.get("SEED_ENABLED", "false").lower() == "true"
@@ -60,6 +60,66 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
         return await call_next(request)
+
+
+class CatchAllErrorMiddleware:
+    """Turn unhandled exceptions into a 500 JSON body *inside* CORS.
+
+    FastAPI's @app.exception_handler(Exception) is attached to Starlette's
+    ServerErrorMiddleware, which sits outside CORSMiddleware. A 500 from
+    that handler has no Access-Control-Allow-Origin, so the GO app shows
+    'Failed to fetch'. This middleware is added before
+    install_browser_middleware so CORS wraps the 500.
+
+    Pure ASGI (not BaseHTTPMiddleware) so the 500 is a normal response
+    CORS can decorate, without BaseHTTPMiddleware receive quirks.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        response_started = False
+
+        async def send_wrapper(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception as exc:
+            if response_started:
+                raise
+            request = Request(scope, receive)
+            response = _internal_error_response(request, exc)
+            await response(scope, receive, send)
+
+
+def _internal_error_response(request: Request, exc: Exception) -> Response:
+    sentry_sdk.capture_exception(exc)
+    logger = logging.getLogger(__name__)
+    logger.error(
+        "unhandled_exception",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        },
+    )
+    headers = cors_headers_for_origin(request.headers.get("origin"))
+    return Response(
+        status_code=500,
+        content='{"error":"internal_server_error","detail":"An unexpected error occurred"}',
+        media_type="application/json",
+        headers=headers,
+    )
+
 
 from app.routers.auth import router as auth_router
 from app.routers.dispatch import router as dispatch_router
@@ -201,6 +261,7 @@ app.include_router(capture_visit_video_router)
 app.include_router(ops_autopilot_router)  # self-running ops sweep/daily/one-tap (2026-11-02)
 app.include_router(seed_router)
 app.add_middleware(InternalAuthMiddleware)
+app.add_middleware(CatchAllErrorMiddleware)
 install_browser_middleware(app)
 
 # ── Structured JSON Logging ────────────────────────────────────────────────────────
@@ -249,21 +310,9 @@ async def log_requests(request: Request, call_next):
 # ── Global exception handler ─────────────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    sentry_sdk.capture_exception(exc)
-    logger.error(
-        "unhandled_exception",
-        extra={
-            "method": request.method,
-            "path": request.url.path,
-            "error": str(exc),
-            "error_type": type(exc).__name__,
-        },
-    )
-    return Response(
-        status_code=500,
-        content='{"error":"internal_server_error","detail":"An unexpected error occurred"}',
-        media_type="application/json",
-    )
+    # Backup for exceptions that still reach ServerErrorMiddleware (outside CORS).
+    # Echo the allowlisted Origin; never a wildcard with credentials.
+    return _internal_error_response(request, exc)
 
 
 # ── Health endpoint ───────────────────────────────────────────────────────────────────

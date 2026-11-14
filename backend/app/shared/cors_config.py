@@ -20,6 +20,17 @@ DEFAULT_ALLOWED_ORIGINS = (
 _CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
 
+def cors_headers_for_origin(origin: str | None) -> dict[str, str]:
+    """CORS headers for an allowed Origin. Never a wildcard when credentials are used."""
+    if origin and origin in allowed_origins():
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+    return {}
+
+
 def allowed_origins() -> list[str]:
     raw = os.environ.get("ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
     return [o.strip() for o in raw.split(",") if o.strip()]
