@@ -1,5 +1,7 @@
 import os
 from typing import Optional
+
+from fastapi import HTTPException
 from .database import get_db
 from .errors import api_error
 from .schemas import VendorMember
@@ -470,6 +472,8 @@ async def resolve_vendor_actor_id(
                     if not member:
                         api_error(403, "Vendor member not found", "vendor_member_not_found")
                     return member["id"]
+            except HTTPException:
+                raise
             except Exception as e:
                 # Fair-Use locks Auth API (402) OR Auth rejects locally-minted
                 # HS256 fair-use JWTs (signature invalid) — verify with the same

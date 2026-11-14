@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.services import email_login_prep as elp
 from app.shared import auth as auth_mod
@@ -262,14 +263,18 @@ def test_wildcard_email_does_not_match(monkeypatch):
 
 
 def test_resolve_attack_session_rejected(monkeypatch):
-    """End to end: attacker password session on an unconfirmed (or forged) account."""
+    """End to end: attacker password session on an unconfirmed (or forged) account.
+
+    lookup raises 403 vendor_member_not_found; that HTTPException must not be
+    swallowed into a 401 Invalid session.
+    """
     user = SimpleNamespace(id=ATTACKER_UID, email=VENDOR_EMAIL, email_confirmed_at=None)
     db = _Db([MEMBER], user=user)
     _patch(monkeypatch, db)
-    with pytest.raises(Exception) as e:
+    with pytest.raises(HTTPException) as e:
         asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + _tok(["password"])))
-    assert getattr(e.value, "status_code", None) in (401, 403)
-    assert "vendor_member_not_found" in str(getattr(e.value, "detail", ""))
+    assert e.value.status_code == 403
+    assert e.value.detail["code"] == "vendor_member_not_found"
 
 
 def test_resolve_normal_otp_login(monkeypatch):
