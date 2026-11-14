@@ -161,3 +161,12 @@ def test_eleventh_auth_request_is_still_429():
         assert other != 429
     finally:
         rl._hits.clear()
+
+
+def test_default_origins_exclude_legacy_vercel_dispatch_web(monkeypatch):
+    monkeypatch.delenv("ALLOWED_ORIGINS", raising=False)
+    from app.shared.cors_config import allowed_origins
+    origins = allowed_origins()
+    assert "https://bricks-dispatch-web.vercel.app" not in origins
+    assert "https://go.brxs.ca" in origins
+    assert "https://app.brxs.ca" in origins
