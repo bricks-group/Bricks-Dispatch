@@ -26,89 +26,6 @@ def _is_rest_quota_error(err: object) -> bool:
     )
 
 
-def _is_jwt_signature_or_parse_error(err: object) -> bool:
-    """Auth.get_user rejects fair-use HS256 mints as signature-invalid.
-
-    Real Supabase sessions still prefer get_user (success path). Only when
-    Auth reports parse/signature failure do we fall through to local verify
-    with SUPABASE_JWT_SECRET (same secret mint_supabase_access_token uses).
-    """
-    e = str(err or "").lower()
-    return any(
-        tok in e
-        for tok in (
-            "unable to parse or verify signature",
-            "token signature is invalid",
-            "signature is invalid",
-            "invalid jwt",
-            "could not be decoded",
-            "error decoding",
-            "jwt malformed",
-            "not enough segments",
-        )
-    )
-
-
-def decode_supabase_user_from_jwt(token: str) -> Optional[tuple]:
-    """Local HS256 verify when Auth API is Fair-Use blocked. Returns (user_id, email)."""
-    secret = (os.environ.get("SUPABASE_JWT_SECRET") or "").strip()
-    if not secret or not token:
-        return None
-    try:
-        import jwt
-        payload = jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-            options={"require": ["sub", "exp"]},
-        )
-        uid = str(payload.get("sub") or "").strip()
-        if not uid:
-            return None
-        email = payload.get("email")
-        return uid, (str(email).strip() if email else None)
-    except Exception:
-        return None
-
-
-
-def mint_supabase_access_token(
-    user_id: str,
-    email: str,
-    *,
-    expires_in: int = 7 * 24 * 3600,
-) -> str:
-    """Mint an HS256 JWT matching decode_supabase_user_from_jwt expectations."""
-    import time
-    import jwt
-
-    secret = (os.environ.get("SUPABASE_JWT_SECRET") or "").strip()
-    if not secret:
-        raise RuntimeError("SUPABASE_JWT_SECRET missing")
-    uid = str(user_id or "").strip()
-    if not uid:
-        raise RuntimeError("user_id required")
-    now = int(time.time())
-    payload = {
-        "aud": "authenticated",
-        "role": "authenticated",
-        "sub": uid,
-        "email": (email or "").strip().lower() or None,
-        "iat": now,
-        "exp": now + int(expires_in),
-    }
-    # Drop null email to keep payload clean
-    if not payload["email"]:
-        payload.pop("email", None)
-    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
-    if supabase_url:
-        payload["iss"] = f"{supabase_url}/auth/v1"
-    token = jwt.encode(payload, secret, algorithm="HS256")
-    if isinstance(token, bytes):
-        token = token.decode("utf-8")
-    return token
-
 def resolve_actor_id(x_user_id: Optional[str]) -> str:
     actor_id = (x_user_id or "").strip()
     if not actor_id:
@@ -136,7 +53,7 @@ _STRONG_AMR = {"otp", "magiclink", "oauth", "sso/saml", "recovery", "invite", "e
 
 def session_amr_methods(token: str) -> set:
     """amr methods from an access token that was ALREADY verified (get_user or
-    local HS256). Unverified decode only to read the claim."""
+    the local ES256 Fair-Use check). Unverified decode only to read the claim."""
     try:
         import jwt
         payload = jwt.decode(token, options={"verify_signature": False, "verify_aud": False, "verify_exp": False})
@@ -206,31 +123,6 @@ def first_link_allowed(amr: Optional[set], *, oauth_email_verified: bool = False
     if methods & _FIRST_LINK_EMAIL_AMR:
         return True
     return "oauth" in methods and bool(oauth_email_verified)
-
-
-def _pg_email_confirmed(uid: str) -> bool:
-    """auth.users.email_confirmed_at via Postgres (fair-use path, Auth API down)."""
-    if not _is_uuid(uid):
-        return False
-    try:
-        from .pg_fallback import _pg_connect
-        conn = _pg_connect()
-    except Exception:
-        return False
-    if not conn:
-        return False
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT email_confirmed_at IS NOT NULL FROM auth.users WHERE id = %s::uuid LIMIT 1", (uid,))
-            row = cur.fetchone()
-            return bool(row and row[0])
-    except Exception:
-        return False
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
 async def lookup_vendor_member(
@@ -453,55 +345,66 @@ async def resolve_vendor_actor_id(
     if authorization:
         token = authorization.replace("Bearer ", "").strip()
         if token:
-            try:
-                # Verify with Supabase Auth API
-                user_resp = await (await get_db()).auth.get_user(token)
-                if user_resp and user_resp.user:
-                    user = user_resp.user
-                    amr = session_amr_methods(token)
-                    member = await lookup_vendor_member(
-                        user.id,
-                        getattr(user, "email", None),
-                        email_confirmed=bool(getattr(user, "email_confirmed_at", None)),
-                        amr=amr,
-                        first_link_ok=first_link_allowed(
-                            amr,
-                            oauth_email_verified=oauth_email_verified_by_provider(user, getattr(user, "email", None)),
-                        ),
-                    )
-                    if not member:
-                        api_error(403, "Vendor member not found", "vendor_member_not_found")
-                    return member["id"]
-            except HTTPException:
-                raise
-            except Exception as e:
-                # Fair-Use locks Auth API (402) OR Auth rejects locally-minted
-                # HS256 fair-use JWTs (signature invalid) — verify with the same
-                # SUPABASE_JWT_SECRET used by mint_supabase_access_token.
-                # Do not fall through on unrelated Auth errors; garbage tokens
-                # still 401 when local decode fails.
-                if _is_rest_quota_error(e) or _is_jwt_signature_or_parse_error(e):
-                    decoded = decode_supabase_user_from_jwt(token)
-                    if decoded:
-                        uid, email = decoded
-                        # Locally verified token: trust the email only when Supabase
-                        # says so -- the token's top-level email_verified, or
-                        # auth.users.email_confirmed_at read server-side. Never
-                        # user_metadata (user-editable). Fair-use mints carry no amr,
-                        # so they never create a first link.
-                        amr = session_amr_methods(token)
-                        top_verified = _jwt_email_verified(token)
-                        member = await lookup_vendor_member(
-                            uid,
-                            email,
-                            email_confirmed=bool(email) and (top_verified or _pg_email_confirmed(uid)),
-                            amr=amr,
-                            first_link_ok=first_link_allowed(amr, oauth_email_verified=top_verified),
-                        )
-                        if not member:
-                            api_error(403, "Vendor member not found", "vendor_member_not_found")
-                        return member["id"]
-                api_error(401, "Invalid session", "invalid_session_token")
+            from starlette.concurrency import run_in_threadpool
+
+            from . import fair_use_auth as _fua
+
+            # Supabase Auth first. Only an unavailable Auth (Fair-Use HTTP 402,
+            # 5xx, network) falls through to the local ES256 check; a definitive
+            # 4xx (bad, expired, revoked or HS256-minted token) stays 401. For
+            # 45 s after an Auth 402 get_user is skipped (Sentinel 2026-11-14,
+            # ported from Bricks-OS fix/os-auth-fairuse-jwt-1114).
+            use_local = _fua.auth_cooldown_active()
+            user_resp = None
+            if not use_local:
+                try:
+                    user_resp = await (await get_db()).auth.get_user(token)
+                    _fua.record_auth_outcome(None)
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    _fua.record_auth_outcome(e)
+                    if not _fua.auth_unavailable(e):
+                        api_error(401, "Invalid session", "invalid_session_token")
+                    use_local = True
+            if not use_local and user_resp and user_resp.user:
+                user = user_resp.user
+                amr = session_amr_methods(token)
+                member = await lookup_vendor_member(
+                    user.id,
+                    getattr(user, "email", None),
+                    email_confirmed=bool(getattr(user, "email_confirmed_at", None)),
+                    amr=amr,
+                    first_link_ok=first_link_allowed(
+                        amr,
+                        oauth_email_verified=oauth_email_verified_by_provider(user, getattr(user, "email", None)),
+                    ),
+                )
+                if not member:
+                    api_error(403, "Vendor member not found", "vendor_member_not_found")
+                return member["id"]
+            if use_local:
+                # ES256 pinned key + session_id + one read-only Postgres query
+                # (live auth.users row, live auth.sessions row owned by sub).
+                local = await run_in_threadpool(_fua.verify_and_load_auth_user, token)
+                if not local:
+                    api_error(401, "Invalid session", "invalid_session_token")
+                claims = local.get("claims") or {}
+                amr = session_amr_methods(token)
+                # Email trust comes from auth.users.email_confirmed_at (same
+                # query), never user_metadata. First link still needs amr proof.
+                top_verified = claims.get("email_verified") is True
+                email = local.get("email")
+                member = await lookup_vendor_member(
+                    local["id"],
+                    email,
+                    email_confirmed=bool(email) and bool(local.get("email_confirmed")),
+                    amr=amr,
+                    first_link_ok=first_link_allowed(amr, oauth_email_verified=top_verified),
+                )
+                if not member:
+                    api_error(403, "Vendor member not found", "vendor_member_not_found")
+                return member["id"]
 
     if x_user_id and verify_internal_api_key(x_internal_api_key):
         raw = resolve_actor_id(x_user_id)

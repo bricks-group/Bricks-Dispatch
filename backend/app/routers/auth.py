@@ -1,16 +1,12 @@
-import os
-
-from fastapi import APIRouter, Body, Header
+from fastapi import APIRouter, Header
 from ..shared.audit import write_audit_event
 from ..shared.auth import (
     get_vendor_member,
     is_vendor_admin,
-    mint_supabase_access_token,
     resolve_vendor_actor_id,
 )
 from ..shared.database import get_db
 from ..shared.errors import api_error
-from ..shared.pg_fallback import _pg_connect, pg_select_vendor_member, pg_verify_auth_password, pg_create_auth_user, pg_upsert_vendor_member
 from ..shared.schemas import VendorAuthLogin
 
 router = APIRouter(prefix="/api", tags=["auth"])
@@ -120,149 +116,7 @@ async def vendor_os_logout(authorization: str | None = Header(default=None, alia
 # For now, I'll keep them as stubs or remove if they are redundant.
 
 
-def fair_use_auth_enabled() -> bool:
-    """Fair-Use PG auth is an emergency path; OFF unless FAIR_USE_AUTH_ENABLED is literally "true"."""
-    return os.environ.get("FAIR_USE_AUTH_ENABLED") == "true"
-
-
-def _require_fair_use_auth_enabled() -> None:
-    if not fair_use_auth_enabled():
-        api_error(404, "Not found", "not_found")
-
-
-@router.post("/vendor-os/auth/fair-use-login")
-async def vendor_os_fair_use_login(payload: dict = Body(default={})):
-    """Email+password login via direct Postgres when Supabase Auth is Fair-Use 402.
-
-    Verifies crypt() against auth.users, resolves vendor_members, mints a
-    Supabase-compatible HS256 JWT with SUPABASE_JWT_SECRET.
-    Disabled (404) unless FAIR_USE_AUTH_ENABLED == "true".
-    """
-    _require_fair_use_auth_enabled()
-    raw = payload if isinstance(payload, dict) else {}
-    email = (raw.get("email") or "").strip().lower()
-    password = raw.get("password")
-    if password is None:
-        password = ""
-    password = str(password)
-    if not email or not password:
-        api_error(400, "Email and password are required", "missing_fields")
-
-    # Probe PG first so "wrong password" (None from verify) is not confused with 503.
-    probe = _pg_connect()
-    if probe is None:
-        api_error(
-            503,
-            "Fair-Use login unavailable: Postgres not configured",
-            "fair_use_pg_unavailable",
-        )
-    try:
-        probe.close()
-    except Exception:
-        pass
-
-    user = pg_verify_auth_password(email, password)
-    if not user:
-        api_error(401, "Invalid email or password", "invalid_credentials")
-
-    # Resolve by auth user id / member id only — never adopt a row by email.
-    member = pg_select_vendor_member(user["id"], "")
-    if not member:
-        api_error(403, "Vendor member not found", "vendor_member_not_found")
-
-    expires_in = 7 * 24 * 3600
-    try:
-        access_token = mint_supabase_access_token(
-            user["id"],
-            user.get("email") or email,
-            expires_in=expires_in,
-        )
-    except Exception as e:
-        api_error(503, f"Could not mint session: {e}", "fair_use_jwt_unavailable")
-
-    # Twin refresh token (same JWT) — client setSession needs both fields.
-    refresh_token = access_token
-
-    try:
-        await write_audit_event(
-            member["id"],
-            "session",
-            member["id"],
-            "fair_use_login",
-            vendor_id=member.get("vendor_id") or "default_vendor",
-        )
-    except Exception:
-        pass
-
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "expires_in": expires_in,
-        "user": {"id": user["id"], "email": user.get("email") or email},
-        "fair_use": True,
-        "member_id": member["id"],
-    }
-
-
-@router.post("/vendor-os/auth/fair-use-signup")
-async def vendor_os_fair_use_signup(payload: dict = Body(default={})):
-    """Create photographer account via Postgres when Supabase Auth is Fair-Use 402.
-
-    Disabled (404) unless FAIR_USE_AUTH_ENABLED == "true".
-    """
-    _require_fair_use_auth_enabled()
-    raw = payload if isinstance(payload, dict) else {}
-    email = (raw.get("email") or "").strip().lower()
-    password = "" if raw.get("password") is None else str(raw.get("password"))
-    name = (raw.get("name") or "").strip()
-    if not email or not password:
-        api_error(400, "Email and password are required", "missing_fields")
-    if len(password) < 8:
-        api_error(400, "Password must be at least 8 characters", "password_too_short")
-    probe = _pg_connect()
-    if probe is None:
-        api_error(503, "Fair-Use signup unavailable: Postgres not configured", "fair_use_pg_unavailable")
-    try:
-        probe.close()
-    except Exception:
-        pass
-    try:
-        user = pg_create_auth_user(email, password, full_name=name)
-    except ValueError as e:
-        code = str(e)
-        if code == "email_taken":
-            api_error(409, "An account with this email already exists", "email_taken")
-        if code == "password_too_short":
-            api_error(400, "Password must be at least 8 characters", "password_too_short")
-        api_error(400, str(e), "signup_failed")
-    if not user:
-        api_error(500, "Could not create account", "fair_use_signup_failed")
-    member = pg_upsert_vendor_member(user["id"], user.get("email") or email, name=name or email.split("@")[0])
-    if not member:
-        api_error(500, "Account created but vendor profile failed", "vendor_member_create_failed")
-    expires_in = 7 * 24 * 3600
-    try:
-        access_token = mint_supabase_access_token(user["id"], user.get("email") or email, expires_in=expires_in)
-    except Exception as e:
-        api_error(503, f"Could not mint session: {e}", "fair_use_jwt_unavailable")
-    refresh_token = access_token
-    try:
-        await write_audit_event(
-            member.get("id") or user["id"],
-            "session",
-            member.get("id") or user["id"],
-            "fair_use_signup",
-            vendor_id=member.get("vendor_id") or "default_vendor",
-        )
-    except Exception:
-        pass
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "expires_in": expires_in,
-        "user": {"id": user["id"], "email": user.get("email") or email},
-        "fair_use": True,
-        "member_id": member.get("id"),
-        "needs_onboarding": True,
-    }
-
+# The Fair-Use HS256 minter and its /vendor-os/auth/fair-use-login and
+# /vendor-os/auth/fair-use-signup routes were deleted 2026-11-14 (Sentinel):
+# they signed 7-day, non-revocable tokens (no session_id) with the Supabase
+# secret. Live api-2 never enabled them (FAIR_USE_AUTH_ENABLED unset -> 404).

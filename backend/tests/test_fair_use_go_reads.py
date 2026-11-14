@@ -1,46 +1,14 @@
-"""Fair-Use: GO auth JWT local verify + job list via OS Postgres proxy."""
+"""Fair-Use: GO job list via OS Postgres proxy."""
 from __future__ import annotations
 
-import time
 from unittest.mock import patch
 
-import jwt
-import pytest
-
-from app.shared import auth as auth_mod
 from app.shared import pg_fallback as pf
 from app.shared.job_scope import KAM_MEMBER_ID
 
 
-def test_decode_supabase_user_from_jwt(monkeypatch):
-    secret = "test-jwt-secret-for-fair-use"
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", secret)
-    token = jwt.encode(
-        {
-            "sub": "0c3fa7c2-d23b-4e44-90ad-ab2d19af2580",
-            "email": "akashorter@gmail.com",
-            "aud": "authenticated",
-            "role": "authenticated",
-            "exp": int(time.time()) + 3600,
-        },
-        secret,
-        algorithm="HS256",
-    )
-    out = auth_mod.decode_supabase_user_from_jwt(token)
-    assert out is not None
-    uid, email = out
-    assert uid.startswith("0c3fa7c2")
-    assert email == "akashorter@gmail.com"
-
-
-def test_decode_rejects_bad_signature(monkeypatch):
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", "right-secret")
-    token = jwt.encode(
-        {"sub": "x", "aud": "authenticated", "exp": int(time.time()) + 3600},
-        "wrong-secret",
-        algorithm="HS256",
-    )
-    assert auth_mod.decode_supabase_user_from_jwt(token) is None
+# HS256 decode_supabase_user_from_jwt tests removed 2026-11-14: the local
+# fallback is ES256-only now (tests/test_fair_use_auth_es256.py).
 
 
 def test_pg_select_vendor_member_proxies_to_os(monkeypatch):

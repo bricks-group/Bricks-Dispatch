@@ -258,40 +258,9 @@ function parseApiErrorDetail(detail: unknown, fallback: string): string {
   return fallback;
 }
 
-async function fairUsePasswordLogin(email: string, password: string): Promise<AuthMember> {
-  const res = await fetch(`${API_BASE}/api/vendor-os/auth/fair-use-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  const body = await res.json().catch(() => ({} as { detail?: unknown; error?: unknown; retry_after?: unknown }));
-  if (!res.ok) {
-    const code = typeof body.error === 'string' ? body.error : undefined;
-    const retryNum = Number(body.retry_after ?? res.headers.get('Retry-After'));
-    const retryAfter = Number.isFinite(retryNum) ? retryNum : undefined;
-    if (res.status === 429 || code === 'rate_limited') {
-      const wait = retryAfter != null ? ` Try again in ${retryAfter}s.` : '';
-      throw new ApiError(`Too many requests.${wait}`, { status: 429, code: 'rate_limited', retryAfter });
-    }
-    const detail = body.detail ?? body;
-    throw new Error(parseApiErrorDetail(detail, `Login failed (${res.status})`));
-  }
-  const access = (body as { access_token?: string }).access_token;
-  const refresh = (body as { refresh_token?: string }).refresh_token || access;
-  if (!access) throw new Error('Fair-Use login returned no token');
-  localStorage.setItem(TOKEN_KEY, access);
-  const { error } = await supabase.auth.setSession({
-    access_token: access,
-    refresh_token: refresh || access,
-  });
-  if (error) {
-    // Session may still work via TOKEN_KEY for API calls even if setSession complains.
-    console.warn('setSession after fair-use login:', error.message);
-  }
-  return me();
-}
+const AUTH_UNAVAILABLE_MSG = 'Sign-in is temporarily unavailable. Please try again in a few minutes.';
 
-/** Password sign-in with Fair-Use Postgres fallback when Auth API is 402. */
+/** Password sign-in. The Fair-Use minted-token fallback was removed 2026-11-14. */
 export async function loginWithPassword(email: string, password: string): Promise<AuthMember> {
   const trimmed = email.trim().toLowerCase();
   if (!trimmed || !password) {
@@ -310,23 +279,7 @@ export async function loginWithPassword(email: string, password: string): Promis
     return me();
   } catch (err) {
     if (isFairUseAuthError(err)) {
-      return fairUsePasswordLogin(trimmed, password);
-    }
-    // Auth completely blocked / network — try Fair-Use path once.
-    const msg = `${(err as Error)?.message || err || ''}`.toLowerCase();
-    if (
-      msg.includes('fetch')
-      || msg.includes('network')
-      || msg.includes('failed to fetch')
-      || msg.includes('auth')
-    ) {
-      try {
-        return await fairUsePasswordLogin(trimmed, password);
-      } catch (fairErr) {
-        // Prefer the Fair-Use error if Auth was clearly blocked; else original.
-        if (isFairUseAuthError(err)) throw fairErr;
-        throw fairErr;
-      }
+      throw new Error(AUTH_UNAVAILABLE_MSG);
     }
     throw err instanceof Error ? err : new Error(String(err));
   }

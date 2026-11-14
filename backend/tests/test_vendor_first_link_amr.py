@@ -138,14 +138,42 @@ def test_user_metadata_email_verified_is_ignored():
 
 
 def _local_path(monkeypatch, db, token, pg_confirmed=False):
+    """Auth 402 -> local ES256 path. verify_and_load_auth_user is stubbed: the
+    token is treated as verified, and email trust comes only from
+    auth.users.email_confirmed_at (pg_confirmed) in the live-session query."""
+    from supabase_auth.errors import AuthApiError
+
+    from app.shared import fair_use_auth as fua
+
+    class _A:
+        async def get_user(_s, _t):
+            raise AuthApiError("exceed_storage_size_quota", 402, None)
+    db.auth = _A()
+    _patch(monkeypatch, db)
+    fua.clear_auth_cooldown()
+    claims = jwt.decode(token, options={"verify_signature": False})
+    monkeypatch.setattr(fua, "verify_and_load_auth_user", lambda t, *a: {
+        "id": UID, "email": VENDOR_EMAIL, "email_confirmed": pg_confirmed, "claims": claims})
+    try:
+        return asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + token))
+    finally:
+        fua.clear_auth_cooldown()
+
+
+def test_local_path_definitive_auth_reject_is_401_without_local_check(monkeypatch):
+    from app.shared import fair_use_auth as fua
+
+    db = _Db([{**MEMBER, "auth_user_id": UID}])
+
     class _A:
         async def get_user(_s, _t):
             raise Exception("invalid JWT: unable to parse or verify signature")
     db.auth = _A()
     _patch(monkeypatch, db)
-    monkeypatch.setattr(auth_mod, "decode_supabase_user_from_jwt", lambda t: (UID, VENDOR_EMAIL))
-    monkeypatch.setattr(auth_mod, "_pg_email_confirmed", lambda uid: pg_confirmed)
-    return asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + token))
+    monkeypatch.setattr(fua, "verify_and_load_auth_user", lambda *a: pytest.fail("local check must not run"))
+    with pytest.raises(Exception) as e:
+        asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + _tok(["otp"])))
+    assert getattr(e.value, "status_code", None) == 401
 
 
 def test_local_path_forged_metadata_cannot_first_link(monkeypatch):

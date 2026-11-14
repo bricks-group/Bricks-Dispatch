@@ -286,8 +286,14 @@ def test_resolve_normal_otp_login(monkeypatch):
 
 
 def test_minted_fair_use_token_never_email_matches(monkeypatch):
+    # The minter is deleted; a token of its shape (HS256, env secret, no
+    # session_id) is rejected outright when Auth rejects it.
+    import jwt as _jwt
+    import time as _time
     monkeypatch.setenv("SUPABASE_JWT_SECRET", "s" * 40)
-    tok = auth_mod.mint_supabase_access_token(ATTACKER_UID, VENDOR_EMAIL)
+    tok = _jwt.encode({"aud": "authenticated", "role": "authenticated", "sub": ATTACKER_UID,
+                       "email": VENDOR_EMAIL, "exp": int(_time.time()) + 7 * 24 * 3600},
+                      "s" * 40, algorithm="HS256")
     db = _Db([MEMBER])
 
     class _A:
@@ -297,8 +303,9 @@ def test_minted_fair_use_token_never_email_matches(monkeypatch):
     _patch(monkeypatch, db)
     with pytest.raises(Exception) as e:
         asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + tok))
-    assert getattr(e.value, "status_code", None) in (401, 403)
-    assert "vendor_member_not_found" in str(getattr(e.value, "detail", ""))
+    assert getattr(e.value, "status_code", None) == 401
+    assert "invalid_session_token" in str(getattr(e.value, "detail", ""))
+    assert db.rows[0].get("auth_user_id") is None
 
 
 def test_backup_excludes_auth_secrets():

@@ -51,22 +51,7 @@ export default function LoginScreen() {
     );
   };
 
-  const applyFairUseSession = async (body: any, verb: string) => {
-    const access = body.access_token;
-    const refresh = body.refresh_token || access;
-    if (!access) throw new Error(`Fair-Use ${verb} returned no token`);
-    const { error: sessionError } = await supabase.auth.setSession({
-      access_token: access,
-      refresh_token: refresh,
-    });
-    if (sessionError) throw sessionError;
-  };
-
-  const fairUseDetail = (body: any, status: number, fallback: string) => {
-    const detail = body?.detail;
-    if (typeof detail === 'string') return detail;
-    return detail?.message || body?.message || `${fallback} (${status})`;
-  };
+  const AUTH_UNAVAILABLE_MSG = 'Sign-in is temporarily unavailable. Please try again in a few minutes.';
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -82,16 +67,8 @@ export default function LoginScreen() {
         password,
       });
       if (authError) {
-        if (!isFairUseAuthError(authError)) throw authError;
-        const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
-        const res = await fetch(`${API}/api/vendor-os/auth/fair-use-login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: trimmed, password }),
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Login failed'));
-        await applyFairUseSession(body, 'login');
+        if (isFairUseAuthError(authError)) throw new Error(AUTH_UNAVAILABLE_MSG);
+        throw authError;
       }
       router.replace('/(tabs)');
     } catch (e: any) {
@@ -121,37 +98,19 @@ export default function LoginScreen() {
         options: display ? { data: { full_name: display } } : undefined,
       });
       if (authError) {
-        if (!isFairUseAuthError(authError)) throw authError;
-        const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
-        const res = await fetch(`${API}/api/vendor-os/auth/fair-use-signup`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: trimmed, password, name: display }),
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Sign up failed'));
-        await applyFairUseSession(body, 'signup');
+        if (isFairUseAuthError(authError)) throw new Error(AUTH_UNAVAILABLE_MSG);
+        throw authError;
       } else if (data?.session) {
         // immediate session (email confirm off)
       } else {
-        // No session yet — try password sign-in (or Fair-Use path)
+        // No session yet — try password sign-in
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email: trimmed,
           password,
         });
         if (signInError) {
-          if (!isFairUseAuthError(signInError)) {
-            throw new Error('Account created — check your email to confirm, then sign in.');
-          }
-          const API = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'https://dispatch-api.brxs.ca';
-          const res = await fetch(`${API}/api/vendor-os/auth/fair-use-login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: trimmed, password }),
-          });
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(fairUseDetail(body, res.status, 'Sign in after signup failed'));
-          await applyFairUseSession(body, 'login');
+          if (isFairUseAuthError(signInError)) throw new Error(AUTH_UNAVAILABLE_MSG);
+          throw new Error('Account created — check your email to confirm, then sign in.');
         }
       }
       router.replace('/(tabs)');

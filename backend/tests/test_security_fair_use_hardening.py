@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException
 
 from app.routers import auth as auth_router
 from app.routers import capture as capture_router
@@ -20,95 +19,23 @@ from app.shared import rate_limit as rl
 # ---------------------------------------------------------------- 1. gate
 
 def _boom(*_a, **_k):
-    raise AssertionError("fair-use path must not touch Postgres when disabled")
+    raise AssertionError("must not touch Postgres")
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("value", [None, "", "false", "1", "TRUE", "True", "yes", " true"])
-async def test_fair_use_signup_and_login_disabled_unless_literal_true(monkeypatch, value):
-    if value is None:
-        monkeypatch.delenv("FAIR_USE_AUTH_ENABLED", raising=False)
-    else:
-        monkeypatch.setenv("FAIR_USE_AUTH_ENABLED", value)
-    monkeypatch.setattr(auth_router, "_pg_connect", _boom)
-    monkeypatch.setattr(auth_router, "pg_create_auth_user", _boom)
-    monkeypatch.setattr(auth_router, "pg_upsert_vendor_member", _boom)
-    monkeypatch.setattr(auth_router, "pg_verify_auth_password", _boom)
-    monkeypatch.setattr(auth_router, "mint_supabase_access_token", _boom)
+def test_fair_use_minter_and_routes_are_deleted():
+    # Sentinel 2026-11-14: the HS256 minter (7-day, no session_id) and its
+    # /vendor-os/auth/fair-use-login and /fair-use-signup routes are gone.
+    from app.shared import auth as auth_mod
 
-    with pytest.raises(HTTPException) as ei:
-        await auth_router.vendor_os_fair_use_signup(
-            {"email": "probe+sec@example.invalid", "password": "longenough1"}
-        )
-    assert ei.value.status_code == 404
-
-    with pytest.raises(HTTPException) as ei2:
-        await auth_router.vendor_os_fair_use_login(
-            {"email": "probe+sec@example.invalid", "password": "longenough1"}
-        )
-    assert ei2.value.status_code == 404
-
-
-# ---------------------------------------------------- 2. no email_confirmed_at
-
-class _FakeCursor:
-    def __init__(self, log):
-        self.log = log
-        self.description = [("id",), ("email",)]
-        self._next = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def execute(self, sql, params=None):
-        self.log.append((sql, params))
-        s = " ".join(sql.split())
-        if s.startswith("SELECT 1 FROM auth.users"):
-            self._next = None
-        elif "INSERT INTO auth.users" in s or s.startswith("SELECT id::text AS id, email::text"):
-            self._next = (params[0], "new@example.invalid")
-        else:
-            self._next = None
-
-    def fetchone(self):
-        return self._next
-
-
-class _FakeConn:
-    def __init__(self, log):
-        self.log = log
-        self.autocommit = False
-
-    def cursor(self):
-        return _FakeCursor(self.log)
-
-    def close(self):
-        pass
-
-
-def test_pg_create_auth_user_never_sets_email_confirmed_at(monkeypatch):
-    import psycopg2
-
-    log: list = []
-    monkeypatch.setattr(pf, "_pg_dsn_candidates", lambda: ["postgresql://u:p@db.x.supabase.co:5432/postgres"])
-    monkeypatch.setattr(psycopg2, "connect", lambda *a, **k: _FakeConn(log))
-    out = pf.pg_create_auth_user("new@example.invalid", "longenough1", full_name="N")
-    assert out and out["id"]
-    sqls = " ".join(s for s, _ in log)
-    assert "INSERT INTO auth.users" in sqls
-    assert "email_confirmed_at" not in sqls
-    # identity row must not claim the email is verified
-    ident = [p for s, p in log if "auth.identities" in s]
-    assert ident and '"email_verified": true' not in ident[0][2]
-
-
-def test_pg_fallback_source_has_no_email_confirmed_at():
-    import inspect
-
-    assert "email_confirmed_at" not in inspect.getsource(pf.pg_create_auth_user)
+    assert not hasattr(auth_mod, "mint_supabase_access_token")
+    assert not hasattr(auth_mod, "decode_supabase_user_from_jwt")
+    assert not hasattr(auth_router, "vendor_os_fair_use_login")
+    assert not hasattr(auth_router, "vendor_os_fair_use_signup")
+    assert not hasattr(pf, "pg_create_auth_user")
+    assert not hasattr(pf, "pg_verify_auth_password")
+    paths = {getattr(r, "path", "") for r in auth_router.router.routes}
+    assert "/api/vendor-os/auth/fair-use-login" not in paths
+    assert "/api/vendor-os/auth/fair-use-signup" not in paths
 
 
 # ------------------------------------------------- 3. no adoption by email
@@ -154,25 +81,6 @@ def test_pg_upsert_vendor_member_adopts_by_id(monkeypatch):
     monkeypatch.setattr(pf, "pg_select_vendor_member", lambda actor_id="", email="": own if actor_id == "uid-1" and not email else None)
     monkeypatch.setattr(pf, "_pg_connect", _boom)
     assert pf.pg_upsert_vendor_member("uid-1", "a@b.c") is own
-
-
-@pytest.mark.asyncio
-async def test_fair_use_login_resolves_member_by_id_only(monkeypatch):
-    monkeypatch.setenv("FAIR_USE_AUTH_ENABLED", "true")
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", "unit-test-secret")
-    monkeypatch.setattr(auth_router, "_pg_connect", lambda: MagicMock())
-    monkeypatch.setattr(auth_router, "pg_verify_auth_password", lambda e, p: {"id": "uid-9", "email": e})
-    seen = []
-
-    def sel(uid, email):
-        seen.append((uid, email))
-        return None
-
-    monkeypatch.setattr(auth_router, "pg_select_vendor_member", sel)
-    with pytest.raises(HTTPException) as ei:
-        await auth_router.vendor_os_fair_use_login({"email": "victim@example.com", "password": "pw"})
-    assert ei.value.status_code == 403
-    assert seen == [("uid-9", "")]
 
 
 # ------------------------------------------------------- 4a. rate-limit key

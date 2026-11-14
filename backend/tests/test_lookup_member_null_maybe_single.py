@@ -83,42 +83,49 @@ def test_no_member_is_none_not_crash(monkeypatch):
     assert asyncio.run(auth_mod.lookup_vendor_member(AUTH_UID, "nobody@example.com")) is None
 
 
-def test_resolve_actor_fair_use_jwt_maps_to_member_id(monkeypatch):
-    """Auth API 402 -> local JWT decode -> lookup must return the member id, not 500."""
-    _patch_db(monkeypatch, _Db(by_id=None, by_email=[dict(MEMBER)]))
+def _auth_402_local(monkeypatch, db, email_confirmed, amr):
+    from supabase_auth.errors import AuthApiError
+
+    from app.shared import fair_use_auth as fua
 
     class _Auth:
         async def get_user(self, token):
-            raise Exception("402 exceed_storage_size_quota")
+            raise AuthApiError("exceed_storage_size_quota", 402, None)
 
-    db = _Db(by_id=None, by_email=[dict(MEMBER)])
     db.auth = _Auth()
     _patch_db(monkeypatch, db)
-    monkeypatch.setattr(auth_mod, "_is_rest_quota_error", lambda e: "402" in str(e))
-    monkeypatch.setattr(
-        auth_mod,
-        "decode_supabase_user_from_jwt",
-        lambda tok: (AUTH_UID, MEMBER["email"]),
-    )
-    # Top-level email_verified (Supabase-issued; never user_metadata). The row
-    # is unlinked, so the first link needs a mailbox-proving sign-in (amr otp).
-    monkeypatch.setattr(auth_mod, "_jwt_email_verified", lambda tok: True)
+    fua.clear_auth_cooldown()
+    claims = {"sub": AUTH_UID, "session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+              "amr": [{"method": m, "timestamp": 1} for m in amr]}
+    monkeypatch.setattr(fua, "verify_and_load_auth_user", lambda tok, *a: {
+        "id": AUTH_UID, "email": MEMBER["email"], "email_confirmed": email_confirmed, "claims": claims})
     import jwt
-    tok = jwt.encode({"sub": AUTH_UID, "amr": [{"method": "otp", "timestamp": 1}]}, "x", algorithm="HS256")
-    actor = asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + tok, None))
+    return jwt.encode(claims, "x", algorithm="HS256")
+
+
+def test_resolve_actor_fair_use_jwt_maps_to_member_id(monkeypatch):
+    """Auth API 402 -> local ES256 verify + live session -> lookup returns the member id, not 500."""
+    from app.shared import fair_use_auth as fua
+
+    db = _Db(by_id=None, by_email=[dict(MEMBER)])
+    # Row is unlinked, so the first link needs a mailbox-proving sign-in (amr otp)
+    # and a confirmed email (auth.users.email_confirmed_at from the same query).
+    tok = _auth_402_local(monkeypatch, db, True, ["otp"])
+    try:
+        actor = asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + tok, None))
+    finally:
+        fua.clear_auth_cooldown()
     assert actor == MEMBER["id"]
 
 
 def test_resolve_actor_local_jwt_unverified_email_no_match(monkeypatch):
-    """Locally decoded token without email_verified must not adopt a row by email."""
-    class _Auth:
-        async def get_user(self, token):
-            raise Exception("402 exceed_storage_size_quota")
+    """Locally verified token whose auth.users email is unconfirmed must not adopt a row by email."""
+    from app.shared import fair_use_auth as fua
 
     db = _Db(by_id=None, by_email=[dict(MEMBER)])
-    db.auth = _Auth()
-    _patch_db(monkeypatch, db)
-    monkeypatch.setattr(auth_mod, "_is_rest_quota_error", lambda e: "402" in str(e))
-    monkeypatch.setattr(auth_mod, "decode_supabase_user_from_jwt", lambda tok: (AUTH_UID, MEMBER["email"]))
-    with pytest.raises(Exception):
-        asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer tok", None))
+    tok = _auth_402_local(monkeypatch, db, False, ["otp"])
+    try:
+        with pytest.raises(Exception):
+            asyncio.run(auth_mod.resolve_vendor_actor_id("Bearer " + tok, None))
+    finally:
+        fua.clear_auth_cooldown()
