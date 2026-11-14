@@ -1,6 +1,6 @@
 """Owner notification for an automatic applicant review: HTML + text + SMS.
 
-House style: Bricks mark + wordmark on paper, ink text, brick #D2542B as the
+House style: Bricks wordmark only on paper, ink text, brick #D2542B as the
 only accent, status green/amber/red only for status, 2px corners, no pills.
 Tables + inline CSS so it holds up in Gmail, Apple Mail/iCloud and Outlook,
 and at 375px. Never names the model or any internal agent.
@@ -15,7 +15,6 @@ from typing import Optional
 from .applicant_evidence import SOURCE_LABEL, COULDNT_CHECK
 
 OS_BASE = (os.environ.get("BRICKS_OS_URL") or "https://app.brxs.ca").rstrip("/")
-LOGO_URL = "https://www.brxs.ca/bricks-mark.png"
 
 SANS = "'General Sans',Helvetica,Arial,sans-serif"
 MONO = "'Ioskeley Mono','SFMono-Regular',Menlo,Consolas,'Courier New',monospace"
@@ -267,8 +266,7 @@ def render_html(
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:separate;">
 <tr><td style="padding:0 4px 14px 4px;">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
-  <td width="18" style="width:18px;"><img src="{LOGO_URL}" width="18" height="18" alt="" style="display:block;width:18px;height:18px;border:0;"></td>
-  <td style="padding-left:7px;font-family:{SANS};font-size:16px;font-weight:500;letter-spacing:-0.5px;color:{INK};">bricks</td>
+  <td style="font-family:{SANS};font-size:16px;font-weight:500;letter-spacing:-0.5px;color:{INK};">bricks</td>
   <td align="right" style="font-family:{MONO};font-size:10px;letter-spacing:1.4px;color:{INK_MUTE};">APPLICANT REVIEW</td>
   </tr></table>
 </td></tr>

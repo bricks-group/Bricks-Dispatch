@@ -3,7 +3,6 @@ from pathlib import Path
 
 from app.services.notifications import (
     _EMAIL_FONT_STACK,
-    _EMAIL_LOGO_URL,
     _build_html_email,
     _paid_booking_admin_email_html,
     format_package_line,
@@ -62,7 +61,7 @@ def test_paid_booking_html_uses_brand_card_and_rows():
         booking_ref="a1b2c3d4",
     )
     assert "bricks" in html
-    assert _EMAIL_LOGO_URL in html
+    assert "bricks-mark.png" not in html
     assert _EMAIL_FONT_STACK in html
     assert "#D2542B" in html or "#d2542b" in html
     assert "#f4f1eb" in html

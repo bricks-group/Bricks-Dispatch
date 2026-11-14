@@ -27,7 +27,6 @@ _EMAIL_FONT_STACK = (
     "'General Sans','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',"
     "Roboto,Helvetica,Arial,sans-serif"
 )
-_EMAIL_LOGO_URL = "https://www.brxs.ca/bricks-mark.png"
 _OS_DESK_URL = (os.environ.get("OS_WEB_URL") or "https://app.brxs.ca").rstrip("/")
 
 
@@ -82,8 +81,6 @@ def _branded_card(title: str, body_inner: str) -> str:
 <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
 <tr>
-<td width="16" height="16" style="width:16px;height:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
-<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
 <td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
 </tr>
 </table>

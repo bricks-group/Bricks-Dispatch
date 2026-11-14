@@ -214,7 +214,7 @@ def _go_url() -> str:
 def vendor_email_html(heading: str, paragraphs: list[str], button_label: str, button_url: str,
                       steps: Optional[list[str]] = None) -> str:
     """Branded vendor email: sentence case, one orange (#D2542B) button."""
-    from .notifications import _EMAIL_FONT_STACK, _EMAIL_LOGO_URL
+    from .notifications import _EMAIL_FONT_STACK
     p = f'style="color:#555;line-height:1.6;margin:0 0 14px 0;font-family:{_EMAIL_FONT_STACK}"'
     body = "".join(f"<p {p}>{t}</p>" for t in paragraphs[:-1]) if steps else "".join(f"<p {p}>{t}</p>" for t in paragraphs)
     if steps:
@@ -228,8 +228,6 @@ def vendor_email_html(heading: str, paragraphs: list[str], button_label: str, bu
 <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px">
 <tr>
-<td width="16" style="width:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
-<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
 <td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
 </tr></table>
 <div style="padding:20px 24px 24px 24px">
@@ -358,7 +356,7 @@ def date_label(d: datetime) -> str:
 
 def reject_email(member: dict, rejected_at: Optional[datetime] = None) -> tuple[str, str]:
     """Same wording as OS server._vendor_status_email (reject)."""
-    from .notifications import _EMAIL_FONT_STACK, _EMAIL_LOGO_URL
+    from .notifications import _EMAIL_FONT_STACK
     when = date_label(reapply_date(rejected_at))
     p = f'style="color:#555;line-height:1.6;margin:0 0 14px 0;font-family:{_EMAIL_FONT_STACK}"'
     subject = "Update on your Bricks application"
@@ -367,8 +365,6 @@ def reject_email(member: dict, rejected_at: Optional[datetime] = None) -> tuple[
 <body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px;margin:0">
 <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:16px 24px 0 24px"><tr>
-<td width="16" style="width:16px"><img src="{_EMAIL_LOGO_URL}" width="16" height="16" alt="" style="display:block;width:16px;height:16px"></td>
-<td width="7" style="width:7px;font-size:0;line-height:0">&nbsp;</td>
 <td style="font-family:{_EMAIL_FONT_STACK};font-size:14px;font-weight:500;letter-spacing:-0.5px;color:#14110E">bricks</td>
 </tr></table>
 <div style="padding:20px 24px 24px 24px">
