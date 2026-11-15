@@ -63,6 +63,7 @@ def presign_url(
     region: str = "auto",
     now: Optional[_dt.datetime] = None,
     virtual_host: bool = False,
+    extra_params: Optional[dict] = None,
 ) -> str:
     """AWS SigV4 presigned URL (UNSIGNED-PAYLOAD), path-style by default."""
     now = now or _dt.datetime.now(_dt.timezone.utc)
@@ -70,7 +71,7 @@ def presign_url(
     datestamp = now.strftime("%Y%m%d")
     scheme, host = endpoint.split("://", 1)
     host = host.rstrip("/")
-    encoded_key = "/".join(quote(part, safe="-_.~") for part in key.split("/"))
+    encoded_key = "/".join(quote(part, safe="-_.~") for part in key.split("/")) if key else ""
     if virtual_host:
         host = f"{bucket}.{host}"
         canonical_uri = f"/{encoded_key}"
@@ -83,6 +84,7 @@ def presign_url(
         "X-Amz-Date": amz_date,
         "X-Amz-Expires": str(int(expires)),
         "X-Amz-SignedHeaders": "host",
+        **{str(k): str(v) for k, v in (extra_params or {}).items()},
     }
     canonical_qs = "&".join(
         f"{quote(k, safe='-_.~')}={quote(v, safe='-_.~')}" for k, v in sorted(params.items())

@@ -18,7 +18,8 @@ assistant. Two entry points (see routers/ops_autopilot.py):
     - day-before reminders to the client and vendor (external sends flag)
 * daily()  once a day from the Vercel cron:
     - health: live URLs, sweep heartbeat, pg_cron failures, stale escalations
-    - nightly logical backup to the private Supabase Storage bucket db-backups
+    - nightly logical backup to the private R2 bucket bricks-backups (prefix db/),
+      falling back to server disk; never Supabase Storage (free 1 GB quota)
     - one email to Kam ONLY when something is broken or needs a decision
       (probation reviews, open escalations), each with one-tap links
 
@@ -63,7 +64,9 @@ PAYOUT_RETRY_SPACING_H = 6
 PAYOUT_MAX_TRIES = 3
 SWEEP_STALE_MIN = 60
 BACKUP_KEEP_DAYS = 14
-BACKUP_BUCKET = "db-backups"
+BACKUP_BUCKET = "bricks-backups"  # private R2 bucket: no custom domain, no r2.dev URL
+BACKUP_PREFIX = "db/"
+BACKUP_LOCAL_DIR = "/var/backups/bricks-db"
 ACTION_TTL_S = 7 * 24 * 3600
 
 HEALTH_URLS = [
@@ -217,6 +220,13 @@ async def _claim(db, key: str, data: Optional[dict] = None) -> Optional[bool]:
     except Exception as e:
         if "duplicate key" in str(e).lower() or str(getattr(e, "code", "")) == "23505":
             return False
+        try:  # PostgREST blocked (e.g. Supabase 402): same marker via direct Postgres
+            rows = _pg_rows("insert into public.ops_autopilot_events (key, data) values (%s, %s::jsonb) "
+                            "on conflict (key) do nothing returning key", (key, json.dumps(data or {}, default=str)))
+            if rows is not None:
+                return bool(rows)
+        except Exception as e2:
+            logger.error("ops once(%s) pg fallback failed: %s", key, type(e2).__name__)
         logger.error("ops once(%s) failed: %s", key, e)
         return None
 
@@ -233,6 +243,11 @@ async def _unclaim(db, key: str) -> None:
     try:
         await db.table("ops_autopilot_events").delete().eq("key", key).execute()
     except Exception as e:
+        try:
+            if _pg_rows("delete from public.ops_autopilot_events where key = %s returning key", (key,)) is not None:
+                return
+        except Exception:
+            pass
         logger.error("ops unclaim(%s) failed: %s", key, e)
 
 
@@ -241,6 +256,12 @@ async def seen(db, key: str) -> bool:
         res = await db.table("ops_autopilot_events").select("key").eq("key", key).limit(1).execute()
         return bool(res.data)
     except Exception:
+        try:
+            rows = _pg_rows("select key from public.ops_autopilot_events where key = %s limit 1", (key,))
+            if rows is not None:
+                return bool(rows)
+        except Exception:
+            pass
         return True  # unsure -> do not act twice
 
 
@@ -249,7 +270,12 @@ async def events_like(db, prefix: str) -> list[dict]:
         res = await db.table("ops_autopilot_events").select("key, created_at").like("key", prefix + "%").execute()
         return res.data or []
     except Exception:
-        return []
+        try:
+            rows = _pg_rows("select key, created_at from public.ops_autopilot_events where key like %s",
+                            (prefix.replace("%", r"\%").replace("_", r"\_") + "%",))
+            return [{"key": r[0], "created_at": r[1].isoformat() if r[1] else None} for r in rows or []]
+        except Exception:
+            return []
 
 
 # ---------------------------------------------------------------- emails
@@ -610,6 +636,12 @@ async def _heartbeat(db, kind: str, ok: bool, summary: dict) -> None:
     try:
         await db.table("ops_autopilot_runs").insert({"kind": kind, "ok": ok, "summary": summary}).execute()
     except Exception as e:
+        try:
+            if _pg_rows("insert into public.ops_autopilot_runs (kind, ok, summary) values (%s, %s, %s::jsonb) returning id",
+                        (kind, ok, json.dumps(summary, default=str))) is not None:
+                return
+        except Exception as e2:
+            logger.warning("ops heartbeat pg fallback failed: %s", type(e2).__name__)
         logger.warning("ops heartbeat insert failed: %s", e)
 
 
@@ -659,11 +691,24 @@ def sweep_secret_from_vault() -> Optional[str]:
     return rows[0][0] if rows else None
 
 
+async def _last_sweep_run(db) -> Optional[dict]:
+    """Latest sweep heartbeat. PostgREST first; direct Postgres when the Data API
+    is blocked (Supabase free-plan 402 restriction blocks REST, not Postgres)."""
+    try:
+        res = await db.table("ops_autopilot_runs").select("created_at, ok").eq("kind", "sweep").order("created_at", desc=True).limit(1).execute()
+        return (res.data or [None])[0]
+    except Exception as e:
+        rows = _pg_rows("select created_at, ok from public.ops_autopilot_runs where kind = 'sweep' "
+                        "order by created_at desc limit 1")
+        if rows is None:
+            raise e
+        return {"created_at": rows[0][0].isoformat(), "ok": rows[0][1]} if rows else None
+
+
 async def health(db, now: datetime) -> list[str]:
     problems = await check_urls()
     try:
-        res = await db.table("ops_autopilot_runs").select("created_at, ok").eq("kind", "sweep").order("created_at", desc=True).limit(1).execute()
-        last = (res.data or [None])[0]
+        last = await _last_sweep_run(db)
         ts = _parse_ts(last.get("created_at")) if last else None
         if not ts or now - ts > timedelta(minutes=SWEEP_STALE_MIN):
             problems.append(f"The 15-minute ops sweep has not run since {fmt_et(ts) if ts else 'ever'}.")
@@ -692,7 +737,16 @@ async def pending_decisions(db, now: datetime) -> list[tuple[str, list[tuple[str
                           [("probation_approve", {"member_id": r["member_id"], "job_id": r["job_id"]}),
                            ("probation_fail", {"member_id": r["member_id"], "job_id": r["job_id"]})]))
     except Exception as e:
-        logger.warning("probation digest failed: %s", e)
+        logger.warning("probation digest via REST failed, trying Postgres: %s", type(e).__name__)
+        try:
+            for mid, jid, _ in _pg_rows("select member_id::text, job_id::text, created_at from public.vendor_probation_reviews "
+                                        "where status = 'pending' limit 20") or []:
+                m = await _member(db, mid)
+                items.append((f"Probation review: {m.get('name') or mid}, job {jid[:8]}",
+                              [("probation_approve", {"member_id": mid, "job_id": jid}),
+                               ("probation_fail", {"member_id": mid, "job_id": jid})]))
+        except Exception as e2:
+            logger.warning("probation digest failed: %s", e2)
     try:
         cutoff = (now - timedelta(hours=24)).isoformat()
         res = await db.table("ops_escalations").select("id, job_id, escalation_type, created_at").eq("status", "open").gte(
@@ -703,7 +757,18 @@ async def pending_decisions(db, now: datetime) -> list[tuple[str, list[tuple[str
                 acts.insert(0, ("reassign", {"job_id": r["job_id"]}))
             items.append((f"Open escalation: {r.get('escalation_type')} on job {str(r.get('job_id'))[:8]} since {fmt_et(_parse_ts(r['created_at']))}", acts))
     except Exception as e:
-        logger.warning("escalation digest failed: %s", e)
+        logger.warning("escalation digest via REST failed, trying Postgres: %s", type(e).__name__)
+        try:
+            for rid, jid, etype, created in _pg_rows(
+                    "select id::text, job_id::text, escalation_type, created_at from public.ops_escalations "
+                    "where status = 'open' and created_at >= %s and created_at <= %s limit 20",
+                    (now - timedelta(days=30), now - timedelta(hours=24))) or []:
+                acts = [("resolve_escalation", {"id": rid})]
+                if jid:
+                    acts.insert(0, ("reassign", {"job_id": jid}))
+                items.append((f"Open escalation: {etype} on job {str(jid)[:8]} since {fmt_et(created)}", acts))
+        except Exception as e2:
+            logger.warning("escalation digest failed: %s", e2)
     return items
 
 
@@ -857,28 +922,90 @@ def dump_database() -> tuple[bytes, dict]:
     return buf.getvalue(), counts
 
 
-async def backup(now: datetime) -> dict:
-    data, counts = dump_database()
-    url, headers = _storage_headers()
-    name = f"{now.strftime('%Y-%m-%d')}.jsonl.gz"
+def _r2_backup_config() -> Optional[dict]:
+    """Backup-only R2 credentials (BACKUP_R2_*), else the shared R2_* app keys."""
+    from .r2_storage import r2_config
+    key = (os.getenv("BACKUP_R2_ACCESS_KEY_ID") or "").strip()
+    secret = (os.getenv("BACKUP_R2_SECRET_ACCESS_KEY") or "").strip()
+    cfg = r2_config() or {}
+    endpoint = (os.getenv("BACKUP_R2_ENDPOINT") or "").strip().rstrip("/") or cfg.get("endpoint")
+    acct = (os.getenv("BACKUP_R2_ACCOUNT_ID") or os.getenv("R2_ACCOUNT_ID") or "").strip()
+    if not endpoint and acct:
+        endpoint = f"https://{acct}.r2.cloudflarestorage.com"
+    if not (key and secret):
+        key, secret = cfg.get("key"), cfg.get("secret")
+    bucket = (os.getenv("BACKUP_R2_BUCKET") or os.getenv("R2_BUCKET_BACKUPS") or BACKUP_BUCKET).strip()
+    if not (endpoint and key and secret):
+        return None
+    return {"endpoint": endpoint, "key": key, "secret": secret, "bucket": bucket, "region": "auto"}
+
+
+def _r2_url(cfg: dict, method: str, key: str, params: Optional[dict] = None, expires: int = 600) -> str:
+    from .r2_storage import presign_url
+    return presign_url(method, key, expires=expires, endpoint=cfg["endpoint"], bucket=cfg["bucket"],
+                       access_key=cfg["key"], secret_key=cfg["secret"], region=cfg["region"], extra_params=params)
+
+
+async def _backup_to_r2(cfg: dict, name: str, data: bytes, now: datetime) -> dict:
+    key = f"{BACKUP_PREFIX}{name}"
     async with httpx.AsyncClient(timeout=120.0) as client:
-        r = await client.post(f"{url}/storage/v1/object/{BACKUP_BUCKET}/{name}", content=data,
-                              headers={**headers, "Content-Type": "application/gzip", "x-upsert": "true"})
+        r = await client.put(_r2_url(cfg, "PUT", key), content=data, headers={"Content-Type": "application/gzip"})
         if r.status_code >= 300:
-            raise RuntimeError(f"backup upload {r.status_code}: {r.text[:200]}")
-        # prune old copies
-        pruned = []
-        lr = await client.post(f"{url}/storage/v1/object/list/{BACKUP_BUCKET}", json={"prefix": "", "limit": 200},
-                               headers=headers)
+            raise RuntimeError(f"R2 backup upload {r.status_code}: {r.text[:160]}")
+        h = await client.head(_r2_url(cfg, "HEAD", key))
+        size = int(h.headers.get("content-length") or -1) if h.status_code < 300 else -1
+        if size != len(data):
+            raise RuntimeError(f"R2 backup read-back mismatch ({h.status_code}, {size} vs {len(data)} bytes)")
+        pruned: list[str] = []
+        lr = await client.get(_r2_url(cfg, "GET", "", {"list-type": "2", "prefix": BACKUP_PREFIX, "max-keys": "1000"}))
         if lr.status_code < 300:
+            keys = re.findall(r"<Key>([^<]+)</Key>", lr.text)
             keep_from = (now - timedelta(days=BACKUP_KEEP_DAYS)).strftime("%Y-%m-%d")
-            old = [o["name"] for o in lr.json() if o.get("name", "")[:10] < keep_from]
-            if old:
-                await client.request("DELETE", f"{url}/storage/v1/object/{BACKUP_BUCKET}", json={"prefixes": old}, headers=headers)
-                pruned = old
+            for k in keys:
+                base = k[len(BACKUP_PREFIX):]
+                if re.match(r"\d{4}-\d{2}-\d{2}\.jsonl\.gz$", base) and base[:10] < keep_from:
+                    d = await client.delete(_r2_url(cfg, "DELETE", k))
+                    if d.status_code < 300:
+                        pruned.append(k)
+    return {"object": f"r2://{cfg['bucket']}/{key}", "bytes": size, "pruned": pruned}
+
+
+def _backup_to_disk(name: str, data: bytes, now: datetime) -> dict:
+    import glob
+    os.makedirs(BACKUP_LOCAL_DIR, mode=0o700, exist_ok=True)
+    path = os.path.join(BACKUP_LOCAL_DIR, name)
+    fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.replace(path + ".tmp", path)
+    keep_from = (now - timedelta(days=BACKUP_KEEP_DAYS)).strftime("%Y-%m-%d")
+    pruned = [p for p in glob.glob(os.path.join(BACKUP_LOCAL_DIR, "*.jsonl.gz")) if os.path.basename(p)[:10] < keep_from]
+    for p in pruned:
+        os.remove(p)
+    return {"object": f"file://{path}", "bytes": len(data), "pruned": pruned}
+
+
+async def backup(now: datetime) -> dict:
+    """Nightly logical backup. Primary: private R2 bucket. Fallback: server disk.
+    Never Supabase Storage (the free 1 GB quota is what blocked it)."""
+    data, counts = dump_database()
+    name = f"{now.strftime('%Y-%m-%d')}.jsonl.gz"
+    cfg = _r2_backup_config()
+    r2_error = None
+    res: dict = {}
+    if cfg:
+        try:
+            res = await _backup_to_r2(cfg, name, data, now)
+        except Exception as e:
+            r2_error = str(e)[:200]
+            logger.warning("R2 backup failed, writing to disk: %s", r2_error)
+    if not res:
+        res = _backup_to_disk(name, data, now)
+        res["warning"] = (f"R2 upload failed ({r2_error}); saved on the server disk only" if r2_error
+                          else "R2 backup key not set; saved on the server disk only")
     bad_tables = [t for t, n in counts.items() if n < 0]
-    return {"object": f"{BACKUP_BUCKET}/{name}", "bytes": len(data), "tables": len(counts),
-            "rows": sum(n for n in counts.values() if n > 0), "skipped_tables": bad_tables, "pruned": pruned}
+    return {**res, "tables": len(counts), "rows": sum(n for n in counts.values() if n > 0),
+            "skipped_tables": bad_tables}
 
 
 async def daily(db, now: Optional[datetime] = None, *, do_backup: bool = True, notify: bool = True) -> dict:
@@ -888,6 +1015,8 @@ async def daily(db, now: Optional[datetime] = None, *, do_backup: bool = True, n
     if do_backup:
         try:
             backup_res = await backup(now)
+            if backup_res.get("warning"):
+                problems.append(f"Nightly backup: {backup_res['warning']}.")
             if backup_res.get("skipped_tables"):
                 problems.append(f"Backup skipped tables: {', '.join(backup_res['skipped_tables'])}")
         except Exception as e:
