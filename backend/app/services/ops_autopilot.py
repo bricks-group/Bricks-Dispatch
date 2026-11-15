@@ -68,13 +68,16 @@ BACKUP_KEEP_DAYS = 14
 # PUBLIC buckets behind images.brxs.ca / media.brxs.ca, so no env var may redirect backups.
 BACKUP_BUCKET = "bricks-backups"  # private R2 bucket: no custom domain, no r2.dev URL
 BACKUP_PREFIX = "db/"
-_R2_BACKUP_NAME_RE = re.compile(r"\d{4}-\d{2}-\d{2}\.jsonl\.gz")
+_R2_BACKUP_NAME_RE = re.compile(r"\d{4}-\d{2}-\d{2}\.jsonl\.gz", re.ASCII)
+# Endpoint pinned too (Sentinel C3): built from the account id only, never from env URLs.
+_R2_ACCOUNT_RE = re.compile(r"[0-9a-f]{32}", re.ASCII)
+_R2_ENDPOINT_RE = re.compile(r"https://[0-9a-f]{32}\.r2\.cloudflarestorage\.com", re.ASCII)
 # Disk fallback (Sentinel C2): owned by the service user (bricks, 0700), with its own
 # file names, so it never touches the root stopgap in /var/backups/bricks-db.
 BACKUP_LOCAL_DIR = "/var/lib/bricks/db-backups"
 BACKUP_LOCAL_STOPGAP_DIR = "/var/backups/bricks-db"
 BACKUP_LOCAL_FILE_PREFIX = "dispatch-"
-_LOCAL_BACKUP_NAME_RE = re.compile(r"dispatch-(\d{4}-\d{2}-\d{2})\.jsonl\.gz")
+_LOCAL_BACKUP_NAME_RE = re.compile(r"dispatch-(\d{4}-\d{2}-\d{2})\.jsonl\.gz", re.ASCII)
 ACTION_TTL_S = 7 * 24 * 3600
 
 HEALTH_URLS = [
@@ -939,13 +942,17 @@ def _r2_backup_config() -> Optional[dict]:
     key = (os.getenv("BACKUP_R2_ACCESS_KEY_ID") or "").strip()
     secret = (os.getenv("BACKUP_R2_SECRET_ACCESS_KEY") or "").strip()
     cfg = r2_config() or {}
-    endpoint = (os.getenv("BACKUP_R2_ENDPOINT") or "").strip().rstrip("/") or cfg.get("endpoint")
+    # BACKUP_R2_ENDPOINT / R2_ENDPOINT are deliberately ignored: a bucket-style endpoint
+    # (https://bricks-images.<acct>...) would put the dump in a public bucket (Sentinel C3).
     acct = (os.getenv("BACKUP_R2_ACCOUNT_ID") or os.getenv("R2_ACCOUNT_ID") or "").strip()
-    if not endpoint and acct:
-        endpoint = f"https://{acct}.r2.cloudflarestorage.com"
+    if not _R2_ACCOUNT_RE.fullmatch(acct):
+        if acct:
+            logger.warning("R2 backup: account id is not 32 lowercase hex; R2 disabled")
+        return None
+    endpoint = f"https://{acct}.r2.cloudflarestorage.com"
     if not (key and secret):
         key, secret = cfg.get("key"), cfg.get("secret")
-    if not (endpoint and key and secret):
+    if not (key and secret):
         return None
     return {"endpoint": endpoint, "key": key, "secret": secret, "bucket": BACKUP_BUCKET, "region": "auto"}
 
@@ -955,6 +962,8 @@ def _assert_backup_target(cfg: dict, key: str) -> None:
     (listing is allowed only on the db/ prefix, with key '')."""
     if cfg.get("bucket") != BACKUP_BUCKET:
         raise RuntimeError(f"refusing R2 backup outside {BACKUP_BUCKET}")
+    if not _R2_ENDPOINT_RE.fullmatch(str(cfg.get("endpoint") or "")):
+        raise RuntimeError("refusing R2 backup to an unexpected endpoint")
     if key and not (key.startswith(BACKUP_PREFIX) and _R2_BACKUP_NAME_RE.fullmatch(key[len(BACKUP_PREFIX):])):
         raise RuntimeError(f"refusing R2 backup key outside {BACKUP_PREFIX}")
 
@@ -962,6 +971,8 @@ def _assert_backup_target(cfg: dict, key: str) -> None:
 def _r2_url(cfg: dict, method: str, key: str, params: Optional[dict] = None, expires: int = 600) -> str:
     from .r2_storage import presign_url
     _assert_backup_target(cfg, key)
+    if not key and method.upper() != "GET":
+        raise RuntimeError("refusing R2 backup write/delete at the bucket root")
     if not key and (params or {}).get("prefix") != BACKUP_PREFIX:
         raise RuntimeError(f"refusing R2 backup list outside {BACKUP_PREFIX}")
     return presign_url(method, key, expires=expires, endpoint=cfg["endpoint"], bucket=cfg["bucket"],
@@ -1003,6 +1014,11 @@ def _backup_to_disk(name: str, data: bytes, now: datetime) -> dict:
     if d == os.path.realpath(BACKUP_LOCAL_STOPGAP_DIR):
         raise RuntimeError("refusing disk backup into the root stopgap directory")
     os.makedirs(d, mode=0o700, exist_ok=True)
+    st = os.stat(d)
+    if st.st_uid != os.geteuid():
+        raise RuntimeError("refusing disk backup: directory is not owned by the service user")
+    if (st.st_mode & 0o777) != 0o700:
+        os.chmod(d, 0o700)
     fname = f"{BACKUP_LOCAL_FILE_PREFIX}{name}"
     if not _LOCAL_BACKUP_NAME_RE.fullmatch(fname):
         raise RuntimeError("unexpected disk backup file name")

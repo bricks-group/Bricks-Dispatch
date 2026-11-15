@@ -11,12 +11,14 @@ import asyncio
 import hashlib
 import os
 import stat
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 import pytest
 
 from app.services import ops_autopilot as oa
 
+ACCT = "0123456789abcdef0123456789abcdef"
 NOW = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
 
 
@@ -24,7 +26,7 @@ NOW = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
 def r2_env(monkeypatch):
     for k in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "R2_ENDPOINT", "R2_ACCOUNT_ID"):
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("BACKUP_R2_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("BACKUP_R2_ACCOUNT_ID", ACCT)
     monkeypatch.setenv("BACKUP_R2_ACCESS_KEY_ID", "kid")
     monkeypatch.setenv("BACKUP_R2_SECRET_ACCESS_KEY", "sek")
 
@@ -109,7 +111,7 @@ def test_r2_upload_md5_and_prune_scope(r2_env, monkeypatch):
     _FakeClient.listing = "".join(f"<Key>{k}</Key>" for k in (
         "db/2026-10-01.jsonl.gz", "db/2026-11-10.jsonl.gz", "db/sub/2026-10-01.jsonl.gz",
         "db/2026-10-01.jsonl.gz.bak", "db/notes.txt"))
-    monkeypatch.setattr(oa.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(oa, "httpx", SimpleNamespace(AsyncClient=_FakeClient))
     res = asyncio.run(oa._backup_to_r2(oa._r2_backup_config(), "2026-11-15.jsonl.gz", b"x" * 100, NOW))
     put = [c for c in _FakeClient.calls if c[0] == "PUT"][0]
     assert "Content-MD5" in put[2]
@@ -123,7 +125,7 @@ def test_r2_upload_md5_mismatch_raises(r2_env, monkeypatch):
         async def head(self, url):
             return _Resp(headers={"content-length": str(_FakeClient.stored["len"]), "etag": '"deadbeef"'})
     _FakeClient.calls, _FakeClient.stored, _FakeClient.listing = [], {}, ""
-    monkeypatch.setattr(oa.httpx, "AsyncClient", Bad)
+    monkeypatch.setattr(oa, "httpx", SimpleNamespace(AsyncClient=Bad))
     with pytest.raises(RuntimeError, match="md5 differs"):
         asyncio.run(oa._backup_to_r2(oa._r2_backup_config(), "2026-11-15.jsonl.gz", b"y" * 10, NOW))
 
@@ -167,3 +169,61 @@ def test_l1_web_push_and_nonce_columns_redacted():
     assert {"endpoint", "p256dh", "auth"} <= oa.backup_redacted_columns(
         "public.pwa_web_push_devices", ["id", "endpoint", "p256dh", "auth", "member_id"])
     assert "nonce_sha256" in oa.backup_redacted_columns("public.calendar_oauth_nonces", ["id", "nonce_sha256"])
+
+
+@pytest.mark.parametrize("var", ["BACKUP_R2_ENDPOINT", "R2_ENDPOINT"])
+def test_endpoint_env_ignored(r2_env, monkeypatch, var):
+    monkeypatch.setenv(var, f"https://bricks-images.{ACCT}.r2.cloudflarestorage.com")
+    cfg = oa._r2_backup_config()
+    assert cfg["endpoint"] == f"https://{ACCT}.r2.cloudflarestorage.com"
+    assert oa._r2_url(cfg, "PUT", "db/2026-11-15.jsonl.gz").startswith(
+        f"https://{ACCT}.r2.cloudflarestorage.com/bricks-backups/db/")
+
+
+@pytest.mark.parametrize("ep", [
+    f"https://bricks-images.{ACCT}.r2.cloudflarestorage.com",
+    f"https://{ACCT}.r2.cloudflarestorage.com/bricks-images",
+    f"https://{ACCT}.r2.cloudflarestorage.com/",
+    f"http://{ACCT}.r2.cloudflarestorage.com",
+    f"https://{ACCT.upper()}.r2.cloudflarestorage.com",
+    "https://images.brxs.ca",
+])
+def test_tampered_endpoint_refused(r2_env, ep):
+    cfg = {**oa._r2_backup_config(), "endpoint": ep}
+    with pytest.raises(RuntimeError):
+        oa._r2_url(cfg, "PUT", "db/2026-11-15.jsonl.gz")
+
+
+@pytest.mark.parametrize("acct", ["acct123", ACCT.upper(), ACCT + "0", "bricks-images." + ACCT])
+def test_bad_account_id_disables_r2(r2_env, monkeypatch, acct):
+    monkeypatch.setenv("BACKUP_R2_ACCOUNT_ID", acct)
+    assert oa._r2_backup_config() is None
+
+
+@pytest.mark.parametrize("method", ["PUT", "DELETE", "HEAD"])
+def test_empty_key_refused_for_writes(r2_env, method):
+    with pytest.raises(RuntimeError):
+        oa._r2_url(oa._r2_backup_config(), method, "", {"prefix": "db/"})
+
+
+def test_unicode_digits_refused(r2_env):
+    with pytest.raises(RuntimeError):
+        oa._r2_url(oa._r2_backup_config(), "PUT", "db/\u0662\u0660\u0662\u0666-11-15.jsonl.gz")
+
+
+def test_existing_fallback_dir_is_tightened_to_0700(tmp_path, monkeypatch):
+    d = tmp_path / "db-backups"
+    d.mkdir(mode=0o755)
+    os.chmod(d, 0o755)
+    monkeypatch.setattr(oa, "BACKUP_LOCAL_DIR", str(d))
+    oa._backup_to_disk("2026-11-15.jsonl.gz", b"d", NOW)
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+
+
+def test_fallback_dir_owned_by_someone_else_refused(tmp_path, monkeypatch):
+    d = tmp_path / "db-backups"
+    d.mkdir(mode=0o700)
+    monkeypatch.setattr(oa, "BACKUP_LOCAL_DIR", str(d))
+    monkeypatch.setattr(oa.os, "geteuid", lambda: os.stat(d).st_uid + 1)
+    with pytest.raises(RuntimeError, match="not owned"):
+        oa._backup_to_disk("2026-11-15.jsonl.gz", b"d", NOW)
