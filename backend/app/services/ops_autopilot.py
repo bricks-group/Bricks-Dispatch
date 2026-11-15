@@ -64,9 +64,17 @@ PAYOUT_RETRY_SPACING_H = 6
 PAYOUT_MAX_TRIES = 3
 SWEEP_STALE_MIN = 60
 BACKUP_KEEP_DAYS = 14
+# Pinned on purpose (Sentinel C1, 2026-11-15): the R2 key on api-2 can also write the
+# PUBLIC buckets behind images.brxs.ca / media.brxs.ca, so no env var may redirect backups.
 BACKUP_BUCKET = "bricks-backups"  # private R2 bucket: no custom domain, no r2.dev URL
 BACKUP_PREFIX = "db/"
-BACKUP_LOCAL_DIR = "/var/backups/bricks-db"
+_R2_BACKUP_NAME_RE = re.compile(r"\d{4}-\d{2}-\d{2}\.jsonl\.gz")
+# Disk fallback (Sentinel C2): owned by the service user (bricks, 0700), with its own
+# file names, so it never touches the root stopgap in /var/backups/bricks-db.
+BACKUP_LOCAL_DIR = "/var/lib/bricks/db-backups"
+BACKUP_LOCAL_STOPGAP_DIR = "/var/backups/bricks-db"
+BACKUP_LOCAL_FILE_PREFIX = "dispatch-"
+_LOCAL_BACKUP_NAME_RE = re.compile(r"dispatch-(\d{4}-\d{2}-\d{2})\.jsonl\.gz")
 ACTION_TTL_S = 7 * 24 * 3600
 
 HEALTH_URLS = [
@@ -733,7 +741,7 @@ async def pending_decisions(db, now: datetime) -> list[tuple[str, list[tuple[str
         res = await db.table("vendor_probation_reviews").select("member_id, job_id, created_at").eq("status", "pending").limit(20).execute()
         for r in res.data or []:
             m = await _member(db, r["member_id"])
-            items.append((f"Probation review: {m.get('name') or r['member_id']}, job {r['job_id'][:8]}",
+            items.append((f"Probation review: {m.get('name') or r['member_id']}, job {str(r.get('job_id') or '')[:8] or 'n/a'}",
                           [("probation_approve", {"member_id": r["member_id"], "job_id": r["job_id"]}),
                            ("probation_fail", {"member_id": r["member_id"], "job_id": r["job_id"]})]))
     except Exception as e:
@@ -742,7 +750,7 @@ async def pending_decisions(db, now: datetime) -> list[tuple[str, list[tuple[str
             for mid, jid, _ in _pg_rows("select member_id::text, job_id::text, created_at from public.vendor_probation_reviews "
                                         "where status = 'pending' limit 20") or []:
                 m = await _member(db, mid)
-                items.append((f"Probation review: {m.get('name') or mid}, job {jid[:8]}",
+                items.append((f"Probation review: {m.get('name') or mid}, job {str(jid or '')[:8] or 'n/a'}",
                               [("probation_approve", {"member_id": mid, "job_id": jid}),
                                ("probation_fail", {"member_id": mid, "job_id": jid})]))
         except Exception as e2:
@@ -755,7 +763,7 @@ async def pending_decisions(db, now: datetime) -> list[tuple[str, list[tuple[str
             acts = [("resolve_escalation", {"id": r["id"]})]
             if r.get("job_id"):
                 acts.insert(0, ("reassign", {"job_id": r["job_id"]}))
-            items.append((f"Open escalation: {r.get('escalation_type')} on job {str(r.get('job_id'))[:8]} since {fmt_et(_parse_ts(r['created_at']))}", acts))
+            items.append((f"Open escalation: {r.get('escalation_type')} on job {str(r.get('job_id') or '')[:8] or 'n/a'} since {fmt_et(_parse_ts(r['created_at']))}", acts))
     except Exception as e:
         logger.warning("escalation digest via REST failed, trying Postgres: %s", type(e).__name__)
         try:
@@ -766,7 +774,7 @@ async def pending_decisions(db, now: datetime) -> list[tuple[str, list[tuple[str
                 acts = [("resolve_escalation", {"id": rid})]
                 if jid:
                     acts.insert(0, ("reassign", {"job_id": jid}))
-                items.append((f"Open escalation: {etype} on job {str(jid)[:8]} since {fmt_et(created)}", acts))
+                items.append((f"Open escalation: {etype} on job {str(jid or '')[:8] or 'n/a'} since {fmt_et(created)}", acts))
         except Exception as e2:
             logger.warning("escalation digest failed: %s", e2)
     return items
@@ -824,6 +832,9 @@ BACKUP_REDACT_COLUMNS: dict[str, frozenset] = {
     "public.dev_capture_connections": frozenset({"secret_sealed"}),
     "public.dev_procore_connections": frozenset({"token_sealed"}),
     "public.api_keys": frozenset({"key_hash"}),
+    # Web Push subscription secrets and OAuth nonces (Sentinel L1, 2026-11-15)
+    "public.pwa_web_push_devices": frozenset({"endpoint", "p256dh", "auth"}),
+    "public.calendar_oauth_nonces": frozenset({"nonce_sha256"}),
 }
 # ... plus fail-closed by name: any column named like a secret is redacted
 # unless it is on this reviewed keep-list (not secrets, needed for restore).
@@ -934,28 +945,45 @@ def _r2_backup_config() -> Optional[dict]:
         endpoint = f"https://{acct}.r2.cloudflarestorage.com"
     if not (key and secret):
         key, secret = cfg.get("key"), cfg.get("secret")
-    bucket = (os.getenv("BACKUP_R2_BUCKET") or os.getenv("R2_BUCKET_BACKUPS") or BACKUP_BUCKET).strip()
     if not (endpoint and key and secret):
         return None
-    return {"endpoint": endpoint, "key": key, "secret": secret, "bucket": bucket, "region": "auto"}
+    return {"endpoint": endpoint, "key": key, "secret": secret, "bucket": BACKUP_BUCKET, "region": "auto"}
+
+
+def _assert_backup_target(cfg: dict, key: str) -> None:
+    """Refuse any R2 backup write/delete outside bricks-backups/db/YYYY-MM-DD.jsonl.gz
+    (listing is allowed only on the db/ prefix, with key '')."""
+    if cfg.get("bucket") != BACKUP_BUCKET:
+        raise RuntimeError(f"refusing R2 backup outside {BACKUP_BUCKET}")
+    if key and not (key.startswith(BACKUP_PREFIX) and _R2_BACKUP_NAME_RE.fullmatch(key[len(BACKUP_PREFIX):])):
+        raise RuntimeError(f"refusing R2 backup key outside {BACKUP_PREFIX}")
 
 
 def _r2_url(cfg: dict, method: str, key: str, params: Optional[dict] = None, expires: int = 600) -> str:
     from .r2_storage import presign_url
+    _assert_backup_target(cfg, key)
+    if not key and (params or {}).get("prefix") != BACKUP_PREFIX:
+        raise RuntimeError(f"refusing R2 backup list outside {BACKUP_PREFIX}")
     return presign_url(method, key, expires=expires, endpoint=cfg["endpoint"], bucket=cfg["bucket"],
                        access_key=cfg["key"], secret_key=cfg["secret"], region=cfg["region"], extra_params=params)
 
 
 async def _backup_to_r2(cfg: dict, name: str, data: bytes, now: datetime) -> dict:
     key = f"{BACKUP_PREFIX}{name}"
+    md5 = hashlib.md5(data)
     async with httpx.AsyncClient(timeout=120.0) as client:
-        r = await client.put(_r2_url(cfg, "PUT", key), content=data, headers={"Content-Type": "application/gzip"})
+        # Content-MD5 makes R2 reject a corrupted body; the ETag read-back confirms what was stored.
+        r = await client.put(_r2_url(cfg, "PUT", key), content=data,
+                             headers={"Content-Type": "application/gzip",
+                                      "Content-MD5": base64.b64encode(md5.digest()).decode()})
         if r.status_code >= 300:
             raise RuntimeError(f"R2 backup upload {r.status_code}: {r.text[:160]}")
         h = await client.head(_r2_url(cfg, "HEAD", key))
         size = int(h.headers.get("content-length") or -1) if h.status_code < 300 else -1
-        if size != len(data):
-            raise RuntimeError(f"R2 backup read-back mismatch ({h.status_code}, {size} vs {len(data)} bytes)")
+        etag = (h.headers.get("etag") or "").strip('"').lower()
+        if size != len(data) or etag != md5.hexdigest():
+            raise RuntimeError(f"R2 backup read-back mismatch ({h.status_code}, {size} vs {len(data)} bytes, md5 "
+                               f"{'ok' if etag == md5.hexdigest() else 'differs'})")
         pruned: list[str] = []
         lr = await client.get(_r2_url(cfg, "GET", "", {"list-type": "2", "prefix": BACKUP_PREFIX, "max-keys": "1000"}))
         if lr.status_code < 300:
@@ -963,25 +991,33 @@ async def _backup_to_r2(cfg: dict, name: str, data: bytes, now: datetime) -> dic
             keep_from = (now - timedelta(days=BACKUP_KEEP_DAYS)).strftime("%Y-%m-%d")
             for k in keys:
                 base = k[len(BACKUP_PREFIX):]
-                if re.match(r"\d{4}-\d{2}-\d{2}\.jsonl\.gz$", base) and base[:10] < keep_from:
+                if _R2_BACKUP_NAME_RE.fullmatch(base) and base[:10] < keep_from:
                     d = await client.delete(_r2_url(cfg, "DELETE", k))
                     if d.status_code < 300:
                         pruned.append(k)
-    return {"object": f"r2://{cfg['bucket']}/{key}", "bytes": size, "pruned": pruned}
+    return {"object": f"r2://{cfg['bucket']}/{key}", "bytes": size, "md5": md5.hexdigest(), "pruned": pruned}
 
 
 def _backup_to_disk(name: str, data: bytes, now: datetime) -> dict:
-    import glob
-    os.makedirs(BACKUP_LOCAL_DIR, mode=0o700, exist_ok=True)
-    path = os.path.join(BACKUP_LOCAL_DIR, name)
+    d = os.path.realpath(BACKUP_LOCAL_DIR)
+    if d == os.path.realpath(BACKUP_LOCAL_STOPGAP_DIR):
+        raise RuntimeError("refusing disk backup into the root stopgap directory")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    fname = f"{BACKUP_LOCAL_FILE_PREFIX}{name}"
+    if not _LOCAL_BACKUP_NAME_RE.fullmatch(fname):
+        raise RuntimeError("unexpected disk backup file name")
+    path = os.path.join(d, fname)
     fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     os.replace(path + ".tmp", path)
     keep_from = (now - timedelta(days=BACKUP_KEEP_DAYS)).strftime("%Y-%m-%d")
-    pruned = [p for p in glob.glob(os.path.join(BACKUP_LOCAL_DIR, "*.jsonl.gz")) if os.path.basename(p)[:10] < keep_from]
-    for p in pruned:
-        os.remove(p)
+    pruned = []
+    for entry in os.listdir(d):
+        m = _LOCAL_BACKUP_NAME_RE.fullmatch(entry)
+        if m and m.group(1) < keep_from:
+            os.remove(os.path.join(d, entry))
+            pruned.append(entry)
     return {"object": f"file://{path}", "bytes": len(data), "pruned": pruned}
 
 
