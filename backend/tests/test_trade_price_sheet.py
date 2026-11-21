@@ -11,7 +11,7 @@ def test_no_quote_only_trades():
 def test_every_trade_has_price_and_cut():
     svc = trc.trade_services()
     for key in ("stg_consult", "stg_vacant_small", "cln_1b", "cln_house_xl", "insp_condo",
-                "insp_detached_xl", "floor_plan_only", "rep_1h", "rep_30m", "rep_half", "rep_day"):
+                "insp_detached_xl", "floor_plan_only", "rep_1h", "rep_30m", "rep_half"):
         assert svc[key]["price"] > 0 and len(svc[key]["payout"]) == 3
 
 
@@ -21,7 +21,9 @@ def test_cuts_within_rules():
 
 def test_handyman_prices():
     s = trc.trade_services()
-    assert [s[k]["price"] for k in ("rep_1h", "rep_30m", "rep_half", "rep_day")] == [149, 47.5, 449, 849]
+    assert [s[k]["price"] for k in ("rep_1h", "rep_30m", "rep_half")] == [149, 47.5, 449]
+    assert "rep_day" not in s  # Kam t653u: handyman tops out at a half day
+    assert s["rep_half"]["payout"] == [166.15, 188.6, 215.5]
     assert s["rep_1h"]["payout"] == [55.15, 62.6, 71.5]
 
 
@@ -104,3 +106,8 @@ def test_go_display_uses_trade_payout():
     job = {"package_id": "rep_1h", "subtotal_cents": 14900, "package_price": 149, "rack_price": 149}
     member = {"tier": 3, "role": "vendor"}
     assert asyncio.run(photographer_payout_cents(None, job, member)) == 7150
+
+
+def test_every_priced_service_has_three_cuts():
+    for key, row in trc.trade_services().items():
+        assert row["price"] > 0 and len(row["payout"]) == 3 and all(p > 0 for p in row["payout"]), key
