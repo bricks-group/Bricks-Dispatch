@@ -409,6 +409,22 @@ def travel_payout_cents(add_ons) -> int:
     return total
 
 
+
+def _trade_payout(job: dict, vendor_tier) -> int | None:
+    """Trade set cut, capped: labour 50% / staging install 80% of the pre-tax price paid; materials on top."""
+    from . import trade_payout_rate_card as trc
+    from .client_service_payouts import net_price_cents
+    cents = trc.trade_payout_cents(job, vendor_tier)
+    if cents is None:
+        return None
+    materials = trc.materials_cents(job)
+    labour = cents - materials
+    net = net_price_cents(job)
+    if net is not None:
+        cap_share = 0.80 if trc.is_pass_through(job.get("package_id")) else 0.50
+        labour = min(labour, int((max(0, net - materials)) * cap_share))
+    return max(0, labour) + materials
+
 def ledger_fields(job: dict, payout_cents: int) -> dict:
     """jobs.vendor_payout / platform_margin in dollars (package_price is dollars)."""
     from .client_service_payouts import net_price_cents
@@ -528,6 +544,12 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
     if owner_job:
         payout_amount = owner_payout_cents(job)
         logger.info(f"Owner payout for job {job_id}: full package {payout_amount} cents, $0 deduction")
+    elif _trade_payout(job, vendor_tier) is not None:
+        # Trades (staging, cleaning, inspection, measuring, repairs) and the
+        # survey-grade / large leasing formulas: set cut from the price sheet
+        # (Kam t635u). Capped on what the client paid; materials pass through.
+        payout_amount = int(_trade_payout(job, vendor_tier))
+        logger.info(f"Trade payout for job {job_id} ({job.get('package_id')}): {payout_amount} cents")
     elif set_payout_cents(job, vendor_tier) is not None:
         # Client service (PM / leasing / investor) or builder visit: set dollar
         # amount, bundled deliverables included (no add-on pay on top), capped
@@ -536,12 +558,18 @@ async def trigger_payout_for_job(db, job_id: str, noshow_claim_id: str | None = 
         logger.info(f"Set payout for job {job_id} ({job.get('package_id')}): {payout_amount} cents")
     else:
         payout_amount = await get_fixed_payout_amount(db, job.get("package_id"), job.get("sqft"), vendor_tier)
+        from . import trade_payout_rate_card as _trc
+        if payout_amount is None and str(job.get("package_id") or "").strip().lower() == "floor_plan_only":
+            # Floor plan only has its own cell now (Kam t635u), not the old % fallback.
+            payout_amount = _trc.floor_plan_only_payout_cents(vendor_tier)
         if payout_amount is None:
             payout_amount = calculate_payout_amount(rack_price, vendor_tier)
         from .vendor_payout_rate_card import addon_payout_cents
         payout_amount = int(payout_amount or 0) + addon_payout_cents(
             job.get("add_ons"), job.get("sqft"), vendor_tier
         )
+        # Twilight / reel / tour / drone / rush booked outside the package (Kam t635u).
+        payout_amount += _trc.addon_payout_cents(job.get("package_id"), job.get("add_ons"), job.get("sqft"), vendor_tier)
         # Travel billed to the client from the assigned photographer's distance
         # is theirs (pass-through), then the whole payout is capped at 50% of
         # what the client actually paid (E2E BUG 3).

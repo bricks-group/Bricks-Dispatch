@@ -84,9 +84,10 @@ LEGACY_COLUMN_TYPES = ("photographer", "stager", "cleaner")
 # Trades that need a $2M CGL certificate of insurance (Kam, 2026-10-26).
 CGL_REQUIRED_TYPES = ("inspector", "handyman")
 CGL_MIN_CENTS = 2_000_000 * 100
-# Phase 1 trades are quote-request only: Bricks brokers each job by hand, so
-# they are never auto-assigned.
-QUOTE_ONLY_TYPES = ("inspector", "measurer", "handyman")
+# Every trade has a set price and a set cut (Kam, t631u/t635u 2026-11-21), so
+# no trade is held back from auto-assign any more. Kept as an empty tuple so
+# old imports keep working.
+QUOTE_ONLY_TYPES: tuple = ()
 VENDOR_TYPE_ALIASES = {
     "photo": "photographer",
     "photography": "photographer",
@@ -224,6 +225,26 @@ def is_platform_owner(member: Any) -> bool:
         return True
     return str(m.get("id") or "") == KAM_MEMBER_ID
 
+
+
+def trade_coi_ok(member: Any, vendor_type: str, today: Any = None) -> bool:
+    """Inspector / handyman auto-assign needs a verified, unexpired $2M CGL COI (Kam 2026-10-26)."""
+    if vendor_type not in CGL_REQUIRED_TYPES:
+        return True
+    m = _as_dict(member)
+    if not m.get("coi_verified"):
+        return False
+    try:
+        if int(float(m.get("coi_liability_cad") or 0)) * 100 < CGL_MIN_CENTS:
+            return False
+    except (TypeError, ValueError):
+        return False
+    exp = str(m.get("coi_expires_on") or "")[:10]
+    if not exp:
+        return False
+    from datetime import date as _date
+    d = today or _date.today()
+    return exp >= d.isoformat()
 
 def onboarding_complete(member: Any) -> bool:
     """Checklist done (or grandfathered): vendor_members.onboarding_completed_at set."""
@@ -720,17 +741,21 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     # Unknown job type: fail closed so ops routes it by hand.
     if needed_type is None:
         return False
-    # Quote-request trades (inspection, measurement, repairs) are brokered by
-    # Bricks in phase 1 and never auto-assigned.
     if needed_type in QUOTE_ONLY_TYPES:
         return False
+    # Measuring is one service: the measured floor plan. A measurer can take a
+    # floor-plan-only job as well as a photographer (Kam t635u, audit decision 5).
+    jt = str(_as_dict(job).get("job_type") or "").strip().lower()
+    if needed_type == "photographer" and jt == "floor_plan_only" and member_vendor_type(m) == "measurer":
+        return location_matches(m, job)
     if member_vendor_type(m) != needed_type:
         return False
     if not location_matches(m, job):
         return False
-    # Stager / cleaner: type + location + active/approved. No photo skill/RPAS gates.
-    if needed_type in ("stager", "cleaner"):
-        return True
+    # Trades: type + location + approved (onboarding_complete already requires
+    # their verified credentials). No photo skill/RPAS gates.
+    if needed_type in ("stager", "cleaner", "inspector", "measurer", "handyman"):
+        return trade_coi_ok(m, needed_type)
     from .commercial_jobs import is_commercial_job, is_employee
     # Tier bands are a contractor concept; in-house staff on commercial jobs
     # are gated by the company policy + RPAS + skills instead.
