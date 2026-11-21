@@ -1,6 +1,6 @@
-// Vendor trades in GO. Phase 1 trades beyond photography are quote-request
-// jobs: Bricks quotes the client in writing and only sends the job once they
-// approve. Only repairs and inspections need a certificate of insurance with
+// Vendor trades in GO. Every trade is a set-price job (Kam, 21 Nov 2026):
+// the client books and pays a set price, and the vendor gets a set cut by
+// tier. Only repairs and inspections need a certificate of insurance with
 // $2M commercial general liability (backend CGL_REQUIRED_TYPES).
 export type TradeId = 'photographer' | 'stager' | 'cleaner' | 'inspector' | 'measurer' | 'handyman';
 
@@ -14,25 +14,27 @@ export type Trade = {
   limits: string[];
   /** How a Bricks job runs for this trade. */
   steps: string[];
+  /** Your pay by tier, Tier 1 / 2 / 3. Same numbers as the backend price sheet. */
+  pay: string[];
   needsCoi: boolean;
 };
 
-const QUOTE_STEP = 'Bricks quotes the client in writing. The job only reaches you once they approve it.';
+const BOOK_STEP = 'The client books and pays a set price. The job comes to you with the time already set.';
 const PROOF_STEP = 'Upload before and after photos in the job, so the client sees proof inside Bricks.';
 
 export const TRADES: Trade[] = [
   { id: 'photographer', label: 'Photographer', role: 'Photographer', work: 'Listing photos, video, floor plans and aerials.', limits: [],
-    steps: ['Follow the Guide for each package. You capture, Bricks edits.'], needsCoi: false },
+    steps: ['Follow the Guide for each package. You capture, Bricks edits.'], pay: ['Set by package and home size. See Payouts.'], needsCoi: false },
   { id: 'stager', label: 'Home stager', role: 'Stager', work: 'Staging for vacant and lived-in homes, timed before the photo visit.', limits: [],
-    steps: [QUOTE_STEP, 'Finish the install before the photo visit, and note the removal date in the job.', PROOF_STEP], needsCoi: false },
+    steps: [BOOK_STEP, 'Finish the install before the photo visit, and note the removal date in the job.', PROOF_STEP], pay: ['Consult: $109.15 / $123.90 / $141.60', 'Install: 80% of the staging price, every tier'], needsCoi: false },
   { id: 'cleaner', label: 'Cleaner', role: 'Cleaner', work: 'Pre-listing cleans, move-in and move-out, rental turnovers and post-construction.', limits: [],
-    steps: [QUOTE_STEP, 'Work through the checklist in the job, room by room.', PROOF_STEP], needsCoi: false },
+    steps: [BOOK_STEP, 'Work through the checklist in the job, room by room.', PROOF_STEP], pay: ['1 bedroom condo: $84.75 / $96.20 / $109.90', 'Up to 2,500 sq ft house: $166.15 / $188.60 / $215.50'], needsCoi: false },
   { id: 'inspector', label: 'Inspector', role: 'Inspector', work: 'Home and building condition inspections with a written report.', limits: ['Ontario only.'],
-    steps: [QUOTE_STEP, 'Upload the written report with photos in the job. Bricks keeps it with the property.'], needsCoi: true },
+    steps: [BOOK_STEP, 'Upload the written report with photos in the job. Bricks keeps it with the property.'], pay: ['Condo: $153.55 / $164.05 / $174.50', 'Detached up to 2,500 sq ft: $197.55 / $211.05 / $224.50'], needsCoi: true },
   { id: 'measurer', label: 'Measurer', role: 'Measurer', work: 'Measured floor area and floor plans.', limits: ['Not a legal survey. Bricks refers legal surveys to an Ontario Land Surveyor.'],
-    steps: [QUOTE_STEP, 'Note the measuring method and anything you left out of the area.', 'Upload the measurements and plan in the job.'], needsCoi: false },
+    steps: [BOOK_STEP, 'Note the measuring method and anything you left out of the area.', 'Upload the measurements and plan in the job.'], pay: ['Floor plan: $36.65 / $41.60 / $47.50'], needsCoi: false },
   { id: 'handyman', label: 'Handyman and repairs', role: 'Handyman', work: 'Small repairs and deficiency lists before listing or between tenants.', limits: ['No electrical, plumbing or gas work.'],
-    steps: [QUOTE_STEP, 'Anything outside the approved quote needs a change order Bricks approves first.', PROOF_STEP], needsCoi: true },
+    steps: [BOOK_STEP, 'Extra time is billed in 30 minute blocks. Anything new needs the client to approve it in Bricks first.', PROOF_STEP], pay: ['First hour: $55.15 / $62.60 / $71.50', 'Each extra 30 min: $17.60 / $19.95 / $22.80', 'Materials paid back at cost'], needsCoi: true },
 ];
 
 const BY_WORD: [RegExp, TradeId][] = [

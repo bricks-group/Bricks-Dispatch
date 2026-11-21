@@ -14,6 +14,11 @@ export function TradeCard({ profile }: { profile: VendorProfile }) {
         <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {t.steps.map((s) => <li key={s} className="muted">{s}</li>)}
         </ol>
+        <div data-testid="trade-pay">
+          <p style={{ margin: 0 }}>Your pay, Tier 1 / 2 / 3</p>
+          {t.pay.map((p) => <p key={p} className="muted" style={{ padding: 0, margin: 0 }}>{p}</p>)}
+          <p className="muted" style={{ padding: 0, margin: 0 }}>Paid every Monday for approved jobs.</p>
+        </div>
         <p className={t.needsCoi ? '' : 'muted'} style={{ padding: 0, margin: 0 }} data-testid="trade-coi">
           {t.needsCoi ? COI_LINE : 'No certificate of insurance needed for this trade.'}
         </p>

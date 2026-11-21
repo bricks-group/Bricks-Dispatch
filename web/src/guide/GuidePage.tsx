@@ -93,7 +93,7 @@ export function GuidePage() {
 
       <section className="gd-trades" id="trades" aria-labelledby="gd-trades-title" data-testid="guide-trades">
         <h2 id="gd-trades-title" className="gd-phase-title">Home services jobs</h2>
-        <p className="gd-phase-note">Staging, cleaning, inspections, measurement and repairs are quote-request jobs. The steps above are for photography.</p>
+        <p className="gd-phase-note">Staging, cleaning, inspections, measurement and repairs are set-price jobs. The steps above are for photography.</p>
         <div className="gd-trade-grid">
           {TRADES.filter((t) => t.id !== 'photographer').map((t) => (
             <article key={t.id} className="gd-trade">
