@@ -16,19 +16,24 @@ def _m(**kw):
     return base
 
 
-def test_handyman_trade_is_paused_but_kept():
+def test_handyman_trade_is_on():
     assert "handyman" in ts.trades()
-    assert ts.trade_enabled("handyman") is False
-    assert ts.paused_trades() == ["handyman"]
-    for k in ("photographer", "stager", "cleaner", "inspector", "measurer"):
+    assert ts.trade_enabled("handyman") is True
+    assert "handyman" not in ts.paused_trades()
+    for k in ("photographer", "stager", "cleaner", "inspector", "measurer", "handyman"):
         assert ts.trade_enabled(k) is True
 
 
-def test_approved_handyman_is_not_assignable_while_paused():
-    m = _m()
-    assert is_vendor_paused(m)
-    assert not is_assignable(m)
+def test_approved_handyman_needs_credentials_stamp_for_jobs():
+    m = _m(coi_verified=True, coi_liability_cad=2_000_000, coi_expires_on="2030-01-01")
+    assert is_assignable(m)
+    # Hard gate: without credentials_person_verified, no jobs.
     assert not member_eligible_for_job(m, {"job_type": "repairs", "address": "Toronto"})
+    stamped = _m(
+        coi_verified=True, coi_liability_cad=2_000_000, coi_expires_on="2030-01-01",
+        application_profile={"credentials_person_verified": True, "trade": "handyman"},
+    )
+    assert member_eligible_for_job(stamped, {"job_type": "repairs", "address": "Toronto"})
 
 
 def test_paused_vendor_is_not_assignable():
@@ -41,9 +46,8 @@ def test_owner_never_paused():
     assert not is_vendor_paused(_m(id="0c3fa7c2-d23b-4e44-90ad-ab2d19af2580", paused_at="2026-11-01"))
 
 
-def test_registry_copies_match():
-    here = os.path.dirname(ts._PATH)
-    assert json.load(open(ts._PATH))["trades"]["handyman"]["enabled"] is False
+def test_registry_handyman_enabled():
+    assert json.load(open(ts._PATH))["trades"]["handyman"]["enabled"] is True
 
 
 def test_expired_credential_detected():

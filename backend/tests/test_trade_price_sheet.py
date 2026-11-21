@@ -61,9 +61,24 @@ def test_formulas():
 def test_coi_gate():
     ok = {"coi_verified": True, "coi_liability_cad": 2000000, "coi_expires_on": "2099-01-01"}
     assert trade_coi_ok(ok, "handyman")
-    assert not trade_coi_ok({**ok, "coi_liability_cad": 1000000}, "inspector")
+    # Inspector CGL floor is $1M; still needs E&O stamp.
+    insp = {
+        **ok,
+        "coi_liability_cad": 1000000,
+        "application_profile": {"trade_credentials": {
+            "eo_verified": True, "eo_limit_cents": 25000000, "eo_expires_on": "2099-01-01",
+        }},
+    }
+    assert trade_coi_ok(insp, "inspector")
+    assert not trade_coi_ok({**ok, "coi_liability_cad": 1000000}, "handyman")
     assert not trade_coi_ok({**ok, "coi_expires_on": "2020-01-01"}, "handyman")
-    assert trade_coi_ok({}, "cleaner")
+    # Cleaner now requires $1M CGL (IC v1.10).
+    assert not trade_coi_ok({}, "cleaner")
+    assert trade_coi_ok(
+        {"coi_verified": True, "coi_liability_cad": 1000000, "coi_expires_on": "2099-01-01"},
+        "cleaner",
+    )
+    assert trade_coi_ok({}, "measurer")
 
 
 def test_internal_test_1cad_retired_for_new_jobs():

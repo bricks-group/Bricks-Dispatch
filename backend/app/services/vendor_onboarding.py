@@ -11,6 +11,7 @@ email goes out. Steps:
   availability  vendor confirmed their availability in the app
   guide         vendor read the vendor guide and said so
   agreement     current IC agreement version accepted
+  credentials   every required trade document is person-verified (set at approve/verify)
 
 There is no test shoot (dropped 2026-10-31). Owners can still pause anyone
 (is_active=false); that keeps the stamp but blocks auto-assign.
@@ -26,7 +27,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-STEP_KEYS = ("signed_in", "payouts", "availability", "guide", "agreement")
+STEP_KEYS = ("signed_in", "payouts", "availability", "guide", "agreement", "credentials")
 
 # Vendor-facing copy. Vendors only ever see "Bricks" (never GO / Bricks OS).
 STEP_COPY = {
@@ -36,6 +37,9 @@ STEP_COPY = {
     "guide": ("Read the vendor guide", "How jobs, delivery and pay work at Bricks. Cancelling an accepted job "
               "within 48 hours of the start, or checking in late, closes your account."),
     "agreement": ("Accept the contractor agreement", "Read and accept the current version and amendment A1."),
+    "credentials": ("Verified documents on file",
+                    "A person at Bricks has checked your ID, insurance and proof for your trade. "
+                    "If something expires, upload a renewal so you can keep taking jobs."),
 }
 
 # Vendor mail comes from help@ so replies reach a person.
@@ -77,6 +81,8 @@ def checklist(member: Any, contractor: Optional[dict] = None) -> dict:
     m = _as_dict(member)
     need_payouts = payouts_required(m)
     connect = ((contractor or {}).get("connect_status") or "").lower()
+    from . import trade_specs as _ts
+    creds_done = _ts.credentials_stamp(m) or bool(m.get("onboarding_completed_at"))
     done = {
         "signed_in": bool(m.get("first_signed_in_at")),
         "payouts": (connect == "connected") or not need_payouts,
@@ -86,6 +92,9 @@ def checklist(member: Any, contractor: Optional[dict] = None) -> dict:
         and str(m.get("ic_agreement_version") or "") == current_agreement_version()
         # New vendors accept amendment A1 too; vendors already set up get it in the GO gate.
         and (bool(m.get("onboarding_completed_at")) or str(m.get("ic_amendment_version") or "") == current_amendment_version()),
+        # Person-verified required docs (approval hard gate). Grandfather vendors
+        # who already completed onboarding before this checklist item existed.
+        "credentials": creds_done,
     }
     steps = []
     for key in STEP_KEYS:

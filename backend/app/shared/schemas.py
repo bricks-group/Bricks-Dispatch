@@ -511,10 +511,13 @@ class VendorApplicationCreate(BaseModel):
     #  shoots_per_week, max_shoots_per_day, notice_hours, has_car, has_licence}
     availability: Optional[Dict[str, Any]] = None
     # Non-media trades (2026-10-26). {cgl_confirmed, cgl_limit_cents,
-    # insurer, wsib_number, years_experience, licences, team_size, service_notes}.
-    # Repairs and inspections must confirm $2M CGL; the COI file goes to
-    # POST /api/onboarding/documents (doc_type=coi) after /apply.
+    # insurer, wsib_number, years_experience, licences, team_size, service_notes,
+    # eo_confirmed}. Insurance floors follow IC v1.10 / trade_specs.json.
+    # The COI (and E&O for inspectors) file goes to
+    # POST /api/onboarding/documents after /apply.
     trade_credentials: Optional[Dict[str, Any]] = None
+    # sole | company — vendors may be companies or sole contractors (Kam 2026-11-21).
+    operator_shape: Optional[str] = None
     # Trade vetting (2026-11-01): reviews link or references, commercial drone flag.
     vetting: Optional[Dict[str, Any]] = None
     # www trade form uploads documents after /apply, then calls /apply/{id}/submitted,

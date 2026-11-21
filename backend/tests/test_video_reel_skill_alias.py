@@ -76,6 +76,7 @@ def test_reel_vendor_eligible_for_legacy_video_job():
         tier=2,
         skills=["photo", "drone", "reel"],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert member_eligible_for_job(reel_vendor, job) is True
 
@@ -98,6 +99,7 @@ def test_specialty_video_vendor_still_eligible_for_video_job():
         tier=2,
         skills=[],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert "reel" in vendor_skills(video_vendor)
     assert member_eligible_for_job(video_vendor, job) is True
@@ -130,6 +132,7 @@ def test_specialty_reel_matches_legacy_video_job():
         tier=2,
         skills=[],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert specialty_matches_job(reel_specialist, job) is True
 
@@ -152,6 +155,7 @@ def test_specialty_video_still_matches_video_job():
         tier=2,
         skills=[],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert specialty_matches_job(video_specialist, job) is True
 
@@ -174,6 +178,7 @@ def test_specialty_video_matches_reel_job():
         tier=2,
         skills=[],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert specialty_matches_job(video_specialist, job) is True
 
@@ -197,6 +202,7 @@ def test_photo_specialty_with_reel_skill_matches_video_job():
         tier=2,
         skills=["photo", "reel"],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert specialty_matches_job(photo_reel, job) is True
 
@@ -219,5 +225,6 @@ def test_photo_only_does_not_specialty_match_video_job():
         tier=2,
         skills=["photo"],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert specialty_matches_job(photo_only, job) is False

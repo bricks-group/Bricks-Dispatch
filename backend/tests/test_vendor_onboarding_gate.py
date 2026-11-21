@@ -35,6 +35,7 @@ def _vendor(**over):
         "service_areas": ["Toronto"], "home_city": "Toronto",
         "terms_accepted_at": NOW, "ic_agreement_version": vo.current_agreement_version(),
         "ic_amendment_version": vo.current_amendment_version(), "ic_amendment_accepted_at": NOW,
+        "application_profile": {"credentials_person_verified": True},
     }
     m.update(over)
     return m
@@ -89,7 +90,7 @@ def test_checklist_steps_and_completion():
     m.update(first_signed_in_at=NOW, availability_confirmed_at=NOW, guide_acknowledged_at=NOW)
     assert not vo.checklist(m, {"connect_status": "pending"})["all_steps_done"]
     done = vo.checklist(m, {"connect_status": "connected"})
-    assert done["all_steps_done"] and done["done"] == 5
+    assert done["all_steps_done"] and done["done"] == len(vo.STEP_KEYS)
     assert not vo.checklist({**m, "ic_agreement_version": "1.8"}, {"connect_status": "connected"})["all_steps_done"]
     assert not vo.checklist({**m, "ic_amendment_version": None}, {"connect_status": "connected"})["all_steps_done"]
 

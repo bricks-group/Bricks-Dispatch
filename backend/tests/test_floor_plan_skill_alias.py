@@ -80,6 +80,7 @@ def test_photo_vendor_eligible_for_floor_plan_only_job():
         tier=2,
         skills=["photo"],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert member_eligible_for_job(photo_vendor, job) is True
 
@@ -113,6 +114,7 @@ def test_specialty_photo_matches_floor_plan_only_job():
         tier=2,
         skills=[],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert specialty_matches_job(photo_specialist, job) is True
 
@@ -135,6 +137,7 @@ def test_specialty_floor_plan_only_matches_photo_job():
         tier=2,
         skills=[],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert specialty_matches_job(fp_specialist, job) is True
 
@@ -157,5 +160,6 @@ def test_reel_only_does_not_specialty_match_floor_plan_only_job():
         tier=2,
         skills=["reel"],
         service_areas=["Mississauga", "GTA"],
+            application_profile={"credentials_person_verified": True},
     )
     assert specialty_matches_job(reel_only, job) is False

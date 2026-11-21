@@ -131,9 +131,41 @@ async def update_applicant_status(
         update_data["is_active"] = True
         # Preserve Owner; otherwise set role from vendor_type (Wave A).
         existing = await (await get_db()).table("vendor_members").select(
-            "vendor_type,role,title,application_profile"
+            "vendor_type,role,title,application_profile,coi_verified,coi_liability_cad,coi_expires_on,skills,drone_certified"
         ).eq("id", member_id).maybe_single().execute()
         row = _maybe_single_row(existing)
+        # Hard gate (Kam / Brixton 2026-11-21): every required doc must be
+        # person-verified before approval. AI-extracted alone does not count.
+        from ..services import trade_specs as _ts
+        from ..services.vendor_profile import member_vendor_type, normalize_vendor_type
+        vtype = normalize_vendor_type(
+            update_data.get("vendor_type") or member_vendor_type(row or {})
+        )
+        docs_res = await (await get_db()).table("vendor_documents").select(
+            "id,doc_type,status,expiry_date,validation_result"
+        ).eq("member_id", member_id).limit(100).execute()
+        docs = docs_res.data or []
+        missing = _ts.missing_person_verified(row or {}, docs, vendor_type=vtype)
+        if missing:
+            labels = [m.get("label") or m.get("kind") for m in missing]
+            api_error(
+                400,
+                "Cannot approve: a person must verify every required document first. Missing or unverified: "
+                + ", ".join(labels),
+                "credentials_unverified",
+            )
+        # Stamp so dispatch eligibility can pass without re-loading every doc.
+        ap = row.get("application_profile") if row else None
+        if isinstance(ap, str):
+            import json as _json
+            try:
+                ap = _json.loads(ap)
+            except Exception:
+                ap = {}
+        if not isinstance(ap, dict):
+            ap = {}
+        ap = _ts.set_credentials_stamp(ap, True, at=update_data["updated_at"])
+        update_data["application_profile"] = ap
         from ..services.vendor_profile import (
             is_platform_owner,
             member_vendor_type,
@@ -247,7 +279,64 @@ async def verify_document(
         elif status in ("rejected", "flagged"):
             await db.table("vendor_members").update({"coi_verified": False}).eq("id", member_id).execute()
 
-    return {"id": doc_id, "status": status}
+    # E&O: stamp on application_profile.trade_credentials (no new column).
+    if doc.get("doc_type") == "eo":
+        mres = await db.table("vendor_members").select("application_profile").eq("id", member_id).maybe_single().execute()
+        mrow = _maybe_single_row(mres) or {}
+        ap = mrow.get("application_profile")
+        if isinstance(ap, str):
+            import json as _json
+            try:
+                ap = _json.loads(ap)
+            except Exception:
+                ap = {}
+        if not isinstance(ap, dict):
+            ap = {}
+        tc = dict(ap.get("trade_credentials") or {})
+        if status == "verified":
+            declared = ((doc.get("validation_result") or {}).get("declared") or {}) if isinstance(doc.get("validation_result"), dict) else {}
+            tc["eo_verified"] = True
+            lim = liability_cad if liability_cad is not None else declared.get("liability_cad")
+            if lim is not None:
+                # liability_cad on the verify call is CAD dollars for COI; for E&O
+                # admins may pass cents or dollars — store cents when >= 1000.
+                try:
+                    n = int(lim)
+                    tc["eo_limit_cents"] = n if n >= 1000 else n * 100
+                except (TypeError, ValueError):
+                    pass
+            tc["eo_expires_on"] = doc.get("expiry_date") or declared.get("expires_on")
+        else:
+            tc["eo_verified"] = False
+        ap["trade_credentials"] = tc
+        await db.table("vendor_members").update({"application_profile": ap}).eq("id", member_id).execute()
+
+    # Refresh credentials_person_verified stamp after every verify/reject.
+    from ..services import trade_specs as _ts
+    from ..services.vendor_profile import member_vendor_type
+    mres = await db.table("vendor_members").select(
+        "vendor_type,application_profile,skills,drone_certified,coi_verified,portfolio_samples,portfolio_links"
+    ).eq("id", member_id).maybe_single().execute()
+    mrow = _maybe_single_row(mres) or {}
+    docs_all = (await db.table("vendor_documents").select(
+        "id,doc_type,status,expiry_date"
+    ).eq("member_id", member_id).limit(100).execute()).data or []
+    ok = _ts.all_person_verified(mrow, docs_all, vendor_type=member_vendor_type(mrow))
+    ap = mrow.get("application_profile")
+    if isinstance(ap, str):
+        import json as _json
+        try:
+            ap = _json.loads(ap)
+        except Exception:
+            ap = {}
+    if not isinstance(ap, dict):
+        ap = {}
+    ap = _ts.set_credentials_stamp(
+        ap, ok, at=datetime.now(timezone.utc).isoformat() if ok else None
+    )
+    await db.table("vendor_members").update({"application_profile": ap}).eq("id", member_id).execute()
+
+    return {"id": doc_id, "status": status, "credentials_person_verified": ok}
 
 
 @router.post("/validate-rpas-batch")

@@ -434,6 +434,18 @@ def _clean_vetting(vtype: str, application) -> Optional[dict]:
         business = str((application.trade_credentials or {}).get("business_name") or "").strip()
         if not business and not (application.hst_number or "").strip():
             raise ValueError("Add your business name or HST number.")
+    # Company vs sole contractor (Kam 2026-11-21). Specialist trades stay off.
+    shape = str(getattr(application, "operator_shape", None) or "").strip().lower()
+    from ..services.trade_specs import apply_shapes
+    allowed = apply_shapes(vtype)
+    if shape and shape not in ("sole", "company"):
+        raise ValueError("Say whether you apply as a sole contractor or a company.")
+    if shape and shape not in allowed:
+        raise ValueError(f"This trade accepts: {', '.join(allowed)}.")
+    if shape == "company":
+        business = str((application.trade_credentials or {}).get("business_name") or "").strip()
+        if not business:
+            raise ValueError("Company applications need the legal business name.")
     from ..services.trade_specs import registry
     out["rules_version"] = registry().get("version")
     return out
@@ -445,12 +457,12 @@ _CREDENTIAL_TEXT_KEYS = ("insurer", "policy_number", "wsib_number", "licences", 
 def _clean_trade_credentials(vtype: str, raw) -> dict:
     """Self-reported trade credentials for non-media applicants.
 
-    Repairs (handyman) and inspections must confirm $2M commercial general
-    liability; the certificate itself is uploaded to /documents (doc_type=coi)
-    and verified by a person before any job. WSIB is optional for repairs.
+    Insurance floors follow IC v1.10 via trade_specs.cgl_min_cents / eo_mins.
+    Certificates upload to /documents and a person verifies them before
+    approval or dispatch. WSIB is optional for repairs.
     Raises ValueError with an applicant-facing message.
     """
-    from ..services.vendor_profile import CGL_MIN_CENTS, CGL_REQUIRED_TYPES
+    from ..services import trade_specs as _ts
 
     data = raw if isinstance(raw, dict) else {}
     out: dict = {}
@@ -465,16 +477,38 @@ def _clean_trade_credentials(vtype: str, raw) -> dict:
             continue
         if 0 <= num <= 500:
             out[key] = num
+    cgl_min = _ts.cgl_min_cents(vtype)
     out["cgl_confirmed"] = bool(data.get("cgl_confirmed"))
     try:
         limit = int(data.get("cgl_limit_cents") or 0)
     except (TypeError, ValueError):
         limit = 0
-    if out["cgl_confirmed"]:
-        out["cgl_limit_cents"] = max(limit, CGL_MIN_CENTS)
-    out["coi_required"] = vtype in CGL_REQUIRED_TYPES
-    if vtype in CGL_REQUIRED_TYPES and not out["cgl_confirmed"]:
-        raise ValueError("Confirm you carry at least $2M commercial general liability insurance.")
+    if out["cgl_confirmed"] and cgl_min:
+        out["cgl_limit_cents"] = max(limit, int(cgl_min))
+    elif out["cgl_confirmed"] and limit:
+        out["cgl_limit_cents"] = limit
+    out["coi_required"] = bool(cgl_min)
+    if cgl_min and not out["cgl_confirmed"]:
+        cad = int(cgl_min) // 100
+        raise ValueError(
+            f"Confirm you carry at least ${cad:,} commercial general liability insurance."
+        )
+    eo = _ts.eo_mins(vtype)
+    if eo:
+        out["eo_required"] = True
+        out["eo_confirmed"] = bool(data.get("eo_confirmed"))
+        if not out["eo_confirmed"]:
+            raise ValueError(
+                "Confirm you carry errors and omissions insurance "
+                "($250,000 per occurrence / $300,000 aggregate)."
+            )
+        try:
+            eo_lim = int(data.get("eo_limit_cents") or 0)
+        except (TypeError, ValueError):
+            eo_lim = 0
+        out["eo_limit_cents"] = max(eo_lim, int(eo.get("min_limit_cents") or 0))
+        if eo.get("min_aggregate_cents"):
+            out["eo_aggregate_cents"] = int(eo["min_aggregate_cents"])
     return out
 
 
@@ -716,6 +750,12 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         if vtype != "photographer":
             application_profile["trade"] = vtype
             application_profile["credentials"] = getattr(application, "trade_credentials", None) or {}
+        shape = str(getattr(application, "operator_shape", None) or "").strip().lower()
+        if shape in ("sole", "company"):
+            application_profile["operator_shape"] = shape
+        elif vtype != "photographer":
+            # Default sole when the form omits it (older clients).
+            application_profile["operator_shape"] = "sole"
         if getattr(application, "vetting", None):
             application_profile["vetting"] = application.vetting
             if application.vetting.get("commercial_drone"):

@@ -34,11 +34,15 @@ def test_stager_not_assigned_media_job():
             id="s1", name="Stage Pro", email="s@test.com",
             specialty="staging", vendor_type="stager",
             is_active=True, status="available", onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00",
+            application_profile={"credentials_person_verified": True},
+            coi_verified=True, coi_liability_cad=1_000_000, coi_expires_on="2030-01-01",
         ),
         VendorMember(
             id="p1", name="Photo Pro", email="p@test.com",
             specialty="photo", vendor_type="photographer",
             is_active=True, status="available", onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00",
+            application_profile={"credentials_person_verified": True},
+            coi_verified=True, coi_liability_cad=1_000_000, coi_expires_on="2030-01-01",
         ),
     ]
     assert pick_vendor_rule_based(job, vendors) == "p1"
@@ -51,11 +55,15 @@ def test_cleaner_job_picks_cleaner_only():
             id="p1", name="Photo Pro", email="p@test.com",
             specialty="photo", vendor_type="photographer",
             is_active=True, status="available", onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00",
+            application_profile={"credentials_person_verified": True},
+            coi_verified=True, coi_liability_cad=1_000_000, coi_expires_on="2030-01-01",
         ),
         VendorMember(
             id="c1", name="Clean Pro", email="c@test.com",
             specialty="cleaning", vendor_type="cleaner",
             is_active=True, status="available", onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00",
+            application_profile={"credentials_person_verified": True},
+            coi_verified=True, coi_liability_cad=1_000_000, coi_expires_on="2030-01-01",
         ),
     ]
     assert pick_vendor_rule_based(job, vendors) == "c1"
@@ -66,19 +74,19 @@ def test_drone_job_still_requires_photographer_with_rpas():
     photo_no_rpas = VendorMember(
         id="p1", name="Photo", email="p@test.com", specialty="photo",
         vendor_type="photographer", is_active=True, status="available",
-        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", drone_certified=True,
+        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", application_profile={"credentials_person_verified": True}, drone_certified=True,
     )
     photo_rpas = VendorMember(
         id="p2", name="Aerial", email="a@test.com", specialty="drone",
         vendor_type="photographer", is_active=True, status="available",
-        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", drone_certified=True,
+        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", application_profile={"credentials_person_verified": True}, drone_certified=True,
         rpas_advanced=True, rpas_certificate_level="advanced",
         skills=["photo", "drone"],
     )
     stager = VendorMember(
         id="s1", name="Stage", email="s@test.com", specialty="staging",
         vendor_type="stager", is_active=True, status="available",
-        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00",
+        onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", application_profile={"credentials_person_verified": True},
     )
     assert member_eligible_for_job(stager, job) is False
     assert member_eligible_for_job(photo_no_rpas, job) is False

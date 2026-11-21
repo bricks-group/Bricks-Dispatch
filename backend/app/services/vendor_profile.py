@@ -81,9 +81,10 @@ DB_VENDOR_TYPES = ("photographer", "stager", "cleaner", "inspector", "measurer",
 # What older rows could hold: inspector / measurer / handyman were stored as
 # 'photographer' with the real trade on application_profile.trade or the label.
 LEGACY_COLUMN_TYPES = ("photographer", "stager", "cleaner")
-# Trades that need a $2M CGL certificate of insurance (Kam, 2026-10-26).
-CGL_REQUIRED_TYPES = ("inspector", "handyman")
-CGL_MIN_CENTS = 2_000_000 * 100
+# IC v1.10 insurance floors live in trade_specs.json (Kam / Brixton 2026-11-21).
+# Legacy aliases kept for imports; prefer trade_specs.cgl_min_cents().
+CGL_REQUIRED_TYPES = ("inspector", "handyman", "cleaner", "stager")
+CGL_MIN_CENTS = 2_000_000 * 100  # handyman floor; per-trade mins come from trade_specs
 # Every trade has a set price and a set cut (Kam, t631u/t635u 2026-11-21), so
 # no trade is held back from auto-assign any more. Kept as an empty tuple so
 # old imports keep working.
@@ -228,23 +229,67 @@ def is_platform_owner(member: Any) -> bool:
 
 
 def trade_coi_ok(member: Any, vendor_type: str, today: Any = None) -> bool:
-    """Inspector / handyman auto-assign needs a verified, unexpired $2M CGL COI (Kam 2026-10-26)."""
-    if vendor_type not in CGL_REQUIRED_TYPES:
-        return True
-    m = _as_dict(member)
-    if not m.get("coi_verified"):
-        return False
-    try:
-        if int(float(m.get("coi_liability_cad") or 0)) * 100 < CGL_MIN_CENTS:
-            return False
-    except (TypeError, ValueError):
-        return False
-    exp = str(m.get("coi_expires_on") or "")[:10]
-    if not exp:
-        return False
+    """Person-verified insurance for the trade per IC v1.10 (trade_specs.json).
+
+    CGL trades need coi_verified + limit + expiry on the member row.
+    Inspector also needs E&O stamped on application_profile.trade_credentials
+    when an admin verifies the eo document (no extra DB column).
+    """
+    from . import trade_specs as _ts
     from datetime import date as _date
+
+    m = _as_dict(member)
     d = today or _date.today()
-    return exp >= d.isoformat()
+    today_s = d.isoformat() if hasattr(d, "isoformat") else str(d)[:10]
+
+    cgl_min = _ts.cgl_min_cents(vendor_type)
+    if cgl_min:
+        if not m.get("coi_verified"):
+            return False
+        try:
+            if int(float(m.get("coi_liability_cad") or 0)) * 100 < int(cgl_min):
+                return False
+        except (TypeError, ValueError):
+            return False
+        exp = str(m.get("coi_expires_on") or "")[:10]
+        if not exp or exp < today_s:
+            return False
+
+    eo = _ts.eo_mins(vendor_type)
+    if eo:
+        ap = _profile_dict(m)
+        tc = ap.get("trade_credentials") if isinstance(ap.get("trade_credentials"), dict) else {}
+        if not (tc.get("eo_verified") or m.get("eo_verified")):
+            return False
+        try:
+            lim = int(float(tc.get("eo_limit_cents") or m.get("eo_limit_cents") or 0))
+        except (TypeError, ValueError):
+            lim = 0
+        if lim and lim < int(eo.get("min_limit_cents") or 0):
+            return False
+        eo_exp = str(tc.get("eo_expires_on") or m.get("eo_expires_on") or "")[:10]
+        if not eo_exp or eo_exp < today_s:
+            return False
+
+    return True
+
+
+def trade_docs_ok(member: Any, vendor_type: str, docs: Any = None, today: Any = None) -> bool:
+    """Hard gate: every required doc person-verified, plus insurance floors.
+
+    Prefer live `docs` rows. When docs are not loaded, require the
+    application_profile credentials stamp set at verify/approve time.
+    """
+    from . import trade_specs as _ts
+
+    m = _as_dict(member)
+    if docs is not None:
+        if not _ts.all_person_verified(m, list(docs), today=today, vendor_type=vendor_type):
+            return False
+        return trade_coi_ok(m, vendor_type, today=today)
+    if not _ts.credentials_stamp(m):
+        return False
+    return trade_coi_ok(m, vendor_type, today=today)
 
 def onboarding_complete(member: Any) -> bool:
     """Checklist done (or grandfathered): vendor_members.onboarding_completed_at set."""
@@ -747,15 +792,17 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     # floor-plan-only job as well as a photographer (Kam t635u, audit decision 5).
     jt = str(_as_dict(job).get("job_type") or "").strip().lower()
     if needed_type == "photographer" and jt == "floor_plan_only" and member_vendor_type(m) == "measurer":
-        return location_matches(m, job)
+        return location_matches(m, job) and trade_docs_ok(
+            m, "measurer", docs=m.get("_vetting_docs")
+        )
     if member_vendor_type(m) != needed_type:
         return False
     if not location_matches(m, job):
         return False
-    # Trades: type + location + approved (onboarding_complete already requires
-    # their verified credentials). No photo skill/RPAS gates.
+    # Trades: type + location + person-verified required docs + insurance floors
+    # (IC v1.10 / vetting gate 2026-11-21). Stamp or live docs via trade_docs_ok.
     if needed_type in ("stager", "cleaner", "inspector", "measurer", "handyman"):
-        return trade_coi_ok(m, needed_type)
+        return trade_docs_ok(m, needed_type, docs=m.get("_vetting_docs"))
     from .commercial_jobs import is_commercial_job, is_employee
     # Tier bands are a contractor concept; in-house staff on commercial jobs
     # are gated by the company policy + RPAS + skills instead.
@@ -772,6 +819,10 @@ def member_eligible_for_job(member: Any, job: Any) -> bool:
     # Commercial: Tier A + verified, unexpired drone liability >= job minimum.
     from .commercial_jobs import commercial_gate_failures
     if commercial_gate_failures(m, job, has_skills=have, advanced_rpas=has_advanced_rpas(m)):
+        return False
+    # Photographer / media: same person-verified docs hard gate (portfolio, ID,
+    # and conditional RPAS / drone liability when required).
+    if not trade_docs_ok(m, "photographer", docs=m.get("_vetting_docs")):
         return False
     return True
 
