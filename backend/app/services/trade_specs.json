@@ -219,7 +219,7 @@
       "long_label": "Handyman / repairs",
       "ic_title": "Repairs IC",
       "role": "Repairs",
-      "enabled": false,
+      "enabled": true,
       "occupied_homes": true,
       "apply_path": "/work-with-bricks/repairs",
       "scope_note": "Electrical, gas and plumbing work beyond simple fixture swaps is excluded.",
