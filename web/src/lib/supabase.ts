@@ -14,5 +14,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
     detectSessionInUrl: true,
     flowType: 'pkce',
+    // Keep sessions across the Supabase -> db.brxs.ca URL change (cutover 2026-11-21).
+    storageKey: 'sb-rbywjnnctjglhcdemnnj-auth-token',
   },
 })
