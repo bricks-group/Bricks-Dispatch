@@ -18,6 +18,10 @@ export const supabase: SupabaseClient = isBrowser
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,
+        // Google sign-in returns ?code= on bricks-go://auth-callback (exchangeCodeForSession): PKCE required by the new login service.
+        flowType: 'pkce',
+        // Keep sessions across the Supabase -> db.brxs.ca URL change (cutover 2026-11-21).
+        storageKey: 'sb-rbywjnnctjglhcdemnnj-auth-token',
       },
     })
   : createClient(supabaseUrl, supabaseAnonKey);
