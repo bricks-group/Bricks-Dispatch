@@ -62,3 +62,45 @@ def test_coi_gate():
     assert not trade_coi_ok({**ok, "coi_liability_cad": 1000000}, "inspector")
     assert not trade_coi_ok({**ok, "coi_expires_on": "2020-01-01"}, "handyman")
     assert trade_coi_ok({}, "cleaner")
+
+
+def test_internal_test_1cad_retired_for_new_jobs():
+    from app.services.payout_service import is_retired_for_new_jobs
+    assert is_retired_for_new_jobs("internal_test_1cad")
+    assert is_retired_for_new_jobs("standard")
+    assert not is_retired_for_new_jobs("essentials")
+
+
+def test_materials_cannot_bypass_labour_cap():
+    # Sentinel Must #2: a huge materials amount_cents with a $149 subtotal must not pay $5000.
+    job = {
+        "package_id": "rep_1h",
+        "add_ons": [{"key": "materials", "amount_cents": 500000}],
+        "subtotal_cents": 14900,
+    }
+    out = _trade_payout(job, 3)
+    assert out is not None
+    assert out <= 14900, out
+    # Labour share of remaining after materials (materials capped to net) → payout == net.
+    assert out == 14900
+
+
+def test_honest_materials_still_pass_through():
+    # Client paid labour + materials: materials reimbursed, labour capped on the rest.
+    job = {
+        "package_id": "rep_1h",
+        "add_ons": [
+            {"key": "rep_30m", "count": 2},
+            {"key": "materials", "amount_cents": 4000, "client_amount_cents": 4000},
+        ],
+        "subtotal_cents": 14900 + 9500 + 4000,
+    }
+    assert _trade_payout(job, 3) == 7150 + 2 * 2280 + 4000
+
+
+def test_go_display_uses_trade_payout():
+    import asyncio
+    from app.shared.vendor_identity import photographer_payout_cents
+    job = {"package_id": "rep_1h", "subtotal_cents": 14900, "package_price": 149, "rack_price": 149}
+    member = {"tier": 3, "role": "vendor"}
+    assert asyncio.run(photographer_payout_cents(None, job, member)) == 7150

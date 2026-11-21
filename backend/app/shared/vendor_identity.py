@@ -191,6 +191,7 @@ def rack_dollars(job: dict) -> float:
 async def photographer_payout_cents(db, job: dict, member: Optional[dict]) -> int:
     """Owner: full package, $0 deduction. IC: fixed rate card, never % of rack."""
     from ..services.payout_service import (
+        _trade_payout,
         calculate_payout_amount,
         get_fixed_payout_amount,
     )
@@ -203,6 +204,10 @@ async def photographer_payout_cents(db, job: dict, member: Optional[dict]) -> in
     if is_employee(member):
         return 0  # in-house staff: salary handled outside Dispatch
     tier = (member or {}).get("tier") or job.get("vendor_tier") or 1
+    # Trades: same cut Monday payouts use (Sentinel Must #3).
+    trade = _trade_payout(job, tier)
+    if trade is not None:
+        return int(trade)
     fixed = set_payout_cents(job, tier)
     if fixed is not None:
         return int(fixed)

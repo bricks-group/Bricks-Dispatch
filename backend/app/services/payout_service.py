@@ -106,7 +106,7 @@ _LEGACY_PACKAGE_IDS = frozenset({"standard", "premium", "luxury", "estate"})
 
 # Soft-retired for NEW job intake only. Historical jobs keep these package_ids
 # so vendor_payout_rates legacy rows still resolve. Nothing maps www IDs onto these.
-_RETIRED_FOR_NEW_JOBS = _LEGACY_PACKAGE_IDS
+_RETIRED_FOR_NEW_JOBS = _LEGACY_PACKAGE_IDS | frozenset({"internal_test_1cad"})
 
 
 def normalize_package_id_key(package_id: str | None) -> str | None:
@@ -411,18 +411,35 @@ def travel_payout_cents(add_ons) -> int:
 
 
 def _trade_payout(job: dict, vendor_tier) -> int | None:
-    """Trade set cut, capped: labour 50% / staging install 80% of the pre-tax price paid; materials on top."""
+    """Trade set cut, capped: labour 50% / staging install 80% of pre-tax net; materials never above client-paid materials."""
     from . import trade_payout_rate_card as trc
     from .client_service_payouts import net_price_cents
     cents = trc.trade_payout_cents(job, vendor_tier)
     if cents is None:
         return None
-    materials = trc.materials_cents(job)
-    labour = cents - materials
+    claimed = max(0, int(trc.materials_cents(job) or 0))
     net = net_price_cents(job)
+    # Materials pass through only up to what the client paid for materials (or the whole net
+    # when the materials line is missing). A huge amount_cents cannot inflate the payout.
+    materials = claimed
     if net is not None:
+        materials = min(claimed, max(0, int(net)))
+        # Prefer an explicit client materials line when present; else leave room for labour.
+        paid_mats = 0
+        for rec in (job.get("add_ons") or []) if isinstance(job.get("add_ons"), list) else []:
+            if isinstance(rec, dict) and str(rec.get("key") or "").lower() in ("materials", "rep_materials"):
+                try:
+                    paid_mats += max(0, int(rec.get("client_amount_cents") or rec.get("paid_cents") or 0))
+                except (TypeError, ValueError):
+                    pass
+        if paid_mats > 0:
+            materials = min(claimed, paid_mats, max(0, int(net)))
+        labour = max(0, int(cents) - claimed)
         cap_share = 0.80 if trc.is_pass_through(job.get("package_id")) else 0.50
-        labour = min(labour, int((max(0, net - materials)) * cap_share))
+        labour = min(labour, int(max(0, int(net) - materials) * cap_share))
+        # Absolute: never pay more than the client net.
+        return min(int(net), max(0, labour) + materials)
+    labour = max(0, int(cents) - claimed)
     return max(0, labour) + materials
 
 def ledger_fields(job: dict, payout_cents: int) -> dict:
