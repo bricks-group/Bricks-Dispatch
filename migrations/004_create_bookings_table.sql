@@ -36,9 +36,18 @@ CREATE TRIGGER sync_bookings_updated_at BEFORE UPDATE ON public.bookings FOR EAC
 
 ALTER TABLE public.bookings ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Enable all for authenticated users only"
+-- A signed-in user sees only their own bookings. There is deliberately no
+-- insert/update/delete policy for anon or authenticated: every booking write
+-- goes through the service role (Companion/Dispatch backends, the
+-- dispatch-booking edge function). Never add a policy keyed only on
+-- auth.role() = 'authenticated' here: anyone can self-register an account.
+-- TRUNCATE/REFERENCES/TRIGGER are not governed by RLS, so they are revoked.
+REVOKE TRUNCATE, REFERENCES, TRIGGER ON TABLE public.bookings FROM anon, authenticated;
+
+CREATE POLICY bookings_select_own
 ON public.bookings
-FOR ALL USING (auth.role() = 'authenticated');
+FOR SELECT TO authenticated
+USING (user_id = auth.uid()::text);
 
 -- Down migration
 DROP TRIGGER IF EXISTS sync_bookings_updated_at ON public.bookings;
