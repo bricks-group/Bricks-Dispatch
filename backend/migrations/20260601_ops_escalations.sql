@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS ops_escalations (
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 
+-- Service role only. RLS on with no policies.
+ALTER TABLE ops_escalations ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE ops_escalations FROM anon, authenticated;
+
 CREATE INDEX IF NOT EXISTS ops_escalations_job_id_idx     ON ops_escalations (job_id);
 CREATE INDEX IF NOT EXISTS ops_escalations_booking_id_idx ON ops_escalations (booking_id);
 CREATE INDEX IF NOT EXISTS ops_escalations_status_idx     ON ops_escalations (status);
