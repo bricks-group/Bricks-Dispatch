@@ -73,6 +73,14 @@ def jobs_or_filter(vendor_ids: list[str], assignee_ids: list[str]) -> str:
     return ",".join(parts) if parts else f"vendor_id.eq.{ORG_VENDOR_ID}"
 
 
+def ilike_any_or_filter(columns: list[str], term: Any) -> str:
+    """or_() body matching `term` in any column. The term is double-quoted so
+    commas/parentheses in user input stay part of the value and cannot add
+    filter atoms."""
+    value = str(term or "").replace("\\", "\\\\").replace('"', '\\"')
+    return ",".join(f'{col}.ilike."%{value}%"' for col in columns)
+
+
 def job_visible_to(
     job: Optional[dict],
     actor_id: str,
