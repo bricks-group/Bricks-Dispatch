@@ -405,21 +405,20 @@ export async function logout() {
 }
 
 // ... rest of types ...
+// GET /api/vendor-os/team returns only id, name, title, skills, assignable,
+// assignable_reason and assigned_jobs. PUT/POST /team also echo role,
+// status and is_active.
 export type TeamMember = {
   id: string;
   name: string;
-  email: string;
-  phone: string;
-  role: string;
+  role?: string;
   title?: string;
   skills?: string[];
-  status: 'available' | 'busy' | 'offline';
-  is_active: boolean;
+  status?: 'available' | 'busy' | 'offline';
+  is_active?: boolean;
   assigned_jobs: number;
   assignable?: boolean;
   assignable_reason?: string | null;
-  rpas_certificate_level?: string | null;
-  payout_label?: string;
 };
 
 export type PaginatedTeamResponse = {

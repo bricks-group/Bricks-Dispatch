@@ -49,9 +49,11 @@ public struct TeamMember: Codable, Identifiable, Hashable, Sendable {
         email = try c.decodeIfPresent(String.self, forKey: .email)
         role = try c.decodeIfPresent(String.self, forKey: .role)
         title = try c.decodeIfPresent(String.self, forKey: .title)
-        isActive = try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? false
         assignable = try c.decodeIfPresent(Bool.self, forKey: .assignable)
         assignableReason = try c.decodeIfPresent(String.self, forKey: .assignableReason)
+        // GET /team does not return is_active; `assignable` already requires an
+        // active, approved, unpaused member.
+        isActive = try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? (assignable ?? false)
     }
 
     public var pickerLabel: String { title ?? role ?? "Photographer" }

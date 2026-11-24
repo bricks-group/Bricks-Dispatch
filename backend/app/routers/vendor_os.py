@@ -779,6 +779,37 @@ async def get_vendor_os_overview(
     return payload
 
 
+# Only what public_profile() needs to derive title, skills and assignable.
+# Contact details, tax/insurance numbers, home coordinates, notes and
+# application_token are never read here, so they cannot reach the response.
+_TEAM_PROFILE_COLUMNS = (
+    "id,name,email,role,title,vendor_type,payout_mode,specialty,skills,equipment_list,"
+    "is_active,paused_at,onboarding_status,onboarding_completed_at,application_profile,created_at"
+)
+
+
+def _team_entry(member: dict, assigned_jobs: int = 0) -> dict:
+    pub = public_profile(member)
+    return {
+        "id": member.get("id"),
+        "name": member.get("name") or "",
+        "title": pub["title"],
+        "skills": pub["skills"],
+        "assignable": pub["assignable"],
+        "assignable_reason": pub["assignable_reason"],
+        "assigned_jobs": assigned_jobs,
+    }
+
+
+def _team_mutation_entry(member: dict, assigned_jobs: int = 0) -> dict:
+    return {
+        **_team_entry(member, assigned_jobs),
+        "role": member.get("role") or "",
+        "status": member.get("status") or "offline",
+        "is_active": bool(member.get("is_active")),
+    }
+
+
 @router.get("/team")
 async def get_vendor_team(
     search: Optional[str] = None,
@@ -790,10 +821,11 @@ async def get_vendor_team(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id") or ORG_VENDOR_ID
+    if not is_vendor_admin(actor_member):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendors = vendor_scope_ids(actor_id, actor_member)
 
-    sb = await get_db(); query = sb.table("vendor_members").select("*", count="exact").in_("vendor_id", vendors)
+    sb = await get_db(); query = sb.table("vendor_members").select(_TEAM_PROFILE_COLUMNS, count="exact").in_("vendor_id", vendors)
     if status:
         query = query.eq("status", status)
     if search:
@@ -801,23 +833,15 @@ async def get_vendor_team(
     
     page, page_size, skip = normalize_pagination(page, page_size)
     res = await query.order("created_at", desc=False).range(skip, skip + page_size - 1).execute()
-    members = res.data
+    members = res.data or []
     total = res.count or 0
     
+    items = []
     for member in members:
-        res_count = await (await get_db()).table("jobs").select("*", count="exact").in_("vendor_id", vendors).eq("assignee_id", member["id"]).in_("status", ["pending_assignment", "assigned", "in_progress", "processing"]).execute()
-        member["assigned_jobs"] = res_count.count or 0
-        pub = public_profile(member)
-        member["title"] = pub["title"]
-        member["skills"] = pub["skills"]
-        member["assignable"] = pub["assignable"]
-        member["assignable_reason"] = pub["assignable_reason"]
-        member["rpas_certificate_url"] = pub["rpas_certificate_url"]
-        member["rpas_certificate_level"] = pub["rpas_certificate_level"]
-        member["payout_model"] = pub["payout_model"]
-        member["payout_label"] = pub["payout_label"]
+        res_count = await (await get_db()).table("jobs").select("id", count="exact").in_("vendor_id", vendors).eq("assignee_id", member["id"]).in_("status", ["pending_assignment", "assigned", "in_progress", "processing"]).execute()
+        items.append(_team_entry(member, res_count.count or 0))
         
-    return paginated_response(members, total, page, page_size)
+    return paginated_response(items, total, page, page_size)
 
 
 @router.post("/team")
@@ -851,9 +875,8 @@ async def create_vendor_member(
     )
     member_dict = member.dict()
     await (await get_db()).table("vendor_members").insert(member_dict).execute()
-    member_dict["assigned_jobs"] = 0
     await _safe_write_audit_event(actor_id, "vendor_member", member_dict["id"], "create", vendor_id=member_dict["vendor_id"], details={"email": member_dict["email"]})
-    return member_dict
+    return _team_mutation_entry(member_dict, 0)
 
 
 @router.put("/team/{member_id}")
@@ -878,10 +901,9 @@ async def update_vendor_member(
         api_error(404, "Member not found", "member_not_found")
     
     member = res.data[0]
-    res_count = await (await get_db()).table("jobs").select("*", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member_id).neq("status", "completed").execute()
-    member["assigned_jobs"] = res_count.count or 0
+    res_count = await (await get_db()).table("jobs").select("id", count="exact").eq("vendor_id", vendor_id).eq("assignee_id", member_id).neq("status", "completed").execute()
     await _safe_write_audit_event(actor_id, "vendor_member", member_id, "update", vendor_id=vendor_id, details=update_data)
-    return member
+    return _team_mutation_entry(member, res_count.count or 0)
 
 
 @router.delete("/team/{member_id}")

@@ -61,6 +61,15 @@ async def list_leads(
     res = await query.order("created_at", ascending=False).limit(100).execute()
     return res.data
 
+# application_token is the applicant's bearer for /api/onboarding/status and
+# /documents; reviewers never need it, nor the Supabase auth id.
+_MEMBER_CREDENTIAL_COLUMNS = ("application_token", "auth_user_id")
+
+
+def _without_credentials(member: dict) -> dict:
+    return {k: v for k, v in member.items() if k not in _MEMBER_CREDENTIAL_COLUMNS}
+
+
 @router.get("/applicants")
 async def list_applicants(
     status: Optional[str] = "pending",
@@ -101,7 +110,7 @@ async def list_applicants(
     for a in applicants:
         a["portfolio_samples"] = assemble_portfolio_samples(a, docs_by_member.get(a.get("id"), []))
 
-    return paginated_response(applicants, total, page, page_size)
+    return paginated_response([_without_credentials(a) for a in applicants], total, page, page_size)
 
 @router.patch("/applicants/{member_id}")
 async def update_applicant_status(
@@ -163,7 +172,7 @@ async def update_applicant_status(
         await _vo.send_onboarding_welcome(approved_row)
     elif update_data.get("onboarding_status") == "rejected":
         await _vo.send_reject_email(approved_row, datetime.fromisoformat(update_data["updated_at"]))
-    return approved_row
+    return _without_credentials(approved_row)
 
 async def _require_applicant_in_own_vendor(db, member_id: str, vendor_id: str):
     """IDOR guard (fixed 2026-08-15): list_applicants/update_applicant_status both
