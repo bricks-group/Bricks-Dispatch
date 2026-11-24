@@ -779,6 +779,36 @@ async def get_vendor_os_overview(
     return payload
 
 
+# Team rows are built from these allowlists, never from the raw vendor_members
+# row: that row carries contact details, home coordinates, tax/insurance
+# numbers, internal notes, the application profile and application_token.
+_TEAM_ROW_FIELDS = ("id", "vendor_id", "name", "role", "status", "is_active", "created_at")
+_TEAM_PROFILE_FIELDS = (
+    "title", "vendor_type", "skills", "tier", "drone_certified", "assignable",
+    "assignable_reason", "rpas_certificate_level", "payout_model", "payout_label",
+)
+_TEAM_ADMIN_ROW_FIELDS = ("email", "phone", "onboarding_status")
+_TEAM_ADMIN_PROFILE_FIELDS = ("rpas_certificate_url",)
+# Search is interpolated into a PostgREST or= filter; anything that can close a
+# term or add a wildcard would let a caller filter on hidden columns.
+_TEAM_SEARCH_DISALLOWED = re.compile(r"[^\w\s@.+'-]")
+
+
+def _team_search_term(search: Optional[str]) -> str:
+    cleaned = _TEAM_SEARCH_DISALLOWED.sub("", search or "")
+    return " ".join(cleaned.split())[:100]
+
+
+def _team_row(member: dict, assigned_jobs: int, admin: bool) -> dict:
+    pub = public_profile(member)
+    row_fields = _TEAM_ROW_FIELDS + (_TEAM_ADMIN_ROW_FIELDS if admin else ())
+    profile_fields = _TEAM_PROFILE_FIELDS + (_TEAM_ADMIN_PROFILE_FIELDS if admin else ())
+    row = {k: member.get(k) for k in row_fields}
+    row.update({k: pub.get(k) for k in profile_fields})
+    row["assigned_jobs"] = assigned_jobs
+    return row
+
+
 @router.get("/team")
 async def get_vendor_team(
     search: Optional[str] = None,
@@ -790,34 +820,36 @@ async def get_vendor_team(
 ):
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id") or ORG_VENDOR_ID
+    admin = is_vendor_admin(actor_member)
+    if not admin and not actor_member.get("is_active"):
+        api_error(403, "Insufficient permissions", "insufficient_permissions")
     vendors = vendor_scope_ids(actor_id, actor_member)
 
-    sb = await get_db(); query = sb.table("vendor_members").select("*", count="exact").in_("vendor_id", vendors)
+    sb = await get_db()
+    query = (
+        sb.table("vendor_members")
+        .select("*", count="exact")
+        .in_("vendor_id", vendors)
+        .eq("is_active", True)
+    )
     if status:
         query = query.eq("status", status)
-    if search:
-        query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%,role.ilike.%{search}%")
-    
+    term = _team_search_term(search)
+    if term:
+        columns = ("name", "email", "role") if admin else ("name", "role")
+        query = query.or_(",".join(f"{c}.ilike.%{term}%" for c in columns))
+
     page, page_size, skip = normalize_pagination(page, page_size)
     res = await query.order("created_at", desc=False).range(skip, skip + page_size - 1).execute()
-    members = res.data
+    members = res.data or []
     total = res.count or 0
-    
+
+    items = []
     for member in members:
         res_count = await (await get_db()).table("jobs").select("*", count="exact").in_("vendor_id", vendors).eq("assignee_id", member["id"]).in_("status", ["pending_assignment", "assigned", "in_progress", "processing"]).execute()
-        member["assigned_jobs"] = res_count.count or 0
-        pub = public_profile(member)
-        member["title"] = pub["title"]
-        member["skills"] = pub["skills"]
-        member["assignable"] = pub["assignable"]
-        member["assignable_reason"] = pub["assignable_reason"]
-        member["rpas_certificate_url"] = pub["rpas_certificate_url"]
-        member["rpas_certificate_level"] = pub["rpas_certificate_level"]
-        member["payout_model"] = pub["payout_model"]
-        member["payout_label"] = pub["payout_label"]
-        
-    return paginated_response(members, total, page, page_size)
+        items.append(_team_row(member, res_count.count or 0, admin))
+
+    return paginated_response(items, total, page, page_size)
 
 
 @router.post("/team")
