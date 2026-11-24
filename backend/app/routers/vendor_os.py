@@ -20,6 +20,7 @@ from ..shared.auth import can_access_stripe_connect, ensure_assigned_to_actor, g
 from ..shared.vendor_identity import is_owner_member, photographer_payout_cents, public_profile
 from ..shared.job_scope import (
     ORG_VENDOR_ID,
+    ilike_any_or_filter,
     job_visible_to,
     jobs_or_filter,
     parse_scheduled_date,
@@ -922,6 +923,9 @@ async def get_vendor_os_jobs(
     vendor_id = actor_member.get("vendor_id") or ORG_VENDOR_ID
     aliases = photographer_assignee_ids(actor_id, actor_member)
     vendors = vendor_scope_ids(actor_id, actor_member)
+    # Only admins may choose whose jobs to list; everyone else always gets
+    # their own book, whatever assignee_id they send.
+    admin_scope = (assignee_id or None) if is_vendor_admin(actor_member) else None
 
     page, page_size, skip = normalize_pagination(page, page_size)
     jobs = []
@@ -934,16 +938,16 @@ async def get_vendor_os_jobs(
             query = query.eq("status", status)
         # Default: assigned jobs for this photographer (aliases include Kam 0c3fa7c2).
         # Owner Jobs page passes assignee_id=all so unassigned default_vendor jobs list.
-        if is_vendor_admin(actor_member) and assignee_id == "all":
+        if admin_scope == "all":
             query = query.or_(jobs_or_filter(vendors, aliases))
-        elif is_vendor_admin(actor_member) and assignee_id == "unassigned":
+        elif admin_scope == "unassigned":
             query = query.or_(jobs_or_filter(vendors, [])).or_(unassigned_assignee_or_filter())
-        elif assignee_id and assignee_id not in ("all", "unassigned"):
-            query = query.eq("assignee_id", assignee_id)
+        elif admin_scope:
+            query = query.eq("assignee_id", admin_scope)
         else:
             query = query.in_("assignee_id", aliases or [actor_id])
         if search:
-            query = query.or_(f"address.ilike.%{search}%,city.ilike.%{search}%")
+            query = query.or_(ilike_any_or_filter(["address", "city"], search))
 
         res = await query.order("scheduled_date", desc=False).range(skip, skip + page_size - 1).execute()
         jobs = res.data or []
@@ -956,8 +960,8 @@ async def get_vendor_os_jobs(
         # Fair-Use: list assigned jobs via Postgres/OS. Admin "all"/"unassigned"
         # scopes still collapse to this photographer's aliases under 402.
         want_ids = aliases or [actor_id]
-        if assignee_id and assignee_id not in ("all", "unassigned"):
-            want_ids = [assignee_id]
+        if admin_scope and admin_scope not in ("all", "unassigned"):
+            want_ids = [admin_scope]
         jobs, total = pg_select_jobs_for_assignees(
             want_ids, status=status, limit=page_size, offset=skip
         )
