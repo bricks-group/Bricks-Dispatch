@@ -32,8 +32,10 @@ from ..services.media_intake import (
 from ..services.storage import create_signed_upload_url, upload_file
 from ..services.post_production import process_job_assets
 from fastapi import BackgroundTasks
-from ..shared.auth import get_vendor_member, resolve_vendor_actor_id
+from ..shared.auth import get_vendor_member, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.database import get_db
+from ..shared.job_scope import job_visible_to, photographer_assignee_ids
+from ..shared.vendor_identity import is_owner_member
 
 
 def _maybe_single_row(res) -> dict:
@@ -67,26 +69,46 @@ def _uploads_db_row(payload_row: dict) -> dict:
     return out
 
 
-async def _actor_job(authorization, x_user_id, job_id: str):
+async def _upload_actor(authorization, x_user_id) -> tuple[str, dict, bool]:
+    """Signed-in member allowed to use uploads: (actor_id, member, is_admin).
+
+    Every member shares the default_vendor org, so vendor_id is never
+    permission. Applicants, email-code sign-ups and terminated vendors are
+    refused; Owner is always allowed.
+    """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
-    db = await get_db()
-    job = {}
+    member = await get_vendor_member(actor_id)
+    if not is_owner_member(member) and not (
+        member.get("is_active") and (member.get("onboarding_status") or "") == "approved"
+    ):
+        api_error(403, "Your account isn't active yet.", "not_approved")
+    return actor_id, member, is_vendor_admin(member)
+
+
+def _job_allowed(job: dict, actor_id: str, member: dict, is_admin: bool) -> bool:
+    """Assigned photographer only; admins see the whole org (same rule as capture)."""
+    return job_visible_to(job, actor_id, member, assigned_only=True, admin_all=is_admin)
+
+
+async def _select_job(db, job_id: str, cols: str) -> dict:
     try:
-        res_job = await db.table("jobs").select(
-            "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
-        ).eq("id", job_id).maybe_single().execute()
-        job = _maybe_single_row(res_job)
+        res_job = await db.table("jobs").select(cols).eq("id", job_id).maybe_single().execute()
+        return _maybe_single_row(res_job)
     except Exception as e:
         from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
         if not _is_rest_quota_error(e):
             raise
-        job = pg_select_job_by_id(job_id) or {}
-    if not job or (
-        job.get("vendor_id") not in (vendor_id, actor_id)
-        and job.get("assignee_id") != actor_id
-    ):
+        return pg_select_job_by_id(job_id) or {}
+
+
+async def _actor_job(authorization, x_user_id, job_id: str):
+    actor_id, actor_member, is_admin = await _upload_actor(authorization, x_user_id)
+    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    db = await get_db()
+    job = await _select_job(
+        db, job_id, "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
+    )
+    if str(job.get("id") or "") != str(job_id) or not _job_allowed(job, actor_id, actor_member, is_admin):
         api_error(404, "Job not found", "job_not_found")
     return db, actor_id, vendor_id, job
 
@@ -442,7 +464,9 @@ async def make_upload_preview(
     preview_path = meta.get("preview_path")
     if preview_path and not row.get("thumbnail_url"):
         try:
-            await db.table("uploads").update({"thumbnail_url": preview_path}).eq("id", upload_id).execute()
+            await db.table("uploads").update({"thumbnail_url": preview_path}).eq(
+                "id", upload_id
+            ).eq("job_id", job_id).execute()
         except Exception as e:
             logger.info("RAW preview thumbnail_url not saved upload=%s: %s", upload_id, str(e)[:120])
     preview_url = await get_signed_download_url(preview_path, expiry=3600) if preview_path else None
@@ -489,37 +513,20 @@ async def list_uploads(
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
     """
-    Return upload records scoped to the caller's own vendor.
+    Return upload records for jobs assigned to the caller (admins: the org).
 
-    FIXED 2026-08-15: this used to resolve the actor but never actually use it to
-    scope the query -- any authenticated vendor could list uploads for ANY job_id,
-    or every upload on the platform with no filter at all (up to 500 rows).
-    `uploads.thumbnail` stores real base64 image data directly on the row, so this
-    wasn't just metadata exposure -- it leaked actual (thumbnail-resolution) photo
-    content across vendors. `uploads` has no vendor_id column, only job_id, so
-    scoping goes through jobs.vendor_id, same as create_upload/delete_upload below
-    already correctly do for writes.
+    `uploads.thumbnail` stores base64 image data on the row and `uploads` has no
+    vendor_id column, so scoping goes through the job's assignee — every job and
+    member share the default_vendor org, so jobs.vendor_id grants nothing.
     """
-    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    actor_member = await get_vendor_member(actor_id)
+    actor_id, actor_member, is_admin = await _upload_actor(authorization, x_user_id)
     vendor_id = actor_member.get("vendor_id", "default_vendor")
 
     sb = await get_db()
 
     if job_id:
-        job = {}
-        try:
-            res_job = await sb.table("jobs").select("id, vendor_id, assignee_id").eq("id", job_id).maybe_single().execute()
-            job = _maybe_single_row(res_job)
-        except Exception as e:
-            from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
-            if not _is_rest_quota_error(e):
-                raise
-            job = pg_select_job_by_id(job_id) or {}
-        if not job or (
-            job.get("vendor_id") not in (vendor_id, actor_id)
-            and job.get("assignee_id") != actor_id
-        ):
+        job = await _select_job(sb, job_id, "id, vendor_id, assignee_id")
+        if str(job.get("id") or "") != str(job_id) or not _job_allowed(job, actor_id, actor_member, is_admin):
             api_error(404, "Job not found", "job_not_found")
         try:
             query = sb.table("uploads").select("*").eq("job_id", job_id)
@@ -533,8 +540,16 @@ async def list_uploads(
         return _annotate_inferred_media_type(rows)
     else:
         try:
-            res_jobs = await sb.table("jobs").select("id").eq("vendor_id", vendor_id).execute()
-            job_ids = [j["id"] for j in (res_jobs.data or [])]
+            jobs_q = sb.table("jobs").select("id, vendor_id, assignee_id")
+            if is_admin:
+                jobs_q = jobs_q.eq("vendor_id", vendor_id)
+            else:
+                jobs_q = jobs_q.in_("assignee_id", photographer_assignee_ids(actor_id, actor_member))
+            res_jobs = await jobs_q.execute()
+            job_ids = [
+                j["id"] for j in (res_jobs.data or [])
+                if _job_allowed(j, actor_id, actor_member, is_admin)
+            ]
         except Exception as e:
             from ..shared.pg_fallback import _is_rest_quota_error
             if not _is_rest_quota_error(e):
@@ -566,35 +581,13 @@ async def create_upload(
     Create an upload record.
 
     Steps:
-      1. Validate the job exists and belongs to the actor's vendor.
+      1. Validate the job exists and is assigned to the actor (admins: the org).
       2. Decode the base64 file payload.
       3. Upload the file (and thumbnail) to S3 via the storage service.
       4. Insert the UploadRecord into the DB.
       5. Increment job.uploaded_count.
     """
-    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
-
-    db = await get_db()
-
-    # Verify job belongs to this vendor (Fair-Use: PG select on 402)
-    job_row = {}
-    try:
-        res_job = await db.table("jobs").select(
-            "id, uploaded_count, deliverables_count, status, vendor_id, assignee_id"
-        ).eq("id", job_id).maybe_single().execute()
-        job_row = _maybe_single_row(res_job)
-    except Exception as e:
-        from ..shared.pg_fallback import _is_rest_quota_error, pg_select_job_by_id
-        if not _is_rest_quota_error(e):
-            raise
-        job_row = pg_select_job_by_id(job_id) or {}
-    if not job_row or (
-        job_row.get("vendor_id") not in (vendor_id, actor_id)
-        and job_row.get("assignee_id") != actor_id
-    ):
-        api_error(404, "Job not found", "job_not_found")
+    db, _, _, job_row = await _actor_job(authorization, x_user_id, job_id)
 
     kind_preview = infer_media_type(filename, mime_type, media_type)
     assert_listing_still_decodable(filename, mime_type, kind_preview)
@@ -673,16 +666,8 @@ async def get_upload(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
 ):
-    """Fetch a single upload record by ID, scoped to the caller's own vendor.
-
-    FIXED 2026-08-15: this used to verify the caller was *some* valid vendor
-    but never that they owned this specific upload -- any authenticated vendor
-    could fetch any other vendor's upload (including its embedded base64
-    thumbnail) just by guessing/incrementing an id. Same fix pattern as
-    delete_upload below, which already scopes correctly."""
-    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    """Fetch a single upload record by ID if its job is visible to the caller."""
+    actor_id, actor_member, is_admin = await _upload_actor(authorization, x_user_id)
 
     db = await get_db()
     res = await db.table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
@@ -690,8 +675,9 @@ async def get_upload(
     if not upload_row:
         api_error(404, "Upload not found", "upload_not_found")
 
-    res_job = await db.table("jobs").select("id").eq("id", upload_row["job_id"]).eq("vendor_id", vendor_id).maybe_single().execute()
-    if not _maybe_single_row(res_job):
+    upload_job_id = str(upload_row.get("job_id") or "")
+    job = await _select_job(db, upload_job_id, "id, vendor_id, assignee_id") if upload_job_id else {}
+    if str(job.get("id") or "") != upload_job_id or not _job_allowed(job, actor_id, actor_member, is_admin):
         api_error(404, "Upload not found", "upload_not_found")
 
     return upload_row
@@ -706,28 +692,27 @@ async def delete_upload(
     """
     Delete an upload record and decrement the associated job's uploaded_count.
     """
-    actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
-    actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
+    actor_id, actor_member, is_admin = await _upload_actor(authorization, x_user_id)
 
     db = await get_db()
 
-    # Fetch the upload to find its job_id
     res_upload = await db.table("uploads").select("id, job_id").eq("id", upload_id).maybe_single().execute()
     upload_row = _maybe_single_row(res_upload)
     if not upload_row:
         api_error(404, "Upload not found", "upload_not_found")
 
-    upload_job_id = upload_row["job_id"]
-
-    # Verify the job belongs to this vendor
-    res_job = await db.table("jobs").select("id, uploaded_count").eq("id", upload_job_id).eq("vendor_id", vendor_id).maybe_single().execute()
-    job_row = _maybe_single_row(res_job)
-    if not job_row:
+    upload_job_id = str(upload_row.get("job_id") or "")
+    job_row = (
+        await _select_job(db, upload_job_id, "id, uploaded_count, vendor_id, assignee_id")
+        if upload_job_id else {}
+    )
+    if str(job_row.get("id") or "") != upload_job_id or not _job_allowed(job_row, actor_id, actor_member, is_admin):
         api_error(404, "Job not found", "job_not_found")
 
-    # Delete the upload record
-    await db.table("uploads").delete().eq("id", upload_id).execute()
+    # Delete only while the row is still on the job that was authorized.
+    res_del = await db.table("uploads").delete().eq("id", upload_id).eq("job_id", upload_job_id).execute()
+    if not (getattr(res_del, "data", None) or []):
+        api_error(404, "Upload not found", "upload_not_found")
 
     # Decrement job.uploaded_count (floor at 0)
     current = job_row.get("uploaded_count") or 0

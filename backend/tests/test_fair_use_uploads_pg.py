@@ -111,7 +111,10 @@ def test_actor_job_pg_on_rest_402(monkeypatch):
     monkeypatch.setattr(
         up,
         "get_vendor_member",
-        AsyncMock(return_value={"id": "photog-1", "vendor_id": "default_vendor"}),
+        AsyncMock(return_value={
+            "id": "photog-1", "vendor_id": "default_vendor",
+            "is_active": True, "onboarding_status": "approved",
+        }),
     )
     monkeypatch.setattr(up, "get_db", AsyncMock(return_value=Db()))
     monkeypatch.setattr(
@@ -268,7 +271,10 @@ def test_create_upload_pg_on_rest_402(monkeypatch):
     monkeypatch.setattr(
         up,
         "get_vendor_member",
-        AsyncMock(return_value={"id": "photog-1", "vendor_id": "default_vendor"}),
+        AsyncMock(return_value={
+            "id": "photog-1", "vendor_id": "default_vendor",
+            "is_active": True, "onboarding_status": "approved",
+        }),
     )
     monkeypatch.setattr(up, "get_db", AsyncMock(return_value=Db()))
     monkeypatch.setattr(
