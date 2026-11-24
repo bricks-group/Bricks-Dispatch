@@ -99,6 +99,7 @@ async def list_applicants(
         except Exception:
             pass
     for a in applicants:
+        a.pop("application_token", None)
         a["portfolio_samples"] = assemble_portfolio_samples(a, docs_by_member.get(a.get("id"), []))
 
     return paginated_response(applicants, total, page, page_size)
