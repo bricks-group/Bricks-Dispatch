@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS public.vendor_calendar_connections (
   UNIQUE (member_id, provider)
 );
 
+-- Service role only: holds calendar OAuth / CalDAV secrets. RLS on with no policies.
+ALTER TABLE public.vendor_calendar_connections ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.vendor_calendar_connections FROM anon, authenticated;
+
 CREATE INDEX IF NOT EXISTS vendor_calendar_connections_member_idx
   ON public.vendor_calendar_connections (member_id);
 
