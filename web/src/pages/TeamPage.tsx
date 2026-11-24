@@ -30,8 +30,8 @@ export function TeamPage() {
   useEffect(() => { load(); }, [page, search, filterStatus]);
 
   const setMemberStatus = async (memberId: string, status: MemberStatus) => {
-    await api.put(`/api/vendor-os/team/${memberId}`, { status });
-    setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, status } : m));
+    const updated = await api.put<TeamMember>(`/api/vendor-os/team/${memberId}`, { status });
+    setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, status: updated?.status ?? status } : m));
   };
 
   const addMember = async () => {
@@ -68,7 +68,6 @@ export function TeamPage() {
               <th>Name</th>
               <th>Title</th>
               <th>Skills</th>
-              <th>RPAS</th>
               <th>Assignable</th>
               <th>Active jobs</th>
               <th>Availability</th>
@@ -80,7 +79,6 @@ export function TeamPage() {
                 <td data-label="Name" style={{ fontWeight: 500 }}>{m.name}</td>
                 <td data-label="Title" className="muted">{`${tradeOf(m as any).label} · ${m.title || m.role}`}</td>
                 <td data-label="Skills" className="muted">{(m.skills || []).join(', ') || '—'}</td>
-                <td data-label="RPAS" className="muted">{m.rpas_certificate_level || '—'}</td>
                 <td data-label="Assignable">
                   <span className={`badge ${m.assignable ? 'badge-green' : 'badge-attn'}`}>
                     {m.assignable ? 'Yes' : (m.assignable_reason || 'No')}

@@ -58,13 +58,14 @@ function isOwnerAdmin(m: { role?: string; title?: string; id?: string } | null) 
   return (m.id || '').toLowerCase().startsWith('0c3fa7c2');
 }
 
+// GET /team does not return is_active; `assignable` already requires an
+// active, approved, unpaused member.
 function isPickerMember(m: TeamMember) {
-  if (!m.is_active) return false;
+  if (m.is_active === false) return false;
   if ((m.id || '').toLowerCase().startsWith('0c3fa7c2')) return true;
   const t = `${m.title || ''} ${m.role || ''}`.toLowerCase();
   if (t.includes('owner')) return true;
-  if (m.assignable === false) return false;
-  return true;
+  return m.assignable === true;
 }
 
 // Mirrors backend vendor_termination.CANCEL_REASONS (all but "other" are reviewed by Bricks).
@@ -110,7 +111,9 @@ export function JobsPage() {
     }
     Promise.all([
       api.get<PaginatedJobsResponse>('/api/vendor-os/jobs', query),
-      api.get<PaginatedTeamResponse>('/api/vendor-os/team', { page: 1, page_size: 200 }),
+      admin
+        ? api.get<PaginatedTeamResponse>('/api/vendor-os/team', { page: 1, page_size: 200 })
+        : Promise.resolve<PaginatedTeamResponse>({ items: [], total: 0, page: 1, page_size: 200 }),
     ])
       .then(([jobData, teamData]) => {
         setJobs(jobData.items);

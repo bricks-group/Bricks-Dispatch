@@ -69,7 +69,7 @@ export type TeamMember = {
   email?: string;
   role?: string;
   title?: string;
-  is_active: boolean;
+  is_active?: boolean;
   assignable?: boolean;
   assignable_reason?: string | null;
 };
@@ -83,13 +83,14 @@ export function isVendorAdmin(m: { role?: string; title?: string; id?: string } 
 }
 
 /** Active photographers only. Owner always included; pending Aman is not. */
+// GET /team does not return is_active; `assignable` already requires an
+// active, approved, unpaused member.
 export function isPickerMember(m: TeamMember) {
-  if (!m.is_active) return false;
+  if (m.is_active === false) return false;
   if ((m.id || '').toLowerCase().startsWith('0c3fa7c2')) return true;
   const t = `${m.title || ''} ${m.role || ''}`.toLowerCase();
   if (t.includes('owner')) return true;
-  if (m.assignable === false) return false;
-  return true;
+  return m.assignable === true;
 }
 
 export function mediaUrl(raw?: string | null) {
