@@ -275,7 +275,7 @@ def test_get_uploads_job_id_is_not_body_rows_422(monkeypatch):
         return "photog-1"
 
     async def _member(actor_id, email=None):
-        return {"id": actor_id, "vendor_id": "vend"}
+        return {"id": actor_id, "vendor_id": "vend", "is_active": True, "onboarding_status": "approved"}
 
     async def _db():
         return Db()
