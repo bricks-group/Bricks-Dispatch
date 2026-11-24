@@ -1,5 +1,6 @@
 from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 from datetime import datetime, timezone
+import hmac
 import logging
 import os
 import secrets
@@ -1096,22 +1097,29 @@ async def validate_rpas_certificate(member_id: str, request: Request):
     }
 
 
-def _check_application_token(member: dict, token: Optional[str]) -> None:
-    """FIXED 2026-08-16: member_id alone (a UUID) was treated as an implicit
-    bearer credential with zero further verification on both of these
-    endpoints -- unguessable via brute force, but a leaked member_id (logs,
-    a forwarded email, a screenshot) would have let anyone view or add to
-    an applicant's compliance documents. application_token is generated
-    once at /apply and returned only in that response.
+def _check_application_token(member: dict, token: Optional[str]) -> str:
+    """The application_token minted at /apply is the only credential these
+    public routes accept; member_id alone is not one (the owner id is in
+    source, OTP members' ids equal their auth uid, admin-added ids appear in
+    other responses).
 
-    Rows created before this fix have no token on file (application_token
-    IS NULL) -- grandfathered through without one rather than locking out
-    an applicant already mid-flow; every new application gets a real token
-    and is fully enforced. 404 (not 403) on mismatch so this doesn't become
-    an oracle for whether a given member_id exists."""
+    Fails closed: a member with no token on file (owner seed, OTP sign-in,
+    admin-added, rows that predate tokens) cannot use these routes and goes
+    through the authenticated /api/vendor-os and /api/profile routes instead.
+    404 (not 403) so this isn't an oracle for whether a member_id exists.
+
+    Returns the authorized member id. Callers act on that id and the member
+    row they passed in, never on a second lookup."""
     stored_token = member.get("application_token")
-    if stored_token and stored_token != token:
+    if (
+        not isinstance(stored_token, str)
+        or not stored_token.strip()
+        or not isinstance(token, str)
+        or not token
+        or not hmac.compare_digest(stored_token.encode(), token.encode())
+    ):
         raise HTTPException(status_code=404, detail="Application not found.")
+    return str(member["id"])
 
 
 @router.get("/status/{member_id}")
@@ -1123,7 +1131,7 @@ async def get_application_status(member_id: str, token: Optional[str] = None):
     member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Application not found.")
-    _check_application_token(member, token)
+    member_id = _check_application_token(member, token)
 
     res_docs = await (await get_db()).table("vendor_documents").select("*").eq("member_id", member_id).execute()
     docs = res_docs.data
@@ -1146,7 +1154,9 @@ async def application_documents_submitted(member_id: str, background_tasks: Back
     member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
-    _check_application_token(member, (payload or {}).get("token") or (payload or {}).get("application_token"))
+    member_id = _check_application_token(
+        member, (payload or {}).get("token") or (payload or {}).get("application_token")
+    )
     try:
         done = await (await get_db()).table("vendor_applicant_reviews").select("id").eq("member_id", member_id).limit(1).execute()
         if done.data:
@@ -1184,7 +1194,7 @@ async def upload_compliance_document(
     member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
-    _check_application_token(member, token or application_token)
+    member_id = _check_application_token(member, token or application_token)
 
     portfolio_docs = [portfolio_doc_type(t) for t in PORTFOLIO_MEDIA_TYPES]
     from ..services.trade_specs import expiring_kinds, upload_kinds
@@ -1371,7 +1381,7 @@ async def upload_portfolio_sample(
     member = maybe_single_row(res_member) or None
     if not member:
         raise HTTPException(status_code=404, detail="Member not found.")
-    _check_application_token(member, token)
+    member_id = _check_application_token(member, token)
 
     import base64
     try:
@@ -1423,7 +1433,7 @@ async def upload_portfolio_sample(
         await db.table("vendor_members").update({
             "portfolio_samples": samples,
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", member_id).execute()
+        }).eq("id", member_id).eq("application_token", member["application_token"]).execute()
     except Exception:
         logger.warning("Could not persist portfolio_samples column for %s", member_id)
 
