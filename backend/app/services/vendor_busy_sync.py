@@ -186,15 +186,15 @@ async def google_busy_intervals(token: str, start: datetime, end: datetime):
 
 
 async def ics_busy_intervals(url: str, start: datetime, end: datetime):
-    url = url.strip()
-    if url.startswith("webcal://"):
-        url = "https://" + url[len("webcal://"):]
+    # Stored URLs are only syntax-checked at save time; DNS and redirects can
+    # change afterwards, so every refetch must go through the guard.
+    from .calendar_url_guard import guarded_request
+
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-        if resp.status_code >= 400 or "BEGIN:VCALENDAR" not in resp.text:
+        status, text = await guarded_request("GET", url, timeout=15.0)
+        if status >= 400 or "BEGIN:VCALENDAR" not in text:
             return None
-        return parse_ics_intervals(resp.text, start, end)
+        return parse_ics_intervals(text, start, end)
     except Exception as e:
         logger.debug("ics busy sync soft-fail: %s", e)
         return None
@@ -210,23 +210,25 @@ async def caldav_busy_intervals(url: str, username: str, password: str, start: d
     <C:time-range start="{_utc(start).strftime('%Y%m%dT%H%M%SZ')}" end="{_utc(end).strftime('%Y%m%dT%H%M%SZ')}"/>
   </C:comp-filter></C:comp-filter></C:filter>
 </C:calendar-query>"""
+    from .calendar_url_guard import guarded_request
+
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.request(
-                "REPORT", url, content=body,
-                headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
-                auth=(username or "user", password),
-            )
-        if resp.status_code >= 400:
+        status, text = await guarded_request(
+            "REPORT", url, content=body,
+            headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
+            auth=(username or "user", password),
+            timeout=15.0,
+        )
+        if status >= 400:
             return None
         texts: list[str] = []
         try:
-            root = ET.fromstring(resp.text)
+            root = ET.fromstring(text)
             for el in root.iter():
                 if el.tag.endswith("calendar-data") and el.text:
                     texts.append(el.text)
         except ET.ParseError:
-            texts = [resp.text]
+            texts = [text]
         out: list[tuple[datetime, datetime]] = []
         for t in texts:
             out.extend(parse_ics_intervals(t, start, end))
