@@ -49,14 +49,28 @@ def _default_resolver(host: str, port: int) -> list[str]:
     return list(dict.fromkeys(i[4][0] for i in infos))
 
 
+# ipaddress reports these as global, but a NAT64/SIIT gateway (or the kernel, for
+# the deprecated IPv4-compatible range) delivers them to the embedded IPv4 address.
+_EMBEDDED_IPV4_NETS = tuple(
+    ipaddress.ip_network(n) for n in ("64:ff9b::/96", "::ffff:0:0:0/96", "::/96")
+)
+
+
+def _effective_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address):
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped:
+            return ip.ipv4_mapped
+        if any(ip in net for net in _EMBEDDED_IPV4_NETS):
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return ip
+
+
 def _vet_ips(ips: Iterable[str]) -> str:
     ips = list(ips)
     if not ips:
         raise UnsafeCalendarURL("Calendar host did not resolve")
     for raw in ips:
-        ip = ipaddress.ip_address(raw.split("%", 1)[0])
-        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-            ip = ip.ipv4_mapped
+        ip = _effective_ip(ipaddress.ip_address(raw.split("%", 1)[0]))
         if not ip.is_global or ip.is_multicast:
             raise UnsafeCalendarURL("Calendar URL points at a private or reserved address")
     return ips[0]
