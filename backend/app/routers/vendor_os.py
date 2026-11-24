@@ -127,27 +127,39 @@ def _listing_public(row: Optional[dict]) -> Optional[dict]:
     }
 
 
+def _listing_key(transaction_id, brokerage_id) -> Optional[tuple]:
+    if not transaction_id or not brokerage_id:
+        return None
+    return (str(transaction_id), str(brokerage_id))
+
+
 def _apply_listing(job: dict, listings: dict) -> dict:
     tid = job.get("transaction_id") or None
-    listing = listings.get(tid) if tid else None
+    key = _listing_key(tid, job.get("brokerage_id"))
+    listing = listings.get(key) if key else None
     job["transaction_id"] = tid
     job["listing_address"] = (listing or {}).get("address") if listing else None
     job["listing"] = listing
     return stamp_capture(job)
 
 
-async def _listings_by_ids(db, ids) -> dict:
-    clean = [i for i in ids if i]
-    if not clean:
+async def _listings_by_ids(db, jobs) -> dict:
+    """(transaction_id, brokerage_id) -> public listing, only where the listing
+    belongs to the brokerage of the job that references it."""
+    wanted = {k for k in (_listing_key(j.get("transaction_id"), j.get("brokerage_id")) for j in jobs) if k}
+    if not wanted:
         return {}
     res = await db.table("transactions").select(
-        "id, property_address, city, deal_type"
-    ).in_("id", clean).execute()
+        "id, property_address, city, deal_type, brokerage_id"
+    ).in_("id", sorted({tid for tid, _ in wanted})).execute()
     out = {}
     for row in res.data or []:
+        key = _listing_key(row.get("id"), row.get("brokerage_id"))
+        if key not in wanted:
+            continue
         pub = _listing_public(row)
         if pub and pub.get("id"):
-            out[pub["id"]] = pub
+            out[key] = pub
     return out
 
 
@@ -978,7 +990,7 @@ async def get_vendor_os_jobs(
             db = await get_db()
             res_members = await db.table("vendor_members").select("id, name").in_("vendor_id", vendors).limit(500).execute()
             member_map = {m["id"]: m.get("name", "Unknown") for m in (res_members.data or [])}
-            listings = await _listings_by_ids(db, [j.get("transaction_id") for j in jobs])
+            listings = await _listings_by_ids(db, jobs)
             res_full = await db.table("vendor_members").select("*").in_("vendor_id", vendors).limit(500).execute()
             member_full = {m["id"]: m for m in (res_full.data or [])}
             for job in jobs:
@@ -1032,7 +1044,7 @@ async def get_vendor_os_job(
     try:
         db = await get_db()
         job = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
-        listings = await _listings_by_ids(db, [job.get("transaction_id")])
+        listings = await _listings_by_ids(db, [job])
         res_member = await db.table("vendor_members").select("id, name").eq("id", job.get("assignee_id") or "").maybe_single().execute()
         member_row = _maybe_single_row(res_member)
         job["assignee_name"] = member_row.get("name") or "Unassigned"
@@ -1064,38 +1076,40 @@ async def search_office_listings(
     """Search Office listings (transactions) so a photographer can attach a shoot.
 
     Empty query returns []. Honest empty — not a fake Connected state.
-    Scoped to the job's office when job_id is provided and jobs.brokerage_id is set.
+    transactions is shared by every brokerage, so results are always limited to
+    the brokerage of a job the caller may edit; no job_id, or a job without
+    brokerage_id, returns [].
     """
     actor_id = await resolve_vendor_actor_id(authorization, x_user_id)
     actor_member = await get_vendor_member(actor_id)
-    vendor_id = actor_member.get("vendor_id", "default_vendor")
     query = (q or "").strip()
-    if not query:
+    if not query or not job_id:
         return {"items": []}
     if len(query) > 80:
         query = query[:80]
     query = query.replace("%", "").replace("_", "")
 
     db = await get_db()
-    office_id = None
-    if job_id:
-        job_row = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
-        office_id = job_row.get("brokerage_id")
+    job_row = await _load_visible_job(db, job_id, actor_id, actor_member, admin_all=is_vendor_admin(actor_member))
+    if not is_vendor_admin(actor_member):
+        ensure_assigned_to_actor(job_row, actor_id, actor_member)
+    office_id = job_row.get("brokerage_id")
+    if not office_id:
+        return {"items": []}
 
     if _is_uuid(query):
-        lookup = db.table("transactions").select("id, property_address, city, deal_type, brokerage_id").eq("id", query)
-        if office_id:
-            lookup = lookup.eq("brokerage_id", office_id)
-        res = await lookup.maybe_single().execute()
-        pub = _listing_public(res.data if res else None)
+        res = await db.table("transactions").select(
+            "id, property_address, city, deal_type, brokerage_id"
+        ).eq("id", query).eq("brokerage_id", office_id).maybe_single().execute()
+        pub = _listing_public(_maybe_single_row(res))
         return {"items": [pub] if pub else []}
 
     if len(query) < 2:
         return {"items": []}
 
-    search = db.table("transactions").select("id, property_address, city, deal_type").ilike("property_address", f"%{query}%")
-    if office_id:
-        search = search.eq("brokerage_id", office_id)
+    search = db.table("transactions").select(
+        "id, property_address, city, deal_type"
+    ).eq("brokerage_id", office_id).ilike("property_address", f"%{query}%")
     res = await search.order("created_at", desc=True).limit(20).execute()
     items = [_listing_public(row) for row in (res.data or [])]
     return {"items": [i for i in items if i]}
@@ -1120,14 +1134,15 @@ async def attach_job_listing(
     raw = payload.transaction_id
     txn_id = None if raw is None or str(raw).strip() == "" else str(raw).strip()
     listing = None
+    office_id = job.get("brokerage_id")
     if txn_id:
         if not _is_uuid(txn_id):
             api_error(400, "Invalid listing id", "invalid_listing_id")
-        tq = db.table("transactions").select("id, property_address, city, deal_type, brokerage_id").eq("id", txn_id)
-        office_id = job.get("brokerage_id")
-        if office_id:
-            tq = tq.eq("brokerage_id", office_id)
-        t_res = await tq.maybe_single().execute()
+        if not office_id:
+            api_error(404, "Listing not found", "listing_not_found")
+        t_res = await db.table("transactions").select(
+            "id, property_address, city, deal_type, brokerage_id"
+        ).eq("id", txn_id).eq("brokerage_id", office_id).maybe_single().execute()
         # maybe_single() is None when the listing/transaction row is missing —
         # None.data was a CORS-less 500 instead of the 404 below.
         txn_row = _maybe_single_row(t_res)
@@ -1136,13 +1151,20 @@ async def attach_job_listing(
         listing = _listing_public(txn_row)
 
     now = datetime.now(timezone.utc).isoformat()
-    await db.table("jobs").update({
+    update = db.table("jobs").update({
         "transaction_id": txn_id,
         "updated_at": now,
-    }).eq("id", job_id).execute()
+    }).eq("id", job_id)
+    if txn_id:
+        # The listing was checked against this brokerage; refuse if the job moved.
+        update = update.eq("brokerage_id", office_id)
+    u_res = await update.execute()
+    if txn_id and not (getattr(u_res, "data", None) or []):
+        api_error(409, "Job changed; reload and try again", "job_brokerage_changed")
     job["transaction_id"] = txn_id
     job["updated_at"] = now
-    listings = {listing["id"]: listing} if listing else {}
+    key = _listing_key(txn_id, office_id)
+    listings = {key: listing} if listing and key else {}
     await _safe_write_audit_event(
         actor_id, "job", job_id, "attach_listing",
         vendor_id=vendor_id,
