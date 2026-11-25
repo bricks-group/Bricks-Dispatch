@@ -9,6 +9,7 @@ from __future__ import annotations
 from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
 import logging
 import posixpath
+import uuid
 from typing import Optional
 
 from ..shared.database import get_db, maybe_single_row
@@ -76,6 +77,51 @@ async def _insert(table: str, rows: list) -> None:
             pg_insert_applicant_rows(table, rows)
         else:
             logger.error("applicant review: insert %s failed (%s)", table, type(e).__name__)
+
+
+async def _mark_review_started(member_id: str, trigger: str) -> str:
+    """Store a placeholder review row before any applicant file is read.
+
+    pending_without_review retries applicants with no row, so a run killed by a
+    hostile upload must still leave one behind. Returns the row id.
+    """
+    from . import applicant_evidence as ev
+    from .applicant_review import NEEDS_REVIEW, VERDICT_LABEL
+
+    review_id = str(uuid.uuid4())
+    await _insert("vendor_applicant_reviews", [{
+        "id": review_id,
+        "member_id": member_id,
+        "verdict": NEEDS_REVIEW,
+        "needs_samples": False,
+        "result": {
+            "version": 1,
+            "status": "started",
+            "verdict": NEEDS_REVIEW,
+            "verdict_label": VERDICT_LABEL[NEEDS_REVIEW],
+            "colour": "yellow",
+            "verdict_reasons": ["The automatic review didn't finish."],
+            "evidence": [{"key": "review", "ok": None, "source": ev.COULDNT_CHECK,
+                          "text": "Automatic review didn't finish. Review this application by hand."}],
+            "flags": [],
+            "missing": [],
+            "images": [],
+            "thumbs": [],
+        },
+        "trigger": trigger,
+    }])
+    return review_id
+
+
+async def _store_review(review_id: str, row: dict) -> None:
+    """Replace the placeholder row with the finished review (insert if that fails)."""
+    try:
+        res = await (await get_db()).table("vendor_applicant_reviews").update(row).eq("id", review_id).execute()
+        if res.data:
+            return
+    except Exception as e:
+        logger.warning("applicant review: placeholder update failed (%s)", type(e).__name__)
+    await _insert("vendor_applicant_reviews", [row])
 
 
 async def _store_thumbs(result: dict) -> None:
@@ -245,6 +291,7 @@ async def review_application(
         member = member or await _load_member(member_id)
         if not member:
             return None
+        review_id = await _mark_review_started(member_id, trigger) if store else ""
         from .applicant_review import _member_trade
         trade = _member_trade(member)
         docs = await _load_docs(member_id)
@@ -283,7 +330,7 @@ async def review_application(
         else:
             result.pop("_thumb_bytes", None)
         if store:
-            await _insert("vendor_applicant_reviews", [{
+            await _store_review(review_id, {
                 "member_id": member_id,
                 "verdict": result["verdict"],
                 "needs_samples": bool(result.get("needs_samples")),
@@ -293,7 +340,7 @@ async def review_application(
                 "trigger": trigger,
                 "trade": result.get("trade"),
                 "rubric_version": result.get("rubric_version"),
-            }])
+            })
             seen = set()
             hash_rows = []
             for img in result.get("images") or []:
