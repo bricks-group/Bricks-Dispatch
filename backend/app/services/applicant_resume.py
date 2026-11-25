@@ -12,7 +12,15 @@ import zipfile
 import zlib
 from typing import Optional
 
+from .applicant_evidence import MAX_RESUME_BYTES
+
 MAX_TEXT = 60_000
+# Ceiling on decompressed bytes. Header sizes are attacker-controlled, so the
+# inflate itself is capped. A real resume's document.xml is well under this.
+MAX_INFLATE = 1024 * 1024
+MAX_PDF_INFLATE_TOTAL = 8 * MAX_INFLATE
+# ZipExtFile caps output per read() only for these; bzip2/lzma/zstd inflate whole chunks.
+_ZIP_BOUNDED = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 
 RE_TERMS = (
     "real estate", "realtor", "listing", "mls", "brokerage", "property", "properties",
@@ -23,7 +31,13 @@ RE_TERMS = (
 
 def _docx_text(data: bytes) -> str:
     with zipfile.ZipFile(io.BytesIO(data)) as z:
-        xml = z.read("word/document.xml").decode("utf-8", "ignore")
+        info = z.getinfo("word/document.xml")
+        if info.compress_type not in _ZIP_BOUNDED:
+            return ""
+        with z.open(info) as f:
+            raw = f.read(MAX_INFLATE)
+    xml = raw.decode("utf-8", "ignore")
+    del raw
     xml = re.sub(r"</w:p>", "\n", xml)
     return re.sub(r"<[^>]+>", "", xml)
 
@@ -34,10 +48,14 @@ _PDF_STR = re.compile(rb"\(((?:\\.|[^\\)])*)\)")
 
 def _pdf_text(data: bytes) -> str:
     out = []
+    budget = MAX_PDF_INFLATE_TOTAL
     for m in _PDF_STREAM.finditer(data):
+        if budget <= 0:
+            break
         raw = m.group(1)
         try:
-            raw = zlib.decompress(raw)
+            raw = zlib.decompressobj().decompress(raw, min(MAX_INFLATE, budget))
+            budget -= len(raw)
         except Exception:
             pass
         if b"Tj" not in raw and b"TJ" not in raw:
@@ -88,4 +106,6 @@ def resume_ext(path: str) -> str:
 def check_resume_bytes(data: Optional[bytes], path: str) -> dict:
     if not data:
         return {"readable": False, "terms": [], "value": None, "error": "missing"}
+    if len(data) > MAX_RESUME_BYTES:
+        return {"readable": False, "terms": [], "value": None, "error": "too_large"}
     return {**assess(extract_text(data, resume_ext(path))), "error": ""}
