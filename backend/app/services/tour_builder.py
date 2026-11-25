@@ -1,6 +1,9 @@
 """Compile path-confined 3D tour from equirect stations."""
 from __future__ import annotations
+import base64
+import hashlib
 import json
+import re
 from html import escape as html_escape
 from uuid import uuid4
 
@@ -87,6 +90,7 @@ def build_tour_json(stations):
 
 _TOUR_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/>
+<meta http-equiv="Content-Security-Policy" content="__CSP__"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>__TITLE__ — __ADDRESS__</title>
 <style>
@@ -149,9 +153,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 <div class="bar"><div class="cap" id="cap"></div><div class="nav"><button type="button" class="btn" id="prev">Previous</button><button type="button" class="btn go" id="next">Next station</button></div></div>
 <div class="dots" id="dots"></div>
 <div class="hint">Path-confined 360 stations · drag to look · tap a feature tag for the amenity · tap the hotspot or ←/→ for the next station</div>
+<script type="application/json" id="tour-scenes">__SCENES__</script>
 <script>
 (function(){
-var S=__SCENES__,i=0,yaw=0,pitch=0,drag=0,lx=0,ly=0,texs=[],off=0,mode="gl",fw=0,gl=null,moved=0;
+var S=JSON.parse(document.getElementById("tour-scenes").textContent),i=0,yaw=0,pitch=0,drag=0,lx=0,ly=0,texs=[],off=0,mode="gl",fw=0,gl=null,moved=0;
 var cv=document.getElementById("view");
 var fb=document.getElementById("fb");
 var img=document.getElementById("fbimg");
@@ -395,16 +400,38 @@ go(0);
 </body></html>
 """
 
+# The player is the only script allowed to run; scene data lives in a
+# non-executing application/json block, so the hash stays constant per build.
+_PLAYER_JS = _TOUR_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+_PLAYER_CSP = (
+    "script-src 'sha256-%s'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    % base64.b64encode(hashlib.sha256(_PLAYER_JS.encode("utf-8")).digest()).decode("ascii")
+)
+_TOUR_HTML = _TOUR_HTML.replace("__CSP__", _PLAYER_CSP)
+
+_PLACEHOLDER = re.compile(r"__(TITLE|ADDRESS|SCENES)__")
+
+_JSON_HTML_ESCAPES = {
+    "<": "\\u003c",
+    ">": "\\u003e",
+    "&": "\\u0026",
+    "\u2028": "\\u2028",
+    "\u2029": "\\u2029",
+}
+
+
+def _json_for_html(value):
+    """JSON that cannot end or reopen the <script> element it is embedded in."""
+    raw = json.dumps(value, separators=(",", ":"))
+    return "".join(_JSON_HTML_ESCAPES.get(ch, ch) for ch in raw)
+
 
 def build_tour_html(stations, *, address="", title="3D tour"):
     if not stations:
         raise TourBuildError("No equirect stations to compile")
-    addr = html_escape(address or "Property")
-    ttl = html_escape(title or "3D tour")
-    scenes = json.dumps(_scenes(stations), separators=(",", ":"))
-    return (
-        _TOUR_HTML
-        .replace("__TITLE__", ttl)
-        .replace("__ADDRESS__", addr)
-        .replace("__SCENES__", scenes)
-    )
+    values = {
+        "TITLE": html_escape(title or "3D tour"),
+        "ADDRESS": html_escape(address or "Property"),
+        "SCENES": _json_for_html(_scenes(stations)),
+    }
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _TOUR_HTML)
