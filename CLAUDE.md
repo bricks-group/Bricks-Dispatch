@@ -149,7 +149,9 @@ pick_vendor_rule_based(job, vendors)
 - `REQUIRE_VENDOR_COMPLIANCE` remains absent from dispatch scoring code. `member_eligible_for_job` does not read `coi_expires_on` or `wsib_expires_on`.
 
 ## Drone Certification (Transport Canada RPAS)
-- `drone_certified: bool` on `vendor_members` — hard gate for `job_type="drone"` jobs
+- Dispatch gate is `rpas_verified_at` + `rpas_verified_level` on `vendor_members` (`has_advanced_rpas` / `has_verified_rpas` in `services/vendor_profile.py`). Only `validate-rpas` with outcome `verified` (registry level wins) or an admin `PUT /api/admin/applicants/{id}/documents/{doc}/verify` sets them; `suspicious` / rejected clears them. `extracted` grants nothing. Migration `supabase/migrations/0024_vendor_members_rpas_verified.sql`.
+- Self-reported `rpas_certificate_level`, `drone_certified`, `rpas_advanced`, and a `drone` skill/equipment entry never grant drone work. The profile routes don't accept RPAS fields; the RPAS upload stores a pending document with the declared level/number in `validation_result.declared`.
+- `drone_certified: bool` on `vendor_members` — set alongside a verification for display; not read by the dispatch gate
 - `rpas_certificate_level`: "basic" | "advanced" (Advanced required for controlled airspace)
 - Stored: `rpas_certificate_number`, `rpas_certificate_level`
 - **Collect at onboarding for all photographers who indicate drone capability**
