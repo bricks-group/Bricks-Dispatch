@@ -393,3 +393,52 @@ async def send_reject_email(member: dict, rejected_at: Optional[datetime] = None
     except Exception as e:
         logger.warning("reject email failed for %s: %s", member.get("id"), type(e).__name__)
         return False
+
+
+def reapply_link(code: str) -> str:
+    import os
+    from urllib.parse import quote
+    base = (os.environ.get("VENDOR_APPLY_URL") or "https://brxs.ca/photographers").strip()
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}reapply_code={quote(code, safe='')}#apply"
+
+
+def reapply_verify_email(member: dict, code: str) -> tuple[str, str, str]:
+    """Sent to the address already on file. Only the row's own data goes in it,
+    never anything from the request that asked for it."""
+    link = reapply_link(code)
+    subject = "Confirm your new Bricks application"
+    html = vendor_email_html(
+        "Confirm it's you",
+        [
+            f"Hi {_first_name(member)},",
+            "Someone asked to send a new Bricks application with this email address. "
+            "If it was you, open the link below and send the form again. The link works once and expires in 24 hours.",
+            f"Your code: <strong>{_html.escape(code)}</strong>",
+            "If it wasn't you, ignore this email. Nothing on your application has changed.",
+        ],
+        "Continue my application",
+        link,
+    )
+    text = (
+        "Someone asked to send a new Bricks application with this email address. "
+        f"If it was you, open this link and send the form again: {link}\n"
+        f"Your code: {code}\n"
+        "If it wasn't you, ignore this email. Nothing on your application has changed."
+    )
+    return subject, html, text
+
+
+async def send_reapply_verify_email(member: dict, code: str, idempotency_key: Optional[str] = None) -> bool:
+    email = (member.get("email") or "").strip()
+    if not email:
+        return False
+    subject, html, text = reapply_verify_email(member, code)
+    from .notifications import send_email_via_resend
+    try:
+        return bool(await send_email_via_resend(
+            email, subject, html, text=text, from_addr=VENDOR_MAIL_FROM, idempotency_key=idempotency_key,
+        ))
+    except Exception as e:
+        logger.warning("reapply verify email failed for %s: %s", member.get("id"), type(e).__name__)
+        return False

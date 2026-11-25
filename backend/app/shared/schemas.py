@@ -520,6 +520,10 @@ class VendorApplicationCreate(BaseModel):
     # www trade form uploads documents after /apply, then calls /apply/{id}/submitted,
     # which runs the review and notifies Kam. False keeps the old notify-on-apply.
     docs_pending: bool = False
+    # Reapplying with an email that already has a rejected application:
+    # /apply emails this code to the address on file, and only a request
+    # carrying it may replace that application.
+    reapply_code: Optional[str] = None
 
 
 class SampleUploadFile(BaseModel):

@@ -639,6 +639,71 @@ def _reapply_target(existing: dict) -> dict:
     return existing
 
 
+REAPPLY_CODE_TTL = 24 * 3600
+REAPPLY_VERIFY_MESSAGE = (
+    "There's already an application with this email. We sent a link to that address. "
+    "Open it and send the form again to reapply."
+)
+_REAPPLY_STATE_KEYS = ("id", "email", "onboarding_status", "rejected_at", "updated_at", "created_at", "application_token")
+
+
+def _reapply_state(row: dict) -> bytes:
+    """The row as it was when the code was emailed. Any change to it (the
+    reapply itself, a new rejection, a status change) voids the code."""
+    import json
+    return json.dumps([str(row.get(k) or "") for k in _REAPPLY_STATE_KEYS]).encode("utf-8")
+
+
+def _reapply_sig(row: dict, exp: int) -> str:
+    import hashlib
+    import hmac
+    from ..services.applicant_evidence import _session_secret
+    key = hmac.new(_session_secret(), b"vendor-reapply-code-v1", hashlib.sha256).digest()
+    return hmac.new(key, str(exp).encode() + b"|" + _reapply_state(row), hashlib.sha256).hexdigest()[:40]
+
+
+def mint_reapply_code(row: dict, now: Optional[int] = None) -> str:
+    """Single-use proof that the caller reads the inbox on file for this row.
+    Stable within the hour so repeat requests resend the same email."""
+    import time
+    hour = int(now or time.time()) // 3600 * 3600
+    exp = hour + 3600 + REAPPLY_CODE_TTL
+    return f"{exp}.{_reapply_sig(row, exp)}"
+
+
+def reapply_code_valid(row: dict, code: Optional[str], now: Optional[int] = None) -> bool:
+    import hmac
+    import time
+    try:
+        exp_s, sig = str(code or "").strip().split(".")
+        exp = int(exp_s)
+    except (ValueError, AttributeError):
+        return False
+    if exp < int(now or time.time()):
+        return False
+    try:
+        expected = _reapply_sig(row, exp)
+    except RuntimeError:
+        return False
+    return hmac.compare_digest(expected, sig)
+
+
+async def _request_reapply_verification(row: dict) -> None:
+    """Email a reapply code to the address on file and refuse this request.
+    Nothing on the row is written and no member id or token is returned."""
+    try:
+        code = mint_reapply_code(row)
+    except RuntimeError:
+        logger.error("reapply code secret not configured; reapply refused member=%s", row.get("id"))
+        raise HTTPException(
+            status_code=503,
+            detail="Could not process application right now. Please try again shortly.",
+        )
+    from ..services.vendor_onboarding import send_reapply_verify_email
+    await send_reapply_verify_email(row, code, idempotency_key=f"vendor-reapply-{row.get('id')}-{code[:10]}")
+    raise HTTPException(status_code=409, detail=REAPPLY_VERIFY_MESSAGE)
+
+
 async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     from ..shared.pg_fallback import (
         _is_rest_quota_error,
@@ -665,7 +730,12 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
             raise
     reapply_of = None
     if existing:
-        reapply_of = _reapply_target(existing)
+        target = _reapply_target(existing)
+        if str(target.get("email") or "").lower().strip() != email_l or not reapply_code_valid(
+            target, getattr(application, "reapply_code", None)
+        ):
+            await _request_reapply_verification(target)
+        reapply_of = target
 
     now_iso = datetime.now(timezone.utc).isoformat()
     application_token = secrets.token_urlsafe(32)
@@ -778,12 +848,18 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
         member_dict["internal_notes"] = f"{prior}\nReapplied on {now_iso} (90-day cooldown passed). {member.internal_notes}".strip()
         member.internal_notes = member_dict["internal_notes"]
         try:
-            await db.table("vendor_members").update(member_dict).eq("id", member.id).execute()
+            # Only the row the code was minted for, and only while it is still
+            # rejected: a second use of the same code matches nothing.
+            res_update = await db.table("vendor_members").update(member_dict).eq(
+                "id", member.id
+            ).eq("email", email_l).eq("onboarding_status", "rejected").execute()
         except Exception as e:
             if not _is_rest_quota_error(e):
                 raise
             # The PG fallback can't rewrite a whole application; ask them to retry.
             raise HTTPException(status_code=503, detail="Could not process application right now. Please try again shortly.")
+        if not (getattr(res_update, "data", None) or []):
+            raise HTTPException(status_code=409, detail="This link was already used. Apply again to get a new one.")
     else:
         try:
             await db.table("vendor_members").insert(member_dict).execute()
