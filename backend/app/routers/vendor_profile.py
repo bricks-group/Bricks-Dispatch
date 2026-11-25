@@ -42,8 +42,6 @@ class ProfileUpdateBody(BaseModel):
     home_city: Optional[str] = None
     max_travel_km: Optional[int] = None
     bio: Optional[str] = None
-    rpas_certificate_level: Optional[str] = None
-    rpas_certificate_number: Optional[str] = None
 
 
 async def _actor_member(authorization: Optional[str], x_user_id: Optional[str]) -> dict:
@@ -78,6 +76,7 @@ async def _persist_safe(db, member_id: str, patch: dict) -> dict:
         optional = {
             "title", "skills", "payout_mode", "rpas_certificate_url", "rpas_certificate_level",
             "rpas_certificate_number", "bio", "avatar_url", "service_areas", "home_city",
+            "rpas_verified_at", "rpas_verified_level",
         }
         slim = {k: v for k, v in patch.items() if k not in optional}
         if slim:
@@ -220,17 +219,8 @@ async def update_profile_impl(
         # profile save keeps it but can never add it.
         if "mapping" in (member.get("skills") or []):
             patch["skills"].append("mapping")
-        if "drone" in patch["skills"] and not member.get("drone_certified"):
-            patch["drone_certified"] = True
-    if payload.rpas_certificate_level is not None:
-        level = payload.rpas_certificate_level.strip().lower()
-        if level not in ("basic", "advanced"):
-            api_error(400, "RPAS level must be basic or advanced", "invalid_rpas_level")
-        patch["rpas_certificate_level"] = level
-        if level == "advanced":
-            patch["drone_certified"] = True
-    if payload.rpas_certificate_number is not None:
-        patch["rpas_certificate_number"] = payload.rpas_certificate_number.strip()
+    # RPAS level / number / drone_certified are set only when a certificate is
+    # verified (validate-rpas or an admin document verify), never from here.
     if payload.bio is not None:
         patch["bio"] = payload.bio
         patch["internal_notes"] = payload.bio
@@ -257,9 +247,15 @@ async def upload_rpas_impl(
     authorization: Optional[str],
     x_user_id: Optional[str],
     file: UploadFile,
-    level: str = "advanced",
+    level: str = "",
     certificate_number: str = "",
 ):
+    """Store a drone pilot certificate for review.
+
+    The file and the level / number the contractor typed go on a pending
+    vendor_documents row. The member's RPAS fields change only when the
+    certificate is verified (validate-rpas or an admin document verify).
+    """
     member = await _actor_member(authorization, x_user_id)
     raw = await file.read()
     if not raw:
@@ -273,6 +269,10 @@ async def upload_rpas_impl(
     db = await get_db()
     doc_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
+    level = (level or "").strip().lower()
+    if level not in ("basic", "advanced"):
+        level = ""
+    certificate_number = (certificate_number or "").strip()[:60]
     await db.table("vendor_documents").insert({
         "id": doc_id,
         "vendor_id": member.get("vendor_id", "default_vendor"),
@@ -280,18 +280,13 @@ async def upload_rpas_impl(
         "doc_type": "rpas_certificate",
         "file_url": file_key,
         "status": "pending",
+        "validation_result": {"declared": {
+            "level": level or None,
+            "certificate_number": certificate_number or None,
+        }},
         "created_at": now,
     }).execute()
-    level = (level or "advanced").strip().lower()
-    if level not in ("basic", "advanced"):
-        level = "advanced"
-    rpas_patch = {
-        "rpas_certificate_url": file_key,
-        "rpas_certificate_level": level,
-        "drone_certified": True,
-    }
-    if (certificate_number or "").strip():
-        rpas_patch["rpas_certificate_number"] = certificate_number.strip()
+    rpas_patch = {"rpas_certificate_url": file_key}
     updated = (await _persist_safe(db, member["id"], rpas_patch)) or {**member, **rpas_patch}
     try:
         from ..services.credential_review_notify import notify_rpas_uploaded
@@ -301,6 +296,7 @@ async def upload_rpas_impl(
     profile = await build_profile(updated)
     profile["rpas_document_id"] = doc_id
     profile["rpas_certificate_url"] = file_key
+    profile["rpas_pending_review"] = True
     return profile
 
 
@@ -528,7 +524,7 @@ async def update_profile(
 @router.post("/api/profile/rpas")
 async def upload_rpas(
     file: UploadFile = File(...),
-    level: str = Form("advanced"),
+    level: str = Form(""),
     certificate_number: str = Form(""),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
@@ -582,7 +578,7 @@ async def os_update_profile(
 @os_router.post("/profile/rpas")
 async def os_upload_rpas(
     file: UploadFile = File(...),
-    level: str = Form("advanced"),
+    level: str = Form(""),
     certificate_number: str = Form(""),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),

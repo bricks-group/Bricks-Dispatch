@@ -73,6 +73,7 @@ def test_drone_job_still_requires_photographer_with_rpas():
         vendor_type="photographer", is_active=True, status="available",
         onboarding_status="approved", onboarding_completed_at="2026-10-01T00:00:00+00:00", drone_certified=True,
         rpas_advanced=True, rpas_certificate_level="advanced",
+        rpas_verified_at="2026-10-01T00:00:00+00:00", rpas_verified_level="advanced",
         skills=["photo", "drone"],
     )
     stager = VendorMember(

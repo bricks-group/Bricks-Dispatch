@@ -41,6 +41,7 @@ from ..shared.schemas import (
     AvailabilityUpdate,
     JobAssignmentUpdate, JobStatusUpdate,
     JobCreate,
+    RPAS_VERIFICATION_FIELDS,
     VendorMember,
     VendorMemberCreate,
     VendorMemberUpdate,
@@ -850,6 +851,8 @@ async def create_vendor_member(
         vendor_id=actor_member.get("vendor_id", "default_vendor"),
     )
     member_dict = member.dict()
+    for key in RPAS_VERIFICATION_FIELDS:
+        member_dict.pop(key, None)
     await (await get_db()).table("vendor_members").insert(member_dict).execute()
     member_dict["assigned_jobs"] = 0
     await _safe_write_audit_event(actor_id, "vendor_member", member_dict["id"], "create", vendor_id=member_dict["vendor_id"], details={"email": member_dict["email"]})

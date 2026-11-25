@@ -7,6 +7,7 @@ fixed rate card. Pending members (e.g. Aman) are not assignable.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 # Full uid, never a prefix: a random auth uid starting 0c3fa7c2 must not be Owner.
@@ -160,6 +161,9 @@ def owner_seed_fields(member: dict) -> dict:
         patch["drone_certified"] = True
     if (member.get("rpas_certificate_level") or "").lower() != "advanced":
         patch["rpas_certificate_level"] = "advanced"
+    if (member.get("rpas_verified_level") or "").lower() != "advanced" or not member.get("rpas_verified_at"):
+        patch["rpas_verified_level"] = "advanced"
+        patch["rpas_verified_at"] = datetime.now(timezone.utc).isoformat()
     if not member.get("service_areas"):
         patch["service_areas"] = ["Mississauga", "GTA", "Toronto", "Peel", "Halton", "York", "Durham"]
     if not member.get("home_city"):

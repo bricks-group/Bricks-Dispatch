@@ -198,12 +198,14 @@ def test_drone_requires_advanced_rpas():
               add_ons=[{"key": "drone", "included": True}])
     basic = _approved(id="basic", name="Basic Pilot", email="b@test.com", drone_certified=True,
                       rpas_certificate_level="basic", specialty="drone", skills=["photo", "drone"],
+                      rpas_verified_at="2026-10-01T00:00:00+00:00", rpas_verified_level="basic",
                       service_areas=["GTA"])
     none = _approved(id="none", name="No Ticket", email="n@test.com", specialty="photo", skills=["photo"],
                      service_areas=["GTA"])
     assert pick_vendor_rule_based(job, [basic, none]) is None
     kam = _approved(id=KAM_MEMBER_ID, name="Kam", email="akashorter@icloud.com", role="Owner", tier=3,
                     skills=["photo", "drone"], rpas_advanced=True, rpas_certificate_level="advanced",
+                    rpas_verified_at="2026-10-01T00:00:00+00:00", rpas_verified_level="advanced",
                     drone_certified=True, service_areas=["Mississauga", "GTA"])
     assert pick_vendor_rule_based(job, [basic, none, kam]) == KAM_MEMBER_ID
 

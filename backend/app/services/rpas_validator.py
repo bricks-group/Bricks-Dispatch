@@ -370,3 +370,56 @@ async def validate_rpas_certificate(
     )
 
     return result
+
+
+def _rpas_level(raw) -> Optional[str]:
+    level = str(raw or "").strip().lower()
+    return level if level in ("basic", "advanced") else None
+
+
+def verified_member_patch(level, certificate_number=None) -> Optional[dict]:
+    """vendor_members fields that grant drone dispatch for a verified certificate."""
+    level = _rpas_level(level)
+    if not level:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    patch = {
+        "drone_certified": True,
+        "rpas_advanced": level == "advanced",
+        "rpas_certificate_level": level,
+        "rpas_verified_level": level,
+        "rpas_verified_at": now,
+        "updated_at": now,
+    }
+    if certificate_number:
+        patch["rpas_certificate_number"] = str(certificate_number).strip()
+    return patch
+
+
+def revoked_member_patch() -> dict:
+    """vendor_members fields that withdraw drone dispatch."""
+    return {
+        "drone_certified": False,
+        "rpas_advanced": False,
+        "rpas_verified_level": None,
+        "rpas_verified_at": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def member_patch_for_validation(validation: dict) -> Optional[dict]:
+    """vendor_members update for a registry check result, or None to leave it.
+
+    Only "verified" (Transport Canada lists the certificate) grants drone
+    work; the registry's level wins over the level read off the image.
+    "suspicious" withdraws it. "extracted" and "failed" change nothing and
+    wait for an admin to verify the document.
+    """
+    outcome = (validation or {}).get("outcome")
+    if outcome == "verified":
+        tc = validation.get("tc_registry") or {}
+        level = _rpas_level(tc.get("level")) or _rpas_level(validation.get("level"))
+        return verified_member_patch(level, validation.get("certificate_number"))
+    if outcome == "suspicious":
+        return revoked_member_patch()
+    return None
