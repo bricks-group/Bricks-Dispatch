@@ -215,14 +215,8 @@ def _as_dict(member: Any) -> dict:
 
 
 def is_platform_owner(member: Any) -> bool:
-    m = _as_dict(member)
-    role = str(m.get("role") or "").strip().lower()
-    if role == "owner":
-        return True
-    email = str(m.get("email") or "").strip().lower()
-    if email in KAM_EMAILS:
-        return True
-    return str(m.get("id") or "") == KAM_MEMBER_ID
+    from ..shared.vendor_identity import is_owner_member
+    return is_owner_member(_as_dict(member))
 
 
 def onboarding_complete(member: Any) -> bool:

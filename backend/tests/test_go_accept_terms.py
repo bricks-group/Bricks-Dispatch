@@ -17,7 +17,7 @@ from app.routers import vendor_profile as vp
 from app.routers import auth as auth_router
 from app.routers.onboarding import _IC_AGREEMENT_VERSION, _IC_AMENDMENT_VERSION
 from app.shared import pg_fallback
-from app.shared.vendor_identity import needs_terms
+from app.shared.vendor_identity import OWNER_MEMBER_ID, needs_terms
 
 ACTOR = "11111111-2222-3333-4444-555555555555"
 MEMBER = {"id": ACTOR, "name": "Crew", "role": "Photographer", "vendor_id": "default_vendor",
@@ -96,8 +96,9 @@ def test_needs_terms_only_for_contractors_without_acceptance():
     assert needs_terms({**live, **A1}) is False
     assert needs_terms(live) is True
     assert needs_terms({**live, "ic_amendment_version": "IC-A0"}) is True
-    assert needs_terms({**MEMBER, "role": "Owner"}) is False
-    assert needs_terms({**MEMBER, "payout_mode": "owner_full"}) is False
+    assert needs_terms({**MEMBER, "id": OWNER_MEMBER_ID}) is False
+    assert needs_terms({**MEMBER, "role": "Owner"}) is True
+    assert needs_terms({**MEMBER, "payout_mode": "owner_full"}) is True
     assert needs_terms(None) is False
 
 
