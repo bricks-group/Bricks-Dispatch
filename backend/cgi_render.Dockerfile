@@ -46,7 +46,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1000 -s /bin/bash bricks
+# bricks runs the worker and holds its credentials; cgidesk owns the virtual
+# desktop the model drives and gets none of them. The entrypoint starts as
+# root only to split the two (see cgi_render_entrypoint.sh), so don't add a
+# USER line or run this image with --user.
+RUN useradd -m -u 1000 -s /bin/bash bricks \
+ && useradd -m -u 1001 -s /bin/bash cgidesk \
+ && install -d -o cgidesk -g cgidesk -m 0755 /srv/cgi-scenes
 
 WORKDIR /app
 
@@ -58,8 +64,7 @@ COPY cgi_render_entrypoint.sh /usr/local/bin/cgi_render_entrypoint.sh
 RUN chmod +x /usr/local/bin/cgi_render_entrypoint.sh \
  && chown -R bricks:bricks /app
 
-USER bricks
-
 ENV DISPLAY=:99
+ENV CGI_SCENE_DIR=/srv/cgi-scenes
 
 ENTRYPOINT ["/usr/local/bin/cgi_render_entrypoint.sh"]
