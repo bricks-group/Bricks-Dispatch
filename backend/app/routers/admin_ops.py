@@ -201,6 +201,8 @@ async def verify_document(
     status: str = "verified",
     liability_cad: Optional[int] = None,
     aviation_covered: Optional[bool] = None,
+    rpas_level: Optional[str] = None,
+    rpas_certificate_number: Optional[str] = None,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
@@ -209,6 +211,8 @@ async def verify_document(
 
     if not is_vendor_admin(actor_member):
         api_error(403, "Insufficient permissions", "insufficient_permissions")
+    if rpas_level is not None and rpas_level.strip().lower() not in ("basic", "advanced"):
+        api_error(400, "rpas_level must be basic or advanced", "invalid_rpas_level")
 
     db = await get_db()
     await _require_applicant_in_own_vendor(db, member_id, actor_member.get("vendor_id", "default_vendor"))
@@ -246,8 +250,26 @@ async def verify_document(
             await db.table("vendor_members").update(patch).eq("id", member_id).execute()
         elif status in ("rejected", "flagged"):
             await db.table("vendor_members").update({"coi_verified": False}).eq("id", member_id).execute()
+    # RPAS: the admin's verify (or the registry check) is the only thing that
+    # makes a contractor eligible for drone work.
+    out = {"id": doc_id, "status": status}
+    if doc.get("doc_type") == "rpas_certificate":
+        from ..services.rpas_validator import revoked_member_patch, verified_member_patch
+        if status == "verified":
+            # Level comes from the admin, else the registry, else the image read.
+            # The contractor's declared level alone never verifies.
+            vr = doc.get("validation_result") if isinstance(doc.get("validation_result"), dict) else {}
+            level = rpas_level or (vr.get("tc_registry") or {}).get("level") or vr.get("level")
+            number = rpas_certificate_number or vr.get("certificate_number") or (vr.get("declared") or {}).get("certificate_number")
+            patch = verified_member_patch(level, number)
+            if patch:
+                await db.table("vendor_members").update(patch).eq("id", member_id).execute()
+            out["rpas_verified_level"] = patch["rpas_verified_level"] if patch else None
+        elif status in ("rejected", "flagged"):
+            await db.table("vendor_members").update(revoked_member_patch()).eq("id", member_id).execute()
+            out["rpas_verified_level"] = None
 
-    return {"id": doc_id, "status": status}
+    return out
 
 
 @router.post("/validate-rpas-batch")
@@ -275,7 +297,7 @@ async def validate_rpas_batch(
             "members": [{"member_id": d["member_id"], "doc_id": d["id"]} for d in docs],
         }
 
-    from ..services.rpas_validator import validate_rpas_certificate as _validate
+    from ..services.rpas_validator import member_patch_for_validation, validate_rpas_certificate as _validate
     from ..services.storage import get_signed_download_url
 
     results = []
@@ -301,13 +323,9 @@ async def validate_rpas_batch(
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", doc["id"]).execute()
 
-            if validation["outcome"] in ("verified", "extracted"):
-                await db.table("vendor_members").update({
-                    "drone_certified": True,
-                    "rpas_certificate_number": validation.get("certificate_number"),
-                    "rpas_certificate_level": validation.get("level"),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("id", member_id).execute()
+            member_patch = member_patch_for_validation(validation)
+            if member_patch:
+                await db.table("vendor_members").update(member_patch).eq("id", member_id).execute()
 
             results.append({
                 "member_id": member_id,
@@ -315,7 +333,7 @@ async def validate_rpas_batch(
                 "outcome": validation["outcome"],
                 "level": validation.get("level"),
                 "issues": validation.get("issues", []),
-                "drone_certified": validation["outcome"] in ("verified", "extracted"),
+                "drone_certified": bool(member_patch and member_patch.get("drone_certified")),
             })
         except Exception as e:
             results.append({"member_id": member_id, "outcome": "error", "error": str(e)})

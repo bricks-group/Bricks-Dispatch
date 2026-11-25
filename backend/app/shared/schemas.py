@@ -345,6 +345,11 @@ class PortfolioSample(BaseModel):
     filename: Optional[str] = None
 
 
+# Written only by an RPAS verification (validate-rpas / admin document verify).
+# Paths that insert a dumped VendorMember drop them.
+RPAS_VERIFICATION_FIELDS = ("rpas_verified_at", "rpas_verified_level")
+
+
 class VendorMember(BaseModel):
     @model_validator(mode="before")
     @classmethod
@@ -399,6 +404,10 @@ class VendorMember(BaseModel):
     rpas_advanced: bool = False
     rpas_certificate_number: Optional[str] = None
     rpas_certificate_level: Optional[str] = None  # "basic" | "advanced"
+    # Set only by the registry check (validate-rpas) or an admin document
+    # verify. Drone dispatch reads these, never the self-reported fields above.
+    rpas_verified_at: Optional[str] = None
+    rpas_verified_level: Optional[str] = None
     # Polycam / splat gear flag for Virtual Visit deliverables. Virtual Visit is
     # always a paid www add-on (never packaged into Photos only–Full suite).
     # Unlike drone_certified there is no Transport Canada registry check —

@@ -80,11 +80,12 @@ def insurance_email(member: dict, declared: dict) -> tuple[str, str]:
 
 def rpas_email(member: dict, level: str, certificate_number: str = "") -> tuple[str, str]:
     """Subject + plain body for a drone pilot certificate upload."""
-    lvl = "Advanced" if (level or "").strip().lower() == "advanced" else "Basic"
+    raw = (level or "").strip().lower()
+    lvl = "Advanced" if raw == "advanced" else "Basic" if raw == "basic" else ""
     lines = [
         f"{_who(member)} sent a drone pilot certificate for review.",
         "",
-        f"Level: {lvl} (as entered)",
+        f"Level: {lvl} (as entered)" if lvl else "Level: not entered",
     ]
     if (certificate_number or "").strip():
         lines.append(f"Certificate number: {certificate_number.strip()[:60]}")

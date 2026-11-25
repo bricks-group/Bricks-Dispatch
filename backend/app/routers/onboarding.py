@@ -16,7 +16,14 @@ from ..services.storage import upload_file
 from ..services.notifications import create_notification
 from ..shared.database import get_db, maybe_single_row
 from ..shared.applicant_source import ApplicantSourceError, found_us_line, normalize_applicant_source
-from ..shared.schemas import AvailabilitySettings, SampleUploadRequest, VendorApplicationCreate, VendorMember, VendorDocument
+from ..shared.schemas import (
+    RPAS_VERIFICATION_FIELDS,
+    AvailabilitySettings,
+    SampleUploadRequest,
+    VendorApplicationCreate,
+    VendorDocument,
+    VendorMember,
+)
 from ..shared.portfolio import (
     PORTFOLIO_MEDIA_TYPES,
     assemble_portfolio_samples,
@@ -758,6 +765,8 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     )
 
     member_dict = member.dict()
+    for key in RPAS_VERIFICATION_FIELDS:
+        member_dict.pop(key, None)
     # Coordinate models serialize as dicts; portfolio_samples as list[dict].
     if "portfolio_samples" in member_dict and member_dict["portfolio_samples"] is not None:
         member_dict["portfolio_samples"] = [
@@ -1028,7 +1037,8 @@ async def rerun_applicant_review(member_id: str, request: Request, notify: bool 
 async def validate_rpas_certificate(member_id: str, request: Request):
     """
     Run Gemini Vision + Transport Canada registry validation on a member's uploaded RPAS cert.
-    Updates vendor_members with drone_certified, rpas_certificate_number, rpas_certificate_level.
+    A verified result stamps rpas_verified_at / rpas_verified_level (what drone dispatch
+    reads); a suspicious result withdraws them.
     Stores full validation result on the vendor_documents record.
     Requires X-Internal-Api-Key header (exempt from middleware; admin/internal callers only).
     """
@@ -1073,15 +1083,10 @@ async def validate_rpas_certificate(member_id: str, request: Request):
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", doc_id).execute()
 
-    # Auto-approve drone cert if outcome is verified or extracted
-    if validation["outcome"] in ("verified", "extracted"):
-        update_fields = {
-            "drone_certified": True,
-            "rpas_certificate_number": validation.get("certificate_number"),
-            "rpas_certificate_level": validation.get("level"),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.table("vendor_members").update(update_fields).eq("id", member_id).execute()
+    from ..services.rpas_validator import member_patch_for_validation
+    member_patch = member_patch_for_validation(validation)
+    if member_patch:
+        await db.table("vendor_members").update(member_patch).eq("id", member_id).execute()
 
     return {
         "member_id": member_id,
@@ -1091,7 +1096,7 @@ async def validate_rpas_certificate(member_id: str, request: Request):
         "certificate_number": validation.get("certificate_number"),
         "holder_name": validation.get("holder_name"),
         "issues": validation.get("issues", []),
-        "drone_certified": validation["outcome"] in ("verified", "extracted"),
+        "drone_certified": bool(member_patch and member_patch.get("drone_certified")),
         "tc_registry": validation.get("tc_registry", {}),
     }
 

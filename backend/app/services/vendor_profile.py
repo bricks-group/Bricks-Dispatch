@@ -367,12 +367,30 @@ TRADE_SKILL = {
 }
 
 
-def has_advanced_rpas(member: Any) -> bool:
+RPAS_LEVELS = ("basic", "advanced")
+
+
+def verified_rpas_level(member: Any) -> Optional[str]:
+    """Level of the RPAS certificate Bricks verified, or None.
+
+    Only the Transport Canada registry check (validate-rpas) or an admin
+    document verify writes rpas_verified_at / rpas_verified_level. The
+    contractor can write rpas_certificate_level, drone_certified, skills and
+    rpas_advanced (profile, upload, application), so none of those count.
+    """
     m = _as_dict(member)
-    if m.get("rpas_advanced") is True:
-        return True
-    level = str(m.get("rpas_certificate_level") or "").strip().lower()
-    return level == "advanced"
+    if not m.get("rpas_verified_at"):
+        return None
+    level = str(m.get("rpas_verified_level") or "").strip().lower()
+    return level if level in RPAS_LEVELS else None
+
+
+def has_verified_rpas(member: Any) -> bool:
+    return verified_rpas_level(member) is not None
+
+
+def has_advanced_rpas(member: Any) -> bool:
+    return verified_rpas_level(member) == "advanced"
 
 
 def vendor_skills(member: Any) -> set[str]:
@@ -406,8 +424,6 @@ def vendor_skills(member: Any) -> set[str]:
         skills.add("reel")
     elif spec and spec != "mapping":
         skills.add(spec)
-    if m.get("drone_certified") or has_advanced_rpas(m):
-        skills.add("drone")
     if m.get("polycam_equipped"):
         skills.add("tour")
     for item in m.get("equipment_list") or []:
@@ -417,6 +433,12 @@ def vendor_skills(member: Any) -> set[str]:
                 skills.add(skill)
         if "polycam" in t or "splat" in t or "virtual" in t:
             skills.add("tour")
+    # Drone work needs a verified pilot certificate, whatever the contractor
+    # lists in skills, specialty or equipment.
+    if has_verified_rpas(m):
+        skills.add("drone")
+    else:
+        skills.discard("drone")
     if not skills:
         vt = member_vendor_type(m)
         skills.add(TRADE_SKILL.get(vt, "photo"))
@@ -838,6 +860,8 @@ async def ensure_owner_profile(db) -> dict:
         "home_lng": -79.6441,
         "max_travel_km": 80,
         "rpas_advanced": True,
+        "rpas_verified_level": "advanced",
+        "rpas_verified_at": now,
         "skills": ["photo", "drone", "reel", "tour", "twilight"],
         "updated_at": now,
     }
