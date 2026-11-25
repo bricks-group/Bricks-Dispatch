@@ -33,9 +33,8 @@ get_own_internal_api_key).
 session to test that half, see below): every piece of this file that
 doesn't require the OpenAI API actually works, end to end, not just "should
 work in theory":
-  - `_run_blender_headless` (the real function, unmodified) genuinely
-    executes `blender --background --python`, runs a full render, and
-    returns a valid output file.
+  - Headless `blender --background --python` genuinely runs a full render
+    and returns a valid output file.
   - Blender's full interactive GUI genuinely launches under Xvfb with no
     GPU (Mesa software/surfaceless EGL rendering) -- confirmed by screenshot.
   - `_execute_computer_action`'s pyautogui calls genuinely drive that GUI:
@@ -57,9 +56,25 @@ OpenAI's documented computer-use-preview schema plus what OpenAI's own
 gpt-6-astra Responses API call has actually been made. Get an
 OPENAI_API_KEY and do that test before trusting `_run_astra_session`'s
 request/response handling in production -- the local half it drives
-(_execute_computer_action, _run_blender_headless) is now confirmed correct,
-so a failure at that point is about the OpenAI integration specifically,
-not the Blender/display plumbing underneath it.
+(_execute_computer_action, _render_camera_view) is confirmed correct, so a
+failure at that point is about the OpenAI integration specifically, not the
+Blender/display plumbing underneath it.
+
+Trust boundary: the brief and plan come from customers and steer the model,
+so everything the model emits is untrusted.
+  - The worker never runs model-written code. The headless tool is a fixed,
+    parameterized camera render (`render_camera_view`): the model supplies
+    validated numbers and an optional scene filename, and the repo-owned
+    `cgi_render_blender/render_camera_view.py` does the rendering, with
+    `--factory-startup --disable-autoexec` and a scrubbed environment.
+  - The virtual desktop the model drives (Xvfb, fluxbox, anything launched
+    from it, including GUI Blender and its Python console) runs as a
+    separate OS user with an empty environment (cgi_render_entrypoint.sh).
+    It cannot read this worker's credentials or its work directories. The
+    only thing it hands back is scene files saved in CGI_SCENE_DIR, which
+    this worker copies without following links and opens with autoexec off.
+  - Computer-use safety checks are never auto-acknowledged; a pending check
+    fails the asset.
 """
 from __future__ import annotations
 
@@ -68,12 +83,16 @@ import base64
 import io
 import json
 import logging
+import math
 import os
+import re
+import shutil
+import stat
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 try:
     # Needs a real or virtual X display (DISPLAY env var) to import cleanly
@@ -112,6 +131,27 @@ MAX_ITERATIONS = 10
 # polling this host does not, but still shouldn't spin forever with nothing
 # queued.
 POLL_INTERVAL_SECONDS = 30
+
+# Where the desktop session (a different OS user, see cgi_render_entrypoint.sh)
+# saves .blend scenes for render_camera_view to pick up by filename.
+CGI_SCENE_DIR = Path(os.environ.get("CGI_SCENE_DIR", "/srv/cgi-scenes"))
+MAX_SCENE_BYTES = 512 * 1024 * 1024
+BLENDER_TIMEOUT_SECONDS = 300
+
+_RENDER_VIEW_SCRIPT = (
+    Path(__file__).resolve().parents[2] / "cgi_render_blender" / "render_camera_view.py"
+)
+_SCENE_FILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.blend")
+_RENDER_PARAM_KEYS = {
+    "camera_location",
+    "camera_target",
+    "lens_mm",
+    "resolution_x",
+    "resolution_y",
+    "samples",
+    "scene_file",
+}
+_MAX_COORDINATE = 10_000.0
 
 
 async def _os_request(method: str, path: str, **kwargs) -> httpx.Response:
@@ -152,35 +192,154 @@ async def _report_status(
         logger.error(f"cgi_render: failed to report status={status} for asset {asset_id}: {e}")
 
 
-def _run_blender_headless(python_script: str, workdir: Path) -> Optional[Path]:
-    """Run a Blender Python script in background mode (no GUI) — used for
-    repetitive, well-defined tasks (placing a camera, rendering one view),
-    matching OpenAI's own Astra case study, which used this for cinematic
-    camera studies rather than driving everything through computer use.
+def _number(value: Any, name: str, low: float, high: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number")
+    value = float(value)
+    if not math.isfinite(value) or not low <= value <= high:
+        raise ValueError(f"{name} must be between {low:g} and {high:g}")
+    return value
+
+
+def _integer(value: Any, name: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if not low <= value <= high:
+        raise ValueError(f"{name} must be between {low} and {high}")
+    return value
+
+
+def _vector(value: Any, name: str) -> list[float]:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError(f"{name} must be a list of three numbers")
+    return [_number(v, f"{name}[{i}]", -_MAX_COORDINATE, _MAX_COORDINATE) for i, v in enumerate(value)]
+
+
+def _parse_render_params(raw_arguments: Optional[str]) -> dict:
+    """Validate render_camera_view arguments into plain numbers and a bare
+    scene filename. Anything else the model sends is refused, never run."""
+    try:
+        args = json.loads(raw_arguments or "{}")
+    except (TypeError, ValueError):
+        raise ValueError("arguments must be a JSON object")
+    if not isinstance(args, dict):
+        raise ValueError("arguments must be a JSON object")
+    unknown = set(args) - _RENDER_PARAM_KEYS
+    if unknown:
+        raise ValueError(f"unsupported argument(s): {', '.join(sorted(map(str, unknown)))}")
+
+    params = {
+        "camera_location": _vector(args.get("camera_location"), "camera_location"),
+        "camera_target": _vector(args.get("camera_target"), "camera_target"),
+        "lens_mm": _number(args.get("lens_mm", 35), "lens_mm", 8, 300),
+        "resolution_x": _integer(args.get("resolution_x", 1920), "resolution_x", 64, 4096),
+        "resolution_y": _integer(args.get("resolution_y", 1080), "resolution_y", 64, 4096),
+        "samples": _integer(args.get("samples", 128), "samples", 1, 1024),
+    }
+    if math.dist(params["camera_location"], params["camera_target"]) < 1e-6:
+        raise ValueError("camera_target must differ from camera_location")
+
+    scene_file = args.get("scene_file")
+    if scene_file is not None:
+        if not isinstance(scene_file, str) or not _SCENE_FILE_RE.fullmatch(scene_file):
+            raise ValueError("scene_file must be a bare .blend filename saved in the scene directory")
+    params["scene_file"] = scene_file
+    return params
+
+
+def _copy_scene_file(name: str, dest: Path) -> None:
+    """Copy a scene the desktop user saved into this worker's private workdir.
+
+    The scene directory is writable by the desktop user, so the file is
+    opened once, without following links, and checked through that same
+    descriptor; Blender only ever sees the private copy.
+    """
+    dir_fd = os.open(CGI_SCENE_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
+    with os.fdopen(fd, "rb") as src:
+        st = os.fstat(src.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError("scene_file is not a regular file")
+        if st.st_size > MAX_SCENE_BYTES:
+            raise ValueError("scene_file is too large")
+        copied = 0
+        with open(dest, "xb") as dst:
+            while chunk := src.read(1024 * 1024):
+                copied += len(chunk)
+                if copied > MAX_SCENE_BYTES:
+                    raise ValueError("scene_file is too large")
+                dst.write(chunk)
+
+
+def _blender_env(workdir: Path) -> dict[str, str]:
+    # Nothing from the worker's own environment (Supabase, internal and
+    # OpenAI keys) may reach Blender.
+    return {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": str(workdir),
+        "TMPDIR": str(workdir),
+        "LANG": "C.UTF-8",
+    }
+
+
+def _render_camera_view(params: dict, workdir: Path, index: int) -> Optional[Path]:
+    """Render one camera view headlessly — used for repetitive, well-defined
+    renders, matching OpenAI's own Astra case study, which used this for
+    cinematic camera studies rather than driving everything through computer
+    use. Runs only the repo-owned render script; `params` must come from
+    `_parse_render_params`.
 
     Returns the rendered output path, or None on failure.
     """
-    script_path = workdir / "render_script.py"
-    script_path.write_text(python_script)
-    output_path = workdir / "render.png"
-    try:
-        result = subprocess.run(
-            ["blender", "--background", "--python", str(script_path)],
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            logger.error(f"cgi_render: blender exited {result.returncode}: {result.stderr[-2000:]}")
-            return None
-        return output_path if output_path.exists() else None
-    except subprocess.TimeoutExpired:
-        logger.error("cgi_render: blender headless render timed out after 300s")
-        return None
-    except FileNotFoundError:
+    blender = shutil.which("blender")
+    if blender is None:
         logger.error("cgi_render: `blender` executable not found on PATH — host needs Blender installed")
         return None
+
+    output_path = workdir / f"render-{index}.png"
+    cmd = [
+        blender,
+        "--background",
+        "--factory-startup",
+        "--disable-autoexec",
+        "--python-exit-code", "1",
+    ]
+    if params.get("scene_file"):
+        scene_copy = workdir / f"scene-{index}.blend"
+        try:
+            _copy_scene_file(params["scene_file"], scene_copy)
+        except (OSError, ValueError) as e:
+            logger.error(f"cgi_render: could not load scene {params['scene_file']!r}: {e}")
+            return None
+        cmd.append(str(scene_copy))
+
+    render_args = {k: params[k] for k in _RENDER_PARAM_KEYS if k != "scene_file"}
+    render_args["output_path"] = str(output_path)
+    cmd += ["--python", str(_RENDER_VIEW_SCRIPT), "--", json.dumps(render_args)]
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(workdir),
+            env=_blender_env(workdir),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=BLENDER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(f"cgi_render: blender headless render timed out after {BLENDER_TIMEOUT_SECONDS}s")
+        return None
+    if result.returncode != 0:
+        logger.error(f"cgi_render: blender exited {result.returncode}: {result.stderr[-2000:]}")
+        return None
+    try:
+        st = os.lstat(output_path)
+    except FileNotFoundError:
+        return None
+    return output_path if stat.S_ISREG(st.st_mode) else None
 
 
 def _screenshot_data_url() -> str:
@@ -274,8 +433,10 @@ async def _run_astra_session(source_plan_url: str, brief: Optional[str], workdir
         "materials, lighting, and a camera; render a check frame; inspect it; refine "
         "until the result is presentable, then stop. You have two tools: a virtual "
         "desktop running Blender (use this to build and inspect the interactive "
-        "scene) and a function to run a Blender Python script in background mode "
-        "(use this for repetitive, well-defined renders once the scene is built)."
+        "scene) and render_camera_view, which renders one camera view of a scene "
+        "in background mode (use this for repetitive, well-defined renders once "
+        f"the scene is built). Save the scene as a .blend file in {CGI_SCENE_DIR} "
+        "and pass its filename as scene_file."
     )
     user_content = [{"type": "input_text", "text": brief or "Render this site/floor plan."}]
     user_content.append({"type": "input_image", "image_url": source_plan_url})
@@ -292,12 +453,33 @@ async def _run_astra_session(source_plan_url: str, brief: Optional[str], workdir
         },
         {
             "type": "function",
-            "name": "run_blender_headless",
-            "description": "Run a Blender Python script in background (no GUI) mode and return the rendered PNG.",
+            "name": "render_camera_view",
+            "description": (
+                "Render one still PNG of a saved scene from a camera at camera_location "
+                "aimed at camera_target (Cycles, CPU)."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {"script": {"type": "string", "description": "Full Blender Python (bpy) script."}},
-                "required": ["script"],
+                "properties": {
+                    "scene_file": {
+                        "type": "string",
+                        "description": f"Bare .blend filename saved in {CGI_SCENE_DIR}. Omit for an empty scene.",
+                    },
+                    "camera_location": {
+                        "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3,
+                        "description": "Camera position [x, y, z] in metres.",
+                    },
+                    "camera_target": {
+                        "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3,
+                        "description": "Point [x, y, z] the camera looks at.",
+                    },
+                    "lens_mm": {"type": "number", "minimum": 8, "maximum": 300},
+                    "resolution_x": {"type": "integer", "minimum": 64, "maximum": 4096},
+                    "resolution_y": {"type": "integer", "minimum": 64, "maximum": 4096},
+                    "samples": {"type": "integer", "minimum": 1, "maximum": 1024},
+                },
+                "required": ["camera_location", "camera_target"],
+                "additionalProperties": False,
             },
         },
     ]
@@ -332,36 +514,40 @@ async def _run_astra_session(source_plan_url: str, brief: Optional[str], workdir
                 break
 
             for call in function_calls:
-                if call.get("name") == "run_blender_headless":
-                    args = json.loads(call.get("arguments") or "{}")
-                    out_path = _run_blender_headless(args.get("script", ""), workdir)
-                    if out_path:
-                        rendered_paths.append(out_path)
-                    input_items.append({
-                        "type": "function_call_output",
-                        "call_id": call["call_id"],
-                        "output": "rendered" if out_path else "render failed — see logs",
-                    })
+                if call.get("name") != "render_camera_view":
+                    result = f"unknown tool {call.get('name')!r}"
+                else:
+                    try:
+                        params = _parse_render_params(call.get("arguments"))
+                    except ValueError as e:
+                        logger.warning(f"cgi_render: rejected render_camera_view arguments: {e}")
+                        result = f"rejected: {e}"
+                    else:
+                        out_path = _render_camera_view(params, workdir, len(rendered_paths))
+                        if out_path:
+                            rendered_paths.append(out_path)
+                        result = "rendered" if out_path else "render failed — see logs"
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": call.get("call_id"),
+                    "output": result,
+                })
 
             for call in computer_calls:
+                # A pending safety check means the model flagged this action
+                # as needing human confirmation. No human watches this
+                # worker, and the brief steering the model is customer
+                # input, so the action is refused rather than acknowledged.
+                if call.get("pending_safety_checks"):
+                    raise RuntimeError(
+                        "Astra requested an action that needs safety-check confirmation; refusing it"
+                    )
                 screenshot_url = _execute_computer_action(call.get("action") or {})
-                output_item = {
+                input_items.append({
                     "type": "computer_call_output",
-                    "call_id": call["call_id"],
+                    "call_id": call.get("call_id"),
                     "output": {"type": "computer_screenshot", "image_url": screenshot_url},
-                }
-                # The computer-use tool can flag a pending safety check (e.g.
-                # an action it judges risky) that must be explicitly
-                # acknowledged on the next turn or the API rejects the call.
-                # We're driving an isolated render VM with no real user data
-                # or credentials exposed to it, so auto-acknowledging is the
-                # right call here -- this would NOT be safe for a tool
-                # driving a real desktop with the user's own accounts on it.
-                pending = call.get("pending_safety_checks") or []
-                if pending:
-                    output_item["acknowledged_safety_checks"] = pending
-                    logger.info(f"cgi_render: auto-acknowledged {len(pending)} safety check(s) on an isolated render VM")
-                input_items.append(output_item)
+                })
         else:
             logger.warning(f"cgi_render: hit MAX_ITERATIONS={MAX_ITERATIONS} without Astra signaling done")
 
@@ -422,6 +608,20 @@ async def _main_loop() -> None:
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
+def _make_worker_non_dumpable() -> None:
+    """Stop processes running as this worker's own user (e.g. Blender) from
+    reading /proc/<worker pid>/environ, where the credentials live."""
+    try:
+        import ctypes
+
+        pr_set_dumpable = 4
+        if ctypes.CDLL(None, use_errno=True).prctl(pr_set_dumpable, 0, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_DUMPABLE) failed")
+    except Exception as e:
+        logger.warning(f"cgi_render: could not mark worker non-dumpable: {e}")
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    _make_worker_non_dumpable()
     asyncio.run(_main_loop())
