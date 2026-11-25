@@ -16,7 +16,7 @@ from ..services.capture_entitlements import stamp_capture
 from ..services.vendor_selection import assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
-from ..shared.auth import can_access_stripe_connect, ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
+from ..shared.auth import can_access_stripe_connect, enforce_member_privilege_fields, ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.vendor_identity import is_owner_member, photographer_payout_cents, public_profile
 from ..shared.job_scope import (
     ORG_VENDOR_ID,
@@ -849,6 +849,11 @@ async def create_vendor_member(
         vendor_type=storage_vendor_type(vtype),
         vendor_id=actor_member.get("vendor_id", "default_vendor"),
     )
+    enforce_member_privilege_fields(
+        {"role": member.role, "title": member.title, "email": member.email},
+        actor_member,
+        member.id,
+    )
     member_dict = member.dict()
     await (await get_db()).table("vendor_members").insert(member_dict).execute()
     member_dict["assigned_jobs"] = 0
@@ -870,6 +875,7 @@ async def update_vendor_member(
     update_data = {k: v for k, v in payload.dict().items() if v is not None}
     if not update_data:
         api_error(400, "No update data", "no_update_data")
+    enforce_member_privilege_fields(update_data, actor_member, member_id)
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
     vendor_id = actor_member.get("vendor_id", "default_vendor")

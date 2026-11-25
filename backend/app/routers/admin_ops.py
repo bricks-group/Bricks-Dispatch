@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Header, HTTPException
 
-from ..shared.auth import is_vendor_admin, get_vendor_member, resolve_vendor_actor_id, require_vendor_admin
+from ..shared.auth import enforce_member_privilege_fields, is_vendor_admin, get_vendor_member, resolve_vendor_actor_id, require_vendor_admin
 from ..shared.database import get_db
 
 
@@ -121,7 +121,8 @@ async def update_applicant_status(
     update_data = {k: v for k, v in payload.dict().items() if v is not None}
     if not update_data:
         api_error(400, "No update data provided", "no_update_data")
-        
+    enforce_member_privilege_fields(update_data, actor_member, member_id)
+
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
     if update_data.get("onboarding_status") == "rejected":

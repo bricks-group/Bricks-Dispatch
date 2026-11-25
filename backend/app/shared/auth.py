@@ -260,6 +260,42 @@ def is_vendor_admin(member: dict) -> bool:
     title = (member.get("title") or "").lower()
     return any(k in role or k in title for k in ["owner", "admin", "manager"])
 
+def enforce_member_privilege_fields(
+    fields: dict,
+    actor_member: Optional[dict],
+    target_id: Optional[str],
+) -> None:
+    """Gate role / title / payout_mode / email on a vendor_members write.
+
+    role and title decide is_vendor_admin; Owner labels, owner_full and the
+    owner's emails are reserved for the platform owner's own row. Only the
+    platform owner may hand out admin labels, and nobody else may change the
+    privilege fields on their own row or on the owner's row.
+    """
+    from .job_scope import KAM_EMAILS
+
+    labels = [str(fields.get(k) or "").strip().lower() for k in ("role", "title")]
+    payout_mode = fields.get("payout_mode")
+    email = str(fields.get("email") or "").strip().lower()
+    target_is_owner = is_owner_member({"id": target_id})
+    if not target_is_owner:
+        if any("owner" in label for label in labels):
+            api_error(403, "Owner is reserved for the platform owner", "owner_label_reserved")
+        if payout_mode is not None and payout_mode != "ic_rate_card":
+            api_error(403, "Payout mode is reserved for the platform owner", "payout_mode_reserved")
+        if email in KAM_EMAILS:
+            api_error(403, "Email is reserved for the platform owner", "owner_email_reserved")
+    if is_owner_member(actor_member):
+        return
+    touched = any(labels) or payout_mode is not None
+    if not touched:
+        return
+    actor_id = str((actor_member or {}).get("id") or "").strip().lower()
+    if target_is_owner or (actor_id and actor_id == str(target_id or "").strip().lower()):
+        api_error(403, "Cannot change this member's role", "cannot_edit_privileges")
+    if any(k in label for label in labels for k in ("admin", "manager")):
+        api_error(403, "Only the owner can grant admin access", "admin_grant_owner_only")
+
 def can_access_stripe_connect(member: dict) -> bool:
     """Who may start/view Stripe Connect onboard+status for their vendor org.
 
