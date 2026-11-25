@@ -531,6 +531,7 @@ def test_payout_summary_router_pg_on_402(monkeypatch):
 
 def test_stripe_connect_status_pg_on_402(monkeypatch):
     from app.routers import stripe_connect_status as sc_status
+    from app.shared.vendor_identity import OWNER_MEMBER_ID
 
     class Chain:
         def select(self, *_a, **_k):
@@ -555,11 +556,11 @@ def test_stripe_connect_status_pg_on_402(monkeypatch):
         def table(self, name):
             return Chain()
 
-    monkeypatch.setattr(sc_status, "resolve_vendor_actor_id", AsyncMock(return_value="owner-1"))
+    monkeypatch.setattr(sc_status, "resolve_vendor_actor_id", AsyncMock(return_value=OWNER_MEMBER_ID))
     monkeypatch.setattr(
         sc_status,
         "get_vendor_member",
-        AsyncMock(return_value={"id": "owner-1", "vendor_id": "default_vendor", "role": "Owner"}),
+        AsyncMock(return_value={"id": OWNER_MEMBER_ID, "vendor_id": "default_vendor", "role": "Owner"}),
     )
     monkeypatch.setattr(sc_status, "can_access_stripe_connect", lambda m: True)
     monkeypatch.setattr(

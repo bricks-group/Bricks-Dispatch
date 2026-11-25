@@ -3,13 +3,15 @@ from unittest.mock import AsyncMock, patch
 
 from app.services import amendment_notice as an
 from app.services import ops_autopilot as ops
+from app.shared.vendor_identity import OWNER_MEMBER_ID
 
 REAL = {"id": "r1", "name": "Filwyn Ma", "email": "filwyn@gmail.com", "role": "Photographer", "is_active": True}
 
 
 def test_skip_reasons():
     assert an.skip_reason(REAL) is None
-    assert an.skip_reason({**REAL, "role": "Owner"}) == "owner"
+    assert an.skip_reason({**REAL, "id": OWNER_MEMBER_ID}) == "owner"
+    assert an.skip_reason({**REAL, "role": "Owner"}) is None
     for over in ({"id": "test-term-0001"}, {"name": "TEST Payout Vendor"}, {"email": "akashorter+x@gmail.com"},
                  {"email": "go-e2e-1@brxs.ca"}, {"email": "go.ok@brxs.test"}, {"name": "Fair Use Smoke"},
                  {"email": "raph.mercs+bricks-test-vendor@gmail.com"}):

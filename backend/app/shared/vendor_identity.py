@@ -26,16 +26,11 @@ TIER_LABELS = {1: "C", 2: "B", 3: "A"}
 
 
 def is_owner_member(member: Optional[dict]) -> bool:
+    # role, title, payout_mode and email are writable through team management;
+    # ownership (full-package payouts, company Connect account) is the fixed id only.
     if not member:
         return False
-    mid = str(member.get("id") or "").lower()
-    if mid == OWNER_MEMBER_ID:
-        return True
-    if (member.get("payout_mode") or "") == "owner_full":
-        return True
-    title = (member.get("title") or "").strip().lower()
-    role = (member.get("role") or "").strip().lower()
-    return title == "owner" or role == "owner"
+    return str(member.get("id") or "").lower() == OWNER_MEMBER_ID
 
 
 def needs_ic_terms(member: Optional[dict]) -> bool:
@@ -71,7 +66,7 @@ def member_title(member: Optional[dict]) -> str:
     if is_owner_member(member):
         return OWNER_TITLE
     stored = (member or {}).get("title") or (member or {}).get("role") or ""
-    if stored.strip().lower() in ("owner", "admin", "manager"):
+    if stored.strip().lower() in ("admin", "manager"):
         return stored
     try:
         from ..services.vendor_profile import member_vendor_type
