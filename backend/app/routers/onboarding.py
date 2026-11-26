@@ -15,6 +15,7 @@ import re
 from ..services.storage import upload_file
 from ..services.notifications import create_notification
 from ..shared.database import get_db, maybe_single_row
+from ..shared.form_limits import base64_file_form_post
 from ..shared.applicant_source import ApplicantSourceError, found_us_line, normalize_applicant_source
 from ..shared.schemas import AvailabilitySettings, SampleUploadRequest, VendorApplicationCreate, VendorMember, VendorDocument
 from ..shared.portfolio import (
@@ -1166,7 +1167,7 @@ def _unique_upload_name(prefix: str, filename: str) -> str:
     return f"{_re.sub(r'[^a-z0-9_]+', '_', prefix.lower())}-{uuid.uuid4().hex[:8]}-{base[-80:]}"
 
 
-@router.post("/documents")
+@base64_file_form_post(router, "/documents")
 async def upload_compliance_document(
     member_id: str = Form(...),
     doc_type: str = Form(...),
@@ -1350,7 +1351,7 @@ async def validate_compliance(member_id: str, doc_type: str, request: Request):
     }
 
 
-@router.post("/portfolio")
+@base64_file_form_post(router, "/portfolio")
 async def upload_portfolio_sample(
     member_id: str = Form(...),
     media_type: str = Form(...),
