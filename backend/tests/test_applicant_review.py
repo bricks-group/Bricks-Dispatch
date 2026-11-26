@@ -188,15 +188,39 @@ async def test_sample_upload_endpoint_limits(monkeypatch):
     from app.routers.onboarding import mint_sample_uploads
     from app.shared.schemas import SampleUploadRequest
 
-    async def fake_signed(path):
+    signed_calls = []
+
+    async def fake_signed(path, upsert=False):
+        signed_calls.append((path, upsert))
         return {"signed_url": f"https://storage.example/{path}?token=t", "token": "t", "path": path}
 
+    async def verified(authorization):
+        assert authorization == "Bearer applicant"
+        return {"id": "applicant-1", "email": "a@example.com"}
+
     monkeypatch.setattr("app.services.storage.create_signed_upload_url", fake_signed)
-    ok = await mint_sample_uploads(SampleUploadRequest(files=[
+    monkeypatch.setattr("app.shared.auth.resolve_mailbox_verified_user", verified)
+    files = [
         {"name": f"{i}.jpg", "type": "image/jpeg", "size": 3_000_000} for i in range(15)
-    ] + [{"name": "cert.jpg", "type": "image/jpeg", "size": 500_000, "kind": "rpas_cert"}]))
+    ] + [{"name": "cert.jpg", "type": "image/jpeg", "size": 500_000, "kind": "rpas_cert"}]
+    ok = await mint_sample_uploads(SampleUploadRequest(files=files), authorization="Bearer applicant")
     assert len(ok["uploads"]) == 16
     assert all(ev.path_in_session(u["path"], ok["session"]) for u in ok["uploads"])
+    assert all(upsert for _, upsert in signed_calls)
+    # Same applicant again (even with another session in the body): same objects.
+    again = await mint_sample_uploads(SampleUploadRequest(files=files, session=ev.mint_upload_session()),
+                                      authorization="Bearer applicant")
+    assert sorted(u["path"] for u in again["uploads"]) == sorted(u["path"] for u in ok["uploads"])
+    first = await mint_sample_uploads(SampleUploadRequest(files=files[:8]), authorization="Bearer applicant")
+    second = await mint_sample_uploads(SampleUploadRequest(files=[
+        {**f, "slot": 8 + i} for i, f in enumerate(files[8:15])
+    ]), authorization="Bearer applicant")
+    batched = [u["path"] for u in first["uploads"] + second["uploads"]]
+    assert len(set(batched)) == 15 and set(batched) <= {u["path"] for u in ok["uploads"]}
+    for bad_slots in ([{**files[0], "slot": 15}], [{**files[0], "slot": 2}, {**files[1], "slot": 2}],
+                      [{**files[15], "slot": 1}]):
+        with pytest.raises(HTTPException):
+            await mint_sample_uploads(SampleUploadRequest(files=bad_slots), authorization="Bearer applicant")
     for bad in (
         [{"name": "x.gif", "type": "image/gif", "size": 2_000_000}],
         [{"name": "x.jpg", "type": "image/jpeg", "size": 40 * 1024 * 1024}],
@@ -204,7 +228,39 @@ async def test_sample_upload_endpoint_limits(monkeypatch):
         [{"name": f"{i}.jpg", "type": "image/jpeg", "size": 2_000_000} for i in range(16)],
     ):
         with pytest.raises(HTTPException):
-            await mint_sample_uploads(SampleUploadRequest(files=bad))
+            await mint_sample_uploads(SampleUploadRequest(files=bad), authorization="Bearer applicant")
+
+
+@pytest.mark.asyncio
+async def test_sample_upload_needs_a_mailbox_verified_session(monkeypatch):
+    from app.routers.onboarding import mint_sample_uploads
+    from app.shared.schemas import SampleUploadRequest
+
+    signed_calls = []
+
+    async def fake_signed(path, upsert=False):
+        signed_calls.append(path)
+        return {"signed_url": f"https://storage.example/{path}?token=t", "token": "t", "path": path}
+
+    monkeypatch.setattr("app.services.storage.create_signed_upload_url", fake_signed)
+    body = SampleUploadRequest(files=[{"name": "a.jpg", "type": "image/jpeg", "size": 2_000_000}],
+                               session=ev.mint_upload_session())
+    with pytest.raises(HTTPException) as exc:
+        await mint_sample_uploads(body, authorization=None)
+    assert exc.value.status_code == 401 and signed_calls == []
+
+    from types import SimpleNamespace
+    import jwt
+    from app.shared import fair_use_auth as fua
+
+    monkeypatch.setattr(fua, "auth_cooldown_active", lambda: False)
+    password_token = jwt.encode({"amr": [{"method": "password"}]}, "placeholder", algorithm="HS256")
+    user = SimpleNamespace(id="u1", email="a@example.com", email_confirmed_at="2026-01-01", identities=[])
+    db = SimpleNamespace(auth=SimpleNamespace(get_user=AsyncMock(return_value=SimpleNamespace(user=user))))
+    monkeypatch.setattr("app.shared.auth.get_db", AsyncMock(return_value=db))
+    with pytest.raises(HTTPException) as exc:
+        await mint_sample_uploads(body, authorization=f"Bearer {password_token}")
+    assert exc.value.status_code == 403 and signed_calls == []
 
 
 # ---------------------------------------------------------------------------

@@ -527,6 +527,9 @@ class SampleUploadFile(BaseModel):
     type: str
     size: int
     kind: str = "sample"  # sample | rpas_cert | resume
+    # Slot within the kind (samples 0-14, cert/resume 0). Same slot = same object,
+    # so a later call replaces it. Omitted: the next slot in this request.
+    slot: Optional[int] = None
 
 
 class SampleUploadRequest(BaseModel):

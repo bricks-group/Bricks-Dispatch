@@ -6,7 +6,7 @@ import secrets
 import traceback
 import uuid
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Form, Request, Body
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Form, Header, Request, Body
 
 logger = logging.getLogger(__name__)
 
@@ -893,17 +893,62 @@ async def _apply_to_bricks_inner(application: VendorApplicationCreate):
     }
 
 
+@router.post("/sample-uploads/email-code")
+async def send_applicant_email_code(payload: dict = Body(default={})):
+    """Email the applicant a sign-in code (Supabase Auth). The verified session
+    from /sample-uploads/email-code/verify is what unlocks /sample-uploads.
+    Same response for every valid address so it can't probe accounts."""
+    email = str((payload or {}).get("email") or "").strip().lower()
+    if not _EMAIL_RE.match(email) or email.split("@")[-1] in _DISPOSABLE_DOMAINS:
+        raise HTTPException(status_code=400, detail="Please enter a valid, permanent email address.")
+    try:
+        from ..shared.database import new_auth_client
+        await (await new_auth_client()).auth.sign_in_with_otp(
+            {"email": email, "options": {"should_create_user": True}}
+        )
+    except Exception as e:
+        logger.warning("applicant email code not sent (%s)", type(e).__name__)
+    return {"ok": True}
+
+
+@router.post("/sample-uploads/email-code/verify")
+async def verify_applicant_email_code(payload: dict = Body(default={})):
+    """Exchange the emailed code for a short-lived session (Bearer for
+    /sample-uploads). Never creates or links a vendor_members row."""
+    email = str((payload or {}).get("email") or "").strip().lower()
+    code = str((payload or {}).get("code") or (payload or {}).get("token") or "").strip()
+    if not email or not code:
+        raise HTTPException(status_code=400, detail="Email and code are required.")
+    try:
+        from ..shared.database import new_auth_client
+        res = await (await new_auth_client()).auth.verify_otp({"email": email, "token": code, "type": "email"})
+    except Exception:
+        res = None
+    session = getattr(res, "session", None)
+    if not session or not getattr(session, "access_token", None):
+        raise HTTPException(status_code=401, detail="That code is wrong or has expired.")
+    return {"access_token": session.access_token, "expires_in": getattr(session, "expires_in", None)}
+
+
 @router.post("/sample-uploads")
-async def mint_sample_uploads(body: SampleUploadRequest):
+async def mint_sample_uploads(
+    body: SampleUploadRequest,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+):
     """Signed upload URLs for application sample photos and the RPAS cert photo.
 
     Files go straight from the browser / GO to Bricks storage (brxs-deliverables),
     never through this function (Vercel body cap). Limits: 15 samples + 1
     certificate per session, JPEG/PNG/WebP/HEIC, 15 MB per sample, 10 MB cert.
     The review re-checks real bytes (magic number, size) before using them.
+
+    Requires a Supabase session that proved the applicant's mailbox (see
+    /sample-uploads/email-code). The folder and object names come from that
+    user, so calling again replaces the same objects; body.session is ignored.
     """
     from ..services import applicant_evidence as ev
     from ..services.storage import create_signed_upload_url
+    from ..shared.auth import resolve_mailbox_verified_user
 
     files = list(body.files or [])
     if not files:
@@ -934,14 +979,24 @@ async def mint_sample_uploads(body: SampleUploadRequest):
             raise HTTPException(status_code=400, detail=f"{f.name or 'A file'} is too large ({cap // (1024 * 1024)} MB max).")
         if f.kind != "rpas_cert" and f.size < ev.MIN_SAMPLE_BYTES:
             raise HTTPException(status_code=400, detail=f"{f.name or 'A photo'} is too small to review. Upload the full-size export.")
-    session = (body.session or "").strip()
-    if not session or not ev.verify_upload_session(session, grace=0):
-        session = ev.mint_upload_session()
-    out = []
-    for i, f in enumerate(files):
+    slots = []
+    taken: set = set()
+    for f in files:
         kind = {"rpas_cert": "cert", "resume": "resume"}.get(f.kind or "sample", "sample")
-        path = ev.sample_path(session, i, kind, f.type.lower())
-        signed = await create_signed_upload_url(path)
+        limit = ev.MAX_SAMPLES if kind == "sample" else 1
+        slot = getattr(f, "slot", None)
+        if slot is None:
+            slot = next((n for n in range(limit) if (kind, n) not in taken), limit)
+        if not isinstance(slot, int) or not 0 <= slot < limit or (kind, slot) in taken:
+            raise HTTPException(status_code=400, detail=f"{f.name or 'A file'} has an invalid upload slot.")
+        taken.add((kind, slot))
+        slots.append((kind, slot))
+    applicant = await resolve_mailbox_verified_user(authorization if isinstance(authorization, str) else None)
+    session = ev.mint_upload_session(owner=applicant["id"])
+    out = []
+    for f, (kind, slot) in zip(files, slots):
+        path = ev.sample_path(session, slot, kind, f.type.lower())
+        signed = await create_signed_upload_url(path, upsert=True)
         if not signed or not signed.get("signed_url"):
             raise HTTPException(status_code=503, detail="Upload is unavailable right now. Please try again shortly.")
         out.append({"name": f.name, "kind": f.kind, "path": signed.get("path") or path,
