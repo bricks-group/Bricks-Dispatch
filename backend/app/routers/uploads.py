@@ -34,6 +34,7 @@ from ..services.post_production import process_job_assets
 from fastapi import BackgroundTasks
 from ..shared.auth import get_vendor_member, resolve_vendor_actor_id
 from ..shared.database import get_db
+from ..shared.form_limits import base64_file_form_post
 
 
 def _maybe_single_row(res) -> dict:
@@ -550,7 +551,7 @@ async def list_uploads(
         return _annotate_inferred_media_type(res.data or [])
 
 
-@router.post("")
+@base64_file_form_post(router, "")
 async def create_upload(
     background_tasks: BackgroundTasks,
     job_id: str = Form(...),
