@@ -394,11 +394,12 @@ def _signed_upload_fields(result) -> Optional[dict]:
     return {"path": path, "token": token, "signed_url": signed}
 
 
-async def create_signed_upload_url(storage_path: str) -> Optional[dict]:
+async def create_signed_upload_url(storage_path: str, upsert: bool = False) -> Optional[dict]:
     """Mint a short-lived signed upload URL for an object in brxs-deliverables.
 
     Used by phone capture so JPEG bytes go straight to Storage and never through
     POST /api/uploads (professional stills, 4MB Vercel cap).
+    upsert=True lets the PUT replace an existing object at that path.
     Returns {path, token, signed_url} or None.
 
     Fair-Use: on Supabase failure, return HMAC PUT proxy URL with token=None so
@@ -409,7 +410,12 @@ async def create_signed_upload_url(storage_path: str) -> Optional[dict]:
     try:
         db = await get_db()
         bucket = db.storage.from_(STORAGE_BUCKET)
-        result = await bucket.create_signed_upload_url(storage_path)
+        if upsert:
+            from types import SimpleNamespace
+            # storage3 reads options.upsert and sends it as the x-upsert header.
+            result = await bucket.create_signed_upload_url(storage_path, SimpleNamespace(upsert="true"))
+        else:
+            result = await bucket.create_signed_upload_url(storage_path)
         parsed = _signed_upload_fields(result)
         if parsed:
             parsed["path"] = parsed.get("path") or storage_path
@@ -426,11 +432,11 @@ async def create_signed_upload_url(storage_path: str) -> Optional[dict]:
         if url and key:
             encoded = "/".join(quote(part, safe="") for part in storage_path.split("/") if part)
             endpoint = f"{url}/storage/v1/object/upload/sign/{STORAGE_BUCKET}/{encoded}"
+            headers = {"Authorization": f"Bearer {key}", "apikey": key}
+            if upsert:
+                headers["x-upsert"] = "true"
             async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.post(
-                    endpoint,
-                    headers={"Authorization": f"Bearer {key}", "apikey": key},
-                )
+                resp = await client.post(endpoint, headers=headers)
             if resp.status_code < 400:
                 parsed = _signed_upload_fields(resp.json())
                 if parsed:
