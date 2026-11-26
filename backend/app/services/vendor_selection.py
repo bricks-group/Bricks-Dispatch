@@ -1,4 +1,5 @@
 from ..shared.alert_recipients import SYSTEM_ALERT_EMAIL
+import html as _html
 import logging
 import os
 from datetime import datetime, timezone
@@ -592,12 +593,12 @@ async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: s
                     "to": [OPS_EMAIL],
                     "subject": f"[OPS] No vendor available — job {job.id}",
                     "html": (
-                        f"<p><b>Job:</b> {job.id}<br/>"
-                        f"<b>Booking:</b> {job.booking_id}<br/>"
-                        f"<b>Address:</b> {job.address}<br/>"
-                        f"<b>Package:</b> {job.package_name}<br/>"
-                        f"<b>Min tier:</b> {job.min_tier_required}<br/>"
-                        f"<b>Attempts:</b> {attempt_count}</p>"
+                        f"<p><b>Job:</b> {_html.escape(str(job.id))}<br/>"
+                        f"<b>Booking:</b> {_html.escape(str(job.booking_id))}<br/>"
+                        f"<b>Address:</b> {_html.escape(str(job.address))}<br/>"
+                        f"<b>Package:</b> {_html.escape(str(job.package_name))}<br/>"
+                        f"<b>Min tier:</b> {_html.escape(str(job.min_tier_required))}<br/>"
+                        f"<b>Attempts:</b> {_html.escape(str(attempt_count))}</p>"
                         f"<p>No eligible vendor could be assigned. Manual assignment required.</p>"
                     ),
                 },

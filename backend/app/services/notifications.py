@@ -173,13 +173,13 @@ def format_when_line(job: dict | None) -> str:
 
 
 def _arrive_confirm_email_html(agent_name: str, photographer: str, address: str, when_line: str, arrive: str, abbrev: str = "") -> str:
-    who = (agent_name or "").strip() or "there"
-    photo = (photographer or "").strip() or "Your Bricks photographer"
-    addr = (address or "").strip() or "your property"
-    when = (when_line or "").strip()
+    who = _html.escape((agent_name or "").strip() or "there")
+    photo = _html.escape((photographer or "").strip() or "Your Bricks photographer")
+    addr = _html.escape((address or "").strip() or "your property")
+    when = _html.escape((when_line or "").strip())
     arrive_s = (arrive or "").strip()
     zone = (abbrev or "").strip()
-    arrive_label = f"{arrive_s} {zone}".strip()
+    arrive_label = _html.escape(f"{arrive_s} {zone}".strip())
     when_p = f'<p style="color:#555;line-height:1.6;margin:0 0 12px 0">{when}</p>' if when else ""
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
@@ -244,7 +244,7 @@ async def notify_arrive_confirmed(job: dict, photographer: dict | None = None) -
 
 def welcome_approved_email_html(availability_url: str) -> str:
     """Welcome after Hiring approval — calendar connect is how auto-assign sees availability."""
-    url = (availability_url or "https://go.brxs.ca/availability").strip()
+    url = _html.escape((availability_url or "https://go.brxs.ca/availability").strip(), quote=True)
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body style="font-family:{_EMAIL_FONT_STACK};background:#f4f1eb;padding:24px">
@@ -272,9 +272,10 @@ def welcome_approved_email_html(availability_url: str) -> str:
 
 
 def _assignment_email_html(name: str, address: str, when_line: str, go_url: str) -> str:
-    who = (name or "").strip() or "there"
-    addr = (address or "").strip() or "a property"
-    when = (when_line or "").strip()
+    who = _html.escape((name or "").strip() or "there")
+    addr = _html.escape((address or "").strip() or "a property")
+    when = _html.escape((when_line or "").strip())
+    go_url = _html.escape(go_url or "", quote=True)
     when_p = f'<p style="color:#555;line-height:1.6;margin:0 0 12px 0">{when}</p>' if when else ""
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
