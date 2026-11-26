@@ -77,12 +77,20 @@ def _session_secret() -> bytes:
     return raw.encode("utf-8")
 
 
-def mint_upload_session(now: Optional[int] = None) -> str:
-    """Opaque session id: <exp>.<random>.<hmac>. Paths live under it."""
+def _mac(msg: str) -> str:
+    return hmac.new(_session_secret(), msg.encode(), hashlib.sha256).hexdigest()
+
+
+def mint_upload_session(now: Optional[int] = None, owner: Optional[str] = None) -> str:
+    """Opaque session id: <exp>.<key>.<hmac>. Paths live under it.
+
+    owner is the applicant's verified auth user id. Its key, and so its storage
+    folder, is the same on every call: an applicant always writes the same
+    slots (see sample_path) instead of opening a new folder per request.
+    """
     exp = int(now or time.time()) + UPLOAD_SESSION_TTL
-    rand = secrets.token_hex(8)
-    msg = f"{exp}.{rand}".encode()
-    sig = hmac.new(_session_secret(), msg, hashlib.sha256).hexdigest()[:24]
+    rand = _mac(f"applicant-owner:{owner}")[:16] if owner else secrets.token_hex(8)
+    sig = _mac(f"{exp}.{rand}")[:24]
     return f"{exp}.{rand}.{sig}"
 
 
@@ -104,9 +112,9 @@ def verify_upload_session(session: str, now: Optional[int] = None, grace: int = 
 
 
 def session_dir(session: str) -> str:
-    """Storage folder for one upload session (no dots in the key)."""
-    _exp, rand, sig = session.split(".")
-    return f"{UPLOAD_PREFIX}/{rand}{sig[:8]}"
+    """Storage folder for one upload session key (no dots; not tied to the expiry)."""
+    _exp, rand, _sig = session.split(".")
+    return f"{UPLOAD_PREFIX}/{rand}{_mac('dir.' + rand)[:8]}"
 
 
 # Resume (required for photographers, 2026-10-31): PDF, DOC or DOCX, 10 MB.
@@ -136,9 +144,10 @@ def is_resume_path(path: str) -> bool:
 
 
 def sample_path(session: str, index: int, kind: str, mime: str) -> str:
+    """Fixed slot per (kind, index, type): minting again overwrites, never adds."""
     ext = RESUME_MIME.get(mime) if kind == "resume" else None
     ext = ext or SAMPLE_MIME.get(mime, "jpg")
-    return f"{session_dir(session)}/{kind}-{index:02d}-{secrets.token_hex(4)}.{ext}"
+    return f"{session_dir(session)}/{kind}-{index:02d}.{ext}"
 
 
 def path_in_session(path: str, session: str) -> bool:

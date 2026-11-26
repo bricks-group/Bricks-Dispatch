@@ -223,14 +223,18 @@ async def test_resume_upload_kind(monkeypatch):
     from app.routers.onboarding import mint_sample_uploads
     from app.shared.schemas import SampleUploadRequest
 
-    async def fake_signed(path):
+    async def fake_signed(path, upsert=False):
         return {"signed_url": f"https://storage.example/{path}?token=t", "token": "t", "path": path}
 
+    async def verified(authorization):
+        return {"id": "applicant-1", "email": "a@example.com"}
+
     monkeypatch.setattr("app.services.storage.create_signed_upload_url", fake_signed)
+    monkeypatch.setattr("app.shared.auth.resolve_mailbox_verified_user", verified)
     ok = await mint_sample_uploads(SampleUploadRequest(files=[
         {"name": "cv.docx", "type": "", "size": 80_000, "kind": "resume"},
         {"name": "a.jpg", "type": "image/jpeg", "size": 2_000_000},
-    ]))
+    ]), authorization="Bearer applicant")
     r = next(u for u in ok["uploads"] if u["kind"] == "resume")
     assert r["path"].endswith(".docx") and ev.is_resume_path(r["path"])
     assert ok["limits"]["max_resume_mb"] == 10
@@ -240,7 +244,7 @@ async def test_resume_upload_kind(monkeypatch):
         [{"name": "a.pdf", "type": "application/pdf", "size": 9000, "kind": "resume"}] * 2,
     ):
         with pytest.raises(HTTPException):
-            await mint_sample_uploads(SampleUploadRequest(files=bad))
+            await mint_sample_uploads(SampleUploadRequest(files=bad), authorization="Bearer applicant")
 
 
 # ── resume check ────────────────────────────────────────────────────────────

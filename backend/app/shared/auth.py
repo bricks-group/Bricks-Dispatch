@@ -413,6 +413,64 @@ async def resolve_vendor_actor_id(
 
     api_error(401, "Authentication required", "auth_required")
 
+
+async def resolve_mailbox_verified_user(authorization: Optional[str]) -> dict:
+    """{'id', 'email'} for a Supabase session whose sign-in proved the mailbox
+    (emailed code / link, or OAuth with a provider-verified email). No
+    vendor_members row is needed or created: applicants use this before /apply.
+
+    Same token checks as resolve_vendor_actor_id: Supabase get_user, or the
+    ES256 + live session check only while Auth is unavailable.
+    """
+    token = (authorization or "").replace("Bearer ", "").strip() if isinstance(authorization, str) else ""
+    if not token:
+        api_error(401, "Verify your email first", "auth_required")
+    from starlette.concurrency import run_in_threadpool
+
+    from . import fair_use_auth as _fua
+
+    amr = session_amr_methods(token)
+    use_local = _fua.auth_cooldown_active()
+    if not use_local:
+        try:
+            user_resp = await (await get_db()).auth.get_user(token)
+            _fua.record_auth_outcome(None)
+        except HTTPException:
+            raise
+        except Exception as e:
+            _fua.record_auth_outcome(e)
+            if not _fua.auth_unavailable(e):
+                api_error(401, "Invalid session", "invalid_session_token")
+            use_local = True
+    if not use_local:
+        user = getattr(user_resp, "user", None) if user_resp else None
+        if not user or not getattr(user, "id", None):
+            api_error(401, "Invalid session", "invalid_session_token")
+        email = (getattr(user, "email", None) or "").strip().lower()
+        proved = (
+            bool(email)
+            and bool(getattr(user, "email_confirmed_at", None))
+            and not getattr(user, "is_anonymous", False)
+            and first_link_allowed(amr, oauth_email_verified=oauth_email_verified_by_provider(user, email))
+        )
+        uid = str(user.id)
+    else:
+        local = await run_in_threadpool(_fua.verify_and_load_auth_user, token)
+        if not local or not local.get("id"):
+            api_error(401, "Invalid session", "invalid_session_token")
+        claims = local.get("claims") or {}
+        email = (local.get("email") or "").strip().lower()
+        proved = (
+            bool(email)
+            and bool(local.get("email_confirmed"))
+            and not claims.get("is_anonymous")
+            and first_link_allowed(amr, oauth_email_verified=claims.get("email_verified") is True)
+        )
+        uid = str(local["id"])
+    if not proved:
+        api_error(403, "Verify your email with the code we send you first", "email_not_verified")
+    return {"id": uid, "email": email}
+
 async def get_vendor_member_ids(vendor_id: str = "default_vendor") -> list[str]:
     response = await (await get_db()).table("vendor_members").select("id").eq("vendor_id", vendor_id).eq("is_active", True).execute()
     ids = [m["id"] for m in response.data]
