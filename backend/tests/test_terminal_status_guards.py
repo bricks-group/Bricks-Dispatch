@@ -1,6 +1,6 @@
 """Closed jobs (cancelled / agent_no_show / qc_failed + finished) are never reopened.
 
-L1: PUT /jobs/{id}/assign (unassign, auto) and POST /jobs/{id}/contractor-no-show.
+L1: PUT /jobs/{id}/assign (unassign, auto, specific-member) and POST /jobs/{id}/contractor-no-show.
 L2: watch-action Accept on an already-assigned job still stamps vendor_accepted_at.
 """
 from __future__ import annotations
@@ -270,3 +270,193 @@ def test_accept_from_pending_assignment_still_changes_status_and_stamps(monkeypa
     assert out["status"] == "updated" and out["new_status"] == "assigned"
     assert db.job["status"] == "assigned"
     assert any(t == "jobs" and set(f) == {"vendor_accepted_at"} for t, f, _ in db.updates)
+
+
+TARGET = {
+    "id": "ic-2",
+    "vendor_id": ORG_VENDOR_ID,
+    "role": "Photographer IC",
+    "title": "Photographer IC",
+    "email": "ic2@brxs.ca",
+    "is_active": True,
+    "onboarding_status": "approved",
+}
+
+ALL_CLOSED = sorted(NO_REDISPATCH_JOB_STATUSES)
+ASSIGN_VERBS = ("unassign", "auto", "ic-2")
+
+
+# ---------------------------------------------------------------- Must: specific-member assign on a closed job
+
+
+@pytest.mark.parametrize("status", ALL_CLOSED)
+@pytest.mark.parametrize("member_id", ASSIGN_VERBS)
+def test_resolve_blocks_every_verb_on_closed_job_that_already_has_an_assignee(status, member_id):
+    code, err, patch = resolve_manual_assignment(
+        actor_id=KAM_MEMBER_ID, actor_member=KAM, job=_job(status, assignee="ic-1"),
+        member_id=member_id, target_member=TARGET,
+    )
+    assert (code, err, patch) == (409, "job_finished", {}), (status, member_id)
+
+
+def _patch_assign(monkeypatch, db, job=None):
+    notify = AsyncMock()
+    confirmed = AsyncMock()
+    callback = MagicMock()
+    auto_assign = AsyncMock(return_value="ic-9")
+    monkeypatch.setattr(vos, "resolve_vendor_actor_id", AsyncMock(return_value=KAM_MEMBER_ID))
+    monkeypatch.setattr(vos, "get_vendor_member", AsyncMock(return_value=KAM))
+    monkeypatch.setattr(vos, "get_db", AsyncMock(return_value=db))
+    monkeypatch.setattr(vos, "assign_vendor_for_job", auto_assign)
+    monkeypatch.setattr(vos, "_safe_write_audit_event", AsyncMock())
+    monkeypatch.setattr("app.services.commercial_jobs.refresh_company_policy", AsyncMock())
+    monkeypatch.setattr("app.services.notifications.notify_assignment", notify)
+    monkeypatch.setattr("app.services.client_comms.notify_booking_confirmed", confirmed)
+    monkeypatch.setenv("BOOKING_CALLBACK_URL", "https://book.example")
+
+    class _Resp:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            callback(*a, **k)
+            return MagicMock()
+
+    # conftest stubs httpx as a MagicMock (no real AsyncClient attr)
+    monkeypatch.setattr(vos, "httpx", type("Httpx", (), {"AsyncClient": staticmethod(lambda *a, **k: _Resp())}))
+    return notify, confirmed, callback, auto_assign
+
+
+@pytest.mark.parametrize("status", ALL_CLOSED)
+@pytest.mark.parametrize("member_id", ASSIGN_VERBS)
+def test_assign_endpoint_closed_job_with_assignee_never_writes_or_notifies(
+    monkeypatch, status, member_id,
+):
+    """A photographer must not be sent to a cancelled / finished booking, and the
+    client must not get a confirmation. Covers unassign, auto, and a named member.
+    """
+    db = FakeDb(_job(status, assignee="ic-1"), member=TARGET)
+    notify, confirmed, callback, auto_assign = _patch_assign(monkeypatch, db)
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(vos.assign_job_to_member(
+            "job-1", vos.JobAssignmentUpdate(member_id=member_id),
+            authorization="Bearer x", x_user_id=None,
+        ))
+    assert ei.value.status_code == 409
+    assert ei.value.detail["code"] == "job_finished"
+    assert db.updates == []
+    assert db.job["assignee_id"] == "ic-1"
+    assert db.job["status"] == status
+    notify.assert_not_awaited()
+    confirmed.assert_not_awaited()
+    callback.assert_not_called()
+    auto_assign.assert_not_awaited()
+
+
+def test_open_job_specific_member_assign_still_writes_and_notifies(monkeypatch):
+    """Guard: the closed-job block must not reject a live assigned job."""
+    db = FakeDb(_job("assigned", assignee="ic-1"), member=TARGET)
+    notify, confirmed, callback, auto_assign = _patch_assign(monkeypatch, db)
+    out = asyncio.run(vos.assign_job_to_member(
+        "job-1", vos.JobAssignmentUpdate(member_id="ic-2"),
+        authorization="Bearer x", x_user_id=None,
+    ))
+    assert any(t == "jobs" and f.get("assignee_id") == "ic-2" for t, f, _ in db.updates)
+    notify.assert_awaited()
+    confirmed.assert_awaited()
+    auto_assign.assert_not_awaited()
+    assert out["assignee_id"] == "ic-2"
+    assert db.job["status"] == "assigned"
+
+
+# ---------------------------------------------------------------- L2 follow-ups: 403 and Fair-Use PG stamp
+
+
+def test_accept_by_non_assignee_returns_403_and_writes_nothing(monkeypatch):
+    job = {**_job("assigned", assignee="photog-1"), "vendor_accepted_at": None}
+    db = FakeDb(job)
+    _patch_watch(monkeypatch, db, job)
+    # Actor is still photog-1 from _patch_watch; the job is assigned to someone else.
+    job["assignee_id"] = "photog-OTHER"
+    with pytest.raises(HTTPException) as ei:
+        _accept()
+    assert ei.value.status_code == 403
+    assert db.updates == []
+    assert job.get("vendor_accepted_at") is None
+    assert db.job["status"] == "assigned"
+
+
+def test_pg_update_job_stamps_vendor_accepted_at_only_when_null(monkeypatch):
+    from app.shared import pg_fallback as pf
+
+    cur = MagicMock()
+    cur.rowcount = 1
+    cur.__enter__ = lambda s: s
+    cur.__exit__ = MagicMock(return_value=False)
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    conn.close = MagicMock()
+    monkeypatch.setattr(pf, "_pg_connect", lambda: conn)
+
+    ok = pf.pg_update_job(
+        "job-1",
+        {"vendor_accepted_at": "2026-11-28T10:00:00+00:00"},
+        only_if_null="vendor_accepted_at",
+    )
+    assert ok is True
+    sql, params = cur.execute.call_args[0]
+    assert "UPDATE public.jobs" in sql
+    assert "vendor_accepted_at = %s" in sql
+    assert "vendor_accepted_at IS NULL" in sql
+    assert "2026-11-28T10:00:00+00:00" in params
+    assert params[-1] == "job-1"
+
+
+def test_pg_update_job_rejects_unknown_only_if_null_column(monkeypatch):
+    from app.shared import pg_fallback as pf
+
+    calls = []
+    monkeypatch.setattr(pf, "_pg_connect", lambda: calls.append(1) or None)
+    assert pf.pg_update_job(
+        "job-1",
+        {"vendor_accepted_at": "2026-11-28T10:00:00+00:00"},
+        only_if_null="not_a_real_column",
+    ) is False
+    assert calls == []
+
+
+def test_record_vendor_accepted_falls_back_to_pg_on_rest_402(monkeypatch):
+    class _QuotaErr(Exception):
+        def __str__(self):
+            return "402 Payment Required: exceed_storage_size_quota (Fair Use restricted)"
+
+    class Chain:
+        def update(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def is_(self, *_a, **_k):
+            return self
+
+        async def execute(self):
+            raise _QuotaErr()
+
+    class Db:
+        def table(self, name):
+            return Chain()
+
+    pg_calls = []
+    monkeypatch.setattr(
+        "app.shared.pg_fallback.pg_update_job",
+        lambda jid, fields, **k: pg_calls.append((jid, fields, k)) or True,
+    )
+    job = {**_job("assigned", assignee="photog-1"), "vendor_accepted_at": None}
+    asyncio.run(vos._record_vendor_accepted(Db(), job, "2026-11-28T10:00:00+00:00"))
+    assert pg_calls == [
+        ("job-1", {"vendor_accepted_at": "2026-11-28T10:00:00+00:00"}, {"only_if_null": "vendor_accepted_at"})
+    ]

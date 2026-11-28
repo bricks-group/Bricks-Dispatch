@@ -2576,16 +2576,26 @@ _WATCH_ACTION_STATUS_MAP = {
 async def _record_vendor_accepted(db, job: dict, now: str) -> None:
     """Stamp jobs.vendor_accepted_at (termination policy) once; never overwrite an earlier accept.
 
-    Soft-fails when the column is absent or the write is unavailable.
+    Soft-fails when the column is absent or the write is unavailable. On Fair-Use
+    402, falls back to pg_update_job with only_if_null so an earlier stamp is kept.
     """
     if job.get("vendor_accepted_at"):
         return
+    job_id = job.get("id")
     try:
-        await db.table("jobs").update({"vendor_accepted_at": now}).eq("id", job.get("id")).is_(
+        await db.table("jobs").update({"vendor_accepted_at": now}).eq("id", job_id).is_(
             "vendor_accepted_at", "null"
         ).execute()
+        return
     except Exception as e:
-        logger.warning("vendor_accepted_at not recorded for %s: %s", job.get("id"), type(e).__name__)
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            logger.warning("vendor_accepted_at not recorded for %s: %s", job_id, type(e).__name__)
+            return
+        try:
+            pg_update_job(job_id, {"vendor_accepted_at": now}, only_if_null="vendor_accepted_at")
+        except Exception as e2:
+            logger.warning("vendor_accepted_at not recorded for %s: %s", job_id, type(e2).__name__)
 
 
 @router.post("/jobs/{job_id}/watch-action")

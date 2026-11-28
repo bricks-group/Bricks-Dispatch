@@ -186,12 +186,16 @@ def resolve_manual_assignment(
         return 404, "job_not_found", {}
     if not job_visible_to(job, actor_id, actor_member, assigned_only=False, admin_all=True):
         return 404, "job_not_found", {}
-    finished = str(job.get("status") or "").strip() in NO_REDISPATCH_JOB_STATUSES
+    # Closed jobs: no unassign, auto, or specific-member change — even when an
+    # assignee is already set and the status would stay the same. The assign
+    # endpoint would otherwise write assignee_id and notify the vendor and client.
+    if str(job.get("status") or "").strip() in NO_REDISPATCH_JOB_STATUSES:
+        return 409, "job_finished", {}
     mid = str(member_id or "").strip()
     if mid.lower() == "auto":
-        return (409, "job_finished", {}) if finished else (200, "auto", {})
+        return 200, "auto", {}
     if mid.lower() in UNASSIGN_TOKENS:
-        return (409, "job_finished", {}) if finished else (200, "ok", assignment_fields(job, None))
+        return 200, "ok", assignment_fields(job, None)
     if not target_member or str(target_member.get("id") or "") != mid:
         return 404, "member_not_found", {}
     if not is_manual_assignable(target_member):
@@ -209,7 +213,5 @@ def resolve_manual_assignment(
     ):
         return 409, "commercial_requirements_unmet", {}
     patch = assignment_fields(job, mid)
-    if finished and patch.get("status") != job.get("status"):
-        return 409, "job_finished", {}
     return 200, "ok", patch
 
