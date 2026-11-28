@@ -116,6 +116,9 @@ UNASSIGN_TOKENS = {"", "unassign", "none", "null"}
 UNASSIGNED_JOB_STATUSES = {"pending_assignment", "unassigned", "dispatch_failed", ""}
 # The shoot is done: an assignment change must not send the job back into dispatch.
 FINISHED_JOB_STATUSES = frozenset({"completed", "processing", "delivered"})
+# Closed jobs: finished, or ended without a shoot (cancelled / agent no-show / QC failed).
+# No assignment change, unassign or no-show may reset these to pending_assignment.
+NO_REDISPATCH_JOB_STATUSES = FINISHED_JOB_STATUSES | frozenset({"cancelled", "agent_no_show", "qc_failed"})
 EMPTY_ASSIGNEE_VALUES = {"", "default_user", "null", "none"}
 
 
@@ -183,7 +186,7 @@ def resolve_manual_assignment(
         return 404, "job_not_found", {}
     if not job_visible_to(job, actor_id, actor_member, assigned_only=False, admin_all=True):
         return 404, "job_not_found", {}
-    finished = str(job.get("status") or "").strip() in FINISHED_JOB_STATUSES
+    finished = str(job.get("status") or "").strip() in NO_REDISPATCH_JOB_STATUSES
     mid = str(member_id or "").strip()
     if mid.lower() == "auto":
         return (409, "job_finished", {}) if finished else (200, "auto", {})

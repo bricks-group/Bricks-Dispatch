@@ -19,7 +19,7 @@ from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.auth import can_access_stripe_connect, ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.vendor_identity import is_owner_member, photographer_payout_cents, public_profile
 from ..shared.job_scope import (
-    FINISHED_JOB_STATUSES,
+    NO_REDISPATCH_JOB_STATUSES,
     ORG_VENDOR_ID,
     job_visible_to,
     jobs_or_filter,
@@ -1344,7 +1344,7 @@ async def assign_job_to_member(
     if status_code == 404:
         api_error(404, "Job not found" if err == "job_not_found" else "Member not found", err)
     if status_code == 409 and err == "job_finished":
-        api_error(409, "This job's shoot is finished; it can't be unassigned or sent back to dispatch", err)
+        api_error(409, "This job is closed (finished, cancelled or failed); it can't be unassigned or sent back to dispatch", err)
     if status_code == 409:
         api_error(
             409,
@@ -2573,6 +2573,21 @@ _WATCH_ACTION_STATUS_MAP = {
 }
 
 
+async def _record_vendor_accepted(db, job: dict, now: str) -> None:
+    """Stamp jobs.vendor_accepted_at (termination policy) once; never overwrite an earlier accept.
+
+    Soft-fails when the column is absent or the write is unavailable.
+    """
+    if job.get("vendor_accepted_at"):
+        return
+    try:
+        await db.table("jobs").update({"vendor_accepted_at": now}).eq("id", job.get("id")).is_(
+            "vendor_accepted_at", "null"
+        ).execute()
+    except Exception as e:
+        logger.warning("vendor_accepted_at not recorded for %s: %s", job.get("id"), type(e).__name__)
+
+
 @router.post("/jobs/{job_id}/watch-action")
 async def watch_job_action(
     job_id: str,
@@ -2601,6 +2616,10 @@ async def watch_job_action(
 
     new_status = _WATCH_ACTION_STATUS_MAP[body.action]
     if new_status == old_status:
+        if body.action == "accept":
+            # Auto-assigned jobs are already 'assigned': the tap is still the vendor's
+            # explicit acceptance, which the termination policy reads.
+            await _record_vendor_accepted(db, job, datetime.now(timezone.utc).isoformat())
         return {"status": "no_change", "job_id": job_id, "current_status": old_status}
     _ensure_vendor_transition(old_status, new_status)
 
@@ -2608,10 +2627,7 @@ async def watch_job_action(
     status_fields = {"status": new_status, "updated_at": now}
     await _update_job_if_status(db, job_id, old_status, status_fields)
     if body.action == "accept":
-        try:  # record explicit acceptance (termination policy); soft-fail if column absent
-            await db.table("jobs").update({"vendor_accepted_at": now}).eq("id", job_id).execute()
-        except Exception as e:
-            logger.warning("vendor_accepted_at not recorded for %s: %s", job_id, type(e).__name__)
+        await _record_vendor_accepted(db, job, now)
 
     if new_status == "in_progress" and old_status != "in_progress":
         try:
@@ -3114,11 +3130,29 @@ async def report_contractor_no_show(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     checked_status = job.get("status")
-    if checked_status in FINISHED_JOB_STATUSES:
-        api_error(409, f"The shoot for this job is finished ('{checked_status}'); it can't be re-dispatched", "job_finished")
+    if str(checked_status or "").strip() in NO_REDISPATCH_JOB_STATUSES:
+        api_error(409, f"This job is '{checked_status}'; it can't be re-dispatched", "job_finished")
 
     assignee_id = job.get("assignee_id")
     now = datetime.now(timezone.utc).isoformat()
+
+    # Reset first, limited to the status checked above. Only when this call really moved
+    # the row do the penalty, the audit event and the redispatch follow, so a job that was
+    # cancelled / finished in the meantime is never reopened and nobody is penalised for it.
+    try:
+        res_reset = await db.table("jobs").update({
+            "status": "pending_assignment",
+            "assignee_id": "default_user",
+            "updated_at": now,
+        }).eq("id", job_id).eq("status", checked_status).execute()
+        reset_done = bool(getattr(res_reset, "data", None))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Contractor no-show reset failed for job {job_id}: {type(e).__name__}")
+        api_error(503, "Couldn't update the job right now; try again shortly", "job_update_unavailable")
+    if not reset_done:
+        api_error(409, "This job's status changed; refresh and try again", "job_status_changed")
 
     if assignee_id and assignee_id != "default_user":
         try:
@@ -3148,12 +3182,6 @@ async def report_contractor_no_show(
         actor_id, "job", job_id, "contractor_no_show", vendor_id=vendor_id,
         details={"assignee_id": assignee_id}
     )
-
-    await db.table("jobs").update({
-        "status": "pending_assignment",
-        "assignee_id": "default_user",
-        "updated_at": now,
-    }).eq("id", job_id).eq("status", checked_status).execute()
 
     redispatch_member_id = None
     try:

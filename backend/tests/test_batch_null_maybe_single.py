@@ -220,6 +220,8 @@ def test_contractor_no_show_null_member_skips_cancel_rate(monkeypatch):
     job["assignee_id"] = "missing-member"
     db = _Db({
         (("jobs", (("id", JOB_ID), ("vendor_id", "default_vendor")), True)): SimpleNamespace(data=job),
+        # guarded reset (status still 'assigned') changes the row
+        (("jobs", (("id", JOB_ID), ("status", "assigned")), False)): SimpleNamespace(data=[{"id": JOB_ID}]),
         # vendor_members → None
     })
 
@@ -236,6 +238,7 @@ def test_contractor_no_show_null_member_skips_cancel_rate(monkeypatch):
     out = _run(vos.report_contractor_no_show(JOB_ID, "Bearer t", None))
     assert out["job_id"] == JOB_ID
     assert out["original_contractor"] == "missing-member"
+    assert not any(name == "vendor_members" for name, _ in db.updates)
 
 
 def test_validate_noshow_null_booking_does_not_crash(monkeypatch):
