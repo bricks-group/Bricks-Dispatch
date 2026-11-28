@@ -13,12 +13,13 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from ..services.capture_entitlements import stamp_capture
-from ..services.vendor_selection import assign_vendor_for_job
+from ..services.vendor_selection import JobStatusChanged, assign_vendor_for_job
 from ..shared.audit import write_audit_event
 from ..shared.geospatial import haversine_km as _haversine_km
 from ..shared.auth import can_access_stripe_connect, ensure_assigned_to_actor, get_vendor_member, get_vendor_member_ids, is_vendor_admin, resolve_vendor_actor_id
 from ..shared.vendor_identity import is_owner_member, photographer_payout_cents, public_profile
 from ..shared.job_scope import (
+    FINISHED_JOB_STATUSES,
     ORG_VENDOR_ID,
     job_visible_to,
     jobs_or_filter,
@@ -1342,6 +1343,8 @@ async def assign_job_to_member(
         api_error(403, "Insufficient permissions", err)
     if status_code == 404:
         api_error(404, "Job not found" if err == "job_not_found" else "Member not found", err)
+    if status_code == 409 and err == "job_finished":
+        api_error(409, "This job's shoot is finished; it can't be unassigned or sent back to dispatch", err)
     if status_code == 409:
         api_error(
             409,
@@ -1350,20 +1353,28 @@ async def assign_job_to_member(
             err,
         )
     vendor_id = str(existing_job.get("vendor_id") or actor_member.get("vendor_id") or ORG_VENDOR_ID)
+    checked_status = existing_job.get("status")
 
     if err == "auto":
-        new_assignee_id = await assign_vendor_for_job(job_id)
+        try:
+            new_assignee_id = await assign_vendor_for_job(job_id, expected_status=checked_status)
+        except JobStatusChanged:
+            api_error(409, "This job's status changed; refresh and try again", "job_status_changed")
     else:
         try:
-            await db.table("jobs").update(patch).eq("id", job_id).execute()
+            res_assign = await db.table("jobs").update(patch).eq("id", job_id).eq("status", checked_status).execute()
+            assigned = bool(getattr(res_assign, "data", None))
         except Exception as e:
             if not _is_rest_quota_error(e):
                 raise
-            if not pg_update_job(job_id, patch):
+            if not pg_update_job(job_id, patch, expected_status=checked_status):
                 raise HTTPException(
                     status_code=502,
                     detail="Job assign unavailable (Fair Use); try again shortly",
                 )
+            assigned = True
+        if not assigned:
+            api_error(409, "This job's status changed; refresh and try again", "job_status_changed")
         new_assignee_id = patch.get("assignee_id")
         if new_assignee_id:
             # Await on Vercel serverless — create_task / BackgroundTasks freeze after the
@@ -3102,6 +3113,9 @@ async def report_contractor_no_show(
     job = _maybe_single_row(res_job)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    checked_status = job.get("status")
+    if checked_status in FINISHED_JOB_STATUSES:
+        api_error(409, f"The shoot for this job is finished ('{checked_status}'); it can't be re-dispatched", "job_finished")
 
     assignee_id = job.get("assignee_id")
     now = datetime.now(timezone.utc).isoformat()
@@ -3139,13 +3153,15 @@ async def report_contractor_no_show(
         "status": "pending_assignment",
         "assignee_id": "default_user",
         "updated_at": now,
-    }).eq("id", job_id).execute()
+    }).eq("id", job_id).eq("status", checked_status).execute()
 
     redispatch_member_id = None
     try:
         from ..services.vendor_selection import assign_vendor_for_job
         # Exclude the no-show vendor so they cannot be immediately re-selected
-        redispatch_member_id = await assign_vendor_for_job(job_id, exclude_member_id=assignee_id)
+        redispatch_member_id = await assign_vendor_for_job(
+            job_id, exclude_member_id=assignee_id, expected_status="pending_assignment"
+        )
     except Exception as e:
         logger.error(f"Re-dispatch after contractor no-show failed for job {job_id}: {e}")
 

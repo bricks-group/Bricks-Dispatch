@@ -114,6 +114,8 @@ def toronto_today() -> date:
 
 UNASSIGN_TOKENS = {"", "unassign", "none", "null"}
 UNASSIGNED_JOB_STATUSES = {"pending_assignment", "unassigned", "dispatch_failed", ""}
+# The shoot is done: an assignment change must not send the job back into dispatch.
+FINISHED_JOB_STATUSES = frozenset({"completed", "processing", "delivered"})
 EMPTY_ASSIGNEE_VALUES = {"", "default_user", "null", "none"}
 
 
@@ -181,11 +183,12 @@ def resolve_manual_assignment(
         return 404, "job_not_found", {}
     if not job_visible_to(job, actor_id, actor_member, assigned_only=False, admin_all=True):
         return 404, "job_not_found", {}
+    finished = str(job.get("status") or "").strip() in FINISHED_JOB_STATUSES
     mid = str(member_id or "").strip()
     if mid.lower() == "auto":
-        return 200, "auto", {}
+        return (409, "job_finished", {}) if finished else (200, "auto", {})
     if mid.lower() in UNASSIGN_TOKENS:
-        return 200, "ok", assignment_fields(job, None)
+        return (409, "job_finished", {}) if finished else (200, "ok", assignment_fields(job, None))
     if not target_member or str(target_member.get("id") or "") != mid:
         return 404, "member_not_found", {}
     if not is_manual_assignable(target_member):
@@ -202,5 +205,8 @@ def resolve_manual_assignment(
         advanced_rpas=has_advanced_rpas(target_member),
     ):
         return 409, "commercial_requirements_unmet", {}
-    return 200, "ok", assignment_fields(job, mid)
+    patch = assignment_fields(job, mid)
+    if finished and patch.get("status") != job.get("status"):
+        return 409, "job_finished", {}
+    return 200, "ok", patch
 

@@ -159,7 +159,7 @@ def test_assign_job_to_member_manual_pg_on_402(monkeypatch):
     )
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_update_job",
-        lambda jid, fields: pg_update_calls.append((jid, fields)) or True,
+        lambda jid, fields, **_k: pg_update_calls.append((jid, fields)) or True,
     )
     monkeypatch.setattr(
         "app.services.client_comms.notify_booking_confirmed",
