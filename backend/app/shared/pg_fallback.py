@@ -603,12 +603,21 @@ def pg_select_vendor_members_by_vendor_ids(vendor_ids: list[str]) -> list[dict]:
             pass
 
 
-def pg_update_job(job_id: str, fields: dict) -> bool:
+def pg_update_job(
+    job_id: str,
+    fields: dict,
+    *,
+    expected_status: Optional[str] = None,
+    only_if_null: Optional[str] = None,
+) -> bool:
     """UPDATE public.jobs SET … via Postgres when PostgREST is Fair-Use 402.
 
     Whitelist covers capture compile deliver paths: updated_at freshness,
     checklist marks, status/arrive fields, and uploaded_count for stills
     registration under Fair Use. Returns True when at least one row was updated.
+    With expected_status, only a row still in that status is updated.
+    With only_if_null (a whitelisted column name), the row is updated only when
+    that column is still NULL — used to stamp vendor_accepted_at once.
     """
     jid = str(job_id or "").strip()
     if not jid or not isinstance(fields, dict) or not fields:
@@ -639,6 +648,8 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
         "noshow_photo_uploaded_at",
         "noshow_call_attempted_at",
         "noshow_call_method",
+        # Termination-policy acceptance stamp (watch-action Accept)
+        "vendor_accepted_at",
     }
     json_cols = {"checklist"}
     cols: list[tuple[str, Any]] = []
@@ -674,6 +685,15 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
         vals.append(v)
     vals.append(jid)
     set_sql = ", ".join(set_parts)
+    where_sql = "id = %s"
+    if expected_status is not None:
+        where_sql += " AND status = %s"
+        vals.append(expected_status)
+    if only_if_null is not None:
+        null_col = str(only_if_null).strip()
+        if null_col not in allowed:
+            return False
+        where_sql += f" AND {null_col} IS NULL"
 
     conn = _pg_connect()
     if not conn:
@@ -682,7 +702,7 @@ def pg_update_job(job_id: str, fields: dict) -> bool:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"UPDATE public.jobs SET {set_sql} WHERE id = %s",
+                f"UPDATE public.jobs SET {set_sql} WHERE {where_sql}",
                 vals,
             )
             ok = cur.rowcount > 0

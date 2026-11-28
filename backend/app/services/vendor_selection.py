@@ -35,7 +35,11 @@ logger = logging.getLogger(__name__)
 OPS_EMAIL = SYSTEM_ALERT_EMAIL
 
 
-async def _mark_dispatch_failed(job_id: str) -> None:
+def _status_kw(expected_status: Optional[str]) -> dict:
+    return {} if expected_status is None else {"expected_status": expected_status}
+
+
+async def _mark_dispatch_failed(job_id: str, expected_status: Optional[str] = None) -> bool:
     """Stamp jobs.status=dispatch_failed so admin /dispatch-failures can see + retry it.
 
     Historical bug: failure wrote status=unassigned while the ops queue only
@@ -43,7 +47,8 @@ async def _mark_dispatch_failed(job_id: str) -> None:
     invisible to the recovery path.
 
     Fair-Use: when PostgREST returns 402, write via Postgres (pg_update_job).
-    Never raises.
+    With expected_status, only a row still in that status is stamped; returns
+    False when it had moved on. Never raises.
     """
     from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
 
@@ -53,15 +58,20 @@ async def _mark_dispatch_failed(job_id: str) -> None:
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        await (await get_db()).table("jobs").update(payload).eq("id", job_id).execute()
+        q = (await get_db()).table("jobs").update(payload).eq("id", job_id)
+        if expected_status is not None:
+            q = q.eq("status", expected_status)
+        res = await q.execute()
+        return expected_status is None or bool(getattr(res, "data", None))
     except Exception as e:
         if _is_rest_quota_error(e):
             try:
-                if pg_update_job(job_id, payload):
-                    return
+                if pg_update_job(job_id, payload, **_status_kw(expected_status)):
+                    return True
             except Exception as pg_e:
                 logger.error(f"pg_update_job dispatch_failed failed for {job_id}: {pg_e}")
         logger.error(f"Failed to mark job {job_id} dispatch_failed: {e}")
+    return expected_status is None
 
 
 async def _notify_owner_no_vendor(job: Job, error_message: str) -> None:
@@ -547,10 +557,14 @@ async def notify_owner_vendor_application(
         logger.error("Vendor application email failed: %s", type(e).__name__)
 
 
-async def _escalate_no_vendor(job: Job, attempt_count: int = 1, error_message: str = "") -> None:
+async def _escalate_no_vendor(
+    job: Job, attempt_count: int = 1, error_message: str = "", expected_status: Optional[str] = None,
+) -> None:
     """Record escalation, mark dispatch_failed, email ops, SMS/notify owner."""
     err = error_message or f"No eligible vendor found after {attempt_count} attempt(s)"
-    await _mark_dispatch_failed(job.id)
+    marked = await _mark_dispatch_failed(job.id, **_status_kw(expected_status))
+    if expected_status is not None and not marked:
+        raise JobStatusChanged(job.id)
 
     from ..shared.pg_fallback import _is_rest_quota_error, pg_insert_ops_escalation
 
@@ -803,10 +817,16 @@ def pick_vendor_rule_based(
     return chosen.id
 
 
-async def _patch_job_assign(job_id: str, patch: dict) -> None:
+class JobStatusChanged(Exception):
+    """The job left the status the caller checked before the assignment was written."""
+
+
+async def _patch_job_assign(job_id: str, patch: dict, expected_status: Optional[str] = None) -> None:
     """Update job assign fields; soft-drop columns PostgREST says are missing.
 
     Fair-Use: when PostgREST returns 402, write via Postgres (pg_update_job).
+    With expected_status, only a row still in that status is written; otherwise
+    JobStatusChanged.
     """
     from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
 
@@ -815,18 +835,24 @@ async def _patch_job_assign(job_id: str, patch: dict) -> None:
     db = await get_db()
     for _ in range(8):
         try:
-            await db.table("jobs").update(data).eq("id", job_id).execute()
-            return
+            q = db.table("jobs").update(data).eq("id", job_id)
+            if expected_status is not None:
+                q = q.eq("status", expected_status)
+            res = await q.execute()
         except Exception as e:
             last = e
             if _is_rest_quota_error(e):
-                if pg_update_job(job_id, data):
+                if pg_update_job(job_id, data, **_status_kw(expected_status)):
                     return
                 raise
             miss = _missing_column(str(e), list(data.keys()))
             if not miss:
                 raise
             data.pop(miss, None)
+            continue
+        if expected_status is not None and not getattr(res, "data", None):
+            raise JobStatusChanged(job_id)
+        return
     if last:
         raise last
 
@@ -836,6 +862,7 @@ async def _update_job_assignee(
     member_id: str,
     estimated_duration_min: Optional[int] = None,
     job_doc: Optional[dict] = None,
+    expected_status: Optional[str] = None,
 ):
     now = datetime.now(timezone.utc).isoformat()
     patch = {
@@ -859,7 +886,7 @@ async def _update_job_assignee(
                 patch["selected_slot_start"], patch["selected_slot_end"] = pair
         except Exception as e:
             logger.debug("selected_slot backfill skipped for %s: %s", job_id, e)
-    await _patch_job_assign(job_id, patch)
+    await _patch_job_assign(job_id, patch, **_status_kw(expected_status))
 
     try:
         from .client_comms import notify_booking_confirmed
@@ -878,13 +905,19 @@ async def _update_job_assignee(
 _MAX_ASSIGNMENT_ATTEMPTS = 3
 
 
-async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = None) -> Optional[str]:
+async def assign_vendor_for_job(
+    job_id: str,
+    exclude_member_id: Optional[str] = None,
+    expected_status: Optional[str] = None,
+) -> Optional[str]:
     """
     Orchestrates vendor assignment using Bricks AI with rule-based fallback.
     Retries up to _MAX_ASSIGNMENT_ATTEMPTS times; on final failure writes an
     ops_escalation, marks status=dispatch_failed, emails raph@brxs.ca, and SMS/notifies owner.
 
     exclude_member_id: skip this vendor member on all attempts (e.g. contractor who no-showed).
+    expected_status: the status the caller authorized; every job write is limited to
+    it and JobStatusChanged is raised when the job has moved on.
     """
     from ..shared.pg_fallback import (
         _is_rest_quota_error,
@@ -907,6 +940,8 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
         job_doc = pg_select_job_by_id(job_id)
     if not job_doc:
         raise ValueError(f"Job {job_id} not found")
+    if expected_status is not None and job_doc.get("status") != expected_status:
+        raise JobStatusChanged(job_id)
 
     job = Job(**job_doc)
 
@@ -935,7 +970,7 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
 
     if not vendors:
         logger.warning(f"No vendor members found for vendor_id {vendor_id}.")
-        await _escalate_no_vendor(job, 1, "No vendor members in this vendor account.")
+        await _escalate_no_vendor(job, 1, "No vendor members in this vendor account.", **_status_kw(expected_status))
         return None
 
     # Drone weather gate: if unsafe, block dispatch entirely — the rule-based fallback
@@ -951,11 +986,11 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
                     f"Job {job_id}: drone_unsafe weather ({_weather.get('condition')}, "
                     f"wind={_weather.get('max_wind_kmh')}km/h) — blocking all assignment attempts"
                 )
-                await _escalate_no_vendor(job, 0, "drone weather unsafe — dispatch blocked")
+                await _escalate_no_vendor(job, 0, "drone weather unsafe — dispatch blocked", **_status_kw(expected_status))
                 return None
         except Exception as _we:
             logger.error(f"Job {job_id}: weather check failed for drone job ({_we}) — blocking dispatch (fail-closed)")
-            await _escalate_no_vendor(job, 0, f"drone weather check failed — dispatch blocked: {_we}")
+            await _escalate_no_vendor(job, 0, f"drone weather check failed — dispatch blocked: {_we}", **_status_kw(expected_status))
             return None
 
     duration_min = estimate_shoot_duration_minutes(job)
@@ -1023,13 +1058,18 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             chosen_id = await bricks_smart_assign(job, vendors, occupied_by_vendor=occupied_by_vendor)
             if chosen_id and chosen_id in eligible_ids:
                 logger.info(f"Job {job_id} assigned via Bricks AI to {chosen_id} (attempt {attempt})")
-                await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min, job_doc=job_doc)
+                await _update_job_assignee(
+                    job_id, chosen_id, estimated_duration_min=duration_min, job_doc=job_doc,
+                    **_status_kw(expected_status),
+                )
                 return chosen_id
             if chosen_id:
                 logger.warning(
                     f"Bricks AI suggested vendor {chosen_id} which is ineligible "
                     f"(not found or below min_tier={min_tier}). Falling back (attempt {attempt})."
                 )
+        except JobStatusChanged:
+            raise
         except Exception:
             _had_exception = True
             logger.exception(f"Bricks AI assignment failed for job {job_id} (attempt {attempt})")
@@ -1044,7 +1084,10 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
         )
         if chosen_id is not None:
             logger.info(f"Job {job.id} assigned via rule-based fallback to {chosen_id} (attempt {attempt})")
-            await _update_job_assignee(job_id, chosen_id, estimated_duration_min=duration_min, job_doc=job_doc)
+            await _update_job_assignee(
+                job_id, chosen_id, estimated_duration_min=duration_min, job_doc=job_doc,
+                **_status_kw(expected_status),
+            )
             return chosen_id
 
         logger.warning(f"No vendor assigned for job {job_id} (attempt {attempt}/{_MAX_ASSIGNMENT_ATTEMPTS}).")
@@ -1053,5 +1096,5 @@ async def assign_vendor_for_job(job_id: str, exclude_member_id: Optional[str] = 
             # Only loop again if a transient exception occurred in bricks_smart_assign.
             break
 
-    await _escalate_no_vendor(job, actual_attempts)
+    await _escalate_no_vendor(job, actual_attempts, **_status_kw(expected_status))
     return None

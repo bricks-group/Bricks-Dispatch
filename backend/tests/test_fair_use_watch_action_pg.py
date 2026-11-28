@@ -71,7 +71,7 @@ def test_watch_job_action_accept_pg_on_rest_402(monkeypatch):
     monkeypatch.setattr(vos, "_load_visible_job", AsyncMock(return_value=job))
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_update_job",
-        lambda jid, fields: pg_calls.append((jid, fields)) or True,
+        lambda jid, fields, **_k: pg_calls.append((jid, fields)) or True,
     )
     monkeypatch.setattr(
         "app.services.webhooks.send_dispatch_status_update_webhook",
@@ -195,7 +195,7 @@ def test_watch_job_action_decline_rate_pg_on_402(monkeypatch):
     monkeypatch.setattr(vos, "_load_visible_job", AsyncMock(return_value=job))
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_update_job",
-        lambda jid, fields: True,
+        lambda jid, fields, **_k: True,
     )
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_select_jobs_for_assignees",
