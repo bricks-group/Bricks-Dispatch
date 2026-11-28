@@ -113,10 +113,11 @@ class _Q:
             self.db.tables.setdefault(self.name, []).append(dict(self.payload))
             return SimpleNamespace(data=[self.payload])
         if self.op == "update":
-            for r in self._rows():
+            matched = self._rows()
+            for r in matched:
                 r.update(self.payload)
             self.db.updates.append((self.name, dict(self.payload)))
-            return SimpleNamespace(data=[])
+            return SimpleNamespace(data=[copy.deepcopy(r) for r in matched])
         rows = [copy.deepcopy(r) for r in self._rows()]
         if self.single:
             return None if not rows else SimpleNamespace(data=rows[0])

@@ -196,6 +196,63 @@ async def _update_job_fields(db, job_id: str, fields: dict) -> None:
             raise HTTPException(status_code=503, detail="Saving is unavailable right now; try again shortly")
 
 
+# Forward-only moves a vendor may make on a job assigned to them. Completed,
+# processing and delivered are owned by post-production and the system: a vendor
+# never leaves them, so a completion (and its on-time credit) happens once per job.
+_VENDOR_STATUS_TRANSITIONS = {
+    "pending_assignment": frozenset({"assigned", "in_progress", "declined"}),
+    "assigned": frozenset({"in_progress", "declined"}),
+    "in_progress": frozenset({"completed"}),
+}
+
+
+def _ensure_vendor_transition(old_status, new_status: str) -> None:
+    if new_status not in _VENDOR_STATUS_TRANSITIONS.get(str(old_status or ""), frozenset()):
+        api_error(
+            409,
+            f"A job that is '{old_status}' can't be moved to '{new_status}'",
+            "invalid_status_transition",
+        )
+
+
+async def _update_job_if_status(db, job_id: str, expected_status: str, fields: dict) -> None:
+    """jobs UPDATE limited to the status the caller checked; 409 when the row moved."""
+    try:
+        res = await db.table("jobs").update(fields).eq("id", job_id).eq("status", expected_status).execute()
+        moved = bool(getattr(res, "data", None))
+    except Exception as e:
+        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
+        if not _is_rest_quota_error(e):
+            raise
+        if not pg_update_job(job_id, fields, expected_status=expected_status):
+            raise HTTPException(
+                status_code=503,
+                detail="Job status update unavailable (Fair Use); try again shortly",
+            )
+        moved = True
+    if not moved:
+        api_error(409, "This job's status changed; refresh and try again", "job_status_changed")
+
+
+# A device completed_at is trusted only this far behind the server clock.
+_COMPLETED_AT_MAX_LAG = timedelta(minutes=10)
+
+
+def _completion_time(job: dict, reported_at: Optional[str], server_now: datetime) -> datetime:
+    """When the shoot finished, for on-time credit.
+
+    Server time, unless the device reported a time within _COMPLETED_AT_MAX_LAG
+    before it and not before the vendor checked in.
+    """
+    reported = noshow_policy.parse_ts(reported_at)
+    if reported is None or reported > server_now or server_now - reported > _COMPLETED_AT_MAX_LAG:
+        return server_now
+    checked_in = noshow_policy.parse_ts(job.get("checked_in_at"))
+    if checked_in is not None and reported < checked_in:
+        return server_now
+    return reported
+
+
 def _valid_coord(lat, lng) -> bool:
     try:
         return lat is not None and lng is not None and -90 <= float(lat) <= 90 and -180 <= float(lng) <= 180
@@ -257,7 +314,7 @@ async def check_in_job(
             "check_in_distance_m": distance_m,
             "updated_at": now.isoformat(),
         }
-        await _update_job_fields(db, job_id, fields)
+        await _update_job_if_status(db, job_id, "in_progress", fields)
         job.update(fields)
     job["status"] = "in_progress"
     out = dict(result or {})
@@ -2334,6 +2391,10 @@ async def update_vendor_job_status(
             detail=f"Status '{new_status}' cannot be set via this endpoint — it is managed by the system",
         )
 
+    # Retries and double taps: nothing to write, notify or count again.
+    if new_status == old_status:
+        return {"status": "no_change", "job_id": job_id, "new_status": old_status}
+    _ensure_vendor_transition(old_status, new_status)
 
     # Trade jobs: every checklist item ticked with its proof (Kam, 2026-10-31).
     # Media jobs return None here and keep their completion rules.
@@ -2373,19 +2434,10 @@ async def update_vendor_job_status(
                 "bracket_gate_unavailable",
             )
 
-    now = datetime.now(timezone.utc).isoformat()
+    server_now = datetime.now(timezone.utc)
+    now = server_now.isoformat()
     status_fields = {"status": new_status, "updated_at": now}
-    try:
-        await db.table("jobs").update(status_fields).eq("id", job_id).execute()
-    except Exception as e:
-        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
-        if not _is_rest_quota_error(e):
-            raise
-        if not pg_update_job(job_id, status_fields):
-            raise HTTPException(
-                status_code=503,
-                detail="Job status update unavailable (Fair Use); try again shortly",
-            )
+    await _update_job_if_status(db, job_id, old_status, status_fields)
 
     # When vendor marks completed, run post-production only when uploads are
     # either not expected (deliverables_count=0) or already fully received.
@@ -2447,7 +2499,9 @@ async def update_vendor_job_status(
                     member_row = pg_select_vendor_member(assignee_id) or None
                 if member_row:
                     prev_total = member_row.get("total_assignments") or 0
-                    prev_rate = member_row.get("on_time_rate") or 1.0
+                    prev_rate = member_row.get("on_time_rate")
+                    if prev_rate is None:
+                        prev_rate = 1.0
                     new_total = prev_total + 1
                     update_fields: dict = {"total_assignments": new_total, "updated_at": now}
                     if sched_date and time_end:
@@ -2456,22 +2510,7 @@ async def update_vendor_job_status(
                         deadline = datetime.strptime(
                             f"{sched_date} {time_end}", "%Y-%m-%d %H:%M"
                         ).replace(tzinfo=zoneinfo_for_job(job))
-                        # Use vendor-submitted completed_at if provided and not in the future.
-                        # Vendors submit from their device when the shoot ends — using
-                        # API call time unfairly penalises late status submissions.
-                        _reported_at = None
-                        if payload.completed_at:
-                            try:
-                                _reported_at = datetime.fromisoformat(
-                                    payload.completed_at.replace("Z", "+00:00")
-                                )
-                            except ValueError:
-                                pass
-                        _completion_time = min(
-                            _reported_at if _reported_at else datetime.now(timezone.utc),
-                            datetime.now(timezone.utc),
-                        )
-                        was_on_time = _completion_time <= deadline
+                        was_on_time = _completion_time(job, payload.completed_at, server_now) <= deadline
                         prev_on_time = round(prev_rate * prev_total)
                         new_on_time = prev_on_time + (1 if was_on_time else 0)
                         update_fields["on_time_rate"] = round(new_on_time / new_total, 4)
@@ -2552,20 +2591,11 @@ async def watch_job_action(
     new_status = _WATCH_ACTION_STATUS_MAP[body.action]
     if new_status == old_status:
         return {"status": "no_change", "job_id": job_id, "current_status": old_status}
+    _ensure_vendor_transition(old_status, new_status)
 
     now = datetime.now(timezone.utc).isoformat()
     status_fields = {"status": new_status, "updated_at": now}
-    try:
-        await db.table("jobs").update(status_fields).eq("id", job_id).execute()
-    except Exception as e:
-        from ..shared.pg_fallback import _is_rest_quota_error, pg_update_job
-        if not _is_rest_quota_error(e):
-            raise
-        if not pg_update_job(job_id, status_fields):
-            raise HTTPException(
-                status_code=503,
-                detail="Job status update unavailable (Fair Use); try again shortly",
-            )
+    await _update_job_if_status(db, job_id, old_status, status_fields)
     if body.action == "accept":
         try:  # record explicit acceptance (termination policy); soft-fail if column absent
             await db.table("jobs").update({"vendor_accepted_at": now}).eq("id", job_id).execute()

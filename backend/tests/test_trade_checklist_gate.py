@@ -70,10 +70,11 @@ class _Q:
 
     async def execute(self):
         if self.op == "update":
-            for r in self._rows():
+            matched = self._rows()
+            for r in matched:
                 r.update(copy.deepcopy(self.payload))
             self.db.updates.append((self.name, copy.deepcopy(self.payload)))
-            return SimpleNamespace(data=[])
+            return SimpleNamespace(data=[copy.deepcopy(r) for r in matched])
         rows = [copy.deepcopy(r) for r in self._rows()]
         if self.single:
             return None if not rows else SimpleNamespace(data=rows[0])

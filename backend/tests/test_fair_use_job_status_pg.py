@@ -197,7 +197,7 @@ def test_update_vendor_job_status_pg_on_rest_402(monkeypatch):
     monkeypatch.setattr(vos, "ensure_assigned_to_actor", lambda *a, **k: None)
     monkeypatch.setattr(
         "app.shared.pg_fallback.pg_update_job",
-        lambda jid, fields: pg_calls.append((jid, fields)) or True,
+        lambda jid, fields, **_k: pg_calls.append((jid, fields)) or True,
     )
     monkeypatch.setattr(
         "app.services.webhooks.send_dispatch_status_update_webhook",
